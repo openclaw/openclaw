@@ -190,9 +190,21 @@ export class A2aTaskStore {
         if (isDefiniteStorageRefusal(error)) {
           this.#deleteTask(task.id);
           if (error.code === "PLUGIN_STATE_LIMIT_EXCEEDED") {
+            if (error.message.endsWith("-row limit.")) {
+              throw new A2aProtocolError(
+                -32000,
+                "Pending task capacity reached. No task was admitted. Wait for pending tasks to settle, then retry with the same message ID.",
+              );
+            }
+            if (error.message.endsWith(" byte limit")) {
+              throw new A2aProtocolError(
+                -32602,
+                "The pending task record is too large. No task was admitted. Use a shorter message or context ID.",
+              );
+            }
             throw new A2aProtocolError(
               -32000,
-              "Pending task capacity reached. No task was admitted. Wait for pending tasks to settle, then retry with the same message ID.",
+              "Pending task storage limit reached. No task was admitted.",
             );
           }
         }

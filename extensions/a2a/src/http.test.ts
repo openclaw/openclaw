@@ -257,7 +257,10 @@ it.each(["SendMessage", "SendStreamingMessage"] as const)(
   async (method) => {
     const pendingStore = createPendingStoreFixture();
     vi.spyOn(pendingStore, "register").mockRejectedValueOnce(
-      Object.assign(new Error("storage detail"), { code: "PLUGIN_STATE_LIMIT_EXCEEDED" }),
+      Object.assign(
+        new Error("Plugin state namespace a2a-pending-default for a2a reached its 500-row limit."),
+        { code: "PLUGIN_STATE_LIMIT_EXCEEDED" },
+      ),
     );
     const harness = await startHttpHarness({ pendingStore, onDispatch: async () => {} });
     const request = sendRequest({ messageId: "retry-admission", returnImmediately: true });
