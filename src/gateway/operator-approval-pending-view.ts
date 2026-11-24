@@ -34,6 +34,7 @@ type PendingApprovalSelection = {
   sourceSessionKey?: string;
   audienceSessionKey?: string;
   reviewerDeviceId?: string;
+  execApprovalIds?: readonly string[];
   limit?: number;
   nowMs: number;
 };
@@ -140,6 +141,7 @@ class PendingApprovalIndex {
       return undefined;
     }
     const { kind, sourceSessionKey, reviewerDeviceId, nowMs } = params;
+    const execApprovalIds = params.execApprovalIds && new Set(params.execApprovalIds);
     const sessionKey =
       params.audienceSessionKey === undefined
         ? undefined
@@ -155,8 +157,10 @@ class PendingApprovalIndex {
             record.expiresAtMs > nowMs &&
             (!kind || record.kind === kind) &&
             (!sourceSessionKey || record.source.sessionKey === sourceSessionKey) &&
-            (reviewerDeviceId === undefined ||
-              matchesOperatorApprovalReviewerBinding(record, reviewerDeviceId))
+            (record.kind === "exec" && execApprovalIds
+              ? execApprovalIds.has(record.id)
+              : reviewerDeviceId === undefined ||
+                matchesOperatorApprovalReviewerBinding(record, reviewerDeviceId))
           ) {
             records.push(record);
             if (records.length === limit) {
