@@ -335,6 +335,7 @@ async function fixture({
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
     "../../infra/update-run-report",
+    "../../infra/update-run-notice",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
     // Post-update state reads and Doctor facts use their production owners,
