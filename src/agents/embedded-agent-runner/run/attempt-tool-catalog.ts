@@ -219,9 +219,15 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         }
       }
     }
+    // An on-demand tool is called by name before its definition is sent, so the stream knows it.
     const liveAllowedToolNames = deferredDirectoryToolsCallable
       ? collectUniqueCatalogToolNames(uncompactedEffectiveTools)
-      : visibleAllowedToolNames;
+      : new Set([
+          ...visibleAllowedToolNames,
+          ...(preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? [])
+            .filter((entry) => entry.onDemand && !entry.requiresExactId)
+            .map((entry) => normalizeToolPolicyName(entry.name)),
+        ]);
     if (deferredDirectoryToolsCallable) {
       // Hidden Tool Search controls are not deferred catalog entries.
       for (const controlName of TOOL_SEARCH_CONTROL_TOOL_NAMES) {

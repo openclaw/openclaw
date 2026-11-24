@@ -356,17 +356,14 @@ it("keeps the definition short and delivers each procedure in the result that ne
     expect(createGitHubPublishTool(options).description.length).toBeLessThanOrEqual(max);
   }
   const { callGateway, execute } = setup();
-  const next = async (args: unknown) => {
-    const [block] = (await execute(args)).content;
-    return block?.type === "text" ? String(JSON.parse(block.text).next ?? "") : "";
-  };
+  const next = async (args: unknown) => ((await execute(args)).details as { next?: string }).next;
   const published = await execute({ title: "Change" });
-  expect(published.details).toEqual(publication);
+  expect(published.details).toEqual({ ...publication, next: expect.any(String) });
   expect(await next({ title: "Change" })).toContain(
     "retain requestId, finish the turn and await its result here; do not submit another publication",
   );
   callGateway.mockResolvedValue({ status: "failed", requestId: "r", error: "no" });
-  expect(await next({ title: "Change" })).toBe("");
+  expect(await next({ title: "Change" })).toBeUndefined();
   callGateway.mockResolvedValue({
     headCommit: "a".repeat(40),
     custody: { kind: "bound_workspace" },
@@ -467,7 +464,7 @@ it("retains original receipt observation without offering or invoking authentica
   expect(Value.Check(tool.parameters, observation)).toBe(true);
   expect(Value.Check(tool.parameters, { action: "publish" })).toBe(false);
   expect(Value.Check(tool.parameters, {})).toBe(false);
-  expect((await execute(observation)).details).toEqual(receipt);
+  expect((await execute(observation)).details).toEqual({ ...receipt, next: expect.any(String) });
   expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.github.readiness", {
     ...caller,
     requestId,
@@ -505,5 +502,5 @@ it("tells an unbound conversation how to publish, but not when reading a child",
   expect(own.next).toContain("publish with workspacePath");
   const child = (await execute({ action: "readiness", publishingSessionKey: "agent:main:child" }))
     .details;
-  expect(child).toEqual(unbound);
+  expect(child).toEqual({ ...unbound, next: expect.any(String) });
 });

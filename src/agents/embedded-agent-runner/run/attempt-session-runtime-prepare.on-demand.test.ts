@@ -132,6 +132,14 @@ it.each([false, true])(
       } as unknown as PrepareInput["toolBase"];
       const signal = new AbortController().signal;
       const resources = { trajectoryRecorder: null, buildAbortSettlePromise: () => null };
+      const toolCatalog = await prepareEmbeddedAttemptToolCatalog({
+        attempt,
+        setup,
+        bundleTools,
+        abortSignal: signal,
+        preparedToolBase: toolBase,
+        executeCodeModeTool: async () => ({ content: [], details: {} }),
+      });
       const prepared = await prepareEmbeddedAttemptSessionRuntime({
         attempt,
         setup,
@@ -139,14 +147,7 @@ it.each([false, true])(
         bundleTools,
         resources,
         runAbortSignal: signal,
-        toolCatalog: await prepareEmbeddedAttemptToolCatalog({
-          attempt,
-          setup,
-          bundleTools,
-          abortSignal: signal,
-          preparedToolBase: toolBase,
-          executeCodeModeTool: async () => ({ content: [], details: {} }),
-        }),
+        toolCatalog,
         prepareSystemPrompt: async () => ({
           systemPromptText: "initial prompt",
           prepareToolPrompt: async () => (prompt: string) => prompt,
@@ -169,12 +170,13 @@ it.each([false, true])(
       await persistSessionSystemPrompt(prepared.sessionPromptState, (type, data) =>
         manager.appendCustomEntryAsync(type, data),
       );
-      return { ...seen, entry };
+      return { ...seen, entry, live: toolCatalog.toolSearchRunPlan.liveAllowedToolNames };
     };
     const first = await turn(true);
     expect(first.sent).not.toContain("github_publish");
     // The transport keeps an undeclared call to it native for this run's later requests.
     expect(first.deferred).toEqual(["github_publish"]);
+    expect(first.live, "the stream guard knows it before it is sent").toContain("github_publish");
     for (const label of ["next turn", "after another restart"]) {
       const later = await turn();
       expect(later.sent, label).toEqual([...first.sent!, "github_publish"]);

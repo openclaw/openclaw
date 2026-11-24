@@ -7,6 +7,7 @@ import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
+  buildToolSchemaDirectoryPrompt,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
@@ -71,6 +72,8 @@ it("tells the model to call it by name and refuses dispatch_action and Code Mode
   const control = (name: string) => surface("tools").tools.find((tool) => tool.name === name)!;
   const search = await control("tool_search").execute("search", { query: "computer desktop" });
   expect(JSON.stringify(search.content)).toContain("top-level by name; not dispatch_action");
+  const directory = buildToolSchemaDirectoryPrompt({ config: {}, ...surface("tools") });
+  expect(directory).toMatch(/computer \(core\) \[call directly\][^]*marked \[call directly\] by/);
   const refusal = "computer runs only as its own top-level tool call. Call computer directly";
   await expect(
     control("dispatch_action").execute("call", { id: "computer", args: { action: "screenshot" } }),
