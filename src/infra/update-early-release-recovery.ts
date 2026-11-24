@@ -614,7 +614,8 @@ export async function finishEarlyGitReleaseRecovery(
     path.dirname(plan.release),
   ];
   for (const dir of doomed.filter((candidate) => fs.existsSync(candidate))) {
-    if (live.some(({ argv }) => argv.includes(dir))) {
+    // The runner that started this step still runs from the kept release and exits next.
+    if (live.some(({ pid, argv }) => Number(pid) !== process.ppid && argv.includes(dir))) {
       kept.push(dir);
       continue;
     }
