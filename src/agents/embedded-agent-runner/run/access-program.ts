@@ -53,7 +53,7 @@ function isSameDiscoveredAccount(
  * Reads the programs the prepared catalog advertises for one attempt's account, model, route,
  * and runtime. Harness-owned auth reads that runtime's native observations.
  */
-export async function prepareAttemptAccessPrograms(
+async function prepareAttemptAccessPrograms(
   attempt: Pick<
     EmbeddedRunAttemptParams,
     "preparedModelRuntime" | "authProfileId" | "authProfileStore" | "provider" | "modelId"
@@ -126,8 +126,24 @@ export async function prepareAttemptAccessPrograms(
  * session choice replaces the default, and a superseded prepared runtime leaves programs unknown.
  */
 export async function readDispatchAccessPrograms(
-  input: Pick<PreparedEmbeddedAttemptDispatchInput, "runInput" | "preparedRuntime">,
-  runtime: ReturnType<PreparedEmbeddedAttemptDispatchInput["preparedRuntime"]["snapshot"]>,
+  input: {
+    runInput: Pick<PreparedEmbeddedAttemptDispatchInput["runInput"], "preparedModelRuntime">;
+    preparedRuntime: Pick<
+      PreparedEmbeddedAttemptDispatchInput["preparedRuntime"],
+      "provider" | "modelId" | "resolveRunAttemptAuthProfileStore"
+    >;
+  },
+  runtime: Pick<
+    ReturnType<PreparedEmbeddedAttemptDispatchInput["preparedRuntime"]["snapshot"]>,
+    "activePreparedAuthPlan" | "lastProfileId"
+  > & {
+    agentHarness: Pick<
+      ReturnType<
+        PreparedEmbeddedAttemptDispatchInput["preparedRuntime"]["snapshot"]
+      >["agentHarness"],
+      "id"
+    >;
+  },
   program: CyberAccessProgram | undefined,
 ): Promise<CyberAccessProgram[] | undefined> {
   const { preparedModelRuntime } = input.runInput;

@@ -856,12 +856,13 @@ describe("channel progress presentation through an isolated Gateway", () => {
     expect(toolResultCounts).toEqual([0, 1, 2]);
   }, 120_000);
 
-  it("records Slack child-result settlement separately from suppressed replies", async () => {
+  it("records suppressed Slack announcements without claiming delivery", async () => {
     const directory = await createDirectory("slack-announce-", cleanups);
     const cancelledMarker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
     const deliveredMarker = "QA-SUBAGENT-TERMINAL-RESTART-OK";
     const observerModel = "mock-openai/observer-failure-fixture";
     const pluginId = "qa-announce-suppression";
+    const suppressionLog = "QA Slack announcement cancelled by fixture policy";
     const pluginDir = path.join(directory, pluginId);
     await writePluginManifest(pluginDir, pluginId);
     await fs.writeFile(
@@ -869,8 +870,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
       `module.exports = {
       id: ${JSON.stringify(pluginId)},
       register(api) {
-        api.on("message_sending", (event) => event.content.includes(${JSON.stringify(cancelledMarker)})
-          ? { cancel: true, cancelReason: "synthetic announcement policy" } : undefined);
+        api.on("message_sending", (event) => {
+          if (!event.content.includes(${JSON.stringify(cancelledMarker)})) return;
+          api.logger.info(${JSON.stringify(suppressionLog)});
+          return { cancel: true, cancelReason: "synthetic announcement policy" };
+        });
       }
     };`,
     );
@@ -1042,11 +1046,13 @@ describe("channel progress presentation through an isolated Gateway", () => {
         );
       }, `settled ${caseName} task`);
       tasks.push(terminalTask!);
+      // Child-result settlement is not evidence of a visible channel send.
       expect(terminalTask).toMatchObject({
         deliveryStatus: "delivered",
         requesterDelivery: "consumed",
       });
       if (caseName === "visible") {
+        await waitForFact(() => gateway.logs().includes(suppressionLog), "Slack suppression hook");
         expect(terminalTask?.requesterVisibleFinal).toBe(false);
       }
       // Delivery settlement does not join the final observer digest. Wait before
@@ -1081,7 +1087,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
   }, 240_000);
 
-  it("retains ambiguous Discord send custody separately from child-result settlement", async () => {
+  it("settles a consumed child result while Discord tracks an unidentified send", async () => {
     const directory = await createDirectory("discord-announce-", cleanups);
     const marker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
     const { writes, adapter, api } = await createPresentationTransport(
@@ -1243,7 +1249,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           entry.channel === "discord" &&
           entry.lastError === "platform send returned no delivery identity",
       );
-      // The queue owns the uncertain platform send independently of child settlement.
+      // Transport recovery can reconcile the queue row independently of child settlement.
       if (pending?.recoveryState === "unknown_after_send") {
         unknownSend ??= pending;
       }
@@ -1289,9 +1295,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
       return (
         task?.execution.status === "terminal" &&
         delivery?.status === "delivered" &&
+        delivery.requesterDelivery?.state === "consumed" &&
         Boolean(unknownSend)
       );
-    }, "child-result settlement and an unknown Discord send").catch((error: unknown) =>
+    }, "child settlement and unidentified Discord send").catch((error: unknown) =>
       rethrowWithDeliveryDiagnostics(error, () => {
         const requests = createRequestSummary();
         for (const { method, route } of writes) {
@@ -1305,6 +1312,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           parentAcknowledged,
           completions,
           unidentifiedSends: writes.filter((write) => write.identityOmitted).length,
+          sawUnidentifiedSendInQueue: Boolean(unknownSend),
           settlementHistory,
           requests: requests.snapshot(),
           ...deliveryQueueDiagnostics(
@@ -1315,11 +1323,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
         };
       }),
     );
-    expect(delivery?.requesterDelivery?.state).toBe("consumed");
-    expect(delivery?.requesterVisibleFinal).toBeUndefined();
     expect(requesterSettledBeforeWorker).toBe(true);
     expect(parentAcknowledged).toBe(true);
     expect(taskRuns).toHaveLength(1);
+    expect(delivery?.requesterVisibleFinal).toBeUndefined();
     expect(unknownSend && resolveDeliveryQueueAttemptCount(unknownSend)).toBe(1);
     expect(
       writes.filter(

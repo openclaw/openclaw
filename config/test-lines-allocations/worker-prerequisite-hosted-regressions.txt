@@ -4,4 +4,5 @@
 # Also covers independent wire/requester settlement and checking persisted child
 # completion before a fresh requester turn. Includes synthetic exec notification
 # storage so cleanup and timeout assertions still exercise the real handoff.
-179
+# Channel merge retains the upstream suppression hook and the wire/receipt proof.
+186
