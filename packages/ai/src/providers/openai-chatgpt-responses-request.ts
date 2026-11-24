@@ -31,8 +31,9 @@ export function buildRequestBody(
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
   retainUserProvenance = false,
 ): RequestBody {
+  const cachesInstructions = model.compat?.cachesInstructions !== false;
   const messages = convertResponsesMessages(model, context, allowedToolCallProviders, {
-    includeSystemPrompt: false,
+    includeSystemPrompt: !cachesInstructions,
     replayResponsesItemIds: false,
     sessionId: options?.sessionId,
     replayMode,
@@ -43,8 +44,13 @@ export function buildRequestBody(
     model: model.id,
     store: false,
     stream: true,
-    instructions:
-      stripSystemPromptCacheBoundary(context.systemPrompt ?? "") || "You are a helpful assistant.",
+    ...(cachesInstructions
+      ? {
+          instructions:
+            stripSystemPromptCacheBoundary(context.systemPrompt ?? "") ||
+            "You are a helpful assistant.",
+        }
+      : {}),
     input: messages,
     text: { verbosity: options?.textVerbosity || "low" },
     include: ["reasoning.encrypted_content"],
