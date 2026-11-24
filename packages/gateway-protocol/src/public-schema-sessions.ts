@@ -17,6 +17,7 @@ export {
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,
   SessionsCatalogContinueResultSchema,
+  SessionsCatalogResolveResultSchema,
   SessionsCatalogImportParamsSchema,
   SessionsCatalogImportResultSchema,
   SessionsCatalogArchiveParamsSchema,

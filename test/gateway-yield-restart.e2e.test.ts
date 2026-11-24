@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { readTranscriptExportSnapshotReadOnlySync } from "../src/config/sessions/session-accessor.sqlite-export-read.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { OperatorScope } from "../src/gateway/operator-scopes.js";
 import { findSubagentSpawnReceipt } from "../src/gateway/server.subagent-stop-settlement.product.test-support.js";
@@ -723,17 +724,54 @@ it
             );
           }
         }
-        await vi.waitFor(
-          async () => {
-            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
-              sessionKey: rootKey,
-            });
-            expect(JSON.stringify(history.messages)).toContain(
-              "REQUESTER_RECEIVED_CHILD_COMPLETION",
-            );
-          },
-          { timeout: 30_000 },
-        );
+        if (action === "policy-unavailable") {
+          // The outage refuses the wake. Since #204178 the child's end state is delivered as
+          // model-visible requester history, once, with no retried wake turn.
+          await vi.waitFor(
+            () => {
+              const agentDir = instance.state.agentDir("main");
+              const sessionId = readRestartSession(agentDir, rootKey)?.sessionId;
+              assert(typeof sessionId === "string");
+              const statuses = (
+                readTranscriptExportSnapshotReadOnlySync({
+                  agentId: "main",
+                  sessionKey: rootKey,
+                  sessionId,
+                  storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+                })?.events ?? []
+              ).filter(
+                (event) =>
+                  isRecord(event) &&
+                  event.type === "custom_message" &&
+                  event.customType === "subagent-completion",
+              );
+              expect(statuses).toEqual([
+                expect.objectContaining({
+                  display: false,
+                  content: expect.stringMatching(
+                    new RegExp(
+                      `session ${childKey}, run [^)]+\\): completed[\\s\\S]*PARKED_CHILD_COMPLETED`,
+                      "u",
+                    ),
+                  ),
+                }),
+              ]);
+            },
+            { timeout: 30_000 },
+          );
+        } else {
+          await vi.waitFor(
+            async () => {
+              const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+                sessionKey: rootKey,
+              });
+              expect(JSON.stringify(history.messages)).toContain(
+                "REQUESTER_RECEIVED_CHILD_COMPLETION",
+              );
+            },
+            { timeout: 30_000 },
+          );
+        }
         if (action === "completed-before") {
           expect(childCalls).toBe(callsBeforeRestart);
         }

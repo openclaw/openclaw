@@ -2,7 +2,7 @@
   "name": "@openclaw/beam",
   "version": "2026.11.7",
   "private": true,
-  "description": "Read-only coding-session Beam receiver",
+  "description": "Receive coding-session snapshots for viewing and Team handoff",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

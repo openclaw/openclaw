@@ -161,7 +161,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           },
         });
         if (result.ok) {
-          options.respond(true, result.sessionKey ? { sessionKey: result.sessionKey } : null);
+          options.respond(true, result.destination);
         } else {
           options.respond(false, undefined, result.error);
         }
