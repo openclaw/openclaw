@@ -1004,6 +1004,7 @@ export async function authenticateReceiptRecovery({
     runReleaseSoak: scope.runReleaseSoak,
     repository: request.repository,
     qualificationAdmission: verified.admission,
+    policyAdmission: verified.policyAdmission ?? null,
     producerOnTrustedMainLineage: true,
     verifier,
     validationInputs: manifest.validationInputs,
