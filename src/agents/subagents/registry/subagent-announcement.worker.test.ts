@@ -551,7 +551,10 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         });
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       } else if (change === "yielded") {
-        expect(outcome).toEqual({ completed: true });
+        expect(outcome).toEqual({
+          completed: false,
+          error: new Error("Subagent suspended delivery cleanup owner changed."),
+        });
         expect(subagentRuns.get(runId)).toEqual(pausedRecord);
         expect(loadSubagentRegistryFromSqlite().get(runId)?.pauseReason).toBe("sessions_yield");
       } else {
