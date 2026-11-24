@@ -128,6 +128,14 @@ export async function settleRunFromTrial(
   trial: Trial | null,
   prefix = resolvePrefix(),
 ): Promise<void> {
+  const lock = await readUpdateLock(prefix);
+  if (lock?.dead) {
+    // A published trial owns its run in every phase; a dead preparer cannot override it.
+    if (lock.runId !== trial?.runId) {
+      await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
+    }
+    await releaseUpdateLock(prefix);
+  }
   if (!trial?.outcome || trial.reported || !trial.runId) {
     return;
   }
@@ -246,17 +254,8 @@ export async function settleRunFromTrial(
 
 /** Called after the listener is serving, including the old release after a rollback. */
 export async function announceReady(buildId: string | null): Promise<void> {
-  const lock = await readUpdateLock();
-  // A restarted container can reuse the old Gateway's PID (including PID 1). A lock with this
-  // PID taken after this process started is this Gateway's own update in progress, not a leftover.
-  const startedAt = Date.now() - process.uptime() * 1000;
-  if (lock && (lock.dead || (lock.pid === process.pid && lock.startedAt < startedAt))) {
-    await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
-    await releaseUpdateLock();
-  }
-  await settleRunFromTrial(await readTrial());
   if (process.env.OPENCLAW_LAUNCHER_IPC !== "1" || !process.send || !process.connected) {
-    return;
+    return await settleRunFromTrial(await readTrial());
   }
   const { promise, resolve, reject } = Promise.withResolvers<Trial | null>();
   const onMessage = (message: unknown) => {
@@ -279,7 +278,7 @@ export async function announceReady(buildId: string | null): Promise<void> {
         reject(error);
       }
     });
-    await settleRunFromTrial(await promise);
+    await settleRunFromTrial((await promise) ?? (await readTrial()));
   } finally {
     clearTimeout(timer);
     process.off("message", onMessage);

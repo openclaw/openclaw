@@ -1,6 +1,6 @@
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { resolveUpdateRunVerifiedServingVersion } from "./update-run-report.js";
+import { resolveUpdateRunVerifiedServingVersion } from "./update-run-verification.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &

@@ -148,9 +148,12 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    Gateway reports ready. After two failed starts, a configuration refusal
    (exit 78), or when the trial budget ends, it restores the previous release,
    SQLite migration originals, and PostgreSQL anchors.
-6. The Gateway that serves after the switch records the outcome. Only a Gateway
-   that runs the target build records success. Restored files alone do not prove
-   that the previous Gateway is serving.
+6. Preparation records refusals, already-current results, and failures before
+   activation. After activation, only the Gateway that is ready settles the run
+   from the launcher trial and preparation lock. A published trial takes precedence
+   over an expired lock for the same run. Only a Gateway that runs the target build
+   records success; restored files alone do not prove that the previous Gateway
+   is serving. Startup does not infer a failed update from PID reuse or uptime.
 7. After success is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
