@@ -4,6 +4,7 @@ import { NATIVE_HISTORICAL_TOOL_CALL } from "@openclaw/ai/provider-types";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderMessage } from "../../../../packages/ai/src/provider-types.js";
+import { projectGoogleMessages } from "../../../../packages/ai/src/providers/google-messages.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
@@ -13,6 +14,7 @@ import { cloneTranscriptView } from "../../../config/sessions/transcript-snapsho
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { labelRuntimeContextText } from "../../../llm/types.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import { buildProviderReplayFamilyHooks } from "../../../plugin-sdk/provider-model-shared.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
@@ -73,6 +75,68 @@ import {
 } from "./runtime-context-prompt.js";
 
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
+  it("preserves direct Gemini 4 request contents across a tool round and the next turn", async () => {
+    const model = {
+      ...testModel,
+      id: "gemini-4-test",
+      api: "google-generative-ai" as const,
+      provider: "google",
+      input: ["text" as const],
+    };
+    const policy = buildProviderReplayFamilyHooks({ family: "google-gemini" }).buildReplayPolicy?.({
+      provider: model.provider,
+      modelApi: model.api,
+      modelId: model.id,
+      model,
+    });
+    const { activeSession } = createActiveSession();
+    activeSession.agent.convertToLlm = convertHarnessMessages;
+    await prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      appendOnlyRuntimeContext: policy?.appendOnlyRuntimeContext,
+      attempt: { sessionId: "gemini-4-prefix", prompt: "read the value" },
+      getUserTranscriptContexts: () => undefined,
+      ...createBoundaryInputDefaults(),
+    });
+    const firstUser: AgentMessage = { role: "user", content: "read the value", timestamp: 1 };
+    const firstCarrier = buildRuntimeContextCustomMessage("first turn context")!;
+    const messages: AgentMessage[] = policy?.appendOnlyRuntimeContext
+      ? [firstUser, firstCarrier]
+      : [firstCarrier, firstUser];
+    const contents = async () =>
+      projectGoogleMessages({
+        model,
+        messages: await activeSession.agent.convertToLlm(messages),
+        replay: "managed",
+        requiresToolCallSignature: false,
+      });
+    const first = await contents();
+    expect(JSON.stringify(first)).toContain("first turn context");
+    messages.push(
+      makeAssistantMessageFixture({
+        content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_read",
+        toolName: "read",
+        content: [{ type: "text", text: "42" }],
+        isError: false,
+        timestamp: 2,
+      },
+    );
+    const toolRound = await contents();
+    expect(toolRound.slice(0, first.length)).toEqual(first);
+    const nextUser: AgentMessage = { role: "user", content: "and now?", timestamp: 3 };
+    const nextCarrier = buildRuntimeContextCustomMessage("next turn context")!;
+    messages.push(makeAssistantMessageFixture({ content: [{ type: "text", text: "42" }] }));
+    messages.push(
+      ...(policy?.appendOnlyRuntimeContext ? [nextUser, nextCarrier] : [nextCarrier, nextUser]),
+    );
+    expect((await contents()).slice(0, toolRound.length)).toEqual(toolRound);
+  });
+
   it("folds the current move continuation into the provider history before the first resumed request", async () => {
     const { activeSession } = createActiveSession();
     activeSession.agent.convertToLlm = convertHarnessMessages;

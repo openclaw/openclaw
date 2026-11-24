@@ -67,6 +67,13 @@ describe("google provider plugin hooks", () => {
       validateAnthropicTurns: false,
       allowSyntheticToolResults: true,
     });
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "google",
+        modelApi: "google-generative-ai",
+        modelId: "gemini-4-test",
+      } as never),
+    ).toMatchObject({ appendOnlyRuntimeContext: true });
 
     const assistantMessage = makeAgentAssistantMessage({
       api: "google-generative-ai",
