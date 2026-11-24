@@ -2,7 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { verifiedLegacyTrialRepair } from "../update/legacy-trial-record.js";
+import {
+  verifiedLegacyTrialReadiness,
+  verifiedLegacyTrialRepair,
+} from "../update/legacy-trial-record.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
@@ -94,7 +97,8 @@ export function persistInterruptedUpdateObservation(
       const repair = input.legacyRepairRunId
         ? readUpdateRunRecord(db, input.legacyRepairRunId)
         : undefined;
-      const current = input.legacyRepairRunId
+      const legacy = input.legacyRepairRunId !== undefined || input.legacyReady === true;
+      const current = legacy
         ? readUpdateRunRecord(db, input.expected.runId)
         : readLatestUpdateRun(db);
       const active = readActiveUpdateRun(db);
@@ -108,14 +112,15 @@ export function persistInterruptedUpdateObservation(
       }
       const legacyCandidate = input.legacyRepairRunId
         ? verifiedLegacyTrialRepair(current, repair, input.verification)
-        : undefined;
+        : input.legacyReady
+          ? verifiedLegacyTrialReadiness(current, input.verification)
+          : undefined;
       if (
-        input.legacyRepairRunId &&
+        legacy &&
         (!legacyCandidate ||
-          !repair ||
-          hasStoredUpdateRecovery(db, repair.runId) ||
+          (input.legacyRepairRunId && (!repair || hasStoredUpdateRecovery(db, repair.runId))) ||
           readUpdateRuns(db, { active: true, limit: 100 }).some(
-            (run) => run.runId !== repair.runId && run.runId !== current.runId,
+            (run) => run.runId !== repair?.runId && run.runId !== current.runId,
           ))
       ) {
         return { accepted: false };

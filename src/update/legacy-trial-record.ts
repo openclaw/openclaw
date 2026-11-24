@@ -113,9 +113,7 @@ export function verifiedLegacyTrialRepair(
   repair: UpdateRunRecord | undefined,
   verification: UpdateRunRecord["verification"] | undefined,
 ) {
-  const candidate = recoverableLegacyTrial(run);
   if (
-    !candidate ||
     !repair ||
     repair.runId === run.runId ||
     repair.status !== "running" ||
@@ -123,7 +121,20 @@ export function verifiedLegacyTrialRepair(
     repair.steps.some((step) => step.status === "failed") ||
     !["doctor", "plugins", "targetConfigConvergence"].every((phase) =>
       repair.steps.some((step) => step.step === `finalize:${phase}` && step.status === "completed"),
-    ) ||
+    )
+  ) {
+    return undefined;
+  }
+  return verifiedLegacyTrialReadiness(run, verification);
+}
+
+export function verifiedLegacyTrialReadiness(
+  run: UpdateRunRecord,
+  verification: UpdateRunRecord["verification"] | undefined,
+) {
+  const candidate = recoverableLegacyTrial(run);
+  if (
+    !candidate ||
     verification?.runningBuildId !== candidate.buildId ||
     verification.runningVersion !== candidate.version ||
     verification.booted !== true ||

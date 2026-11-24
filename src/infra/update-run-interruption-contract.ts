@@ -8,6 +8,8 @@ export type InterruptedUpdateSettlement = {
   cleanup?: "pending" | "unknown" | "confirmed";
   /** Exact explicit repair whose persisted maintenance receipts permit legacy completion. */
   legacyRepairRunId?: string;
+  /** Core readiness observed by the selected release, under its existing worker admission. */
+  legacyReady?: true;
 };
 
 export type InterruptedUpdateSettlementResult = {

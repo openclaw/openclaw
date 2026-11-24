@@ -95,11 +95,14 @@ export async function prepareLegacyTrialRun(
 export async function settleLegacyTrial(
   root: string | null,
   buildId: string | null,
+  onCompleted: (runId: string) => void,
 ): Promise<boolean> {
   if (!root || !buildId) {
     return false;
   }
-  const prefix = resolvePrefix();
+  const context = captureOpenClawStateWorkerContext();
+  const options = { env: context.environment, path: context.admission.databasePath };
+  const prefix = resolvePrefix(context.environment);
   const trial = await readLegacyTrial(prefix);
   if (
     !trial ||
@@ -113,10 +116,13 @@ export async function settleLegacyTrial(
   // Match the exact publication occurrence, not a newest run or a version. Missing or
   // ambiguous history still ends the healthy trial, but cannot invent update success.
   const detail = JSON.stringify(projectLegacyTrialReceipt(trial));
-  const matches = await listUpdateRunsAsync({
-    limit: 2,
-    completedStep: { step: LEGACY_TRIAL_PREPARED, detail },
-  });
+  const matches = await listUpdateRunsAsync(
+    {
+      limit: 2,
+      completedStep: { step: LEGACY_TRIAL_PREPARED, detail },
+    },
+    options,
+  );
   if (matches.length === 1) {
     const recorded = await recordUpdateRunStepAsync(
       matches[0]!.runId,
@@ -126,9 +132,37 @@ export async function settleLegacyTrial(
         endedAtMs: Date.now(),
         detail,
       },
-      { requireNoRecovery: true },
+      { context, env: context.environment, requireNoRecovery: true },
     );
     if (!recorded) {
+      return false;
+    }
+    const candidate = recoverableLegacyTrial(recorded);
+    if (candidate) {
+      const result = await persistInterruptedUpdateObservationAsync(context, {
+        expected: recorded,
+        legacyReady: true,
+        detail: "The selected legacy Git release is core-ready after its original updater exited.",
+        verification: {
+          runningVersion: VERSION,
+          runningBuildId: buildId,
+          pid: process.pid,
+          booted: true,
+          serviceRunning: true,
+          versionMatch: true,
+          coreReady: true,
+          settled: true,
+        },
+      });
+      if (!result?.accepted) {
+        return false;
+      }
+      if (result.updateResult) {
+        void sendUpdateResultTelemetry(result.updateResult, { env: context.environment });
+      }
+      onCompleted(recorded.runId);
+    } else if (recorded.status === "running") {
+      // A live or unproven original driver retains completion; readiness can retry later.
       return false;
     }
   }

@@ -94,6 +94,15 @@ async function fixture() {
   return { root, file, trial, runId: run.runId };
 }
 
+async function recordHistoricalReady(f: Awaited<ReturnType<typeof fixture>>) {
+  const { target, previous, version, buildId, createdAt } = f.trial;
+  await recordUpdateRunStepAsync(f.runId, {
+    step: "finalize:legacy-release-ready",
+    status: "completed",
+    detail: JSON.stringify({ target, previous, version, buildId, createdAt }),
+  });
+}
+
 it.each(["repairing", "restarting"] as const)(
   "does not correlate a Git-targeted repair during %s with the original activation",
   async (phase) => {
@@ -231,7 +240,7 @@ it.each(["sidecars", "methods"] as const)(
 );
 
 it.each([false, true])(
-  "ends a healthy old-launcher trial without claiming unfinished update success (driver already reconciled=%s)",
+  "automatically completes the exact healthy legacy update after its driver exits (already reconciled=%s)",
   async (abandoned) => {
     const f = await fixture();
     await prepareLegacyTrialRun(f.runId, f.root, () => {});
@@ -242,7 +251,10 @@ it.each([false, true])(
     await announceReady(f.trial.buildId, f.root);
     await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
     const run = await getUpdateRunAsync(f.runId);
-    expect(run?.status).toBe(abandoned ? "failed" : "running");
+    expect(run).toMatchObject({
+      status: "succeeded",
+      after: { version: VERSION, buildId: f.trial.buildId },
+    });
     expect(run?.steps).toContainEqual(
       expect.objectContaining({
         step: "finalize:legacy-release-ready",
@@ -285,7 +297,7 @@ it("does not attribute an uncorrelated healthy trial to the newest failed run", 
 it("keeps correlated history selectable when repair cannot verify the serving build", async () => {
   const f = await fixture();
   await prepareLegacyTrialRun(f.runId, f.root, () => {});
-  await announceReady(f.trial.buildId, f.root);
+  await recordHistoricalReady(f);
   await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
   const before = await getUpdateRunAsync(f.runId);
   const settle = prepareUpdateRepairHistory([f.runId]);
@@ -293,6 +305,33 @@ it("keeps correlated history selectable when repair cannot verify the serving bu
   await recordUpdateRunPhaseAsync(repair.runId, "repairing");
   expect(await settle(repair.runId, f.root, true)).toEqual([]);
   expect(await getUpdateRunAsync(f.runId)).toEqual(before);
+});
+
+it("retains the ready legacy trial until its original completion transaction can commit", async () => {
+  const f = await fixture();
+  await prepareLegacyTrialRun(f.runId, f.root, () => {});
+  await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
+  const other = await createUpdateRunAsync({ trigger: "cli" });
+  const bytes = await fs.readFile(f.file, "utf8");
+  expect(await announceReady(f.trial.buildId, f.root)).toBe(false);
+  expect(await fs.readFile(f.file, "utf8")).toBe(bytes);
+  const pending = await getUpdateRunAsync(f.runId);
+  expect(pending?.status).toBe("failed");
+  expect(pending?.steps).toContainEqual(
+    expect.objectContaining({ step: "finalize:legacy-release-ready", status: "completed" }),
+  );
+  await finishUpdateRunAsync(other.runId, {
+    status: "failed",
+    reason: "unrelated-fixture-failure",
+  });
+  const unrelated = await getUpdateRunAsync(other.runId);
+  expect(await announceReady(f.trial.buildId, f.root)).toBe(true);
+  expect(await getUpdateRunAsync(f.runId)).toMatchObject({
+    status: "succeeded",
+    after: { version: VERSION, buildId: f.trial.buildId },
+  });
+  expect(await getUpdateRunAsync(other.runId)).toEqual(unrelated);
+  await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("does not attribute an ambiguous publication to any matching run", async () => {
@@ -350,7 +389,7 @@ it.each([
     });
   }
   await prepareLegacyTrialRun(f.runId, f.root, () => {});
-  await announceReady(f.trial.buildId, f.root);
+  await recordHistoricalReady(f);
   if (kind === "unrelated-failure") {
     await recordUpdateRunStepAsync(f.runId, {
       step: "plugin install",

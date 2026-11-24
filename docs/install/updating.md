@@ -203,11 +203,15 @@ Git installs that tracked main before the resident launcher can retain an older
 trial record. A ready Gateway ends only the trial matching its selected release
 and loaded build. For an older updater that calls the candidate's admitted native
 install or restart command, the candidate records that exact run's prepared trial;
-readiness records the matching publication, not update success. Explicit
-`openclaw update repair` can correct that run's abandoned outcome only after its
-drivers have exited, Doctor and plugin maintenance complete, and the same build
-is verified serving. Existing recovery custody and substantive failures remain
-with their owners. No database schema or launcher protocol changes.
+core readiness automatically completes that original run once all recorded drivers
+have exited, including an otherwise abandoned run whose old verifier could not
+read the migrated schema. The existing worker transaction rechecks the exact
+publication, serving version/build, original row and recovery exclusions. No
+explicit repair or synthetic repair run is needed. Core success is durable before
+the trial is removed; Doctor inspections and plugin maintenance use the same
+advisory post-ready owner as resident-launcher updates. Existing recovery custody
+and substantive failures remain with their owners. No database schema or launcher
+protocol changes.
 
 An old updater can skip that candidate command when it waits for the release
 successor itself. Historical trials without the exact correlation still end on
@@ -221,7 +225,11 @@ The verified core-readiness boundary records this observation without waiting
 for the 30-second maintenance tick; unrelated channel health does not keep a
 healthy release trial armed. An initially unready startup retains its readiness
 reader for the existing maintenance retry. Unsettled observations and failed
-history writes remain eligible for that retry. Repair retains an eligible
+history writes remain eligible for that retry. A ready receipt does not remove
+the trial until eligible original-run completion is durable, so a refused or
+failed completion write can retry. Explicit repair still handles historical
+ready receipts under its maintenance and serving-verification checks, but does
+not regrade a run that startup already completed. Repair retains an eligible
 prepared run while service restoration publishes its matching ready receipt;
 other changes to the captured run still prevent history correction. Native
 activation pins its history namespace inside the admitted executor interval; repair and missing-run commands

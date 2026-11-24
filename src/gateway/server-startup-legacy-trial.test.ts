@@ -79,12 +79,27 @@ vi.mock("../version.js", async (original) => ({
   resolveRuntimeServiceBuildId: () => installed.buildId,
 }));
 
+vi.mock("../update/run.js", async (original) => ({
+  ...(await original<typeof import("../update/run.js")>()),
+  runPluginMaintenance: async () => ({ step: { step: "plugins", status: "completed" as const } }),
+}));
+vi.mock("../cli/update-cli/update-command-post-activation-inspections.js", async (original) => ({
+  ...(await original<
+    typeof import("../cli/update-cli/update-command-post-activation-inspections.js")
+  >()),
+  runPostActivationInspections: async ({
+    result,
+  }: Parameters<
+    typeof import("../cli/update-cli/update-command-post-activation-inspections.js").runPostActivationInspections
+  >[0]) => result,
+}));
+
 it.each([
   { name: "core ready before channel health", captureBeforeReady: false, changedRow: false },
   { name: "ready receipt after repair capture", captureBeforeReady: true, changedRow: false },
-  { name: "changed-row refusal", captureBeforeReady: true, changedRow: true },
+  { name: "unrelated-failure refusal", captureBeforeReady: true, changedRow: true },
 ])(
-  "settles the actual cold-started legacy build through repair: $name",
+  "preserves automatic legacy completion when repair is also invoked: $name",
   async ({ captureBeforeReady, changedRow }) => {
     installed.degraded = !captureBeforeReady;
     const fixture = await import("./server-startup-state.test-support.js");
@@ -173,9 +188,13 @@ it.each([
       if (changedRow) {
         const { recordUpdateRunStepAsync } = await import("../infra/update-run-write.async.js");
         await recordUpdateRunStepAsync(run.runId, {
-          step: "post-activation doctor inspections",
-          status: "completed",
+          step: "plugins",
+          status: "failed",
+          detail: "Unrelated plugin maintenance failed before readiness",
         });
+        expect((await getUpdateRunAsync(run.runId))?.steps).toContainEqual(
+          expect.objectContaining({ step: "plugins", status: "failed" }),
+        );
       }
       const { startGatewayServerCore } = await import("./server-start.js");
       server = await startGatewayServerCore(port, {
@@ -190,10 +209,17 @@ it.each([
         coreReady: true,
         failing: installed.degraded ? ["unavailable-test-channel"] : [],
       });
+      const { TICK_INTERVAL_MS } = await import("./server-constants.js");
+      await clock.advanceBy(TICK_INTERVAL_MS);
+      await clock.advanceBy(TICK_INTERVAL_MS);
       expect((await getUpdateRunAsync(run.runId))?.steps).toContainEqual(
         expect.objectContaining({ step: "finalize:legacy-release-ready", status: "completed" }),
       );
       await expect(fs.stat(trialPath)).rejects.toMatchObject({ code: "ENOENT" });
+      if (!changedRow) {
+        expect((await getUpdateRunAsync(run.runId))?.status).toBe("succeeded");
+      }
+      const warnings = vi.spyOn(console, "warn");
       const settleHistory = capturedHistory ?? prepareUpdateRepairHistory([run.runId]);
       const { UpdateFinalizationLifecycle } =
         await import("../cli/update-cli/update-finalization-lifecycle.js");
@@ -209,9 +235,7 @@ it.each([
             authority.assertCurrent();
           });
         }
-        expect(await settleHistory(repairId, installed.root, true)).toEqual(
-          changedRow ? [] : [run.runId],
-        );
+        expect(await settleHistory(repairId, installed.root, true)).toEqual([]);
       });
       lifecycle.complete(0);
       const original = await getUpdateRunAsync(run.runId);
@@ -220,6 +244,11 @@ it.each([
         expect(original?.steps.some((step) => step.step === "reconcile:acknowledged")).toBe(false);
         return;
       }
+      expect(
+        warnings.mock.calls
+          .flat()
+          .some((value) => String(value).includes("completion history was not verified")),
+      ).toBe(false);
       expect(original).toMatchObject({
         status: "succeeded",
         reason: null,

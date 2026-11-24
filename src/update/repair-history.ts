@@ -29,8 +29,11 @@ export function prepareUpdateRepairHistory(runIds: readonly string[]) {
     const reconciled: string[] = [];
     for (const runId of runIds) {
       let legacy = legacyTrials.find((run) => run.runId === runId);
+      const current = legacy ? getUpdateRun(runId) : undefined;
+      if (current?.status === "succeeded") {
+        continue;
+      }
       if (legacy && !readLegacyTrialReceipt(legacy, true)) {
-        const current = getUpdateRun(runId);
         if (
           current &&
           isDeepStrictEqual(

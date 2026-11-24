@@ -24,7 +24,9 @@ import {
 const log = createSubsystemLogger("gateway/update-run");
 
 /** The committed core keeps serving while its own code updates and reloads installed plugins. */
-async function maintainTrialPlugins(trial: Trial): Promise<void> {
+async function maintainTrialPlugins(
+  trial: Pick<Trial, "runId" | "acceptCapabilities">,
+): Promise<void> {
   let pluginIds: string[] = [];
   let step: UpdateRunStep | undefined;
   try {
@@ -108,6 +110,68 @@ async function maintainTrialPlugins(trial: Trial): Promise<void> {
   }
 }
 
+function schedulePostUpdateMaintenance(trial: Pick<Trial, "runId" | "acceptCapabilities">): void {
+  const step = "post-activation doctor inspections";
+  // Advisory work never holds the committed trial handshake open; the watcher logs its failures.
+  const accepted = wakeUpdateRunWatcher(trial.runId, () =>
+    withCommandProcessScope(async () => {
+      try {
+        await maintainTrialPlugins(trial);
+      } catch (error) {
+        log.warn(`update run ${trial.runId} plugin result could not be recorded: ${String(error)}`);
+      }
+      if (getAsyncWorkSignal()?.aborted) {
+        return;
+      }
+      try {
+        const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
+          await Promise.all([
+            import("../cli/update-cli/update-command-post-activation-inspections.js"),
+            import("../flows/doctor-health-contributions.js"),
+          ]);
+        const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+        if (!root) {
+          throw new Error("Running release root not found");
+        }
+        const result = await runPostActivationInspections({
+          root,
+          gatewayReady: true,
+          checkIds: await resolvePostActivationInspectionCheckIds(),
+          timeoutMs: 120_000,
+          result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
+        });
+        getAsyncWorkSignal()?.throwIfAborted();
+        for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
+          await recordUpdateRunStepAsync(trial.runId, projected);
+        }
+        if (result.steps.length === 0) {
+          await recordUpdateRunStepAsync(trial.runId, { step, status: "completed" });
+        }
+      } catch (error) {
+        if (getAsyncWorkSignal()?.aborted) {
+          return;
+        }
+        // The update stays successful; the skipped inspections are reported with a next step.
+        const detail = redactSensitiveText(
+          `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
+          { mode: "tools" },
+        ).slice(0, 2000);
+        await recordUpdateRunStepAsync(trial.runId, { step, status: "completed", detail });
+        await recordUpdateRunStepAsync(trial.runId, {
+          step: `warning:${step}`,
+          status: "completed",
+          detail,
+        });
+      }
+    }, getAsyncWorkSignal()),
+  );
+  if (!accepted) {
+    log.warn(
+      `update run ${trial.runId} post-update maintenance skipped: no Gateway update watcher`,
+    );
+  }
+}
+
 // IPC also reaches Windows, where POSIX signals cannot request a graceful child stop.
 if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
   process.on("message", (message: unknown) => {
@@ -171,67 +235,7 @@ export async function settleRunFromTrial(
         },
   );
   if (outcome.status === "succeeded") {
-    const step = "post-activation doctor inspections";
-    // Advisory work never holds the committed trial handshake open; the watcher logs its failures.
-    const accepted = wakeUpdateRunWatcher(trial.runId, () =>
-      withCommandProcessScope(async () => {
-        try {
-          await maintainTrialPlugins(trial);
-        } catch (error) {
-          log.warn(
-            `update run ${trial.runId} plugin result could not be recorded: ${String(error)}`,
-          );
-        }
-        if (getAsyncWorkSignal()?.aborted) {
-          return;
-        }
-        try {
-          const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
-            await Promise.all([
-              import("../cli/update-cli/update-command-post-activation-inspections.js"),
-              import("../flows/doctor-health-contributions.js"),
-            ]);
-          const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
-          if (!root) {
-            throw new Error("Running release root not found");
-          }
-          const result = await runPostActivationInspections({
-            root,
-            gatewayReady: true,
-            checkIds: await resolvePostActivationInspectionCheckIds(),
-            timeoutMs: 120_000,
-            result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
-          });
-          getAsyncWorkSignal()?.throwIfAborted();
-          for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
-            await recordUpdateRunStepAsync(trial.runId, projected);
-          }
-          if (result.steps.length === 0) {
-            await recordUpdateRunStepAsync(trial.runId, { step, status: "completed" });
-          }
-        } catch (error) {
-          if (getAsyncWorkSignal()?.aborted) {
-            return;
-          }
-          // The update stays successful; the skipped inspections are reported with a next step.
-          const detail = redactSensitiveText(
-            `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
-            { mode: "tools" },
-          ).slice(0, 2000);
-          await recordUpdateRunStepAsync(trial.runId, { step, status: "completed", detail });
-          await recordUpdateRunStepAsync(trial.runId, {
-            step: `warning:${step}`,
-            status: "completed",
-            detail,
-          });
-        }
-      }, getAsyncWorkSignal()),
-    );
-    if (!accepted) {
-      log.warn(
-        `update run ${trial.runId} post-update maintenance skipped: no Gateway update watcher`,
-      );
-    }
+    schedulePostUpdateMaintenance(trial);
   }
   trial.reported = true;
   await writeTrial(trial, prefix);
@@ -250,7 +254,9 @@ export async function announceReady(
   runningRoot: string | null = null,
 ): Promise<boolean> {
   const { settleLegacyTrial } = await import("./legacy-trial.js");
-  const legacySettled = await settleLegacyTrial(runningRoot, buildId);
+  const legacySettled = await settleLegacyTrial(runningRoot, buildId, (runId) =>
+    schedulePostUpdateMaintenance({ runId }),
+  );
   const lock = await readUpdateLock();
   // A restarted container can reuse the old Gateway's PID (including PID 1). A lock with this
   // PID taken after this process started is this Gateway's own update in progress, not a leftover.
