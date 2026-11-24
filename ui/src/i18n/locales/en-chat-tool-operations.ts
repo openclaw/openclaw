@@ -60,7 +60,7 @@ const enChatToolOperations = {
           reply: {
             action: "Reply to message",
             running: "Replying to message",
-            done: "Reply to message",
+            done: "Replied to message",
           },
           sendWithEffect: {
             action: "Send message with effect",

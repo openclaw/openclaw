@@ -1,10 +1,53 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { jsonResult } from "../../../../../src/agents/tools/tool-results.js";
+import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 const text = (container: ParentNode, selector: string) =>
   container.querySelector(selector)?.textContent;
+
+it.each([
+  [{ ok: true, messageId: "reply-guid", repliedTo: "parent-guid" }, "Replied to message"],
+  [{ ok: true, messageId: "unknown", repliedTo: "parent-guid" }, "Reply to message"],
+  [{ ok: true, messageId: "ok", repliedTo: "parent-guid" }, "Reply to message"],
+  [{ ok: true, dryRun: true, channel: "imessage", action: "reply" }, "Reply to message"],
+  [{ status: "suppressed", reason: "poll_vote_echo" }, "Reply to message"],
+  [{ error: "iMessage action timed out after 5000ms" }, "Reply to message"],
+  [undefined, "Reply to message"],
+] as const)(
+  "labels a recorded iMessage reply from its outbound receipt: %j",
+  async (payload, label) => {
+    const args = {
+      action: "reply",
+      channel: "imessage",
+      chatGuid: "iMessage;+;fixture",
+      messageId: "parent-guid",
+      message: "Fixture reply",
+    };
+    const result = payload && jsonResult(payload);
+    const isError = Boolean(payload && "error" in payload);
+    const [card] = extractToolCardsCached({
+      role: "assistant",
+      content: [
+        { type: "toolcall", id: "reply", name: "message", arguments: args },
+        {
+          type: "toolresult",
+          id: "reply",
+          name: "message",
+          isError,
+          content: result?.content ?? [],
+          details: projectToolResultDetails(result?.details, 4_096, { name: "message" }).details,
+        },
+      ],
+    });
+    expect(card?.args).toEqual(args);
+    const container = await mountCard(card!, { expanded: false });
+    expect(text(container, ".chat-tool-row__title")).toBe(label);
+  },
+);
 
 it.each([
   [{ live: true }, "Checking goal"],

@@ -1,5 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   unwrapToolCallForDisplay,
   unwrapToolResultTextForDisplay,
@@ -85,9 +86,9 @@ export function catalogToolIcon(name: string): IconName | undefined {
   return operationIcons.get(name.trim().toLowerCase());
 }
 
-function readMessageReactionReceipt(card: ToolCard) {
+function readMessageReceipt(card: ToolCard) {
   const details = asNullableRecord(card.details);
-  // History keeps ok/changed in details, but channels report removed in their JSON output.
+  // History projects only a few fields from details; the channel receipt stays in the JSON output.
   const receipt = {
     ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
     ...(asNullableRecord(asNullableRecord(details?.result)?.details) ?? details),
@@ -142,9 +143,7 @@ export function catalogToolLabel(
   let action = typeof args?.action === "string" ? args.action : undefined;
   if (name === "message" && action === "react") {
     const receipt =
-      outcome === "succeeded" && args?.dryRun !== true
-        ? readMessageReactionReceipt(card)
-        : undefined;
+      outcome === "succeeded" && args?.dryRun !== true ? readMessageReceipt(card) : undefined;
     const removed = receipt?.removed;
     const clearCount = Array.isArray(removed)
       ? removed.length
@@ -178,12 +177,26 @@ export function catalogToolLabel(
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
   }
-  const phase =
+  let phase =
     outcome === "running"
       ? "running"
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
+  if (name === "message" && operation === "reply" && phase === "done") {
+    const receipt = readMessageReceipt(card);
+    const messageId = normalizeOptionalString(receipt?.messageId);
+    // repliedTo is the parent. The iMessage bridge can return "ok" or "unknown" without a new ID.
+    if (
+      !normalizeOptionalString(receipt?.repliedTo) ||
+      !messageId ||
+      ["ok", "unknown", "skipped", "suppressed"].includes(messageId) ||
+      receipt?.dryRun === true ||
+      receipt?.status === "suppressed"
+    ) {
+      phase = "action";
+    }
+  }
   const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
   const actionLabel = addressed?.name
     ? t("chat.toolCards.namedOperation", { action: label, name: addressed.name })
