@@ -35,6 +35,19 @@ export type BackupScratchReport = {
 };
 
 export async function createBackupScratchDirectory(root: string): Promise<BackupScratch> {
+  try {
+    return await claimBackupScratchDirectory(root);
+  } catch (error) {
+    if (!isSqliteLockError(error) && !(error instanceof SqliteStagingRetiredError)) {
+      throw error;
+    }
+    // A concurrent repair can claim a visible directory before the creator does.
+    // Leave that directory with its owner and try one fresh allocation before staging any data.
+    return await claimBackupScratchDirectory(root);
+  }
+}
+
+async function claimBackupScratchDirectory(root: string): Promise<BackupScratch> {
   const directory = await createPrivateSqliteTempDirectory(root, ownedPrefix);
   let boundary: Root | undefined;
   try {

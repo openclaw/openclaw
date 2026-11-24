@@ -299,7 +299,7 @@ it("preserves a symlink target when scratch is replaced after transaction retire
   await expectContents(protectedFile, "unrelated data");
 });
 
-it("preserves retired scratch for maintenance instead of admitting it", async () => {
+it("preserves retired scratch for maintenance and admits only fresh scratch", async () => {
   const root = dirs.make("backup-scratch-admission-");
   const acquire = tokens.acquireSqliteStagingToken;
   let retired: string | undefined;
@@ -310,9 +310,14 @@ it("preserves retired scratch for maintenance instead of admitting it", async ()
     }
     return acquire(directory, mode, options);
   });
-  await expect(createScratch(root)).rejects.toBeInstanceOf(tokens.SqliteStagingRetiredError);
-  const report = await inspect(root);
-  expect(report).toMatchObject({ reclaimed: [retired], active: [] });
+  const fresh = await createScratch(root);
+  try {
+    expect(fresh.directory).not.toBe(retired);
+    const report = await inspect(root);
+    expect(report).toMatchObject({ reclaimed: [retired], active: [fresh.directory] });
+  } finally {
+    await finishScratch(fresh);
+  }
 });
 
 it("preserves unknown contents, legacy scratch, rollback directories and symbolic links", async () => {
