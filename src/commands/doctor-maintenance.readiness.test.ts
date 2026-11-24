@@ -79,6 +79,8 @@ it.each([
   expect(boundary.log).not.toHaveBeenCalledWith(
     "Gateway restarted and verified after Doctor maintenance.",
   );
+  // A stop duration is reported only for a verified restart.
+  expect(boundary.log).not.toHaveBeenCalledWith(expect.stringMatching(/^The Gateway was stopped/u));
   expect(boundary.restart).toHaveBeenCalledOnce();
 });
 
