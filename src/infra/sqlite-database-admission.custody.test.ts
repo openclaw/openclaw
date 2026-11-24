@@ -76,11 +76,11 @@ it("lets a raw worker's first snapshot retire a descriptor adopted after it star
     signal,
   );
   sibling = openNodeSqliteDatabase(location);
+  const fact = { name: "raw-worker-custody-proof" };
+  publishSqliteDatabaseAdmission(sibling, fact, 42);
   const record = state.registry.forLocation(location);
   assert(record && acquisition.descriptor !== undefined);
   physical = record.physicalIdentity;
-  const fact = { name: "raw-worker-custody-proof" };
-  publishSqliteDatabaseAdmission(sibling, fact, 42);
   const read = prepareSqliteDatabaseAdmissionForPath(location, fact);
   expect(read()).toBe(42);
   expect(record.descriptor).not.toBe(acquisition.descriptor);
