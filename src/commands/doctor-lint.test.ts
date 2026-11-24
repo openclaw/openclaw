@@ -754,31 +754,45 @@ describe("runDoctorLintCli", () => {
     });
 
     it("stops the spinner when a check throws", async () => {
-      mockConfig();
-      setStderrTTY(true);
-      registerHealthCheck({
-        id: "test/throws",
-        kind: "plugin",
-        description: "throws while the spinner runs",
-        detect: async () => {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 200);
-          });
-          throw new Error("boom");
-        },
-      });
+      // Only the spinner's frame interval is faked, so the run's own I/O keeps real time.
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      try {
+        mockConfig();
+        setStderrTTY(true);
+        let fail: () => void = () => {};
+        const failing = new Promise<void>((resolve) => {
+          fail = resolve;
+        });
+        registerHealthCheck({
+          id: "test/throws",
+          kind: "plugin",
+          description: "throws while the spinner runs",
+          detect: async () => {
+            await failing;
+            throw new Error("boom");
+          },
+        });
 
-      expect(await runDoctorLintCli(runtime, { onlyIds: ["test/throws"] })).toBe(1);
-      expect(mocks.progressEvents.at(-1)).toBe("done");
-      expect(JSON.parse(outputText())).toMatchObject({
-        ok: false,
-        findings: [expect.objectContaining({ checkId: "test/throws", severity: "error" })],
-      });
-      const writesAfterRun = stderr.mock.calls.length;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 300);
-      });
-      expect(stderr.mock.calls.length).toBe(writesAfterRun);
+        const run = runDoctorLintCli(runtime, { onlyIds: ["test/throws"] });
+        await vi.waitFor(() => expect(labels().at(-1)).toContain("test/throws"));
+        const writesBeforeFrames = stderr.mock.calls.length;
+        vi.advanceTimersByTime(500);
+        expect(stderr.mock.calls.length).toBeGreaterThan(writesBeforeFrames);
+
+        fail();
+        expect(await run).toBe(1);
+        expect(mocks.progressEvents.at(-1)).toBe("done");
+        expect(JSON.parse(outputText())).toMatchObject({
+          ok: false,
+          findings: [expect.objectContaining({ checkId: "test/throws", severity: "error" })],
+        });
+        const writesAfterRun = stderr.mock.calls.length;
+        vi.advanceTimersByTime(500);
+        expect(stderr.mock.calls.length).toBe(writesAfterRun);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

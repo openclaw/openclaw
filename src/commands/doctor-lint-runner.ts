@@ -16,7 +16,7 @@ import type { DoctorHealthCheckContext } from "../flows/doctor-health-contributi
 import {
   stateSchemaHealthCheck,
   exitCodeFromFindings,
-  runDoctorLintChecks,
+  runDoctorLintChecksWithProgress,
   selectUpdateReadinessChecks,
   type DoctorLintRunOptions,
 } from "../flows/doctor-lint-flow.js";
@@ -534,9 +534,10 @@ async function executeDoctorLint(
     includeAllChecks: opts.updateReadiness !== undefined || opts.includeAllChecks === true,
     skipIds: [...(opts.skipIds ?? []), ...(stateView.deferredCheckIds ?? [])],
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
-    onCheckStart: (check, index, total) => stateView.progress.check(index, total, check.id),
   };
-  const result = await runDoctorLintChecks(ctx, runOpts);
+  const result = await runDoctorLintChecksWithProgress(ctx, runOpts, (check, index, total) =>
+    stateView.progress.check(index, total, check.id),
+  );
   stateView.progress.phase("finishing report");
   const detectedFindings: readonly HealthFinding[] = [
     ...result.findings,
