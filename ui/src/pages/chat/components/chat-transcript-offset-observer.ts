@@ -411,8 +411,13 @@ export function observeTranscriptOffset(
       owner.invalidate();
     }
   };
+  // WebKit starts a keyboard scroll a frame after keydown, so the previous movement's idle
+  // (timer or scrollend) can arrive in between. Only the input's own scrolling can end it.
+  let inputAwaitingScroll = false;
   const finishScroll = () => {
-    owner.state.nativeInputActive = false;
+    if (!inputAwaitingScroll) {
+      owner.state.nativeInputActive = false;
+    }
     // Only touch scrolling holds history; wheel and trackpad settles need no render.
     if (!owner.state.touching && owner.state.touchScrolling) {
       owner.state.touchScrolling = false;
@@ -492,6 +497,7 @@ export function observeTranscriptOffset(
     owner.state.pendingInteractionAnchor = null;
     owner.state.maintenanceScrollOffset = null;
     owner.state.nativeInputActive = true;
+    inputAwaitingScroll = true;
     // Native scrolling may precede input delivery. Attribute the gesture before
     // cancellation or offset synchronization publishes that consumed movement.
     publishInput(event);
@@ -561,6 +567,7 @@ export function observeTranscriptOffset(
     owner.onComposerLayout(true);
     if (event.target === element) {
       nativeScrollEvent = event;
+      inputAwaitingScroll = false;
     }
   };
   const listeners = new AbortController();
