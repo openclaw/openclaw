@@ -239,7 +239,7 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
   });
 }
 
-export function intersectOperatorRunModelPolicy(
+function intersectOperatorRunModelPolicy(
   original: PreparedOperatorModelPolicy | undefined,
   current: PreparedOperatorModelPolicy | undefined,
 ): PreparedOperatorModelPolicy | undefined {
