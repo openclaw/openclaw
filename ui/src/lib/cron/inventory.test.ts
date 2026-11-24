@@ -15,6 +15,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { createInitialCronState } from "./editor-state.ts";
 import {
   bindCronInventory,
   clearCronInventory,
@@ -22,7 +23,6 @@ import {
 } from "./inventory-connection.ts";
 import { readCronInventory } from "./inventory.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
-import { createInitialCronState } from "./state.ts";
 
 const hello: GatewayHelloOk = {
   type: "hello-ok",

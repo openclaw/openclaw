@@ -2,6 +2,7 @@ import { elementScroll, Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 
 it("keeps native zero when a prepared predecessor lands its first measurement", () => {
@@ -42,7 +43,11 @@ it("keeps native zero when a prepared predecessor lands its first measurement", 
       offsetState: new TranscriptOffsetState(),
       renderer: { columnElement: column, queueAfterCommit: () => {} },
       initialRange: { pending: false },
-      prependAnchor: { messageKey: null },
+      prependAnchor: new TranscriptPrependAnchor(
+        new Map(),
+        () => {},
+        () => false,
+      ),
       headerHeight: 0,
       scrollElement: viewport,
       contentElement: content,
@@ -101,7 +106,11 @@ it("preserves a near-end reader when a deferred measurement shrinks the native r
       offsetState: new TranscriptOffsetState(),
       renderer: { columnElement: column, queueAfterCommit: () => {} },
       initialRange: { pending: false },
-      prependAnchor: { messageKey: null },
+      prependAnchor: new TranscriptPrependAnchor(
+        new Map(),
+        () => {},
+        () => false,
+      ),
       headerHeight: 0,
       scrollElement: viewport,
       contentElement: content,
@@ -165,7 +174,11 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
         offsetState,
         renderer: { columnElement: column, queueAfterCommit: () => {} },
         initialRange: { pending: false },
-        prependAnchor: { messageKey: null },
+        prependAnchor: new TranscriptPrependAnchor(
+          new Map(),
+          () => {},
+          () => false,
+        ),
         headerHeight: 0,
         scrollElement: viewport,
         contentElement: content,
@@ -276,7 +289,11 @@ it("keeps visible rows still when a prepared row joins the flow beside a new row
       offsetState: new TranscriptOffsetState(),
       renderer: { columnElement: column, queueAfterCommit: () => {} },
       initialRange: { pending: false },
-      prependAnchor: { messageKey: null },
+      prependAnchor: new TranscriptPrependAnchor(
+        new Map(),
+        () => {},
+        () => false,
+      ),
       headerHeight: 0,
       scrollElement: viewport,
       contentElement: content,
@@ -353,7 +370,13 @@ it("keeps a new predecessor stable after another row's owned measurement", async
   virtualizer.elementsCache.set("1", owned);
   virtualizer.elementsCache.set("2", retained);
   virtualizer.resizeItem(1, owned.offsetHeight);
-  const prependAnchor: { messageKey: string | null } = { messageKey: null };
+  retained.dataset.messageId = "2";
+  const prependAnchor = new TranscriptPrependAnchor(
+    new Map([["2", retained]]),
+    () => {},
+    () => false,
+  );
+  prependAnchor.messageKeys = new Set(["2"]);
   const anchor = new TranscriptReaderAnchor(
     {
       virtualizer,
@@ -385,12 +408,12 @@ it("keeps a new predecessor stable after another row's owned measurement", async
   });
   const top = retained.getBoundingClientRect().top;
   // The positioning owner measures and restores this row before native delivery.
-  prependAnchor.messageKey = "2";
+  prependAnchor.capture(viewport, false, true);
   const previousHeight = owned.offsetHeight;
   owned.style.height = "210px";
   virtualizer.resizeItem(1, owned.offsetHeight);
   viewport.scrollTop += owned.offsetHeight - previousHeight;
-  prependAnchor.messageKey = null;
+  prependAnchor.clear();
 
   const predecessor = row(0, 80);
   rows.push(predecessor);

@@ -6,6 +6,7 @@ import { resolveMergedModelProviderConfig } from "../config/model-provider-confi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { ProviderAuthFailure } from "../plugins/provider-auth-failure.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
@@ -27,10 +28,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import {
-  buildOAuthRefreshFailureLoginCommand,
-  OAuthRefreshFailureError,
-} from "./auth-profiles/oauth-refresh-failure.js";
+import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { isFailedOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
@@ -703,11 +701,13 @@ export async function resolveApiKeyForProviderCore(input: {
     return credential?.type === "oauth" && isFailedOAuthRefreshFence(credential);
   });
   if (endedProfileId) {
+    // Each surface renders the typed failure: chat offers `/login` and Sign in, the CLI its command.
+    const failure = new ProviderAuthFailure("refresh_rejected");
     throw new ProviderAuthError(
       "missing-provider-auth",
       provider,
-      `The ${provider} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected. Sign in again with ${buildOAuthRefreshFailureLoginCommand(provider, { profileId: endedProfileId })}.`,
-      { providerGuidance: true },
+      `The ${provider} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected.`,
+      { providerGuidance: true, cause: failure },
     );
   }
 

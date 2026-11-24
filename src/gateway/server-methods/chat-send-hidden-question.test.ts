@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { attachSteerBackend } from "../../auto-reply/reply/agent-runner-steer-adoption.test-support.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -62,16 +62,15 @@ it.each(
         },
       };
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      owner.operatorAuthority = createAdmittedRunOperatorAuthority({
+      owner.operatorAuthority = createTestOperatorAuthority({
         profileId: "question-owner",
         scopes: ["operator.admin"],
         gatewayAccessGrant: null,
         modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-        assertCurrent: () => operation.abortSignal.throwIfAborted(),
       });
       const incomingAuthority =
         caller === "different profile"
-          ? createAdmittedRunOperatorAuthority({
+          ? createTestOperatorAuthority({
               ...owner.operatorAuthority,
               profileId: "question-participant",
             })

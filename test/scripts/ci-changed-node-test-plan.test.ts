@@ -175,7 +175,6 @@ describe("selected boundary setup sharing", () => {
 
   it.each([
     { measurement: "complete", prices: [1, 1], allocations: 1 },
-    { measurement: "missing", prices: [1, undefined], allocations: 2 },
     { measurement: "expensive", prices: [75, 1], allocations: 2 },
   ])(
     "shares boundary setup only for a short $measurement tooling selection",
@@ -232,6 +231,7 @@ describe("selected boundary setup sharing", () => {
   it("retains the standalone gate when setup, concurrency, or timing cannot be shared", () => {
     const base = tooling();
     const variants = [
+      { predictedSeconds: undefined, predictedTestSeconds: undefined },
       { predictedSeconds: 61, predictedTestSeconds: 61 },
       { runner: "blacksmith-32vcpu-ubuntu-2404" },
       { planConcurrency: 2 },

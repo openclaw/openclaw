@@ -9,10 +9,8 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { expectCollected } from "../../../test-utils/retention.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { markCodeModePermissionChangeResult } from "../../code-mode-permission-change.js";
@@ -170,10 +168,9 @@ it.each(
 )(
   "aborts $surface tools before parameter preparation or effects ($outcome)",
   async ({ surface, outcome }) => {
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "reviewer-caller",
       scopes: [],
-      assertCurrent() {},
     });
     const skillsSnapshot = {
       prompt: "",

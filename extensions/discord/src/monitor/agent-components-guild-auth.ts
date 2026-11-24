@@ -111,39 +111,6 @@ async function ensureGuildComponentMemberAllowed(params: {
   return false;
 }
 
-export async function ensureAgentComponentInteractionAllowed(params: {
-  ctx: AgentComponentContext;
-  interaction: AgentComponentInteraction;
-  channelId: string;
-  rawGuildId: string | undefined;
-  memberRoleIds: string[];
-  user: DiscordUser;
-  componentLabel: string;
-  unauthorizedReply: string;
-}) {
-  const ctx = await resolveAgentComponentPolicyContext(params);
-  if (!ctx) {
-    return null;
-  }
-  const guildContext = resolveComponentGuildContext({ ...params, ctx });
-  const memberAllowed = await ensureGuildComponentMemberAllowed({
-    ...params,
-    ...guildContext,
-    groupPolicy: guildContext.groupPolicy,
-  });
-  if (!memberAllowed) {
-    return null;
-  }
-  if (ctx.isPolicyCurrent?.() === false) {
-    await replyUnavailableComponentInteraction(
-      params.interaction,
-      "Access policy changed. Try this interaction again.",
-    );
-    return null;
-  }
-  return { parentId: guildContext.channelCtx.parentId };
-}
-
 export async function resolveAuthorizedComponentInteraction(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;

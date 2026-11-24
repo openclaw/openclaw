@@ -8,6 +8,7 @@ import {
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
+import { readSessionWatchdogFailure } from "../sessions/session-controller.watchdog-error.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   applyCommandLaneCapacity,
@@ -219,6 +220,7 @@ function drainLane(
                   errorName: readErrorName(err) || undefined,
                   ...taskIdentity,
                   ...readOperatorAuthorityFailure(err),
+                  ...readSessionWatchdogFailure(err),
                 },
               );
             } else if (!quietFailure) {

@@ -307,7 +307,13 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
           sessionIdUsed: sessionId,
           messagesSnapshot: messages,
           ...(mixedPreflight
-            ? { preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" } }
+            ? {
+                preflightRecovery: {
+                  route: "compact_then_truncate",
+                  pressure: "overflow",
+                  source: "mid-turn",
+                },
+              }
             : {}),
         }),
         runtimeAuthPlan: undefined,

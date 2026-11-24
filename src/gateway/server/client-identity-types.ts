@@ -14,21 +14,28 @@ export type GatewayAuthenticatedUserProfile = {
   updatedAt: number;
 };
 
-export type RemoteIngressPrincipalSnapshot = Readonly<{
+export type RemoteIngressPrincipalIdentity = Readonly<{
   bindingId: string;
-  /** Host-captured original admission, carried across further app approvals. */
-  admission?: string;
-  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
-  recoverySource?: Readonly<{ pluginId: string; audienceId: string; recoveryId: string }>;
-  authenticatedUserProfile: GatewayAuthenticatedUserProfile;
-  preparedSessionProfile: UserProfileIdentity;
-  operatorRoleActor: GatewayOperatorRoleActor;
-  operatorRolePolicy?: GatewayOperatorRoleDefinition;
-  operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
-  scopes: string[];
-  signal: AbortSignal;
-  assertCurrent(): void;
+  pluginId: string;
+  audienceId: string;
+  principal: GatewayIngressPrincipal;
 }>;
+
+export type RemoteIngressPrincipalSnapshot = RemoteIngressPrincipalIdentity &
+  Readonly<{
+    /** Host-captured original admission, carried across further app approvals. */
+    admission?: string;
+    openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    recoverySource?: Readonly<{ pluginId: string; audienceId: string; recoveryId: string }>;
+    authenticatedUserProfile: GatewayAuthenticatedUserProfile;
+    preparedSessionProfile: UserProfileIdentity;
+    operatorRoleActor: GatewayOperatorRoleActor;
+    operatorRolePolicy?: GatewayOperatorRoleDefinition;
+    operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
+    scopes: string[];
+    signal: AbortSignal;
+    assertCurrent(): void;
+  }>;
 
 /** Core-retained grant authority; browser headers cannot create this context. */
 export type RemoteControlUiIngressContext = Readonly<{

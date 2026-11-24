@@ -30,7 +30,7 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
   params: Exclude<
     SessionGitHubActionParams,
-    { action: "refresh_base" | "inspect_pr" | "prepare_pr" }
+    { action: "refresh_base" | "inspect_pr" | "prepare_pr" | "create_issue" }
   >;
 };
 function assertPreservedPublicationFooter(before: string, after: string) {
@@ -116,9 +116,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   const assertRequester = () => {
     target.assertCurrent();
     admitted.requester.assertCurrent();
-    if (requiresOperatorWrite) {
-      callerOperator?.assertCurrent();
-    }
     if (
       requiresOperatorWrite &&
       !roleScopesAllow({

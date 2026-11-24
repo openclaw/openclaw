@@ -1,4 +1,11 @@
-import { history, historyKeymap, insertNewline, standardKeymap } from "@codemirror/commands";
+import {
+  history,
+  historyKeymap,
+  insertNewline,
+  isolateHistory,
+  standardKeymap,
+  undo,
+} from "@codemirror/commands";
 import {
   Compartment,
   EditorSelection,
@@ -476,6 +483,20 @@ export function mountComposerEditor(
         selection: { anchor: from + text.length },
         scrollIntoView: true,
       });
+    },
+    replaceAll(text) {
+      sync();
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        userEvent: "input.replace",
+        annotations: isolateHistory.of("full"),
+        selection: { anchor: text.length },
+        scrollIntoView: true,
+      });
+    },
+    undo() {
+      sync();
+      undo(view);
     },
   });
   // Container queries can shrink the scrollport without a document change.

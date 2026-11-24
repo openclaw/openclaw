@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
@@ -12,8 +14,11 @@ import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
 } from "../../sessions/session-controller.session-reader.js";
+import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { prepareCommandOwnerAuthority } from "../command-auth.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -39,24 +44,23 @@ export async function prepareReplySourceAdmission(params: {
     if (operation.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
     }
-    followupRun.operatorAuthority?.assertCurrent();
     assertSessionControllerOperation(operation);
   };
   assertCurrent();
   await recorder.resolveMessage();
   assertCurrent();
   const ownsCustody = !recorder.getPendingInputMessage?.() && !recorder.hasPersisted();
+  let admissionFailure: unknown;
   const release = ownsCustody
-    ? async () => {
-        try {
-          recorder.finishPendingInput?.(
-            "cancelled",
-            isUserInitiatedAgentRunAbortReason(operation.abortSignal.reason) ? true : undefined,
-          );
-        } finally {
-          await recorder.waitForPendingInputSettlement?.();
-        }
-      }
+    ? () =>
+        settleUserTurnPendingInput(
+          recorder,
+          operation.abortSignal,
+          admissionFailure,
+          false,
+          "cancelled",
+          operation.turnKind === "queued_followup",
+        )
     : undefined;
   try {
     if (ownsCustody && getReplyOperationSessionTarget(operation)) {
@@ -80,6 +84,7 @@ export async function prepareReplySourceAdmission(params: {
     assertCurrent();
     return release;
   } catch (error) {
+    admissionFailure = error;
     await release?.();
     throw error;
   }
@@ -130,7 +135,7 @@ export async function enqueueReplySourceAdmission(params: {
   const assertCurrent = () => {
     input.abortSignal.throwIfAborted();
     params.assertCurrent();
-    input.sourceAdapter?.authority?.assertCurrent();
+    input.sourceAdapter?.authority?.assertCurrent?.();
   };
   let staged = false;
   if (recorder && !recorder.getPendingInputMessage?.() && !recorder.hasPersisted()) {
@@ -149,7 +154,11 @@ export async function enqueueReplySourceAdmission(params: {
   }
   const enqueued = params.enqueue();
   if (!enqueued && staged) {
-    recorder?.finishPendingInput?.("cancelled");
+    // Terminal overflow already records its own cause. Retryable capacity pressure
+    // leaves the accepted row and its live owner with the mailbox.
+    if (recorder?.isPendingInputConsumed?.()) {
+      recorder.releasePendingInput?.();
+    }
     await recorder?.waitForPendingInputSettlement?.();
   }
   return enqueued;
@@ -189,11 +198,92 @@ export async function prepareReplySystemPrincipalAuthority(params: {
     run.senderName = undefined;
     bindCommandOwnerAuthority(run, {
       operatorAuthority: authority,
-      isCurrent: () => {
-        authority.assertCurrent();
-        return true;
-      },
+      isCurrent: () => true,
     });
   }
   return principal;
+}
+
+/** Admit a queued command-owner source once, retaining only the execution's lifetime afterward. */
+export async function prepareReplyCommandOwnerAuthority(params: {
+  run: FollowupRun["run"];
+  config: OpenClawConfig;
+  operation: ReplyOperation;
+  hasOperatorAuthority: boolean;
+  assertCurrent: () => void;
+}): Promise<void> {
+  const { run, operation } = params;
+  // Command-owner policy belongs to the host, not the model's scoped execution config.
+  const config = getRuntimeConfigSnapshot() ?? params.config;
+  const origin = run.requesterOrigin;
+  const retainedOwner = getCommandOwnerAuthority(run);
+  const ownerReference = retainedOwner?.recoveryReference;
+  const channelPrincipal =
+    retainedOwner?.channelPrincipal ??
+    (!run.internalEventExecution &&
+    !run.sessionEventOrigin &&
+    origin?.messageProvider &&
+    !origin.operatorProfileId &&
+    origin.messageProvider !== INTERNAL_MESSAGE_CHANNEL &&
+    origin.senderId
+      ? {
+          channelId: origin.messageProvider,
+          accountId: normalizeAccountId(origin.accountId),
+          senderId: origin.senderId,
+        }
+      : undefined);
+  const nativeOwner =
+    channelPrincipal && ownerReference?.version !== 1
+      ? {
+          channel: channelPrincipal.channelId,
+          accountId: channelPrincipal.accountId,
+          senderId: channelPrincipal.senderId,
+          senderE164:
+            origin?.messageProvider === channelPrincipal.channelId &&
+            normalizeAccountId(origin.accountId) === channelPrincipal.accountId &&
+            origin.senderId === channelPrincipal.senderId
+              ? (origin.senderE164 ?? undefined)
+              : undefined,
+        }
+      : undefined;
+  if (
+    ownerReference ||
+    nativeOwner ||
+    (origin?.messageProvider &&
+      !origin.operatorProfileId &&
+      origin.messageProvider !== INTERNAL_MESSAGE_CHANNEL &&
+      !run.internalEventExecution &&
+      !run.sessionEventOrigin)
+  ) {
+    const owner = await prepareCommandOwnerAuthority(
+      config,
+      nativeOwner ??
+        ownerReference ?? {
+          channel: origin?.messageProvider ?? undefined,
+          accountId: origin?.accountId ?? undefined,
+          senderId: origin?.senderId ?? undefined,
+          senderE164: origin?.senderE164 ?? undefined,
+        },
+    );
+    params.assertCurrent();
+    const senderIsOwner = owner.isCurrent(config);
+    run.senderIsOwner = senderIsOwner;
+    run.traceAuthorized = senderIsOwner;
+    bindCommandOwnerAuthority(run, {
+      recoveryReference: owner.recoveryReference,
+      channelPrincipal,
+      isCurrent: () => senderIsOwner && !operation.abortSignal.aborted && !operation.result,
+      // A successor re-admits these native source facts, not this operation's lifetime.
+      successor: {
+        recoveryReference: owner.recoveryReference,
+        channelPrincipal,
+        isCurrent: () => senderIsOwner,
+      },
+    });
+  } else if (!params.hasOperatorAuthority && retainedOwner) {
+    // A profile-only or legacy owner has no authenticated source for another owner turn.
+    run.senderIsOwner = false;
+    run.traceAuthorized = false;
+    bindCommandOwnerAuthority(run, { isCurrent: () => false });
+  }
 }

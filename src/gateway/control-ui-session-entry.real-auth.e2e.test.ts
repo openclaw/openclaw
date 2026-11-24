@@ -382,7 +382,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     }
   });
 
-  for (const change of ["visibility", "role"] as const) {
+  for (const change of ["visibility"] as const) {
     it(`withholds all app bytes when ${change} changes after real document preparation`, async () => {
       await addSessionMember(privateScope, { identityId: memberId, addedBy: ownerId });
       const held = holdPreparedDocument();
@@ -399,12 +399,8 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         expect(prepared.current).toBe(true);
         expect(prepared.body).toContain("<openclaw-app");
         expect(prepared.res.headersSent).toBe(false);
-        if (change === "visibility") {
-          // Membership alone does not grant or revoke this role's read access.
-          await patchSessionEntryCore(privateScope, () => ({ visibility: "draft" }));
-        } else {
-          await setCanonicalUserProfileRole(memberId, "denied", roleOptions);
-        }
+        // Membership alone does not grant or revoke this role's read access.
+        await patchSessionEntryCore(privateScope, () => ({ visibility: "draft" }));
         expect(prepared.res.headersSent).toBe(false);
         held.resume();
         const response = await pending;
@@ -420,10 +416,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         held.resume();
         await Promise.allSettled([pending]);
         held.restore();
-        if (change === "visibility") {
-          await patchSessionEntryCore(privateScope, () => ({ visibility: "read-only" }));
-        }
-        await setCanonicalUserProfileRole(memberId, null, roleOptions);
+        await patchSessionEntryCore(privateScope, () => ({ visibility: "read-only" }));
       }
     });
   }

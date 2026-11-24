@@ -275,7 +275,6 @@ function runBatch(
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "error" | "busy") => void,
 ) {
   return cron.run(job.id, "force", {
-    evaluateTrigger: true,
     streamBatch: batch,
     payload: job.payload,
     onTriggerDisposition,

@@ -91,7 +91,8 @@ truncated. The caller's requested URL is preserved.
     header. Blocks private/internal hostnames and re-checks redirects.
   </Step>
   <Step title="Extract">
-    Runs Readability (main-content extraction) on the HTML response.
+    Runs Readability (main-content extraction) on a background worker so HTML
+    parsing does not block the Gateway.
   </Step>
   <Step title="Fallback (optional)">
     If Readability fails and a fetch provider is available, retries through
@@ -133,6 +134,10 @@ ignores cancellation. Already-canceled calls reject even when a cached result
 exists. If cancellation occurs during fetching, fallback processing, or
 connection cleanup, OpenClaw rejects the call instead of returning success or
 adding a result to the fetch cache.
+
+Readability extraction stops waiting when the fetch is canceled or its request
+timeout expires. Extraction already admitted to a worker finishes under the
+existing HTML limits; its late result is discarded.
 
 ## Config
 

@@ -16,13 +16,8 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
-import {
-  prepareSandboxFsContext,
-  prepareSandboxMountSources,
-} from "../../skills/runtime/refresh.js";
-import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
-import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
+import { prepareSandboxFsContext } from "../../skills/runtime/refresh.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import {
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
@@ -34,9 +29,7 @@ import {
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagents/subagent-attachment-paths.js";
-import { runWorkspaceFilesystemOperation } from "../workspace-filesystem.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
-import { ensureSandboxWorkspace } from "../workspace.js";
 import {
   timeWorktreePreparationPhase,
   withWorktreePreparationTiming,
@@ -50,7 +43,6 @@ import { retainSandboxContainerUsage } from "./container-usage.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
-import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
 import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
@@ -58,161 +50,14 @@ import {
 } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxSession } from "./session-selection.js";
-import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner } from "./state-owner.js";
 import { bindStreamSandboxContext } from "./stream-context.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import { ensureSandboxWorkspaceLayout } from "./workspace-layout.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
 
-const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
-  () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
-  "syncWorkspaceSkills",
-);
-
-async function ensureSandboxWorkspaceLayout(
-  params: ResolveSandboxContextParams,
-  selected: Awaited<ReturnType<typeof prepareSandboxWorkspaceSelection>>,
-  guard?: WorkspaceStateGuard,
-  lifetime?: DisposableStack,
-): Promise<{
-  agentWorkspaceDir: string;
-  scopeKey: string;
-  skillsWorkspaceDir: string;
-  skillsEligibility?: SkillEligibilityContext;
-  skillUsagePaths?: SkillUsagePath[];
-  workspaceDir: string;
-}> {
-  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.layout.workspace");
-  const { rawSessionKey, runtime, localWorkspace } = selected;
-  const assertCurrent = localWorkspace?.assertCurrent ?? params.assertCurrent;
-  const cfg = localWorkspace ? { ...selected.cfg, workspaceAccess: "rw" as const } : selected.cfg;
-  const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
-    resolveSandboxWorkspaceLayoutPaths({
-      cfg,
-      rawSessionKey,
-      agentId: runtime.agentId,
-      isolationSubject:
-        localWorkspace && runtime.isolationSubject?.kind !== "session"
-          ? { kind: "session", sessionKey: rawSessionKey }
-          : runtime.isolationSubject,
-      workspaceDir: localWorkspace?.workspaceDir ?? params.workspaceDir,
-    });
-
-  assertCurrent?.();
-  if (lifetime) {
-    if (localWorkspace) {
-      await localWorkspace.protectRuntimeScope(scopeKey);
-    } else {
-      lifetime.use(await acquireSandboxRuntimeUse({ scopeKey }));
-    }
-    assertCurrent?.();
-  }
-  if (cfg.workspaceAccess !== "rw") {
-    await ensureSandboxWorkspace(
-      sandboxWorkspaceDir,
-      agentWorkspaceDir,
-      params.config?.agents?.defaults?.skipBootstrap,
-      params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
-      guard,
-    );
-  } else {
-    await runWorkspaceFilesystemOperation({ kind: "mkdir", dir: workspaceDir }, guard);
-  }
-  assertCurrent?.();
-  const targetWorkspaceDir =
-    cfg.workspaceAccess === "rw" ? skillsWorkspaceDir : sandboxWorkspaceDir;
-  const { config, execOverrides, skillsSnapshot } = params;
-  const agentId = runtime.agentId;
-  async function syncSandboxSkillsToWorkspace(): Promise<{
-    eligibility?: SkillEligibilityContext;
-    skillUsagePaths?: SkillUsagePath[];
-  }> {
-    try {
-      phases.mark("attempt.setup.sandbox.layout.skills_import");
-      const [
-        syncWorkspaceSkills,
-        { getRemoteSkillEligibility },
-        { resolveNodeExecEligibilityAsync },
-      ] = await Promise.all([
-        loadSyncWorkspaceSkills(),
-        import("../../skills/runtime/remote.js"),
-        import("../exec-defaults.js"),
-      ]);
-      assertCurrent?.();
-      phases.mark("attempt.setup.sandbox.layout.remote_skills");
-      await prepareRemoteSkillConnections();
-      assertCurrent?.();
-      phases.mark("attempt.setup.sandbox.layout.skill_eligibility");
-      const nodeSkills = await resolveNodeExecEligibilityAsync({
-        cfg: config,
-        sessionKey: rawSessionKey,
-        agentId,
-        execOverrides,
-      });
-      const eligibility: SkillEligibilityContext = {
-        nodeSkills,
-        remote: getRemoteSkillEligibility({
-          advertiseExecNode: nodeSkills.canExec,
-        }),
-      };
-      phases.mark("attempt.setup.sandbox.layout.skills_sync");
-      const skillUsagePaths = await syncWorkspaceSkills({
-        sourceWorkspaceDir: agentWorkspaceDir,
-        targetWorkspaceDir,
-        readOnlyTarget: cfg.backend === "docker" || cfg.backend === "podman",
-        config,
-        agentId,
-        eligibility,
-        skillsSnapshot,
-        assertCurrent,
-        stateOwnerPath: guard?.stateOwnerPath,
-      });
-      assertCurrent?.();
-      return { eligibility, skillUsagePaths };
-    } catch (error) {
-      assertCurrent?.();
-      if (hasErrnoCode(error, "GATEWAY_STATE_OWNER_REQUIRED")) {
-        throw error;
-      }
-      const message = error instanceof Error ? error.message : JSON.stringify(error);
-      defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
-      if (skillsSnapshot?.librarySelections?.length) {
-        throw error;
-      }
-      return {};
-    }
-  }
-  const syncedSkills = await syncSandboxSkillsToWorkspace();
-  const createdSkillMountSources = await prepareSandboxMountSources(
-    {
-      workspaceDir,
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-      workdir: cfg.docker.workdir,
-      workspaceAccess: cfg.workspaceAccess,
-    },
-    assertCurrent,
-    guard?.stateOwnerPath,
-  );
-  if (createdSkillMountSources && localWorkspace) {
-    // Finish producer-created layout before first use, so source admission does
-    // not mistake protected mount directories for unsaved guest work.
-    await localWorkspace.checkpoint({ knownMutation: true });
-    assertCurrent?.();
-  }
-
-  return {
-    agentWorkspaceDir,
-    scopeKey,
-    skillsWorkspaceDir,
-    ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
-    ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
-    workspaceDir,
-  };
-}
-
-type ResolveSandboxContextParams = {
+export type ResolveSandboxContextParams = {
   config?: OpenClawConfig;
   agentId?: string;
   execOverrides?: ExecPolicyOverrides;
@@ -271,12 +116,7 @@ async function prepareSandboxWorkspaceSelection(
         assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         stateOwnerPath: guard?.stateOwnerPath,
         assertHost: () => {
-          if (persistentExecution) {
-            guard?.assertHost?.();
-            return;
-          }
-          if (params.admittedRunContext) {
-            operatorAuthority?.assertCurrent();
+          if (persistentExecution || params.admittedRunContext) {
             guard?.assertHost?.();
           } else {
             params.assertCurrent?.();
@@ -354,7 +194,6 @@ async function resolveSandboxContextWithAuthority(
   const assertCallerCurrent = params.assertCurrent;
   const assertCurrent = () => {
     assertCallerCurrent?.();
-    operatorAuthority?.assertCurrent();
     assertStateOwner();
   };
   const ownedParams = { ...params, assertCurrent };

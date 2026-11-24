@@ -1,6 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createDecisionTool } from "../agents/tools/decision-tool.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -312,10 +312,9 @@ describe("registered decision capability", () => {
         },
       };
       setRuntimeConfigSnapshot(selected);
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "decision-reader",
         scopes: ["operator.write"],
-        assertCurrent: () => {},
         modelPolicy: prepareOperatorModelPolicy({
           cfg: selected,
           policy: { sourceAgent: "main", allow: ["fixture/*"], deny: ["fixture/fixture-v1"] },
@@ -344,7 +343,7 @@ describe("registered decision capability", () => {
             ),
       ).rejects.toThrow(
         source === "unbound-operator"
-          ? "requires original Gateway authority"
+          ? "Decision evaluation requires its current Gateway binding."
           : "cannot use this model",
       );
       expect(evaluate).not.toHaveBeenCalled();

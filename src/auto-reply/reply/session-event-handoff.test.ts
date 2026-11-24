@@ -8,10 +8,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../../agents/admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -195,6 +193,38 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("carries the persisted native conversation ID into a completion turn", async ({
+    nativeState: { env },
+  }) => {
+    const nativeChannelId = "123456789012345678";
+    const deliveryContext = { channel: "discord", to: `channel:${nativeChannelId}` };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    writeSessionEntry(database, sessionKey, {
+      sessionId: "original-session",
+      lifecycleRevision: "original-revision",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({
+        context: deliveryContext,
+        origin: { provider: "discord", nativeChannelId },
+      }),
+    });
+
+    const target = await captureTarget("main", sessionKey, { env });
+    const ctx = buildSessionEventContext({
+      cfg: {},
+      ...eventScope,
+      text: "Process completed",
+      options: { source: "exec" },
+      occurrenceId: "native-conversation",
+      deliveryContext: target.deliveryContext,
+      target,
+      assertCurrent() {},
+    });
+
+    expect(ctx.ChatId).toBe(nativeChannelId);
+    expect(ctx.OriginatingTo).toBe(deliveryContext.to);
+  });
+
   it("retains scheduled creation restrictions and private skill pins only for absent targets", async ({
     state: _state,
   }) => {
@@ -585,7 +615,11 @@ describe("session event target custody", () => {
         sessionKey,
         sessionEventToolsAllow: toolsAllow,
         operationalRunInstance: createOperationalRunInstanceRef(runId),
-        receiptAuthority: () => invocationActive,
+        receiptAuthority: () => {
+          if (!invocationActive) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () =>
         captureTarget("main", sessionKey, {
@@ -626,7 +660,15 @@ describe("session event target custody", () => {
     async (owner, { state: { env } }) => {
       let active = true;
       const capture = withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, receiptAuthority: () => owner !== "invocation" || active },
+        {
+          agentId: "main",
+          sessionKey,
+          receiptAuthority: () => {
+            if (owner === "invocation" && !active) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
+        },
         () =>
           captureTarget("main", sessionKey, {
             env,
@@ -646,7 +688,7 @@ describe("session event target custody", () => {
       } else {
         active = false;
         await expect(capture).rejects.toThrow(
-          owner === "invocation" ? "no longer owns its invocation" : "Background producer retired",
+          owner === "invocation" ? "no longer active" : "Background producer retired",
         );
       }
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
@@ -714,16 +756,14 @@ describe("session event target custody", () => {
 it("retains one requester until pre-admission cancellation", async ({ signal, state: { env } }) => {
   const release = vi.fn();
   const retain = vi.fn(() => release);
-  const guest = createAdmittedRunOperatorAuthority({
+  const guest = createTestOperatorAuthority({
     profileId: "guest",
     scopes: ["operator.write"],
-    assertCurrent() {},
     retain,
   });
-  const admin = createAdmittedRunOperatorAuthority({
+  const admin = createTestOperatorAuthority({
     profileId: "admin",
     scopes: ["operator.admin"],
-    assertCurrent() {},
   });
   const target = await captureTarget("main", sessionKey, {
     env,

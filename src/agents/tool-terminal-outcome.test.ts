@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agent } from "../../packages/agent-core/src/agent.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveCronPayloadOutcome } from "../cron/isolated-agent/helpers.js";
 import type { Message, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
@@ -129,6 +130,110 @@ describe("tool terminal outcome observer", () => {
       }
     },
   );
+
+  it.each([
+    { verboseLevel: "off", expected: "⚠️ Automations failed" },
+    {
+      verboseLevel: "full",
+      expected: "⚠️ Automations failed: record_result already accepted for this automation run",
+    },
+  ] as const)(
+    "names the dispatched tool, not the dispatcher, at $verboseLevel verbosity",
+    async ({ verboseLevel, expected }) => {
+      const { emit, subscription } = createSubscribedSessionHarness({ runId: "dispatched" });
+      const turns = [
+        [
+          makeToolCall("call-dispatch", "dispatch_action", {
+            id: "automations",
+            args: { action: "record_result", outcome: "no_change" },
+          }),
+        ],
+      ];
+      const agent = new Agent({
+        initialState: {
+          model: steeringModel,
+          tools: [
+            {
+              name: "dispatch_action",
+              label: "Tool Call",
+              description: "Calls a catalog tool.",
+              parameters: Type.Object({ id: Type.String(), args: Type.Object({}) }),
+              execute: async () => {
+                throw new Error("record_result already accepted for this automation run");
+              },
+            },
+          ],
+        },
+        streamFn: () => responseStream(turns.shift() ?? []),
+      });
+      const unsubscribe = agent.subscribe(emit);
+      try {
+        await agent.prompt("Run the scheduled check.");
+        await subscription.waitForPendingEvents();
+        const payloads = buildPayloads({
+          isCronTrigger: true,
+          verboseLevel,
+          assistantTexts: subscription.assistantTexts,
+          lastAssistant: subscription.getCurrentAttemptAssistant(),
+          lastToolError: subscription.getLastToolError(),
+        });
+        expect(payloads.map((payload) => payload.text)).toEqual([expected]);
+      } finally {
+        unsubscribe();
+        subscription.unsubscribe();
+      }
+    },
+  );
+
+  it.each([
+    { name: "recovers", recovered: true },
+    { name: "never recovers", recovered: false },
+  ])("keeps a scheduled run whose model calls a missing tool and $name", async ({ recovered }) => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "51" }],
+      details: {},
+    }));
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "missing-tool" });
+    const turns = [
+      [makeToolCall("call-missing", "cream_exec", { command: "cat state.json" })],
+      ...(recovered ? [[makeToolCall("call-exec", "exec", { command: "cat state.json" })]] : []),
+      [{ type: "text" as const, text: "NO_REPLY" }],
+    ];
+    const agent = new Agent({
+      initialState: {
+        model: steeringModel,
+        tools: [
+          {
+            name: "exec",
+            label: "exec",
+            description: "Runs a command.",
+            parameters: Type.Object({ command: Type.String() }),
+            execute,
+          },
+        ],
+      },
+      streamFn: () => responseStream(turns.shift() ?? []),
+    });
+    const unsubscribe = agent.subscribe(emit);
+    try {
+      await agent.prompt("Run the scheduled scan.");
+      await subscription.waitForPendingEvents();
+      expect(execute).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      const payloads = buildPayloads({
+        isCronTrigger: true,
+        assistantTexts: subscription.assistantTexts,
+        lastAssistant: subscription.getCurrentAttemptAssistant(),
+        lastToolError: subscription.getLastToolError(),
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        recovered ? [] : ["⚠️ Cream Exec blocked"],
+      );
+      expect(resolveCronPayloadOutcome({ payloads }).hasFatalErrorPayload).toBe(!recovered);
+    } finally {
+      unsubscribe();
+      subscription.unsubscribe();
+    }
+  });
 
   it.each([
     { firstOutcome: "success", error: undefined, warnings: [] },

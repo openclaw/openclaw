@@ -22,9 +22,10 @@ export function spawnProcess(
 ): ChildProcess {
   assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
+  const brokerable = broker && brokerSpawnOptions(options);
   // Anonymous secret pipes and inherited numeric descriptors belong to this process.
   const child =
-    broker && brokerSpawnOptions(options)
+    broker && brokerable
       ? broker.spawn(
           command,
           args,
@@ -40,7 +41,13 @@ export function spawnProcess(
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }
-  recordChildProcessSpawn(command, child, undefined, args);
+  recordChildProcessSpawn(
+    command,
+    child,
+    undefined,
+    args,
+    brokerable ? "broker" : broker ? "native.stdio" : "native.no-broker",
+  );
   return child;
 }
 

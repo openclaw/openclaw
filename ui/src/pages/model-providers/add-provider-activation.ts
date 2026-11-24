@@ -69,10 +69,13 @@ export async function activateAddedKey(params: {
     name: known?.name ?? id,
     ...(agentRuntime ? { agentRuntime } : {}),
   };
+  // The first line summarizes; later lines are notices, such as a small context window.
+  const notices = formatUiExternalText((result.lines ?? []).slice(1).join(" "));
   return {
     message: {
       kind: "success",
       text: t("modelProviders.add.ready", { provider: params.provider, model: model.name }),
+      ...(notices ? { warning: notices } : {}),
     },
     model,
   };

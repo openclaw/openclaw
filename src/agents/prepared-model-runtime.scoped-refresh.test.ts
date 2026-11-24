@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
@@ -25,6 +26,8 @@ import {
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import * as catalogLifetime from "./prepared-model-runtime.plugin-lifetime.js";
+import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 
 const fixture = usePreparedModelRuntimeHarness();
 const { mocks } = fixture;
@@ -165,6 +168,93 @@ async function prepareCatalogOwner(config: OpenClawConfig, catalog: ModelCatalog
 }
 
 describe("prepared model runtime scoped refresh", () => {
+  it("starts a new native refresh after publication", async ({ signal }) => {
+    const runtime = "fixture-native";
+    let currentNativeId = "initial";
+    const nativeList = vi.fn(async () => ({
+      entries: [entry("custom", currentNativeId, currentNativeId, { nativeRuntime: runtime })],
+      outcomes: [outcome("custom", "ready")],
+    }));
+    {
+      const { resolveNativeModelPrimary } =
+        await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+      mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
+      mocks.resolveStaticCatalogModel.mockImplementation(({ provider, modelId }) => ({
+        ...modelDefinition(modelId),
+        provider,
+        api: "openai-responses",
+        baseUrl: "https://catalog.example.test",
+      }));
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+        const registry = createEmptyPluginRegistry();
+        registry.agentHarnesses.push({
+          pluginId: runtime,
+          source: "fixture",
+          harness: {
+            id: runtime,
+            label: "Fixture native",
+            supports: () => ({ supported: true }),
+            async runAttempt() {
+              throw new Error("catalog-only fixture");
+            },
+            loadModelCatalog: nativeList,
+          },
+        });
+        return registry;
+      });
+    }
+    const config = withProvider(
+      "custom",
+      {
+        baseUrl: "https://catalog.example.test",
+        models: [],
+        agentRuntime: { id: runtime },
+      },
+      agentConfig({ pro: {} }, { model: "custom/configured" }),
+    );
+    const owner = await prepareCatalogOwner(
+      config,
+      makeCatalog([entry("custom", "initial", "Initial")]),
+    );
+    const original = catalogLifetime.runWithPreparedPluginGeneration;
+    const publication = createDeferredCore();
+    const release = createDeferredCore();
+    let calls = 0;
+    const lifetimeSpy = vi
+      .spyOn(catalogLifetime, "runWithPreparedPluginGeneration")
+      .mockImplementation((params, build) => {
+        const call = ++calls;
+        return original(params, async () => {
+          const value = await build();
+          if (call === 1) {
+            publication.resolve();
+            await release.promise;
+          }
+          return value;
+        });
+      });
+    try {
+      currentNativeId = "first";
+      const beforeNative = nativeList.mock.calls.length;
+      serveCatalog(makeCatalog([entry("custom", "first", "First")]));
+      const first = owner.loadFullModelCatalog!({ refresh: true, wait: true });
+      await withinTest(publication.promise, signal);
+      expect(owner.readFullModelCatalog!()!.entries).toContainEqual(
+        expect.objectContaining({ id: "first" }),
+      );
+      currentNativeId = "second";
+      serveCatalog(makeCatalog([entry("custom", "second", "Second")]));
+      const second = owner.loadFullModelCatalog!({ refresh: true, wait: true });
+      release.resolve();
+      await first;
+      const refreshed = await second;
+      expect(nativeList.mock.calls.length).toBe(beforeNative + 2);
+      expect(refreshed.entries).toContainEqual(expect.objectContaining({ id: "second" }));
+    } finally {
+      release.resolve();
+      lifetimeSpy.mockRestore();
+    }
+  });
   it.each(["catalog", "auth"] as const)(
     "reconciles response tier observations after same-generation %s refresh",
     async (refreshKind) => {
@@ -629,9 +719,28 @@ describe("prepared model runtime scoped refresh", () => {
     const owner = await prepareCatalogOwner(config, catalog);
     containsEntries((await owner.loadFullModelCatalog!()).entries, learned);
     serveCatalog(makeCatalog());
-    await hotReload(config);
-    const reloaded = published(config);
-    expect(reloaded.readFullModelCatalog!()?.entries ?? []).not.toContainEqual(learned);
+    const discoveryCalls = catalogWorker.mock.calls.length;
+    const observations: { privateRowPresent: boolean; discoveryCalls: number }[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase !== "published") {
+        return;
+      }
+      const entries = published(config).readFullModelCatalog!()?.entries ?? [];
+      observations.push({
+        privateRowPresent: entries.some(
+          (row) => row.provider === learned.provider && row.id === learned.id,
+        ),
+        discoveryCalls: catalogWorker.mock.calls.length,
+      });
+    });
+    try {
+      await hotReload(config);
+      expect(observations).toEqual([{ privateRowPresent: false, discoveryCalls }]);
+      const reloaded = published(config);
+      expect(reloaded.readFullModelCatalog!()?.entries ?? []).not.toContainEqual(learned);
+    } finally {
+      unregister();
+    }
   });
 
   it("retains warmed catalog callbacks across scoped exec reloads", async () => {

@@ -1,12 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
 } from "./chat-application-context.test-support.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   connectPaneTestView,
   createTestChatPane,
@@ -14,14 +16,34 @@ import {
   type TestChatPane,
   nativeHistoryMessage,
 } from "./chat-pane.test-support.ts";
+import { renderChatView, waitForElement } from "./chat-view.test-helpers.ts";
 import { render, renderChatThread } from "./test-helpers/chat-transcript-native.tsx";
 
+it("keeps the older-history sentinel at the scroll boundary during a held row correction", async () => {
+  const host = renderChatView({
+    messages: [nativeHistoryMessage(2)],
+    historyPagination: { hasMore: true, loading: false, onShowEarlier: vi.fn() },
+  });
+  const sentinel = await waitForElement(host, ".chat-history-sentinel");
+  const inner = expectDefined(
+    sentinel.closest(".chat-thread-inner--virtual"),
+    "virtual transcript",
+  );
+  const column = expectDefined(inner.querySelector<HTMLElement>(".chat-virtual-sizer"), "rows");
+  const offset = (element: Element) =>
+    element.getBoundingClientRect().top - inner.getBoundingClientRect().top;
+  const before = offset(column);
+  expect(offset(sentinel)).toBe(before);
+  // Hold the same margin the reader anchor uses while native scrolling owns the offset.
+  column.style.marginTop = "-1600px";
+  expect(offset(column)).toBe(before - 1600);
+  expect(offset(sentinel)).toBe(before);
+});
+
 it("fills an initially short transcript when its first geometry settles without an unrelated pane update", async () => {
-  const historyRequest = vi.fn(async () => ({
-    messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
-    hasMore: false,
-    totalMessages: 4,
-  }));
+  const messages = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));
+  const olderPage = createDeferred<ChatHistoryResult>();
+  const historyRequest = vi.fn(() => olderPage.promise);
   const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture({
       request: (method) => (method === "chat.history" ? historyRequest() : Promise.resolve({})),
@@ -30,7 +52,7 @@ it("fills an initially short transcript when its first geometry settles without 
   pane.paneId = "history-initial-geometry";
   pane.presentationId = pane.paneId;
   pane.sessionKey = state.sessionKey;
-  state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+  state.chatMessages = messages.slice(2);
   state.chatHistoryPagination = {
     hasMore: true,
     olderCursor: "older-settlement",
@@ -62,12 +84,10 @@ it("fills an initially short transcript when its first geometry settles without 
   await expect.poll(() => pane.transcript.isPositionSettled).toBe(true);
   expect(root.scrollHeight).toBeLessThanOrEqual(root.clientHeight);
   await expect.poll(() => historyRequest.mock.calls.length).toBe(1);
-  expect(state.chatMessages).toEqual([
-    nativeHistoryMessage(1),
-    nativeHistoryMessage(2),
-    nativeHistoryMessage(3),
-    nativeHistoryMessage(4),
-  ]);
+  expect(state.chatMessages).toEqual(messages.slice(2));
+  olderPage.resolve({ messages: messages.slice(0, 2), hasMore: false, totalMessages: 4 });
+  await expect.poll(() => state.chatMessages).toEqual(messages);
+  expect(historyRequest).toHaveBeenCalledTimes(1);
   expect(state.chatFollowLocked).toBe(false);
   expect(state.chatReadingHistory).toBe(false);
 });

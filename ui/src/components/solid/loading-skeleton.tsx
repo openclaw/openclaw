@@ -65,7 +65,7 @@ export function LoadingSkeleton(
       >
         {props.renderContent ? (
           props.renderContent()
-        ) : (
+        ) : props.composer ? null : (
           <>
             <div class="loading-skeleton__message loading-skeleton__message--user">
               <div class="skeleton skeleton-line" />

@@ -137,7 +137,6 @@ const session = new AgentSession({
   modelRegistry: ModelRegistry.inMemory(auth),
   customTools: agent.state.tools,
   allowedToolNames: values.scenario === "tool-boundary" ? ["hold"] : [],
-  cleanupProviderSessionResourcesOnDispose: false,
 });
 const text = "Synthetic delegated task completed. ".repeat(64);
 const recorder = createUserTurnTranscriptRecorder({

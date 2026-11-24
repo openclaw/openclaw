@@ -1,3 +1,5 @@
+import { syncBuiltinESMExports } from "node:module";
+import util from "node:util";
 import { expect, it, vi } from "vitest";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -231,7 +233,20 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
     };
     const acquire = (candidate: records.Row, storedEntry: SessionEntry) =>
       records.acquireSessionRowEntry({ ...acquisition, row: candidate, storedEntry });
-    const next = acquire(row, structuredClone(original));
+    const reread = structuredClone(original);
+    const compare = vi.spyOn(util, "isDeepStrictEqual");
+    syncBuiltinESMExports();
+    let next: records.Row | undefined;
+    try {
+      next = acquire(row, reread);
+      // One value comparison admits a fresh database snapshot; acquisition reuses that fact.
+      expect(
+        compare.mock.calls.filter(([left, right]) => left === reread || right === reread),
+      ).toHaveLength(1);
+    } finally {
+      compare.mockRestore();
+      syncBuiltinESMExports();
+    }
     expect(next).toBe(row);
     expect(put).not.toHaveBeenCalled();
     expect(next?.databaseFactsRevision).toBe(0);

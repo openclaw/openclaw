@@ -84,7 +84,6 @@ function writeOrdinary(id: string, write: () => Promise<void>) {
 const ordinaryExitWakeRecorder = {
   backgrounded(session: ProcessSession) {
     const persistence = store;
-    const target = session.notifySessionTarget;
     if (
       !persistence ||
       session.durable ||
@@ -92,8 +91,7 @@ const ordinaryExitWakeRecorder = {
       !session.agentId ||
       !session.sessionKey ||
       // Incognito state stays in memory; it never reaches shared storage.
-      isIncognitoSessionKey(session.sessionKey) ||
-      !target?.sessionId
+      isIncognitoSessionKey(session.sessionKey)
     ) {
       return;
     }
@@ -105,7 +103,6 @@ const ordinaryExitWakeRecorder = {
       agentId: session.agentId,
       sessionKey: session.sessionKey,
       scopeKey: session.scopeKey,
-      sessionId: target.sessionId,
       // An older reader finds no unit and records the process as lost, which stays true.
       unitName,
       logPath: path.join(resolveStateDir(), "processes", `${unitName}.log`),
@@ -167,7 +164,7 @@ async function settleLostOrdinaryProcess(
   // After a crash, agent database preparation finishes after the listener binds.
   await waitForAgentDatabasePreparation(record.agentId);
   // Eligibility and authority are rechecked against the current session, as for durable outcomes.
-  await prepareAdoptedDurableProcessNotification(session, record.sessionId);
+  await prepareAdoptedDurableProcessNotification(session);
   // The registry's exit hook deletes the row once the notice settles.
   ordinaryRecords.set(session, record);
   addSession(session);
@@ -253,7 +250,7 @@ export async function initializeDurableProcesses(
     // Prepare the wake at adoption so poll and process lists report it; exit prepares it again.
     const prepareNotification = () => {
       session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
-      return prepareAdoptedDurableProcessNotification(session, record.sessionId);
+      return prepareAdoptedDurableProcessNotification(session);
     };
     await prepareNotification();
     const run = bind(session, record, current);
@@ -303,11 +300,10 @@ export async function disposeDurableProcesses() {
 
 export async function startDurableExecProcess(
   session: ProcessSession,
-  sessionId: string | undefined,
   input: SpawnInput,
   notification: { notifyOnExit?: boolean; notifyOnExitEmptySuccess?: boolean } = {},
 ): Promise<ManagedRun> {
-  if (!store || !session.agentId || !session.sessionKey || !sessionId || input.mode !== "child") {
+  if (!store || !session.agentId || !session.sessionKey || input.mode !== "child") {
     throw new Error(
       "Durable exec requires a Gateway-host session on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session; sandbox, node, worker, and one-shot execution are unsupported.",
     );
@@ -324,7 +320,6 @@ export async function startDurableExecProcess(
     agentId: session.agentId,
     sessionKey: session.sessionKey,
     scopeKey: session.scopeKey,
-    sessionId,
     unitName,
     logPath,
     // Arguments may contain credentials. Only the live registry retains the command.

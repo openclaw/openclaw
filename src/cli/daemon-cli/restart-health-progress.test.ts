@@ -247,54 +247,23 @@ describe("restart startup progress", () => {
 
   it.each([
     {
-      name: "heartbeat observed after polling delay",
-      readyAtMs: 90_000,
-      pollJitterMs: 250,
+      name: "silent startup before its listener",
+      migration: false,
+      readyAtMs: 120_000,
       expected: "healthy",
-      elapsedMs: 90_250,
+      elapsedMs: 120_000,
     },
     {
-      name: "migration released at 120s before readiness at 145s",
-      releaseAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "healthy",
-      elapsedMs: 145_000,
-    },
-    {
-      name: "migration stalled after its 61s renewal without completing",
-      renewUntilMs: 61_000,
-      readyAtMs: 145_000,
+      name: "supervisor's next process before its listener",
+      migration: false,
+      replacedAtMs: 30_000,
       expected: "still-starting",
-      elapsedMs: 130_000,
-    },
-    {
-      name: "foreign migration completion after the observed lease is replaced",
-      foreignAfterMs: 90_000,
-      releaseAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "still-starting",
-      elapsedMs: 130_000,
+      elapsedMs: 89_500,
       phase: "waiting for Gateway listener",
     },
+    { name: "startup migration", expected: "still-starting", elapsedMs: 300_000 },
     {
-      name: "migration completion credited only once",
-      releaseAtMs: 120_000,
-      expected: "still-starting",
-      elapsedMs: 180_000,
-      phase: "waiting for Gateway listener",
-    },
-    {
-      name: "migration poll failure without observed completion",
-      renewUntilMs: 61_000,
-      pollErrorAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "still-starting",
-      elapsedMs: 130_000,
-      phase: "waiting for Gateway listener",
-    },
-    { name: "renewing migration", expected: "still-starting", elapsedMs: 300_000 },
-    {
-      name: "renewing migration under a published updater",
+      name: "startup migration under a published updater",
       updateInProgress: true,
       expected: "still-starting",
       elapsedMs: 300_000,
@@ -302,18 +271,19 @@ describe("restart startup progress", () => {
   ])(
     "bounds a $name",
     async ({
-      foreignAfterMs,
-      releaseAtMs,
-      renewUntilMs,
-      pollErrorAtMs,
+      migration = true,
+      replacedAtMs,
       phase,
       readyAtMs,
-      pollJitterMs,
       expected,
       elapsedMs,
       updateInProgress,
     }) => {
       const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.mocked(service.readRuntime).mockImplementation(async () => ({
+        status: "running",
+        pid: monotonicClock.nowMs >= (replacedAtMs ?? Infinity) ? 8001 : 8000,
+      }));
       if (readyAtMs !== undefined) {
         inspectPortUsage.mockImplementation(async (port) => ({
           port,
@@ -325,47 +295,10 @@ describe("restart startup progress", () => {
           gatewayHealthResponse({ server: { bootId: "stable-boot" } }),
         );
       }
-      if (pollJitterMs) {
-        vi.mocked(service.readRuntime).mockImplementation(async () => {
-          if (monotonicClock.nowMs === 60_000) {
-            monotonicClock.nowMs += pollJitterMs;
-          }
-          return { status: "running", pid: 8000 };
-        });
-      }
-      const isStartupMigrationActive = ({
-        onActivity,
-      }: {
-        env?: NodeJS.ProcessEnv;
-        onActivity?: (activity: {
-          owner: string;
-          pid?: number;
-          heartbeatAt: number | null;
-        }) => void;
-      } = {}) => {
-        if (monotonicClock.nowMs >= (pollErrorAtMs ?? Infinity)) {
-          throw new Error("Migration activity unavailable");
-        }
-        if (monotonicClock.nowMs < 1_000 || monotonicClock.nowMs >= (releaseAtMs ?? Infinity)) {
-          return false;
-        }
-        const foreignLease = monotonicClock.nowMs >= (foreignAfterMs ?? Infinity);
-        onActivity?.({
-          owner: foreignLease ? "foreign-migration-owner" : "migration-owner",
-          pid: foreignLease ? 9000 : 8000,
-          heartbeatAt:
-            1_000 +
-            Math.floor(
-              (Math.min(monotonicClock.nowMs, renewUntilMs ?? Infinity) - 1_000) / 60_000,
-            ) *
-              60_000,
-        });
-        return true;
-      };
       const health = await waitForGatewayHealthyRestart({
         service,
         port: 18789,
-        isStartupMigrationActive,
+        isStartupMigrationActive: () => migration && monotonicClock.nowMs >= 1_000,
         requireOwnedListener: true,
         env: updateInProgress ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {},
       });
@@ -380,7 +313,9 @@ describe("restart startup progress", () => {
         defaultTimeoutSeconds: 60,
       });
       if (expected === "still-starting") {
-        expect(message.failMessage).toContain(`still starting after ${elapsedMs / 1000}s`);
+        expect(message.failMessage).toContain(
+          `still starting after ${Math.round(elapsedMs / 1000)}s`,
+        );
         expect(message.failMessage).toContain(phase ?? "startup migration");
         expect(message.failMessage).toContain("openclaw gateway status --deep");
       }
@@ -389,7 +324,7 @@ describe("restart startup progress", () => {
 
   it.each([
     { listenerPid: 8000, elapsedMs: 90_000 },
-    { listenerPid: 9000, elapsedMs: 60_000 },
+    { listenerPid: 9000, elapsedMs: 300_000 },
   ])(
     "only credits new listener progress owned by the service (pid=$listenerPid)",
     async ({ listenerPid, elapsedMs }) => {

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   loadReleaseNotesForTag,
+  regularStableVersionFromReleaseBody,
   renderGithubReleaseNotes,
   verifyGithubReleaseNotes,
 } from "../render-github-release-notes.mts";
@@ -33,15 +34,32 @@ export function inspectPublishReleasePage(input: {
   });
   const version = parseReleaseVersion(notes.version);
   let regularStableVersion: unknown;
+  let mainPackageVersion: unknown;
+  let lookup: ReturnType<typeof readPublishPreflightRelease> | undefined;
   if (version && classifyReleaseTrain(version) === "extended-stable") {
-    // Match the publisher parent's frozen .release-harness/package.json context,
-    // not a live dist-tag that could change before canonical readback.
-    regularStableVersion = requirePreflightRecord(
+    // Retirement remains bound to the publisher main context, not Latest.
+    mainPackageVersion = requirePreflightRecord(
       JSON.parse(
         execFileSync("git", ["show", `${input.toolingSha}:package.json`], { encoding: "utf8" }),
       ),
       "publisher package.json",
     ).version;
+    lookup = readPublishPreflightRelease(input.runGh, input.repo, input.tag);
+    // A public page retains the version observed when it was first rendered.
+    // Drafts can be replaced and must use the currently published regular stable.
+    if (
+      lookup.state === "found" &&
+      !lookup.release.draft &&
+      typeof lookup.release.body === "string"
+    ) {
+      regularStableVersion = regularStableVersionFromReleaseBody(lookup.release.body);
+    } else {
+      const latest = requirePreflightRecord(
+        preflightApi(input.runGh, input.repo, "releases/latest"),
+        "Latest release",
+      );
+      regularStableVersion = trimString(latest.tag_name).replace(/^v/u, "");
+    }
   }
   const target = {
     changelog: notes.section,
@@ -50,10 +68,11 @@ export function inspectPublishReleasePage(input: {
     repository: input.repo,
     contributionRecordPath: notes.recordPath ?? undefined,
     regularStableVersion,
+    mainPackageVersion,
     retiredLineReason: input.retiredLineReason,
   };
   renderGithubReleaseNotes(target);
-  const lookup = readPublishPreflightRelease(input.runGh, input.repo, input.tag);
+  lookup ??= readPublishPreflightRelease(input.runGh, input.repo, input.tag);
   if (lookup.state !== "found") {
     return undefined;
   }

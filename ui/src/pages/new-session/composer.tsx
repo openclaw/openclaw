@@ -63,11 +63,7 @@ import {
   ComposerWidthEdge,
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
-import {
-  NewSessionPlusMenu,
-  NewSessionSelectionStatus,
-  StartControl,
-} from "./composer-capability-controls.tsx";
+import { NewSessionPlusMenu, StartControl } from "./composer-capability-controls.tsx";
 import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
@@ -602,7 +598,6 @@ export function NewSessionComposer(props: {
         </Show>
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
         <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
-        <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             <Show when={frame().skillMenuVisible}>
@@ -647,9 +642,6 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal}>
-              <NewSessionSelectionStatus options={options()} />
-            </Show>
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
@@ -672,6 +664,7 @@ export function NewSessionComposer(props: {
                 </div>
               </Show>
             </div>
+            {options().dictationStatus}
             <div
               class="agent-chat__composer-actions"
               ref={(element) => {

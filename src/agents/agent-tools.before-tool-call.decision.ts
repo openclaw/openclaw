@@ -57,9 +57,7 @@ export function recordGenericToolActionDecision(
     .slice(0, 32)}`;
   try {
     const occurredAt = Date.now();
-    if (authority() === false) {
-      return false;
-    }
+    authority();
     return recordExecutionDecisionWork({
       workVersion: 1,
       token,

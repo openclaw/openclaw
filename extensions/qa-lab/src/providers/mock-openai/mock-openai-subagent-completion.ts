@@ -3,7 +3,9 @@ import {
   extractAllRequestTexts,
   extractLastUserText,
   extractLastMatchingUserTurn,
+  extractToolOutputCallId,
   isMockSubagentSettledWake,
+  isResponsesToolCallOutput,
   parseToolOutputJson,
   resolveMockSubagentTurn,
   splitMockConversationContext,
@@ -44,8 +46,8 @@ export function readMockSubagentCompletion(
     latestFunctionCall?.name === "sessions_yield" &&
     activeTurnItems.some(
       (item) =>
-        item.type === "function_call_output" &&
-        item.call_id === latestFunctionCall.call_id &&
+        isResponsesToolCallOutput(item) &&
+        extractToolOutputCallId([item]) === latestFunctionCall.call_id &&
         typeof item.output === "string" &&
         parseToolOutputJson(item.output)?.status === "yielded",
     );

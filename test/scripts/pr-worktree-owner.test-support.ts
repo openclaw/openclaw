@@ -19,8 +19,9 @@ export function createProvisionOwnerFixture(
   const canonical = join(root, "repo");
   const home = join(root, "home");
   const bin = join(root, "bin");
+  // These private fixture ancestors must not inherit a group-writable host umask.
   for (const dir of [canonical, home, bin]) {
-    mkdirSync(dir);
+    mkdirSync(dir, { mode: 0o700 });
   }
   const isolation = createProvisionIsolationFixture(root, canonical);
   const env: NodeJS.ProcessEnv = {

@@ -103,6 +103,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, web app, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
+  "gateway.resources": "Gateway resource profile selection. Changes require a Gateway restart.",
+  "gateway.resources.memoryBudgetMiB":
+    "Lean only: worker memory budget in MiB. Extra workers beyond each pool's minimum start only while measured memory stays under it. Overrides the default of 85% of a cgroup-v2 memory.max, or 40% of host RAM without a container limit. Changes require a Gateway restart.",
+  "gateway.resources.profile":
+    "Resource profile: auto (default), standard, or lean. Auto selects lean below 8 GiB effective memory (the minimum of host RAM and visible cgroup-v2 memory.max limits); exactly 8 GiB selects standard. CPU count does not affect selection. Cgroup v1 limits are not detected; host RAM is used. Explicit profiles override detection. Lean starts extra workers only within a memory budget (gateway.resources.memoryBudgetMiB).",
   "gateway.port":
     "TCP port used by the gateway listener for API, web app, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
   "gateway.mode":
@@ -137,6 +142,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Days an owner device may go without reaching this claw before the claw removes it from its allowlist (default: 90). Devices it approved stay.",
   "gateway.openclawId.memberDeviceInactivityDays":
     "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
+  "gateway.sessionControl":
+    "Explicit opt-ins for session control surfaces. Authentication and saved device grants do not enable publication or active steering.",
+  "gateway.sessionControl.publicationWriteEnabled":
+    "Allows restricted publication-writer connections only when true (default: false). Independent of publication reads and host steering. Source plugins still require their own opt-in and device grant. Checked at each request admission; disabling denies new requests without revoking admitted work.",
+  "gateway.sessionControl.publicationReadEnabled":
+    "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Checked when each connection or read request starts; disabling denies new requests without revoking an already admitted read.",
+  "gateway.sessionControl.steeringEnabled":
+    "Allows authenticated people to steer an existing run only when true (default: false). Independent of publication reads and writer transport. Checked when each request starts; disabling denies new requests without revoking one already admitted.",
   "gateway.cliAgents":
     "Web app discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
@@ -167,6 +180,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Accept revision-scoped OCE browser identity and scope grants through the private trusted proxy. Delegated profiles do not use email aliases or device grants.",
   "gateway.auth.trustedProxy.delegation.credentialFile":
     "Absolute path to a private file containing the revision's 32-byte credential as 64 lowercase hexadecimal characters. File replacement or removal invalidates existing grants.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt":
+    "Opt-in check that each request's cf-access-jwt-assertion is signed by your Cloudflare Access team, is for this application, and has not expired. The user header must match the signed email claim. Without it, the Gateway trusts the identity headers from any trusted proxy source, including other local processes.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.issuer":
+    "Exact HTTPS origin of your Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Signing keys are fetched from its /cdn-cgi/access/certs endpoint.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.audience":
+    "Application Audience (AUD) tag from the Access application's overview page. Assertions issued for other applications are rejected.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc":
     "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
   "gateway.auth.trustedProxy.gitCoauthor":
@@ -189,10 +208,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Automatically approves new browser and native UI operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
     "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
+  "gateway.auth.trustedProxy.narrowToDeviceGrant":
+    "When true, an approved CLI or TUI device behind the trusted proxy that requests more than its paired scopes connects within them instead of filing a scope-upgrade request, and the TUI receives a device token. Browser clients are unaffected. Default false.",
   "gateway.roles":
-    "Named operator-role definitions for team Gateways. Setting gateway.roles.default enables profile-bound enforcement of session access, sandbox isolation, agents, and operator scopes. Definitions without a default are a catalog only and preserve the behavior of a Gateway without gateway.roles.",
+    "Named operator-role catalog. A default enables enforcement for all identified profiles. Without a default, only current linked OpenClaw ID members use their profile role across sign-in routes. Enforced profiles without a resolvable role cannot connect.",
   "gateway.roles.default":
-    "Optional default that enables named-role enforcement and applies to authenticated profiles without a valid explicit or GitHub login assignment. Its name must match a configured definition. Omitting it leaves named-role enforcement off, even when definitions exist.",
+    "Optional installation-wide enforcement switch and fallback for authenticated profiles without a valid explicit or GitHub login assignment. Its name must match a configured definition. Without a default, only current linked OpenClaw ID members need a resolvable assignment.",
   "gateway.roles.assignments":
     "Optional declarative role assignments for authenticated profiles. A valid explicit assignment made with users.setRole takes precedence over these mappings, followed by the default role.",
   "gateway.roles.assignments.byGithubLogin":
@@ -200,19 +221,19 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.assignments.byGithubLogin.*":
     "Configured role name for this GitHub login. Applies when the profile has a matching cached GitHub identity and no valid explicit role assignment. Changes hot-apply when config reload is enabled.",
   "gateway.roles.definitions":
-    "Nonempty administrator-named role catalog bundling session-sharing, sandbox-isolation, agent-access, and operator-scope policies. Definitions alone do not enable enforcement; set gateway.roles.default to apply named roles to authenticated profiles.",
+    "Nonempty administrator-named role catalog bundling session-sharing, sandbox-isolation, agent-access, and operator-scope policies. Current linked OpenClaw ID members use explicit profile assignments without gateway.roles.default; other profiles require the default switch.",
   "gateway.roles.definitions.*":
     "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions and a plugin access policy.",
   "gateway.roles.definitions.*.sessions":
     "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
   "gateway.roles.definitions.*.sessions.others":
-    'Access to other people\'s sessions: "none" hides them even with explicit session membership, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation without membership. Explicit session membership can raise "view" or "suggest" access for a specific session. Session creators and connections holding operator.admin retain their session access.',
+    'Access to other people\'s sessions: "none" hides them even with explicit session membership, "invited" requires explicit membership, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation without membership. Explicit session membership can raise "view" or "suggest" access for a specific session. Session creators and connections holding operator.admin retain their session access. A creator or admin can invite an explicitly configured "invited" profile with a selected human @mention; connection scopes and draft/incognito restrictions still apply.',
   "gateway.roles.definitions.*.sandbox":
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and blocks execution if the backend is unavailable.',
   "gateway.roles.definitions.*.agents":
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
   "gateway.roles.definitions.*.modelPolicy":
-    "Optional model ceiling for this role's requests and descendants. An empty object allows only the source agent's configured primary and fallback models; omitting the policy leaves model access unchanged. Model aliases resolve before enforcement, and denied models cannot be used by retries or fallbacks. With config reload enabled, changes confined to existing roles' model policies apply when committed without restarting permitted work. Other role changes hot-apply and reconnect clients with current authority.",
+    "Optional model ceiling for this role's requests and descendants. An empty object allows only the source agent's configured primary and fallback models; omitting the policy leaves model access unchanged. Model aliases resolve before enforcement, and denied models cannot be used by retries or fallbacks. With config reload enabled, changes confined to existing roles' model policies or project grants apply when committed without restarting permitted work. Other role changes hot-apply and reconnect clients with current authority.",
   "gateway.roles.definitions.*.modelPolicy.sourceAgent":
     "Agent whose primary, fallbacks, and model aliases supply this role's model policy. Defaults to the configured system/default agent or the sole agent. Set this explicitly when a multi-agent Gateway has no ambient owner.",
   "gateway.roles.definitions.*.modelPolicy.allow":
@@ -221,6 +242,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Model references, source-agent aliases, or trailing prefix wildcards excluded from this role. A pattern such as "provider/family-*" excludes future members of that family too. Exclusions match resolved model identities and take precedence over allowed and source-agent models.',
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
+  "gateway.roles.definitions.*.projects":
+    'Registered projects this role may discover and open in addition to public GitHub repositories: set "*" for every registered project or list project IDs. Callers with operator.write already reach every project. Sessions and spawns reach a project granted only this way through an isolated managed worktree. Unknown IDs are ignored; folder browsing, repository URLs, and remote search stay unchanged. Grant edits apply to the next request without reconnecting clients or stopping runs.',
   "gateway.roles.definitions.*.workerProfiles":
     "Cloud worker profiles this role may explicitly dispatch its own sessions to. Omitted or empty denies cloud dispatch; administrators retain access. Setup and moves to cloud profiles remain administrator-only.",
   "gateway.roles.definitions.*.accessPolicyPlugin":

@@ -6,7 +6,6 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +14,7 @@ import v8 from "node:v8";
 import type { SandboxContext } from "../../src/agents/sandbox/types.js";
 import type { SkillSnapshot } from "../../src/skills/types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { countSyncFsCalls } from "../lib/sync-fs-counters.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -150,38 +150,17 @@ try {
     await run();
   }
   const calls: Record<string, number> = {};
-  const restore: Array<() => void> = [];
-  for (const name of ["existsSync", "statSync", "lstatSync", "realpathSync"] as const) {
-    const original = fs[name];
-    const native = fs.realpathSync.native;
-    const wrapped = new Proxy(original, {
-      apply(fn, self, args) {
-        calls[name] = (calls[name] ?? 0) + 1;
-        return Reflect.apply(fn, self, args);
-      },
-    });
-    Object.assign(fs, { [name]: wrapped });
-    if (name === "realpathSync") {
-      fs.realpathSync.native = new Proxy(native, {
-        apply(fn, self, args) {
-          calls.realpathNative = (calls.realpathNative ?? 0) + 1;
-          return Reflect.apply(fn, self, args);
-        },
-      });
-    }
-    restore.push(() => {
-      Object.assign(fs, { [name]: original });
-      fs.realpathSync.native = native;
-    });
-  }
-  syncBuiltinESMExports();
+  const restore = countSyncFsCalls(
+    ["existsSync", "statSync", "lstatSync", "realpathSync"],
+    (name: string) => {
+      const key = name === "realpathSync.native" ? "realpathNative" : name;
+      calls[key] = (calls[key] ?? 0) + 1;
+    },
+  );
   try {
     await run();
   } finally {
-    for (const reset of restore.toReversed()) {
-      reset();
-    }
-    syncBuiltinESMExports();
+    restore();
   }
   global.gc?.();
   const heap = v8.getHeapStatistics();

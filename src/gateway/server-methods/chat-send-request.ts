@@ -5,6 +5,7 @@ import type { Static } from "typebox";
 import type { ChatAppContextAttachment } from "../../../packages/gateway-protocol/src/chat-app-context.js";
 import {
   GATEWAY_CLIENT_CAPS,
+  isNativeAppUiClient,
   hasGatewayClientCap,
   type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -66,6 +67,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  activeSteer?: { runId: string; profileId: string };
   normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
@@ -94,7 +96,7 @@ export type NormalizedChatSendRequest = {
 };
 
 /** Talk settings are machine preferences, not user commands for a particular model. */
-export function shouldNormalizeTalkThinking(
+function shouldNormalizeTalkThinking(
   request: Pick<NormalizedChatSendRequest, "p" | "systemInputProvenance">,
 ): boolean {
   return (
@@ -113,6 +115,7 @@ export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
+  activeSteer?: { runId: string; profileId: string };
   goalResume?: SessionGoalOperation & { action: "resume" };
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
@@ -125,7 +128,7 @@ export function normalizeChatSendRequest(params: {
       : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
-    isOperatorUiClient(clientInfo) &&
+    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) &&
     params.client?.connect?.scopes?.includes("operator.admin") === true &&
     hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
   const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params.params, clientInfo);
@@ -226,7 +229,10 @@ export function normalizeChatSendRequest(params: {
 
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
+    suppressCommandInterpretation ||
+    hasGoalOperation ||
+    providerReview !== undefined ||
+    params.activeSteer !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
@@ -281,7 +287,7 @@ export function normalizeChatSendRequest(params: {
     !rawMessage.startsWith("!");
   if (
     mentions.value &&
-    (!isBrowserOperatorUiClient(clientInfo) ||
+    (!(isBrowserOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) ||
       !client?.authenticatedUserProfile ||
       client.internal?.syntheticClient ||
       client.internal?.senderAttribution ||
@@ -312,6 +318,9 @@ export function normalizeChatSendRequest(params: {
     : rawMessage;
   const requestInput = JSON.stringify([
     p.message,
+    ...(params.activeSteer
+      ? [{ operation: "active-steer", sessionId: p.sessionId, ...params.activeSteer }]
+      : []),
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
     ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
@@ -319,6 +328,7 @@ export function normalizeChatSendRequest(params: {
   ]);
 
   const value: NormalizedChatSendRequest = {
+    ...(params.activeSteer ? { activeSteer: params.activeSteer } : {}),
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,

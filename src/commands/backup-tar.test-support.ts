@@ -1,4 +1,4 @@
-import * as tar from "tar";
+import * as tar from "tar/raw";
 
 export function encodeTarEntry(params: {
   path: string;

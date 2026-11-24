@@ -4,6 +4,7 @@ import { captureRuntimeConfigAsyncReader, resetConfigRuntimeState } from "../con
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostMemory from "../infra/host-memory.js";
 import * as workAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -51,12 +52,9 @@ it.each([false, true])(
         const clock = createGatewaySchedulerClock(now);
         const wallClock = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
         const gatewayScheduler = createTestGatewayScheduler(clock.clock);
-        const constrained = vi
-          .spyOn(process, "constrainedMemory")
-          .mockReturnValue(1024 * 1024 * 1024);
-        const available = vi
-          .spyOn(process, "availableMemory")
-          .mockReturnValue(pressure ? 128 * 1024 * 1024 : 1024 * 1024 * 1024);
+        const lowMemory = vi
+          .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
+          .mockReturnValue(pressure);
         const delay = pressure ? 120_000 : 0;
         const admission = vi.spyOn(workAdmission, "runWithGatewayIndependentRootWorkAdmission");
         try {
@@ -103,7 +101,7 @@ it.each([false, true])(
             expect(
               admission.mock.calls.filter(([, label]) => label === "cron:maintenance"),
             ).toHaveLength(0);
-            available.mockReturnValue(1024 * 1024 * 1024);
+            lowMemory.mockReturnValue(false);
             await clock.advanceBy(60_000);
           }
           await stopCronMaintenance();
@@ -140,8 +138,7 @@ it.each([false, true])(
           resetCronActiveJobs();
           resetGatewayWorkAdmission();
           admission.mockRestore();
-          available.mockRestore();
-          constrained.mockRestore();
+          lowMemory.mockRestore();
           wallClock.mockRestore();
           resetConfigRuntimeState();
         }

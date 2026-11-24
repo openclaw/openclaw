@@ -47,6 +47,7 @@ export async function runDistArtifactChild(
         return runManagedCommand({
           bin: process.execPath,
           ...options,
+          shell: false,
           cwd: options.cwd ?? rootDir,
           args: distArtifactEntryArgs(script, args, options),
         });

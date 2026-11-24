@@ -205,30 +205,80 @@ it("keeps a model setup choice usable when a text answer advances during a busy 
   expect(answer).toHaveBeenLastCalledWith("openai");
 });
 
-it.each([false, true])(
-  "keeps model submission in its native form (manual sign-in: %s)",
-  (externalAuthInput) => {
-    const cancel = vi.fn();
-    const { container, answer } = mountStep(step("text"), () => ({
-      value: "synthetic-answer",
+it("keeps model submission in its native form", () => {
+  const cancel = vi.fn();
+  const { container, answer } = mountStep(step("text"), () => ({
+    value: "synthetic-answer",
+    presentation: "model-setup",
+    leadingAction: cancelButton(cancel),
+  }));
+  const form = container.querySelector("form")!;
+  const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  const cancelControl = container.querySelector<HTMLButtonElement>(".cancel")!;
+  expect(submitButton.form).toBe(form);
+  expect(submitButton.closest("openclaw-modal-actions")).not.toBeNull();
+  expect(cancelControl.closest("openclaw-modal-actions")).not.toBeNull();
+  submitButton.click();
+  expect(answer).toHaveBeenCalledExactlyOnceWith("synthetic-answer");
+  cancelControl.click();
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("shows the pasted-address field of a browser sign-in and finishes with it", () => {
+  const cancel = vi.fn();
+  const [value, setValue] = createSignal("");
+  const [validationError, setValidationError] = createSignal<string>();
+  const signInUrl = "https://accounts.example.test/authorize?state=synthetic";
+  const { container, answer } = mountStep(
+    { id: "paste", type: "text", message: "Paste the redirect", externalUrl: signInUrl },
+    () => ({
+      get value() {
+        return value();
+      },
+      get validationError() {
+        return validationError();
+      },
+      validationErrorId: "paste-error",
       presentation: "model-setup",
-      externalAuthInput,
+      externalAuthInput: true,
+      brandId: "gemini",
+      providerLabel: "Example",
       leadingAction: cancelButton(cancel),
-    }));
-    const form = container.querySelector("form")!;
-    const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    const cancelControl = container.querySelector<HTMLButtonElement>(".cancel")!;
-    expect(submitButton.form).toBe(form);
-    expect(Boolean(submitButton.closest("openclaw-modal-actions"))).toBe(!externalAuthInput);
-    expect(Boolean(submitButton.closest("details"))).toBe(externalAuthInput);
-    expect(cancelControl.closest("openclaw-modal-actions")).not.toBeNull();
-    expect(cancelControl.closest("details")).toBeNull();
-    submitButton.click();
-    expect(answer).toHaveBeenCalledExactlyOnceWith("synthetic-answer");
-    cancelControl.click();
-    expect(cancel).toHaveBeenCalledOnce();
-  },
-);
+      onValueChange: (next) => setValue(String(next)),
+    }),
+  );
+  expect(container.querySelector("h2")?.textContent).toBe("Example");
+  expect(
+    container
+      .querySelector(".wizard-sign-in__badge [data-provider-icon]")
+      ?.getAttribute("data-provider-icon"),
+  ).toBe("gemini");
+  const open = container.querySelector<HTMLAnchorElement>("a.wizard-step__external-link")!;
+  expect(open.textContent).toBe("Open sign-in page");
+  expect(open.href).toBe(signInUrl);
+  expect(container.querySelector("[data-copy-label]")?.textContent).toBe("Copy link");
+  const input = container.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
+  expect(input.labels?.[0]?.textContent).toBe("Address of the page your browser opened");
+  expect(input.closest("details")).toBeNull();
+  const finish = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  expect(finish.textContent).toBe("Finish sign-in");
+  expect(finish.disabled).toBe(true);
+  const footer = finish.closest("openclaw-modal-actions")!;
+  expect([...footer.querySelectorAll("button")]).toEqual([
+    container.querySelector(".cancel"),
+    finish,
+  ]);
+  typeInto(input, "http://127.0.0.1:8787/callback?code=synthetic");
+  flush();
+  expect(finish.disabled).toBe(false);
+  submit(input.form!);
+  expect(answer).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:8787/callback?code=synthetic");
+  setValidationError("State mismatch");
+  flush();
+  const alert = container.querySelector<HTMLElement>("#paste-error")!;
+  expect(alert.textContent).toContain("State mismatch");
+  expect(input.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
 
 it("submits the channel ID from a single-choice picker", async () => {
   const { container, answer } = mountStep(

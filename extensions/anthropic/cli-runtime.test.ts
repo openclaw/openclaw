@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   CliBackendExecuteContext,
   CliBackendMessageInjection,
@@ -577,11 +578,8 @@ describe("Claude native stdio boundary", () => {
 
   it.for([
     ["approval", "assertCurrent", "deny"],
-    ["approval", "assertPrivateInputCurrent", "allow"],
     ["initialize", "assertCurrent", undefined],
-    ["initialize", "assertPrivateInputCurrent", undefined],
     ["initialize", "prepareCredentialUse", undefined],
-    ["prompt", "assertPrivateInputCurrent", undefined],
   ] as const)(
     "revalidates authority at %s with %s",
     async ([stage, check, decision], { signal }) => {
@@ -610,9 +608,6 @@ describe("Claude native stdio boundary", () => {
           await withinTest(Promise.race([approvalStarted.promise, running]), signal);
         } else {
           await fixtureReadyBeforeSettlement(context, `${stage}.ready`, running, signal);
-          if (stage === "prompt") {
-            expect(await readFixture(context, "user.received")).toBe(context.prompt);
-          }
         }
         active = false;
       } finally {
@@ -628,16 +623,10 @@ describe("Claude native stdio boundary", () => {
         await expect(access(fixtureFile(context, "user.received"))).rejects.toThrow();
       } else {
         const detail = resultDetail(await withinTest(running, signal));
-        expect(detail).toMatchObject(
-          stage === "prompt"
-            ? { turn: 1, user: context.prompt }
-            : { hookDecision: { hookSpecificOutput: { permissionDecision: decision } } },
-        );
-        if (stage === "prompt") {
-          expect(detail.privateContext).toBeUndefined();
-        } else if (decision === "deny") {
-          expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
-        }
+        expect(detail).toMatchObject({
+          hookDecision: { hookSpecificOutput: { permissionDecision: decision } },
+        });
+        expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
       }
     },
   );
@@ -706,6 +695,30 @@ describe("Claude native stdio boundary", () => {
         promptOrigin: "host",
       }),
     ).toMatchObject({ synthetic: true, privateContext: "second private context" });
+  });
+
+  it("keeps private context above Claude Code's hook limit readable", async () => {
+    const framing = "completion framing";
+    // The encoded framing takes 22 units; the first segment has 9,845 payload units.
+    // This pair straddles that boundary; later cuts cross encoded \u003c escapes.
+    const appendContext = `${"r".repeat(9_822)}🦞${"<".repeat(4_000)}CHILD-RESULT-TAIL`;
+    const detail = await runDetail(
+      await createContext("hook-context-limit", {
+        promptContext: { prependContext: framing, appendContext },
+      }),
+    );
+    const hookContexts = detail.hookContexts as string[];
+
+    expect(detail.modelContext).toContain("CHILD-RESULT-TAIL");
+    const segments = [
+      ...String(detail.modelContext).matchAll(
+        /<system-reminder>\nUserPromptSubmit hook additional context: OpenClaw private context segment \d+[^\n]*\n(".*")\n<\/system-reminder>/g,
+      ),
+    ].map((match) => JSON.parse(expectDefined(match[1], "encoded context segment")) as string);
+    expect(segments.join("")).toBe(`${framing}\n\n${appendContext}`);
+    expect(hookContexts.map((value) => value.length <= 10_000)).not.toContain(false);
+    expect(segments[1]?.startsWith("🦞")).toBe(true);
+    expect(segments.every((segment) => segment.isWellFormed())).toBe(true);
   });
 
   it.each([

@@ -10,9 +10,9 @@ sidebarTitle: "Authentication"
 
 Choose your OpenAI authentication method based on the access you need:
 
-- **Codex login:** use your ChatGPT account for Codex models. Choose browser
-  OAuth locally or device code on a remote machine. OpenAI-hosted plugins require
-  a grant with connector scopes.
+- **Codex login:** use your ChatGPT account for Codex models. Sign in with a
+  one-time device code, which works locally and on remote machines. OpenAI-hosted
+  plugins require a grant with connector scopes.
 - **Sign in with ChatGPT** (SIWC): use your ChatGPT plan for eligible Responses API
   requests in OpenClaw. OpenAI-hosted plugins are not supported yet.
 - **API key:** use OpenAI Platform models with your project's permissions and
@@ -20,7 +20,7 @@ Choose your OpenAI authentication method based on the access you need:
 
 ## Compare capabilities
 
-|                                                        | Sign in with ChatGPT                                      | Codex login (browser OAuth or device code)                  | OpenAI Platform API key                                    |
+|                                                        | Sign in with ChatGPT                                      | Codex login                                                 | OpenAI Platform API key                                    |
 | ------------------------------------------------------ | --------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
 | Identity                                               | Your ChatGPT account and workspace authorizing OpenClaw   | Your ChatGPT account and workspace using the Codex product  | The API key's Platform project and permissions             |
 | Credential refresh                                     | OpenClaw refreshes its SIWC profile for this app          | OpenClaw refreshes its Codex OAuth profile                  | No OAuth refresh; rotate the key with its owner            |
@@ -60,9 +60,8 @@ the connection in [ChatGPT login connections](https://chatgpt.com/#settings/Secu
 OpenClaw does not display SIWC quota or per-app usage.
 
 **OpenAI-hosted plugins through Codex require a grant with connector scopes.**
-Neither OpenClaw Codex login method grants plugin invocation: device-code login
-lacks `api.connectors.invoke`, and OpenClaw's browser OAuth flow does not
-request that scope. For the native Codex harness, use a
+OpenClaw Codex login does not grant plugin invocation: device-code login lacks
+`api.connectors.invoke`, and its browser fallback does not request that scope. For the native Codex harness, use a
 [native Codex browser sign-in or imported credential](/plugins/codex-harness-reference/auth#auth-and-environment-isolation)
 whose grant includes `api.connectors.invoke`, then follow
 [native plugin setup](/plugins/codex-native-plugins). You may still need to
@@ -165,11 +164,8 @@ Run the command on the machine running the OpenClaw installation you want to
 configure:
 
 ```bash
-# Codex login through a browser
+# Codex login (device code; browser fallback when device code is turned off)
 openclaw models auth login --provider openai --method oauth
-
-# Codex login on a remote or headless machine
-openclaw models auth login --provider openai --method device-code
 
 # Sign in with ChatGPT
 openclaw models auth login --provider openai --method siwc
@@ -178,10 +174,10 @@ openclaw models auth login --provider openai --method siwc
 openclaw models auth login --provider openai --method api-key
 ```
 
-Browser OAuth and device code both provide Codex model access, but their grants
-can differ. Device code lets you approve the login in a browser on another
-machine; it does not create a separate kind of permanent credential. Without
-`--method`, OpenAI login defaults to Codex browser OAuth.
+Codex login requests a device code first, so you can approve it in a browser on
+another machine. It falls back to the localhost browser flow only when OpenAI
+reports that device-code login is not enabled; other device-code errors are
+shown instead. Without `--method`, OpenAI login defaults to Codex login.
 
 Use `--agent <agentId>` to target a configured agent and `--profile-id <profileId>`
 to name the saved credential. Login saves and prioritizes that credential for the

@@ -538,6 +538,13 @@ it("forks an exact active-path prefix without changing the source", async () => 
   expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
   expect(result.entry.cliSessionBindings).toBeUndefined();
   expect(result.entry.previousSessionId).toBeUndefined();
+  // The copied prefix keeps the parent's CLI account record under the child's id.
+  expect(readEntry({ ...params, sessionKey: targetKey })?.cliHistoryBoundary).toEqual({
+    version: 1,
+    sessionId: result.entry.sessionId,
+    state: "known",
+    authFingerprint: "a".repeat(64),
+  });
   expect(result.entry).toMatchObject({
     parentSessionKey: canonicalSourceKey,
     modelOverride: "gpt-5",

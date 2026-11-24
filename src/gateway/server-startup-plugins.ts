@@ -106,6 +106,34 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
       },
     ],
     [
+      // An earlier updater can leave this installation's pnpm launcher pointing at its
+      // removed stage while the Gateway runs the new version; heal it without a command.
+      "cli-launcher",
+      async () => {
+        const [{ resolveOpenClawPackageRootSync }, { repairPublishedPnpmLaunchers }] =
+          await Promise.all([
+            import("../infra/openclaw-root.js"),
+            import("../infra/update-launcher-repair.js"),
+          ]);
+        const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+        params.signal.throwIfAborted();
+        if (!root) {
+          return;
+        }
+        const { repaired, failed } = await repairPublishedPnpmLaunchers({ root });
+        for (const repair of repaired) {
+          params.log.info(
+            `Repaired the openclaw launcher ${repair.file}: it still pointed at the removed update stage ${repair.stage}.`,
+          );
+        }
+        for (const { file, error } of failed) {
+          params.log.warn(
+            `The openclaw launcher ${file} still points at a removed update stage and could not be repaired: ${formatErrorMessageWithCode(error)}. Recreate it with pnpm add -g --allow-build=openclaw openclaw@<installed-version>.`,
+          );
+        }
+      },
+    ],
+    [
       "pairing",
       async () => {
         const { listLegacyPairingStoreFiles } = await import("../infra/pairing-files.js");

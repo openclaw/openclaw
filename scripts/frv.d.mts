@@ -113,7 +113,7 @@ export function watchRelease(
 ): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
-  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository" | "getReleaseEvidenceClient">,
   options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(

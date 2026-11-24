@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   BOOLEAN_GATE,
@@ -6,7 +5,6 @@ import {
   type LabFeature,
   type LabFeatureDefinition,
 } from "./labs-feature-state.ts";
-import { TEMPLATES_LAB_FEATURE } from "./templates-lab-feature.ts";
 
 export const LAB_FEATURES = (
   [
@@ -14,39 +12,6 @@ export const LAB_FEATURES = (
       ...BOOLEAN_GATE,
       id: "decisionAssistance",
       configPath: ["agents", "defaults", "experimental", "decisionAssistance"],
-    },
-    {
-      ...BOOLEAN_GATE,
-      id: "codeMode",
-      configPath: ["tools", "codeMode", "enabled"],
-      // The on position writes the "auto" tier, never `true`: Labs offers
-      // Auto/Off, and force-on for unevaluated models stays a config-only choice.
-      onValue: "auto",
-      activeValues: [true, "auto"],
-      // Mirrors resolveCodeModeConfig: absence inherits auto; authored objects opt in.
-      readEnabled: (raw) =>
-        raw === undefined ||
-        raw === true ||
-        raw === "auto" ||
-        (isRecord(raw) && (raw.enabled === true || raw.enabled === "auto")),
-    },
-    {
-      ...BOOLEAN_GATE,
-      id: "toolSearch",
-      configPath: ["tools", "toolSearch", "enabled"],
-      // Mirrors resolveToolSearchConfig: unauthored config is on, while explicit
-      // booleans and objects retain their own enablement semantics.
-      readEnabled: (raw) =>
-        raw === undefined ||
-        raw === true ||
-        (isRecord(raw) &&
-          (typeof raw.enabled === "boolean" || typeof raw.enabled === "string"
-            ? raw.enabled === true
-            : Object.keys(raw).some((key) => key !== "enabled"))),
-      // Explicit objects without a mode retain the legacy "code" surface.
-      // Pin structured calls when writing an enabled override from Labs.
-      enableAlso: { mode: "tools" },
-      resetScope: "parent",
     },
     {
       ...BOOLEAN_GATE,
@@ -63,7 +28,6 @@ export const LAB_FEATURES = (
       id: "chatBubbles",
       configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],
     },
-    TEMPLATES_LAB_FEATURE,
     {
       ...BOOLEAN_GATE,
       id: "hostDesktop",
@@ -95,12 +59,7 @@ export function labFeatureMergePatch(
   enabled: boolean,
 ): Record<string, unknown> {
   const key = feature.configPath.at(-1) as string;
-  // Companion keys ride in the same patch as the gate so one save cannot leave
-  // the feature on in a variant Labs never offered.
-  let patch: unknown = {
-    [key]: enabled ? feature.onValue : feature.offValue,
-    ...(enabled ? feature.enableAlso : null),
-  };
+  let patch: unknown = { [key]: enabled };
   for (const segment of feature.configPath.slice(0, -1).toReversed()) {
     patch = { [segment]: patch };
   }

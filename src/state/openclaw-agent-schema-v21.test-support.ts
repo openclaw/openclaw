@@ -47,6 +47,7 @@ export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSyn
     "session_entry_snapshots",
     "context_engine_turn_outbox",
     "trajectory_runtime_events",
+    "session_pending_inputs",
   ];
   for (const table of tables) {
     if (database.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()) {

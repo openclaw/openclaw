@@ -4,10 +4,8 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
-  assistantMessageIsInterrupted,
   groupEndsRunInFailure,
-  isProviderVoiceTranscript,
-  resolveAssistantReplyPhase,
+  hasTerminalRunOutcome,
 } from "./chat-assistant-reply.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
@@ -24,7 +22,6 @@ import {
   type StreamRunRenderItem,
   type WorkGroupRenderItem,
 } from "./chat-turn-presentation.ts";
-import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -156,27 +153,6 @@ export function agentRunFrameActiveStatusParts(
     )
     ? parts
     : undefined;
-}
-
-function hasTerminalRunOutcome(message: unknown, runId: string): boolean {
-  const record = asRecord(message);
-  const metadata = asRecord(record?.["__openclaw"]);
-  if (
-    isLiveTerminalForRun(message, runId) ||
-    metadata?.runTerminal === true ||
-    assistantMessageIsInterrupted(message) ||
-    record?.stopReason === "error"
-  ) {
-    return true;
-  }
-  // Provider speech, commentary and reasoning mirrors can stop a message without ending its run.
-  const phase = resolveAssistantReplyPhase(message);
-  return (
-    !isProviderVoiceTranscript(message) &&
-    phase !== "commentary" &&
-    metadata?.mirrorOrigin !== "codex-app-server" &&
-    (phase === "final_answer" || record?.stopReason === "stop")
-  );
 }
 
 /** Wrap semantic work/activity rows in one run-owned presentation frame. */

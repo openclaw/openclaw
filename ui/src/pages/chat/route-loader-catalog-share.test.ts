@@ -4,11 +4,11 @@ import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { resolveCatalogContinuation } from "./route-loader-catalog-share.runtime.ts";
 import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import { loadRoute, routeLocation } from "./route-loading.test-support.ts";
 
 const fullId = "0123456789abcdef0123456789abcdef";
+const querySearch = `?catalog=beam&host=gateway&thread=${fullId}`;
 const SHARE_ROUTE = {
   kind: "thread-id-prefix",
   routeSegment: "beam",
@@ -258,12 +258,7 @@ it.each([
   const loading =
     route === "share"
       ? loadRoute(context, "/beam/0123456789ab")
-      : resolveCatalogContinuation(
-          context,
-          { catalogId: "beam", hostId: "gateway", threadId: fullId },
-          "research",
-          new AbortController().signal,
-        );
+      : loadRoute(context, "/chat/research", querySearch);
   await entered.promise;
   Object.assign(
     context.gateway.snapshot,
@@ -293,13 +288,12 @@ it.each([null, { sessionKey: "agent:analysis:dashboard:handoff" }])(
   async (result) => {
     const request = vi.fn(async () => result);
     await expect(
-      resolveCatalogContinuation(
-        catalogContext(request),
-        { catalogId: "beam", hostId: "gateway", threadId: fullId },
-        "research",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual(result ? { ...result, agentId: "analysis" } : undefined);
+      loadRoute(catalogContext(request), "/chat/research", querySearch),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: result?.sessionKey ?? `agent:research:catalog:beam:gateway:${fullId}`,
+      agentId: result ? "analysis" : "research",
+    });
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.catalog.resolve",
       { catalogId: "beam", hostId: "gateway", threadId: fullId, agentId: "research" },
@@ -313,13 +307,8 @@ it("preserves a query resolution denial without falling back to discovery", asyn
   const request = vi.fn(async () => {
     throw denied;
   });
-  await expect(
-    resolveCatalogContinuation(
-      catalogContext(request),
-      { catalogId: "beam", hostId: "gateway", threadId: fullId },
-      "research",
-      new AbortController().signal,
-    ),
-  ).rejects.toBe(denied);
+  await expect(loadRoute(catalogContext(request), "/chat/research", querySearch)).rejects.toBe(
+    denied,
+  );
   expect(request).toHaveBeenCalledTimes(1);
 });
