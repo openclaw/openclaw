@@ -171,7 +171,7 @@ it("names the model whose connection failed", () => {
     )?.text;
 
   expect(failure({ provider: "gpufarm", model: "qwen3.8-27b" })).toBe(
-    "⚠️ gpufarm/qwen3.8-27b request failed: Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`. Check the conversation for any completed work before trying again.",
+    "⚠️ gpufarm/qwen3.8-27b request failed: Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`. Check the conversation for any completed work before trying again.",
   );
   // A model id that already carries its provider is not prefixed twice.
   expect(failure({ provider: "openrouter", model: "openrouter/auto" })).toMatch(
