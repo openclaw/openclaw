@@ -456,6 +456,11 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
+When a provider plugin serves your selected default model, the Control UI warns
+before uninstalling it. Choose **Choose another model** to keep the plugin installed
+and open **Models**, or confirm **Remove** to uninstall it without changing your
+saved model selection. No replacement provider is chosen automatically.
+
 Template Add installs plugins as shared dependencies. Deleting an agent created by
 Add does not uninstall its plugins. Before uninstalling a plugin, check which
 agents use it; uninstall may break those agents.
