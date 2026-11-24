@@ -39,26 +39,23 @@ export function ChatSessionSuggestions(props: {
               suggestion().state === "pending";
             return (
               <article
-                class={[
-                  "session-suggestion",
-                  { "session-suggestion--awaiting": awaitingApproval() },
-                ]}
+                class={["session-suggestion", { preview: awaitingApproval() }]}
                 data-suggestion-id={suggestion().id}
               >
-                <span class="session-suggestion__author">
+                <b class="session-suggestion__author">
                   <Show when={awaitingApproval()} fallback={author()}>
                     <PersonReferenceLabel profileId={suggestion().author.id} label={author()} />
                   </Show>
-                </span>
+                </b>
                 <span class="session-suggestion__text">{suggestion().text}</span>
                 <Show
                   when={canResolve() && suggestion().state === "pending"}
                   fallback={
-                    <span class="session-suggestion__state">
+                    <small class="session-suggestion__state">
                       {awaitingApproval()
                         ? t("chat.sessionSuggestions.awaitingApproval")
                         : t(`chat.sessionSuggestions.state.${suggestion().state}`)}
-                    </span>
+                    </small>
                   }
                 >
                   <div class="session-suggestion__actions">
