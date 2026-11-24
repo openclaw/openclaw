@@ -304,7 +304,7 @@ export function switchChatSetting(
   );
 }
 
-export function clearUnsupportedChatAccessProgram(
+export function reconcileChatAccessProgram(
   host: ChatModelSettingsHost,
   row: GatewaySessionRow,
   sessionKey: string,
@@ -321,18 +321,18 @@ export function clearUnsupportedChatAccessProgram(
     ),
     row.agentRuntime?.id,
   );
-  if (
-    entry &&
-    entry.available !== false &&
-    resolveDaybreakModelSwitch(
-      entry.availableAccessPrograms?.cyber,
-      row.cyberAccessProgram,
-      row.cyberAccessProgram,
-    ) === null
-  ) {
-    return switchChatSetting(host, { kind: "cyberAccessProgram", value: null }, sessionKey);
+  // A discovery failure also omits the list. Keep saved intent until discovery confirms it is stale.
+  if (!entry?.availableAccessPrograms || entry.available === false) {
+    return undefined;
   }
-  return undefined;
+  const program = resolveDaybreakModelSwitch(
+    entry.availableAccessPrograms.cyber,
+    row.cyberAccessProgram,
+    row.cyberAccessProgram,
+  );
+  return program === undefined
+    ? undefined
+    : switchChatSetting(host, { kind: "cyberAccessProgram", value: program }, sessionKey);
 }
 
 export type ChatModelSelection = ReturnType<typeof claimChatModelSelection>;

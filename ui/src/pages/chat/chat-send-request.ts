@@ -21,7 +21,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { clearUnsupportedChatAccessProgram } from "./chat-session.ts";
+import { reconcileChatAccessProgram } from "./chat-session.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
 export async function requestChatSend(
@@ -88,7 +88,7 @@ export async function requestChatSend(
       (!sessionId || row.sessionId === sessionId) &&
       visibleSessionMatches(state, sessionKey, selectedAgentId)
     ) {
-      const repair = clearUnsupportedChatAccessProgram(state, row, sessionKey);
+      const repair = reconcileChatAccessProgram(state, row, sessionKey);
       if (repair) {
         if (!(await repair)) {
           throw new Error(state.chatError ?? t("chat.modelControls.modelsUnavailable"));

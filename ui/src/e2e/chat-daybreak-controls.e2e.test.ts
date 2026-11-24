@@ -12,7 +12,8 @@ const models = (
     { id: "gpt-6.2-sol", name: "GPT-6.2 Sol", programs: ["standard", "daybreak_blue"] },
     { id: "gpt-6-cyber", name: "GPT-6 Cyber", programs: ["daybreak_red"] },
     { id: "sample-standard", name: "Sample Standard", programs: ["standard"] },
-  ] satisfies { id: string; name: string; programs: CyberAccessProgram[] }[]
+    { id: "sample-unknown", name: "Sample Unknown" },
+  ] satisfies { id: string; name: string; programs?: CyberAccessProgram[] }[]
 ).map(({ id, name, programs }) => ({
   id,
   name,
@@ -20,7 +21,7 @@ const models = (
   reasoning: true,
   available: true,
   supportsFastMode: true,
-  availableAccessPrograms: { cyber: programs },
+  availableAccessPrograms: programs ? { cyber: programs } : undefined,
   cyberAccessProgramDefault: "standard" as const,
 }));
 
@@ -33,6 +34,8 @@ suite.define(() => {
     { model: "gpt-6.2-sol", selected: "daybreak_blue", scenario: "clear on switch" },
     { model: "sample-standard", selected: "standard", scenario: "hide" },
     { model: "sample-standard", selected: "daybreak_blue", scenario: "hide stale" },
+    { model: "sample-unknown", selected: "daybreak_blue", scenario: "preserve unknown" },
+    { model: "gpt-6-cyber", selected: "daybreak_blue", scenario: "remap on send" },
   ] satisfies { model: string; selected: CyberAccessProgram; scenario: string }[])(
     "Daybreak: $scenario",
     ({ model, selected, scenario }) =>
@@ -78,19 +81,28 @@ suite.define(() => {
         await trigger.click();
         const menu = picker.locator(".chat-controls__effort-menu");
         const toggle = menu.getByRole("switch", { name: "Daybreak", exact: true });
-        const sendAndReceive = async () => {
+        const sendAndReceive = async (program?: CyberAccessProgram, patched = true) => {
           const request = await sendChat(page, gateway, "Check the selected model.");
           expect(
             (await gateway.getRequests())
               .map(({ method }) => method)
               .filter((method) => method === "sessions.patch" || method === "chat.send"),
-          ).toEqual(["sessions.patch", "chat.send"]);
-          expect((await gateway.getSessionRow(key)).cyberAccessProgram).toBeUndefined();
+          ).toEqual(patched ? ["sessions.patch", "chat.send"] : ["chat.send"]);
+          expect((await gateway.getSessionRow(key)).cyberAccessProgram).toBe(program);
           expect(typeof request.idempotencyKey).toBe("string");
           const text = "The selected model replied.";
           await gateway.emitChatFinal({ runId: String(request.idempotencyKey), text });
           await page.locator(".chat-group.assistant", { hasText: text }).waitFor();
         };
+
+        if (scenario === "preserve unknown" || scenario === "remap on send") {
+          await menu.waitFor();
+          const unknown = scenario === "preserve unknown";
+          expect(await toggle.count()).toBe(unknown ? 0 : 1);
+          await trigger.click();
+          await sendAndReceive(unknown ? "daybreak_blue" : "daybreak_red", !unknown);
+          return;
+        }
 
         if (scenario === "hide" || scenario === "hide stale") {
           await menu.waitFor();
