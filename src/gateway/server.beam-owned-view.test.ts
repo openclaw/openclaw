@@ -248,9 +248,11 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       expect(
         await rpcReq(alice, "sessions.catalog.list", { search: "aaaaaaaaaaaa" }),
       ).toMatchObject({ ok: false, error: { message: "missing scope: operator.read" } });
-      const discovered = await rpcReq<SessionsCatalogRouteResult>(alice, "sessions.catalog.route", {
-        routeSegment: "beam",
-      });
+      const discovered = await rpcReq<NonNullable<SessionsCatalogRouteResult>>(
+        alice,
+        "sessions.catalog.route",
+        { routeSegment: "beam" },
+      );
       expect(discovered.payload).toEqual({
         catalogId: "beam",
         routeSegment: "beam",
@@ -263,7 +265,7 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       });
       expect(
         (
-          await rpcReq<SessionsCatalogRouteResult>(reader, "sessions.catalog.route", {
+          await rpcReq<NonNullable<SessionsCatalogRouteResult>>(reader, "sessions.catalog.route", {
             catalogId: "beam",
           })
         ).payload?.methods,
