@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
@@ -29,28 +28,12 @@ it("holds a direct transport send used by realtime chat during route admission",
   );
 });
 
-it.each([false, true])(
-  "sends split Talk settings only when advertised (%s)",
-  async (advertised) => {
-    const host = makeChatHost({ requestHandlers: {} });
-    const hello = host.hello!;
-    host.hello = {
-      ...hello,
-      features: {
-        ...hello.features,
-        capabilities: advertised ? [GATEWAY_SERVER_CAPS.TALK_CHAT_SETTINGS] : [],
-      },
-    };
-    await requestChatSend(host, {
-      message: "Talk turn",
-      runId: "talk-turn",
-      useTalkSettings: true,
-    });
-    const send = host.request.mock.calls.find(([method]) => method === "chat.send");
-    expect(send).toBeDefined();
-    expect(Object.hasOwn(send?.[1] ?? {}, "useTalkSettings")).toBe(advertised);
-  },
-);
+it("marks split Talk sends with useTalkSettings", async () => {
+  const host = makeChatHost({ requestHandlers: {} });
+  await requestChatSend(host, { message: "Talk turn", runId: "talk-turn", useTalkSettings: true });
+  const send = host.request.mock.calls.find(([method]) => method === "chat.send");
+  expect(send?.[1]).toMatchObject({ useTalkSettings: true });
+});
 
 it("holds direct and restored queued sends after startup until route revalidation", async () => {
   let pending = false;

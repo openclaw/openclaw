@@ -382,3 +382,17 @@ it.each([
     expect(result.value.systemInputProvenance).toBeUndefined();
   },
 );
+
+it("keeps explicit per-request thinking and Fast mode over Talk settings", async () => {
+  const result = await normalizeChatSendRequest({
+    params: requestParams({ useTalkSettings: true, thinking: "high", fastMode: true }),
+    client: humanClient(),
+    talkSettings: { consultThinkingLevel: "low", consultFastMode: false },
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    return;
+  }
+  expect(result.value.p.thinking).toBe("high");
+  expect(result.value.p.fastMode).toBe(true);
+});

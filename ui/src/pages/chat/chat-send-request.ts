@@ -4,11 +4,9 @@ import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
-import { isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   isUiGlobalSessionKey,
@@ -84,9 +82,6 @@ export async function requestChatSend(
   );
   let payload: unknown;
   const client = state.client!;
-  const useTalkSettings =
-    params.useTalkSettings &&
-    isGatewayCapabilityAdvertised(state, GATEWAY_SERVER_CAPS.TALK_CHAT_SETTINGS) === true;
   try {
     if (
       row?.cyberAccessProgram &&
@@ -115,7 +110,7 @@ export async function requestChatSend(
         ...(params.workContext ? { workContext: params.workContext } : {}),
         ...(params.appContext ? { appContext: params.appContext } : {}),
         ...(params.mentions?.length ? { mentions: params.mentions } : {}),
-        ...(useTalkSettings ? { useTalkSettings: true } : {}),
+        ...(params.useTalkSettings ? { useTalkSettings: true } : {}),
         ...(params.intent ? { intent: params.intent } : {}),
         deliver: false,
         ...(params.replyToId ? { replyToId: params.replyToId } : {}),
