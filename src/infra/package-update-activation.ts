@@ -308,13 +308,15 @@ export async function settlePendingPackageActivation(
     return options.dryRun ? receipt : undefined;
   }
   const originalAuthority = initial.descriptor.authority;
+  // Recorded generations under today's device numbers after a verified remount.
+  const previousIdentity =
+    identities?.currentIdentity(initial.descriptor.previous.identity) ??
+    initial.descriptor.previous.identity;
+  const candidateIdentity =
+    identities?.currentIdentity(initial.descriptor.candidate.identity) ??
+    initial.descriptor.candidate.identity;
   const replacementIdentity = packageActivationIdentity(installKey, true);
-  if (
-    options?.automatic &&
-    ![initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
-      replacementIdentity,
-    )
-  ) {
+  if (options?.automatic && ![previousIdentity, candidateIdentity].includes(replacementIdentity)) {
     return undefined;
   }
   const lease = inspectPackageActivationLease(originalAuthority);
@@ -322,12 +324,6 @@ export async function settlePendingPackageActivation(
     !lease.current ||
     (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
   const leaseIdentityChanged = leaseWasMissing || lease.changed;
-  const previousIdentity =
-    identities?.currentIdentity(initial.descriptor.previous.identity) ??
-    initial.descriptor.previous.identity;
-  const candidateIdentity =
-    identities?.currentIdentity(initial.descriptor.candidate.identity) ??
-    initial.descriptor.candidate.identity;
   const manualReplacement = ![previousIdentity, candidateIdentity].includes(replacementIdentity);
   const reason =
     identities && manualReplacement

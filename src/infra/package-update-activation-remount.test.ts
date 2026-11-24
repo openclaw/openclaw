@@ -246,6 +246,31 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     },
   );
 
+  it.each([
+    ["previous", "publication-not-started"],
+    ["candidate", "publication-settled-external-change"],
+  ] as const)(
+    "automatically settles a remounted publication with the %s installed",
+    async (installed, reason) => {
+      const { root } = fixture.setup();
+      const f = await prepareRemountedPublication(
+        fixture,
+        root,
+        false,
+        installed === "previous" ? "different-files" : "equal-symlinks",
+        installed,
+      );
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow(
+        "device number changed only",
+      );
+      await expect(
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, { automatic: true }),
+      ).resolves.toMatchObject({ operationId: f.operationId, reason });
+      expect(fs.existsSync(f.journalPath)).toBe(false);
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    },
+  );
+
   it("keeps separate-helper settlement from retiring an ordinary prepared operation", async () => {
     fixture.setup();
     const f = await fixture.prepare();
