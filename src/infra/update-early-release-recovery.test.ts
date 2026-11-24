@@ -146,23 +146,21 @@ function runner(fail: Record<string, number>, resumed = false) {
   const prefix = path.join(base, "git-install");
   const release = path.join(prefix, "recovery", "openclaw");
   const serviceFile = path.join(base, "openclaw-gateway.service");
-  const original = `ExecStart=node ${resumed ? release : "/checkout"}/dist/index.js\n`;
+  const original = `ExecStart=node ${resumed ? release : "/co"}/dist/index.js --port 1\n`;
   fs.mkdirSync(release, { recursive: true });
   fs.writeFileSync(serviceFile, original);
   const target = "b".repeat(40);
   const calls: string[] = [];
   const records: RecoveryOutcome[] = [];
-  let [alive, migrated] = [2, false];
+  let alive = 2;
   const run: RunCommand = async (argv) => {
     const cli = argv[1]?.endsWith("openclaw.mjs") ? path.dirname(argv[1]) : "";
     const role = cli === release ? "release" : cli ? "checkout" : "";
     const name = [role, ...argv.filter((arg) => !/^[/-]/u.test(arg))].join(" ").trim();
     calls.push(name);
-    if (name.endsWith("gateway install")) {
-      // Like the real install, the definition changes even when the start then fails.
-      fs.writeFileSync(serviceFile, `ExecStart=node ${cli}/dist/index.js\n`);
+    if (name.endsWith("gateway install") && !fail[name]) {
+      fs.writeFileSync(serviceFile, `ExecStart=node ${cli}/dist/index.js --port 1\n`);
     }
-    migrated ||= name === "release gateway start";
     // A resumed runner already fast-forwarded the checkout.
     const head = resumed ? target : "a".repeat(40);
     const output = { "git rev-parse HEAD": head, "git symbolic-ref HEAD": "main" }[name];
@@ -173,7 +171,12 @@ function runner(fail: Record<string, number>, resumed = false) {
     log: () => {},
     driverAlive: () => alive-- > 0,
     restarts: async () => 0,
-    migrated: () => migrated,
+    migrated: () => true,
+    ready: async (port: number | null) => {
+      const role = fs.readFileSync(serviceFile, "utf8").includes(release) ? "release" : "checkout";
+      calls.push(`${role} ready ${port}`);
+      return !fail[`${role} ready`];
+    },
     record: async (outcome: RecoveryOutcome) => void records.push(outcome),
     finish: async () => ({ code: 0, output: "" }),
     now: () => calls.length * 1000,
@@ -184,20 +187,24 @@ function runner(fail: Record<string, number>, resumed = false) {
   return { plan: full, calls, records, deps, serviceFile, release, original };
 }
 
-const TO_RELEASE = ["release gateway install", "release gateway start"];
+const TO_RELEASE = ["release gateway install", "release ready 1"];
 const BUILD = ["pnpm install", "pnpm build"];
-const TO_CHECKOUT = ["checkout gateway install", "checkout gateway start"];
+const TO_CHECKOUT = ["checkout gateway install", "checkout ready 1"];
 const MERGE = `git merge ${"b".repeat(40)}`;
-const RESTORE = ["systemctl daemon-reload", "systemctl restart openclaw-gateway.service"];
 
 it.each([
   ["serves the release while the checkout builds", {}, [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT]],
   ["resumes at the build once the release serves", {}, [...BUILD, ...TO_CHECKOUT], true],
   ["changes nothing when the fast-forward fails", { [MERGE]: 1 }, []],
   [
-    "puts back the previous service when the release fails before migrating",
+    "changes nothing when the service cannot be moved to the release",
     { "release gateway install": 1 },
-    ["release gateway install", ...RESTORE],
+    ["release gateway install"],
+  ],
+  [
+    "never puts the previous build back once the release started",
+    { "release ready": 1 },
+    TO_RELEASE,
   ],
   [
     "keeps the release serving when the build fails",
@@ -206,7 +213,7 @@ it.each([
   ],
   [
     "returns to the release when the rebuilt checkout does not start",
-    { "checkout gateway start": 1 },
+    { "checkout ready": 1 },
     [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT, ...TO_RELEASE],
   ],
 ] as Array<[string, Record<string, number>, string[], boolean?]>)(
@@ -215,16 +222,17 @@ it.each([
     const fx = runner(fail, resumed);
     expect(await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps)).toBe(false);
 
-    expect(fx.calls.filter((call) => /gateway|pnpm|systemctl/u.test(call))).toEqual(expected);
+    expect(fx.calls.filter((call) => /gateway|pnpm|ready/u.test(call))).toEqual(expected);
     expect(fx.calls.includes(MERGE)).toBe(!resumed);
-    // Once state migrated a failure is recorded with its next step; before that, nothing is.
-    const failed = Boolean(fail["pnpm build"] || fail["checkout gateway start"]);
+    // Once the service starts the release a failure is recorded with its next step; before
+    // that nothing changed and the next update retries.
+    const failed = ["release ready", "pnpm build", "checkout ready"].some((name) => fail[name]);
     expect(fx.records.map((record) => record.nextAction?.includes("install --force"))).toEqual(
       failed ? [true] : [],
     );
-    // The kept release stays only while the Gateway may still serve from it.
-    expect(fs.existsSync(fx.release)).toBe(expected.includes("pnpm install"));
-    if (expected.includes(RESTORE[0]!)) {
+    // The kept release stays only while the Gateway may serve from it.
+    expect(fs.existsSync(fx.release)).toBe(!fail[MERGE] && !fail["release gateway install"]);
+    if (fail["release gateway install"]) {
       expect(fs.readFileSync(fx.serviceFile, "utf8")).toBe(fx.original);
     }
   },

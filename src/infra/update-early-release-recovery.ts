@@ -37,6 +37,8 @@ export const EARLY_RELEASE_RECOVERY_FLAG = "--early-release-recovery";
 const MIN_FREE_BYTES = 4 * 1024 ** 3;
 const DRIVER_EXIT_TIMEOUT_MS = 30 * 60_000;
 const COMMAND_TIMEOUT_MS = 60 * 60_000;
+/** A boot migration of a large agent database runs before the Gateway reports ready. */
+const READY_TIMEOUT_MS = 20 * 60_000;
 const MAX_RESTARTS = 2;
 const PASSED_ENV = [
   "HOME",
@@ -405,6 +407,8 @@ export type RunnerDeps = {
   /** Restarts systemd made of this unit after an abnormal exit. */
   restarts: (unit: string) => Promise<number>;
   migrated: () => boolean;
+  /** Waits for the Gateway on this port to answer `/readyz`, without opening state. */
+  ready: (port: number | null) => Promise<boolean>;
   record: (outcome: RecoveryOutcome) => Promise<void>;
   /** Runs the finishing step from the rebuilt checkout, whose code is this release's. */
   finish: (plan: RecoveryPlan, facts: FinishFacts) => Promise<CommandResult>;
@@ -439,9 +443,16 @@ export async function runEarlyGitReleaseRecovery(
       stream: true,
       timeoutMs: 15 * 60_000,
     });
+  // The CLI's own start check opens state, which the booting release holds for its migration,
+  // so readiness is read over HTTP. `switched` is false when the definition never changed.
   const serve = async (root: string) => {
     const installed = await cli(root, "gateway", "install", "--force", "--json");
-    return ok(installed) ? cli(root, "gateway", "start", "--json") : installed;
+    const unit = fs.readFileSync(plan.serviceFile, "utf8");
+    if (!unit.includes(path.join(root, "dist"))) {
+      return { switched: false, ready: false, detail: tail(installed) };
+    }
+    const port = Number(/--port\s+(\d+)/u.exec(unit)?.[1]) || null;
+    return { switched: true, ready: await deps.ready(port), detail: tail(installed) };
   };
   const abandon = async (why: string) => {
     log(`stopped before changing the Gateway: ${why}. The next \`openclaw update\` tries again.`);
@@ -495,22 +506,20 @@ export async function runEarlyGitReleaseRecovery(
     downtimeMs += deps.now() - started;
     return result;
   };
-  const before = fs.readFileSync(plan.serviceFile);
   // A resumed run finds the service already on the release and continues from the build.
-  if (!before.includes(plan.release)) {
+  if (!fs.readFileSync(plan.serviceFile, "utf8").includes(plan.release)) {
     log("restarting the Gateway on the new release; it migrates state at startup");
     const served = await switched(plan.release);
-    if (!ok(served)) {
-      if (!deps.migrated()) {
-        // Nothing migrated, so the previous build can serve again: put back its definition.
-        fs.writeFileSync(plan.serviceFile, before);
-        await run(["systemctl", "--user", "daemon-reload"]);
-        await run(["systemctl", "--user", "restart", path.basename(plan.serviceFile)]);
-        return abandon(`the new release did not become ready (${tail(served)})`);
-      }
+    if (!served.switched) {
+      return abandon(
+        `the Gateway service could not be moved to the new release (${served.detail})`,
+      );
+    }
+    // Never put the previous build back: the release may have started migrating state.
+    if (!served.ready) {
       return fail(
         "early-release-recovery-start-failed",
-        `The new release migrated state but did not report ready (${tail(served)}).`,
+        "The Gateway service now starts the new release, which did not report ready.",
         `from the checkout, run \`${REBUILD} && openclaw gateway install --force\``,
       );
     }
@@ -535,12 +544,12 @@ export async function runEarlyGitReleaseRecovery(
   }
   log("restarting the Gateway on the rebuilt checkout");
   const final = await switched(plan.checkout);
-  if (!ok(final)) {
+  if (!final.ready) {
     const back = await serve(plan.release);
     return fail(
       "early-release-recovery-switch-failed",
-      `The rebuilt checkout did not become ready (${tail(final)}); the Gateway ${ok(back) ? "serves the new release again" : "could not be put back on the new release"}.`,
-      "from the checkout, run `openclaw gateway install --force && openclaw gateway start`",
+      `The rebuilt checkout did not become ready (${final.detail}); the Gateway ${back.ready ? "serves the new release again" : "could not be put back on the new release"}.`,
+      "from the checkout, run `openclaw gateway install --force`",
     );
   }
   const finished = await deps.finish(plan, { downtimeMs });
@@ -701,6 +710,21 @@ export async function runEarlyGitReleaseRecoveryEntry(argv: readonly string[]) {
       ) || 0,
     // Unreadable state counts as migrated: the old build is never put back on data it may not open.
     migrated: () => readPendingSchemaChange() === null,
+    ready: async (port) => {
+      for (const until = Date.now() + READY_TIMEOUT_MS; port && Date.now() < until;) {
+        const status = await fetch(`http://127.0.0.1:${port}/readyz`, {
+          signal: AbortSignal.timeout(2000),
+        }).then(
+          (response) => response.status,
+          () => 0,
+        );
+        if (status === 200) {
+          return true;
+        }
+        await delay(1000);
+      }
+      return false;
+    },
     record,
     finish: (current, facts) => {
       const worker = resolveRuntimeWorkerUrl({
