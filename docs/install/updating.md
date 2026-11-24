@@ -151,6 +151,13 @@ required database files, including their WAL and rollback journals, are refused
 before copying; an optional SQLite family is skipped together rather than copied
 without its unreadable journal.
 
+The startup copy stages the root config and every file it includes through
+`$include`, keeping relative include paths valid even when an include sits in an
+excluded workspace or the config lives outside the state directory. Included
+files changed by Doctor are published in the same durable plan as the root config,
+and keep a `.pre-<version>` copy. A missing or unreadable include refuses the
+upgrade without changing live files.
+
 Before copying, startup checks free space against the selected file bytes plus
 an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
 that budget because a filesystem can decline reflinking. Insufficient space

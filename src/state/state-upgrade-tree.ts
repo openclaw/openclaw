@@ -148,7 +148,7 @@ function skipEntry(name: string): boolean {
 }
 
 /** Changes on any write, replacement or mode change of the file. */
-function fileStamp(pathname: string): string | undefined {
+export function fileStamp(pathname: string): string | undefined {
   const stat = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }

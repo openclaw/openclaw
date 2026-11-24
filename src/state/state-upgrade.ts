@@ -12,15 +12,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import JSON5 from "json5";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default-path.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { resolveManagedWorktreeRoot } from "../agents/worktrees/storage-root.js";
-import { resolveConfigIncludes } from "../config/includes.js";
-import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
@@ -45,6 +41,7 @@ import {
   type SetAsideRow,
   type SqliteSwapReport,
 } from "./sqlite-copy-swap.js";
+import { copyUpgradeConfigInputs, readUpgradeConfig } from "./state-upgrade-config.js";
 import { createDoctorChain, type StateUpgradeChain } from "./state-upgrade-doctor.js";
 import {
   applyPlan,
@@ -170,7 +167,7 @@ function discoverDatabases(stateDir: string, env: NodeJS.ProcessEnv) {
   if (targets.some((target) => target.kind === "state" && target.version === 0)) {
     return { targets, retainedAgentRoots };
   }
-  const config = readUpgradeConfig(resolveConfigPath(env, stateDir));
+  const { config } = readUpgradeConfig(resolveConfigPath(env, stateDir));
   const retained = agents.length
     ? createRetainedAgentDatabaseMatcherFromSnapshot(
         env,
@@ -226,17 +223,6 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
     (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX)) ||
       outdatedDatabases(discoverDatabases(stateDir, env).targets).length > 0)
   );
-}
-
-function readUpgradeConfig(configPath: string): OpenClawConfig {
-  try {
-    // Doctor owns validation and migration; path resolvers tolerate legacy shapes.
-    return coerceConfig(
-      resolveConfigIncludes(JSON5.parse(fs.readFileSync(configPath, "utf8")), configPath),
-    );
-  } catch {
-    return {};
-  }
 }
 
 /** Generic rebuild of every outdated database into the shadow. */
@@ -366,7 +352,7 @@ export async function upgradeStateDirectory(params: {
   if (!fs.existsSync(stateDir)) {
     return { status: "current" };
   }
-  const config = readUpgradeConfig(configPath);
+  const { config, files: configFiles } = readUpgradeConfig(configPath);
   const excludedRoots = [
     resolveDefaultAgentWorkspaceDir(env),
     ...listAgentWorkspaceDirs(config, env),
@@ -443,6 +429,7 @@ export async function upgradeStateDirectory(params: {
   const runChain = params.runChain ?? createDoctorChain();
   const chainLog = path.join(workDir, "chain.log");
   let planWritten = false;
+  const stagedConfigs = new Set<string>();
   try {
     fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
     params.log.info(
@@ -454,14 +441,17 @@ export async function upgradeStateDirectory(params: {
     const copyScope = await copyTree(stateDir, shadowRoot, skip, baseline, {
       requiredSqlite,
       log: params.log,
-      additionalCopyBytes: configInside
-        ? 0
-        : (fs.statSync(configPath, { throwIfNoEntry: false })?.size ?? 0),
+      additionalCopyBytes: [...configFiles.values()].reduce(
+        (bytes, { raw }) => bytes + Buffer.byteLength(raw),
+        0,
+      ),
     });
-    if (!configInside && fs.existsSync(configPath)) {
-      fs.mkdirSync(path.dirname(shadowConfig), { recursive: true });
-      fs.copyFileSync(configPath, shadowConfig);
-    }
+    const configInputs = copyUpgradeConfigInputs({
+      configPath,
+      shadowConfig,
+      files: configFiles,
+      baseline: configInside ? baseline : undefined,
+    });
     for (const target of outdated) {
       const db = openNodeSqliteDatabase(toShadow(target.path));
       try {
@@ -471,8 +461,16 @@ export async function upgradeStateDirectory(params: {
       }
     }
     // Absolute paths into the live tree must resolve to the shadow during the run.
-    if (fs.existsSync(shadowConfig)) {
-      rewriteFilePrefix(shadowConfig, stateDir, shadowRoot);
+    for (const target of configInputs.values()) {
+      if (!fs.existsSync(target)) {
+        continue;
+      }
+      rewriteFilePrefix(target, stateDir, shadowRoot);
+      if (!configInside) {
+        for (const [source, shadow] of configInputs) {
+          rewriteFilePrefix(target, source, shadow);
+        }
+      }
     }
     let mode: "chain" | "fallback" = "chain";
     let failedStep: string | undefined;
@@ -536,6 +534,20 @@ export async function upgradeStateDirectory(params: {
         mismatches.push(...report.conservationMismatches.map((t) => `${report.label}:${t}`));
       }
     }
+    // Admit the private graph while absolute includes still address the migrated copies.
+    let refusal: string | undefined;
+    try {
+      refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
+    } finally {
+      // Config admission can retain a reader on the successor inode. Retire it before
+      // rename: its old shadow pathname cannot find the first live writer's WAL/SHM.
+      await closeOpenClawStateDatabaseByPathAsync(toShadow(liveState));
+    }
+    if (refusal !== undefined) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);
+      return { status: "refused", reason: refusal };
+    }
     // Paths the run wrote into the shadow point at the live tree again. Only files the
     // run wrote can hold them; the rest of the copy is never read again.
     const written = changedShadowFiles(shadowRoot, baseline);
@@ -554,8 +566,15 @@ export async function upgradeStateDirectory(params: {
         rewriteFilePrefix(file, shadowRoot, stateDir);
       }
     }
-    if (fs.existsSync(shadowConfig) && !configInside) {
-      rewriteFilePrefix(shadowConfig, shadowRoot, stateDir);
+    if (!configInside) {
+      for (const target of configInputs.values()) {
+        if (fs.existsSync(target)) {
+          rewriteFilePrefix(target, shadowRoot, stateDir);
+          for (const [source, shadow] of configInputs) {
+            rewriteFilePrefix(target, shadow, source);
+          }
+        }
+      }
     }
     const pinned = mode === "fallback" || mismatches.length > 0;
     const setAsideCount = setAside.reduce((sum, entry) => sum + entry.rows.length, 0);
@@ -583,28 +602,29 @@ export async function upgradeStateDirectory(params: {
     ) {
       ops.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
     }
-    if (mode === "fallback" && configInside && fs.existsSync(shadowConfig)) {
-      const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
-      if (!original?.equals(fs.readFileSync(shadowConfig))) {
-        ops.push({ kind: original ? "replace" : "add", live: configPath, next: shadowConfig });
-      }
-    }
-    // A config outside the state directory may be on another filesystem; its new
-    // bytes are staged beside it so the plan's rename stays on one filesystem.
-    let stagedConfig: string | undefined;
-    if (!configInside && fs.existsSync(shadowConfig)) {
-      const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
-      if (!original?.equals(fs.readFileSync(shadowConfig))) {
-        stagedConfig = path.join(
-          path.dirname(configPath),
-          `.${path.basename(configPath)}.upgrade-${VERSION}`,
-        );
-        ops.push({ kind: original ? "replace" : "add", live: configPath, next: stagedConfig });
+    // Include changes participate in the same durable plan as the root config.
+    const publishedConfigTargets = new Set<string>();
+    if (mode === "fallback" || !configInside) {
+      for (const [file, target] of configInputs) {
+        if (!fs.existsSync(target)) {
+          continue;
+        }
+        const original = fs.existsSync(file) ? fs.readFileSync(file) : undefined;
+        if (original?.equals(fs.readFileSync(target))) {
+          continue;
+        }
+        const destination =
+          file === configPath ? file : (configFiles.get(file)?.canonicalPath ?? file);
+        if (publishedConfigTargets.has(destination)) {
+          continue;
+        }
+        publishedConfigTargets.add(destination);
+        ops.push({ kind: original ? "replace" : "add", live: destination, next: target });
       }
     }
     for (let index = ops.length - 1; index >= 0; index--) {
       const op = ops[index]!;
-      if (op.live === configPath && !configInside) {
+      if (publishedConfigTargets.has(op.live)) {
         continue;
       }
       if (fs.lstatSync(op.live, { throwIfNoEntry: false }) && !baseline.has(toShadow(op.live))) {
@@ -635,27 +655,28 @@ export async function upgradeStateDirectory(params: {
     );
     checkpointShadowDatabases([toShadow(liveState)]);
     ops.push(...companionRemovals(ops));
+    // A workspace include can be on another filesystem even when the root is not.
+    // Stage its planned writes (including Doctor backups) beside their destinations.
+    const configDirectories = new Set(
+      [...configInputs.keys()].flatMap((file) => [
+        path.dirname(file),
+        path.dirname(configFiles.get(file)?.canonicalPath ?? file),
+      ]),
+    );
     for (const op of ops) {
+      if (op.next && configDirectories.has(path.dirname(op.live)) && !isSqliteFile(op.next)) {
+        const staged = path.join(
+          path.dirname(op.live),
+          `.${path.basename(op.live)}${path.basename(workDir)}`,
+        );
+        stagedConfigs.add(staged);
+        fs.cpSync(op.next, staged, { verbatimSymlinks: true });
+        op.next = staged;
+      }
       if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
         fsyncPath(op.next);
+        fsyncPath(path.dirname(op.next), true);
       }
-    }
-    let refusal: string | undefined;
-    try {
-      refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
-    } finally {
-      // Config admission can retain a reader on the successor inode. Retire it before
-      // rename: its old shadow pathname cannot find the first live writer's WAL/SHM.
-      await closeOpenClawStateDatabaseByPathAsync(toShadow(liveState));
-    }
-    if (refusal !== undefined) {
-      fs.rmSync(workDir, { recursive: true, force: true });
-      params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);
-      return { status: "refused", reason: refusal };
-    }
-    if (stagedConfig) {
-      fs.copyFileSync(shadowConfig, stagedConfig);
-      fsyncPath(stagedConfig);
     }
     await params.beforeSwap?.();
     writePlan(workDir, { appVersion: VERSION, ops });
@@ -687,6 +708,9 @@ export async function upgradeStateDirectory(params: {
   } catch (error) {
     if (!planWritten) {
       // Nothing live changed; the next start retries from scratch.
+      for (const staged of stagedConfigs) {
+        fs.rmSync(staged, { force: true });
+      }
       fs.rmSync(workDir, { recursive: true, force: true });
       throw explainMachineFailure(error, stateDir);
     }
