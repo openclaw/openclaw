@@ -37,9 +37,11 @@ node extensions/beam/scripts/package-cleaners.mjs --prefetch
 ```
 
 Copy the complete `.artifacts/beam-cleaners/<version>/` directory to the
-same location in the packaging checkout and run the normal release packaging
-command with `npm_config_offline=true`. A missing or changed archive stops
-packaging before npm writes its tarball.
+same location in the packaging checkout. The normal npm package cache must
+also contain the dependency metadata and tarballs required by OpenClaw's
+packager. Run the release packaging command with `npm_config_offline=true`.
+A missing or changed cleaner archive stops packaging before npm writes its
+tarball.
 
 When upgrading the cleaner, verify the Beam release's `cleaners.json` against
 its published checksums and provenance. Copy its contents into
