@@ -141,6 +141,7 @@ export function acquireAuthProfileReadDatabase(
   ) {
     if (schema && schema.userVersion !== cached.schemaVersion) {
       try {
+        admitSqliteSchema(cached.db);
         cached.schemaVersion = assertSupportedAgentSchemaVersion(
           cached.db,
           resolvedPath,
@@ -184,17 +185,12 @@ export function acquireAuthProfileReadDatabase(
   let readable = false;
   try {
     enableNodeSqliteKyselyStatementCache(db);
-    if (inspection || schema) {
-      candidate.schemaVersion = assertSupportedAgentSchemaVersion(
-        db,
-        resolvedPath,
-        schema?.userVersion,
-      );
-    } else {
-      candidate.schemaVersion = admitSqliteSchema(db, (version) =>
-        assertSupportedAgentSchemaVersion(db, resolvedPath, version),
-      ).userVersion;
-    }
+    admitSqliteSchema(db);
+    candidate.schemaVersion = assertSupportedAgentSchemaVersion(
+      db,
+      resolvedPath,
+      schema?.userVersion,
+    );
     readable = true;
   } catch {
     // Invalid readers are disposed below, where native close failures propagate.
