@@ -20,6 +20,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.ClassName
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
@@ -527,13 +528,15 @@ class ServiceInfoNsdShadow : ShadowNsdManager() {
   override fun registerServiceInfoCallback(
     serviceInfo: NsdServiceInfo,
     executor: Executor,
-    callback: NsdManager.ServiceInfoCallback,
+    @ClassName("android.net.nsd.NsdManager\$ServiceInfoCallback") callback: Any,
   ) {
-    registrations.add(ServiceInfoRegistration(executor, callback))
+    registrations.add(ServiceInfoRegistration(executor, callback as NsdManager.ServiceInfoCallback))
   }
 
   @Implementation(minSdk = 34)
-  override fun unregisterServiceInfoCallback(callback: NsdManager.ServiceInfoCallback) {
+  override fun unregisterServiceInfoCallback(
+    @ClassName("android.net.nsd.NsdManager\$ServiceInfoCallback") callback: Any,
+  ) {
     // Like NsdManager, unregister does not cancel listener lambdas already captured for delivery.
   }
 }
