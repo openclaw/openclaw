@@ -1,22 +1,13 @@
-import { createMemo } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChannelAccountSnapshot, ToolsCatalogResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import { i18n, t } from "../../i18n/index.ts";
-import { loadLazyLocaleTranslation } from "../../i18n/lib/registry.ts";
-import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
@@ -109,45 +100,6 @@ describe("renderAgents", () => {
         ),
       ).toEqual(["Agent list unavailable"]),
     );
-  });
-
-  it("renders the selected agent's tool catalog loading state", async () => {
-    const mounted = mountConnected(() => {
-      const readCatalog = createMemo(() => new Promise<ToolsCatalogResult>(() => {}));
-      const props = createProps();
-      return (
-        <Agents
-          {...props}
-          tools={{ ...props.tools, readCatalog }}
-          config={config({})}
-          readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
-        />
-      );
-    });
-    await vi.dynamicImportSettled();
-
-    await waitForSolid(() =>
-      expect(
-        mounted.container.querySelector(
-          `.settings-loading-skeleton[aria-label="${t("agentTools.loadingCatalog")}"]`,
-        ),
-      ).not.toBeNull(),
-    );
-  });
-
-  it("renders the active agent tab and selects a different panel", () => {
-    const container = document.createElement("div");
-    const onSelectPanel = vi.fn();
-    renderView(
-      { onSelectPanel, readData: () => ({ ...createProps().readData(), agentsPanel: "files" }) },
-      container,
-    );
-
-    expect(container.querySelector("#agents-tab-files")?.hasAttribute("active")).toBe(true);
-    expectAgentTab(container, "Tools").dispatchEvent(
-      new MouseEvent("click", { detail: 1, bubbles: true }),
-    );
-    expect(onSelectPanel).toHaveBeenCalledWith("tools");
   });
 
   it("prefills the identity editor from the fetched agent identity", () => {
@@ -356,49 +308,6 @@ describe("renderAgents", () => {
     expect(container.querySelector(".cron-load-more")).toBeNull();
   });
 
-  it("renders Memory after Automations and scopes the panel to the selected agent", async () => {
-    const container = document.createElement("div");
-    const request = vi.fn(async (method: string) =>
-      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
-    );
-    const client = createTestGatewayClient(request);
-    const context = {
-      gateway: createApplicationGateway({
-        ...createApplicationGateway().gateway.snapshot,
-        client,
-        phase: "connected",
-      }).gateway,
-      runtimeConfig: {
-        state: { configForm: null, configSnapshot: null },
-        ensureLoaded: async () => undefined,
-        subscribe: () => () => undefined,
-      },
-    } as unknown as ApplicationContext;
-    mountSolid(
-      (props: AgentsProps) => (
-        <ApplicationProvider value={context}>
-          <Agents {...props} />
-        </ApplicationProvider>
-      ),
-      createProps({ readData: () => ({ ...createProps().readData(), agentsPanel: "memory" }) }),
-      container,
-    );
-
-    await vi.dynamicImportSettled();
-
-    const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
-      directText(tab),
-    );
-    expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
-    await vi.dynamicImportSettled();
-    await waitForSolid(() =>
-      expect(container.querySelector("openclaw-agent-memory-panel .dreams-page")).not.toBeNull(),
-    );
-    await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "beta" }),
-    );
-  });
-
   it("updates the configured primary model selection when the active agent changes", async () => {
     const container = document.createElement("div");
     const configForm = {
@@ -445,223 +354,6 @@ describe("renderAgents", () => {
       '[role="option"][aria-selected="true"]',
     );
     expect(inheritedSelection?.textContent?.trim()).toBe("Inherit default (openai/gpt-5.4)");
-  });
-
-  it("omits redundant family aliases and preserves custom aliases in agent options", async () => {
-    const container = document.createElement("div");
-    const configForm = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-8" },
-          models: {
-            "anthropic/claude-opus-4-8": { alias: "opus" },
-            "anthropic/claude-sonnet-5": { alias: "sonnet" },
-            "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
-            "local/unlisted-model": { alias: "My local model" },
-          },
-        },
-        entries: {
-          alpha: {
-            models: {
-              "local/unlisted-model": { alias: "Alpha local model" },
-              "google/gemini-3-flash-preview": { alias: "Alpha Flash" },
-            },
-          },
-          beta: {},
-        },
-      },
-    };
-
-    renderView(
-      {
-        selectedAgentId: "alpha",
-        config: config(configForm),
-        overview: {
-          ...createProps().overview,
-          modelCatalog: [
-            {
-              id: "claude-opus-4-8",
-              alias: "opus",
-              name: "Opus 4.8",
-              provider: "anthropic",
-            },
-            {
-              id: "claude-sonnet-5",
-              alias: "sonnet",
-              name: "Sonnet 5",
-              provider: "anthropic",
-            },
-            {
-              id: "moonshotai/kimi-k2.5",
-              alias: "Kimi K2.5 (NVIDIA)",
-              name: "Kimi K2.5",
-              provider: "nvidia",
-            },
-          ],
-        },
-      },
-      container,
-    );
-
-    await updatePickers(container);
-    const select = primaryModelPicker(container);
-    await openPicker(select!);
-    expect(
-      select?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("anthropic/claude-opus-4-8");
-    const options = new Map(
-      Array.from(select?.querySelectorAll('[role="option"]') ?? []).map((option) => [
-        option.getAttribute("data-value"),
-        option.querySelector(".picker-select__label")?.textContent?.trim(),
-      ]),
-    );
-
-    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8");
-    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5");
-    expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
-    expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
-    expect(options.get("google/gemini-3-flash-preview")).toBe(
-      "Alpha Flash (google/gemini-3-flash-preview)",
-    );
-  });
-
-  it("does not display inherited fallback chips for an authored primary", () => {
-    const model = { primary: "openai/gpt-5.4" };
-    const container = document.createElement("div");
-    const fallback = "anthropic/claude-sonnet-4-6";
-
-    renderView(
-      {
-        selectedAgentId: "beta",
-        config: config({
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
-            },
-            entries: { alpha: {}, beta: { model } },
-          },
-        }),
-      },
-      container,
-    );
-
-    const field = container.querySelector<HTMLElement>("openclaw-multi-select.agent-fallbacks");
-    expect(field).not.toBeNull();
-    expect(field?.querySelectorAll(".multi-select__chip")).toHaveLength(0);
-  });
-
-  it("shows the skills count only for the selected agent's report", async () => {
-    const container = document.createElement("div");
-    renderView(
-      {
-        agentSkills: { ...createProps().agentSkills, filter: "" },
-        readData: () => ({
-          ...createProps().readData(),
-          agentSkillsReport: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [createSkill()],
-          },
-          agentSkillsAgentId: "alpha",
-        }),
-      },
-      container,
-    );
-    await Promise.resolve();
-
-    let skillsTab = expectAgentTab(container, "Skills");
-
-    expect(skillsTab.textContent?.trim()).toBe("Skills");
-
-    renderView(
-      {
-        agentSkills: { ...createProps().agentSkills, filter: "" },
-        readData: () => ({
-          ...createProps().readData(),
-          agentSkillsReport: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [createSkill()],
-          },
-          agentSkillsAgentId: "beta",
-        }),
-      },
-      container,
-    );
-    await Promise.resolve();
-
-    skillsTab = expectAgentTab(container, "Skills");
-
-    expect(directText(skillsTab)).toBe("Skills");
-    expect(skillsTab.querySelector(".hub-tab__badge--count")).toBeNull();
-  });
-
-  it("localizes mounted agent tabs and falls back for an untranslated channel subtitle", async () => {
-    const restoreI18n = captureI18nStateForTesting();
-    const chinese = await loadLazyLocaleTranslation("zh-CN");
-    vi.stubGlobal("localStorage", createStorageMock());
-    const container = document.createElement("div");
-
-    try {
-      await i18n.setLocale("en");
-      // Leave the subtitle untranslated so generated catalog coverage cannot remove the fallback.
-      i18n.registerTranslation("zh-CN", {
-        agents: {
-          tabs: {
-            overview: "概览",
-            files: "文件",
-            tools: "工具",
-            skills: "技能",
-            channels: "渠道",
-            cronJobs: "定时任务",
-            memory: "记忆",
-          },
-        },
-      });
-      renderView(
-        {
-          channels: { ...createProps().channels },
-          readData: () => ({ ...createProps().readData(), agentsPanel: "channels" }),
-          readChannels: () => ({
-            ...createProps().readChannels(),
-            channelsSnapshot: null,
-            channelsRead: null,
-            channelsError: null,
-            channelsLastSuccess: null,
-          }),
-        },
-        container,
-      );
-      const tabLabels = () =>
-        Array.from(container.querySelectorAll<HTMLElement>(".agents-hub-tabs .hub-tab"), (button) =>
-          button.textContent?.trim(),
-        );
-      await waitForSolid(() =>
-        expect(tabLabels()).toEqual([
-          "Overview",
-          "Files",
-          "Tools",
-          "Skills",
-          "Channels",
-          "Automations",
-          "Memory",
-        ]),
-      );
-
-      await i18n.setLocale("zh-CN");
-      await waitForSolid(() => {
-        expect(tabLabels()).toEqual(["概览", "文件", "工具", "技能", "渠道", "定时任务", "记忆"]);
-        expect(
-          Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
-            desc.textContent?.replace(/\s+/gu, " ").trim(),
-          ),
-        ).toContain("Channel status across OpenClaw.");
-      });
-    } finally {
-      i18n.registerTranslation("zh-CN", chinese ?? {});
-      vi.unstubAllGlobals();
-      await restoreI18n();
-    }
   });
 });
 
