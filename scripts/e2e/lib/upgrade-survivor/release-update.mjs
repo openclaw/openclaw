@@ -153,7 +153,7 @@ try {
     ["view", "openclaw", "dist-tags", "--json", "--registry=https://registry.npmjs.org"],
     "public-dist-tags.json",
   );
-  save("cli-env.json", env);
+  assert(!Object.hasOwn(env, "OPENCLAW_UPDATE_PACKAGE_SPEC"), "CLI target override present");
   const bootstrap = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not initialize its state");
   const stopped = once(bootstrap, "exit");
@@ -181,18 +181,12 @@ try {
   const gateway = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not become ready");
   assert.equal(gateway.exitCode, null, "T exited before the API update");
-  save(
-    "gateway-env.json",
-    Object.fromEntries(
-      fs
-        .readFileSync(`/proc/${gateway.pid}/environ`, "utf8")
-        .split("\0")
-        .filter(Boolean)
-        .map((entry) => {
-          const separator = entry.indexOf("=");
-          return [entry.slice(0, separator), entry.slice(separator + 1)];
-        }),
-    ),
+  assert(
+    !fs
+      .readFileSync(`/proc/${gateway.pid}/environ`, "utf8")
+      .split("\0")
+      .some((entry) => entry.startsWith("OPENCLAW_UPDATE_PACKAGE_SPEC=")),
+    "Gateway target override present",
   );
   const startedAt = Date.now();
   await command("openclaw", ["update", "--yes", "--json"], "update-cli.json", crash ? 1 : 0);
@@ -285,6 +279,8 @@ try {
     previous,
     wallMs: Date.now() - startedAt,
     migrationProof: true,
+    servingSchema: expected.schema,
+    rowCount: after.length,
   });
 } finally {
   tlsRelay?.closeAllConnections();
