@@ -15,6 +15,7 @@ import { navigateToModelProvider } from "../../model-providers/navigation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
+import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
 import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
@@ -80,10 +81,18 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   const voice = {
     dictation: state.dictation,
     picker: microphonePicker,
-    // A voice surface whose sign-in lacks an API key opens that provider in Settings → Models.
-    openModelProvider: application
-      ? (provider: string) =>
-          navigateToModelProvider(application, currentProps.currentAgentId || null, provider)
+    configureApiKey: application
+      ? (modelProvider: string | undefined) => {
+          if (modelProvider) {
+            navigateToModelProvider(
+              application,
+              currentProps.currentAgentId || null,
+              modelProvider,
+            );
+          } else {
+            navigateToSpeechSettings(application);
+          }
+        }
       : undefined,
   };
   // Dictation admission invalidates edits and dismisses errors before the next input event.

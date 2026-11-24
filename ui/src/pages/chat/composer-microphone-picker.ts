@@ -11,7 +11,7 @@ import {
 } from "./talk/input.ts";
 
 /** Per voice surface, the provider whose sign-in doesn't cover it and needs an API key. */
-export type VoiceApiKeyProviders = Partial<Record<"talk" | "dictation", string>>;
+export type VoiceApiKeyProviders = Partial<Record<"talk" | "dictation" | "speech", string>>;
 
 type CatalogEntries = TalkCatalogResult["realtime"]["providers"] | undefined;
 const keyed = (entries: CatalogEntries, ready?: boolean, selected?: string) =>
@@ -52,7 +52,7 @@ export type MicrophonePickerProps = {
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   apiKeyProviders?: VoiceApiKeyProviders;
-  onOpenModelProvider?: (provider: string) => void;
+  onConfigureApiKey?: (modelProvider: string | undefined) => void;
 };
 
 // Each composer owns discovery and the devicechange subscription; delayed results
@@ -236,7 +236,13 @@ export class ComposerMicrophoneOwner extends EventTarget {
           ) || status.fallbackProviders.length > 0;
       }
       if (request === this.catalogRequest) {
-        this.apiKeyProviders.talk ??= keyed(catalog.speech.providers, speechReady, speechProvider);
+        if (!this.apiKeyProviders.talk) {
+          this.apiKeyProviders.speech = keyed(
+            catalog.speech.providers,
+            speechReady,
+            speechProvider,
+          );
+        }
         this.realtimeStatus =
           this.dictationStatus === "ready" && speechReady ? "ready" : "unavailable";
       }
@@ -246,7 +252,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
       }
     } finally {
       if (request === this.catalogRequest) {
-        this.talkApiKeyNotice &&= this.apiKeyProviders.talk !== undefined;
+        this.talkApiKeyNotice &&= Boolean(this.apiKeyProviders.talk ?? this.apiKeyProviders.speech);
         this.dispatchEvent(new Event("change"));
       }
     }

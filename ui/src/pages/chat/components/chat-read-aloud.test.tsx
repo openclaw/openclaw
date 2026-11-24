@@ -79,8 +79,7 @@ function mount(options: Parameters<typeof MessageActions>[0]["options"] = {}) {
   });
 }
 
-it("uses the failed speech provider and the settings agent of the pane that played it", async () => {
-  const selectAgent = vi.fn();
+it("uses the failed speech provider in its pane and opens speech settings", async () => {
   const navigate = vi.fn();
   const openAiCatalog = { speech: { providers: [{ id: "openai", apiKeyRequired: true }] } };
   const betaCatalog = createDeferred<typeof openAiCatalog>();
@@ -97,7 +96,7 @@ it("uses the failed speech provider and the settings agent of the pane that play
     });
   });
   context = createContext(scopedRequest, { methods: ["tts.speak"], runtimeConfig });
-  Object.assign(context, { navigate, settingsAgentSelection: { set: selectAgent } });
+  Object.assign(context, { navigate, settingsAgentSelection: { set: vi.fn() } });
   const alpha = mount({ agentId: "alpha", sessionKey: "agent:alpha:main" });
   const beta = mount({ agentId: "beta", sessionKey: "agent:beta:main" });
   readButton(alpha).click();
@@ -115,8 +114,10 @@ it("uses the failed speech provider and the settings agent of the pane that play
   );
   expect(alpha.queryByRole("button", { name: "Configure" })).toBeNull();
   beta.getByRole<HTMLButtonElement>("button", { name: "Configure" }).click();
-  expect(selectAgent).toHaveBeenCalledWith("beta");
-  expect(navigate).toHaveBeenCalledWith("model-providers", { search: "?provider=openai" });
+  expect(navigate).toHaveBeenCalledWith("communications", {
+    search: "?section=tts&advanced=1",
+    hash: "#config-section-tts",
+  });
 });
 
 it.each([false, true])(

@@ -6,6 +6,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { useApplication, useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { navigateToModelProvider } from "../../model-providers/navigation.ts";
+import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
 import { voiceApiKeyMessage, VoiceApiKeyNotice } from "../voice-api-key-notice.tsx";
 
 /** A recording the selected provider can't transcribe because its sign-in doesn't cover voice. */
@@ -24,11 +25,7 @@ export function RecordingApiKeyNotice(props: { provider: string; agentId?: strin
   );
 }
 
-export default function ReadAloudStatus(props: {
-  error: unknown;
-  agentId?: string;
-  sessionKey?: string;
-}) {
+export default function ReadAloudStatus(props: { error: unknown; sessionKey?: string }) {
   const app = useApplication();
   const keyProvider = createMemo(async () => {
     const error = props.error;
@@ -56,7 +53,7 @@ export default function ReadAloudStatus(props: {
             class="chat-send-status__action"
             style={{ color: "var(--muted)", "text-decoration": "underline" }}
             type="button"
-            onClick={() => navigateToModelProvider(app, props.agentId ?? null, provider())}
+            onClick={() => navigateToSpeechSettings(app)}
           >
             {t("chat.composer.configureCapability")}
           </button>

@@ -77,7 +77,7 @@ export function createChatComposerContext(
   voice: {
     dictation: ComposerDictationOwner;
     picker: ComposerMicrophoneOwner;
-    openModelProvider?: (provider: string) => void;
+    configureApiKey?: (modelProvider: string | undefined) => void;
   },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
@@ -507,10 +507,12 @@ export function createChatComposerContext(
     props.onTypingChange?.(false);
   };
   const devicePicker = voice.picker;
+  const talkModelKey = devicePicker.apiKeyProviders.talk;
+  const talkKey = talkModelKey ?? devicePicker.apiKeyProviders.speech;
   const startRealtimeTalk = () => {
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
-      if (devicePicker.apiKeyProviders.talk && voice.openModelProvider) {
+      if (talkKey && voice.configureApiKey) {
         devicePicker.setTalkApiKeyNotice(true);
       } else {
         devicePicker.handleOpen();
@@ -564,7 +566,7 @@ export function createChatComposerContext(
           ? props.onOpenDictationSettings
           : undefined,
         apiKeyProviders: devicePicker.apiKeyProviders,
-        onOpenModelProvider: devicePicker.canConfigure ? voice.openModelProvider : undefined,
+        onConfigureApiKey: devicePicker.canConfigure ? voice.configureApiKey : undefined,
       }
     : undefined;
   const dictationOptions = createComposerDictationOptions(
@@ -631,10 +633,10 @@ export function createChatComposerContext(
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     talkApiKeyNotice:
-      devicePicker.talkApiKeyNotice && devicePicker.apiKeyProviders.talk
+      devicePicker.talkApiKeyNotice && talkKey
         ? {
-            provider: devicePicker.apiKeyProviders.talk,
-            onConfigure: voice.openModelProvider,
+            provider: talkKey,
+            onConfigure: () => voice.configureApiKey?.(talkModelKey),
             onDismiss: () => devicePicker.setTalkApiKeyNotice(false),
           }
         : undefined,

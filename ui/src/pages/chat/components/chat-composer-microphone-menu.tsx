@@ -30,7 +30,7 @@ export function MicrophoneMenu(props: {
         },
       ) =>
         // A sign-in without voice names its fix: that provider's API key.
-        provider && props.picker.onOpenModelProvider && status === "unavailable"
+        provider && props.picker.onConfigureApiKey && status === "unavailable"
           ? {
               key,
               status,
@@ -41,7 +41,7 @@ export function MicrophoneMenu(props: {
             }
           : { key, status, ...fallback, provider: undefined };
       let capabilities = [
-        capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk, {
+        capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk ?? keyed.speech, {
           label: t("chat.composer.realtimeTalkCapability"),
           unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
           canConfigure: Boolean(props.picker.onOpenTalkSettings),
@@ -59,6 +59,7 @@ export function MicrophoneMenu(props: {
       // Talk and dictation missing the same key read as one fix, not two.
       if (
         capabilities.length === 2 &&
+        !keyed.speech &&
         capabilities[0]!.provider &&
         capabilities[0]!.provider === capabilities[1]!.provider
       ) {
@@ -175,7 +176,9 @@ export function MicrophoneMenu(props: {
               : capability.unavailableReason;
         entries.push({
           id: capability.provider
-            ? `api-key:${capability.provider}`
+            ? capability.key === "realtime" && keyed.speech
+              ? "speech-api-key"
+              : `api-key:${capability.provider}`
             : `capability:${capability.key}`,
           label: [
             capability.label,

@@ -176,7 +176,6 @@ export function MessageActions(props: {
       </Show>
       <Show when={props.details?.readAloudText}>
         <ReadAloud
-          agentId={props.options.agentId}
           sessionKey={props.options.sessionKey}
           text={props.details!.readAloudText!}
           buttonRef={(element) => {

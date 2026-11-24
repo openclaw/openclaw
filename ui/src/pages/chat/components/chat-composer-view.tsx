@@ -19,7 +19,6 @@ import type {
 } from "../../../plugins/control-ui-actions.ts";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { VoiceApiKeyNotice } from "../voice-api-key-notice.tsx";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
@@ -63,6 +62,9 @@ const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
   export: "ComposerReplyPreview",
 });
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
+const VoiceApiKeyNotice = lazy(() => import("../voice-api-key-notice.tsx"), {
+  export: "VoiceApiKeyNotice",
+});
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",
 });
@@ -177,13 +179,15 @@ export function renderChatComposerView(
         />
         <Show when={context().runControlsProps.talkApiKeyNotice}>
           {(notice) => (
-            <VoiceApiKeyNotice
-              class="agent-chat__composer-alert"
-              kind="talk"
-              provider={notice().provider}
-              onConfigure={notice().onConfigure}
-              onDismiss={notice().onDismiss}
-            />
+            <ChatLazyBoundary>
+              <VoiceApiKeyNotice
+                class="agent-chat__composer-alert"
+                kind="talk"
+                provider={notice().provider}
+                onConfigure={notice().onConfigure}
+                onDismiss={notice().onDismiss}
+              />
+            </ChatLazyBoundary>
           )}
         </Show>
         {props.realtimeTalkInputNotice ? (

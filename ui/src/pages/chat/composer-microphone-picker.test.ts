@@ -143,7 +143,7 @@ it.each([
     expect(picker).toMatchObject({
       realtimeStatus: ready ? "ready" : "unavailable",
       dictationStatus: "ready",
-      apiKeyProviders: { talk: ready ? undefined : "openai" },
+      apiKeyProviders: { speech: ready ? undefined : "openai" },
     });
     expect(request.mock.calls.some(([method]) => method === "tts.status")).toBe(!talkProvider);
   },

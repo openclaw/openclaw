@@ -25,7 +25,6 @@ const ReadAloudStatus = lazy(() => import("./chat-read-aloud-status.tsx"));
 
 type ReadAloudProps = {
   text: string;
-  agentId?: string;
   sessionKey?: string;
   buttonRef?: (element: HTMLButtonElement) => void;
 };
@@ -194,11 +193,7 @@ function ReadAloudPlayback(props: {
         <Errored
           fallback={(error) => (
             <ChatLazyBoundary>
-              <ReadAloudStatus
-                error={error()}
-                agentId={props.input.agentId}
-                sessionKey={props.input.sessionKey}
-              />
+              <ReadAloudStatus error={error()} sessionKey={props.input.sessionKey} />
             </ChatLazyBoundary>
           )}
         >
