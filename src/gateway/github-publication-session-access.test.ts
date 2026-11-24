@@ -92,7 +92,7 @@ describe("local checkout publication", () => {
       ...f.config,
       agents: { entries: { main: { workspace } } },
     });
-    const invoke = async (workspacePath: string, handoff = true) => {
+    const invoke = async (workspacePath: string, handoff = true, pullRequestUrl?: string) => {
       const respond = vi.fn();
       await withGatewayToolCallerIdentity(
         {
@@ -106,7 +106,12 @@ describe("local checkout publication", () => {
               type: "req",
               id: "owned-checkout",
               method: "sessions.github.publish",
-              params: { sessionKey: SESSION_KEY, idempotencyKey: "owned-checkout", workspacePath },
+              params: {
+                sessionKey: SESSION_KEY,
+                idempotencyKey: "owned-checkout",
+                workspacePath,
+                ...(pullRequestUrl ? { pullRequestUrl } : {}),
+              },
             },
             context: {
               ...createDirectChatContext({ getRuntimeConfig }),
@@ -138,6 +143,15 @@ describe("local checkout publication", () => {
       undefined,
       { message: expect.stringContaining("agent handoff") },
     ]);
+    expect(
+      await invoke(source.cwd, true, "https://github.com/openclaw/openclaw/pull/7"),
+    ).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("No replacement PR was created") },
+    ]);
+    expect(await readPublicationWorktreeState(source)).toEqual(before);
+    expect(source.effects).toEqual([]);
     for (const [other, message] of [
       [workspace, "not a git repository"],
       // The refusal names the admitted paths; a bare scope gives a tool caller no next step.

@@ -305,6 +305,14 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         return;
       }
       const agentId = caller?.agentId ?? params.agentId;
+      if (
+        params.pullRequestUrl !== undefined &&
+        (params.workspacePath !== undefined || params.selection?.source === "personal")
+      ) {
+        throw new Error(
+          "Updating a named PR requires shared publication from that PR's prepared workspace, without workspacePath. No replacement PR was created.",
+        );
+      }
       if (params.selection?.source === "personal") {
         if (params.workspacePath !== undefined) {
           throw new Error("workspacePath requires the local agent publication handoff.");

@@ -27,6 +27,26 @@ describe("existing PR preparation through the registered agent action", () => {
     realWorktree: true,
   });
 
+  it("publishes a named update only after preparing that exact PR", async () => {
+    const f = await fixture({ fork: true });
+    const publish = { action: "publish", pullRequestUrl: f.pr.html_url };
+    await expect(f.invoke(publish)).rejects.toThrow("not prepared in this workspace");
+    expect(f.externalWrites).toEqual([]);
+
+    await expect(f.invoke()).resolves.toMatchObject({ status: "prepared" });
+    await expect(
+      f.invoke({ ...publish, pullRequestUrl: "https://github.com/openclaw/openclaw/pull/8" }),
+    ).rejects.toThrow("not prepared in this workspace");
+    await f.advanceHead({ "another-writer.txt": "New commit on the original PR\n" });
+    // A matching URL reaches the original-PR executor, which notices its changed head.
+    await expect(f.invoke(publish)).resolves.toMatchObject({
+      status: "failed",
+      code: "push_rejected",
+    });
+    expect(f.externalWrites).toEqual([]);
+    expect(f.writes).toEqual([]);
+  });
+
   it.each([false, true])(
     "lets the current maintainer prepare a guest's PR without transferring authority (private=%s)",
     async (privateRepository) => {

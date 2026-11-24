@@ -1470,7 +1470,7 @@ var External = [
     /^UTC[+-]\d{1,2}(?::[0-5]\d)?$/u,
     /^\d{4}-\d{2}-\d{2}$/u,
     /(^state$|^embedUrl$|^openUrl$)/u,
-    /(^sessionKey$|^agentId$|^idempotencyKey$|^workspacePath$|^title$|^body$|^draft$|^selection$)/u,
+    /(^sessionKey$|^agentId$|^idempotencyKey$|^pullRequestUrl$|^workspacePath$|^title$|^body$|^draft$|^selection$)/u,
     /^[^\r\n]*\S[^\r\n]*$/u,
     /(^source$|^expected$)/u,
     /(^source$|^accountId$|^login$)/u,
@@ -16980,6 +16980,9 @@ var External = [
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_63(value.sessionKey)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     check_6(value.idempotencyKey) &&
+    (value.pullRequestUrl === void 0 ||
+      !("pullRequestUrl" in value) ||
+      check_623(value.pullRequestUrl)) &&
     (value.workspacePath === void 0 ||
       !("workspacePath" in value) ||
       check_623(value.workspacePath)) &&

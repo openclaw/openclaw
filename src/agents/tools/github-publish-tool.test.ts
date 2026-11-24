@@ -338,7 +338,9 @@ it("offers current-PR preparation and lists actions gated by the Gateway", () =>
   }
   check({ action: "ready", publishingSessionKey: "another" });
   check({ action: "edit", publishingSessionKey: "another" });
-  expect(tool.description).toContain("omit action to append accepted changes to the original PR");
+  expect(tool.description).toContain(
+    "publish with pullRequestUrl to append accepted changes to the original PR",
+  );
   expect(tool.description).not.toContain("Imported source publication is not available");
   expect(tool.description).toContain("used only when creating a PR");
   expect(tool.description).toContain("retain requestId, finish the turn and await its result here");

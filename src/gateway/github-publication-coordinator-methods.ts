@@ -21,6 +21,7 @@ import {
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
+import { parseGitHubPullRequestUrl } from "./github-publication-inspect.js";
 import {
   digestGitHubPublicationRequest as digestRequest,
   projectGitHubPublicationResult,
@@ -209,6 +210,20 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     using _ = { [Symbol.dispose]: () => initialAuthority.release() };
 
     const loaded = initialAuthority.loaded;
+    if (input.pullRequestUrl !== undefined) {
+      const binding = loaded.entry.worktree?.githubPullRequest;
+      const target = binding && parseGitHubPullRequestUrl(input.pullRequestUrl, binding.host);
+      if (
+        !binding ||
+        !target ||
+        binding.number !== target.number ||
+        binding.base.repository.toLowerCase() !== target.repository.toLowerCase()
+      ) {
+        throw new Error(
+          "The requested PR is not prepared in this workspace. Continue in its prepared workspace or use prepare_pr where available. No replacement PR was created.",
+        );
+      }
+    }
     const lifecycleRevision = loaded.entry?.lifecycleRevision ?? null;
     const session = {
       sessionId,
