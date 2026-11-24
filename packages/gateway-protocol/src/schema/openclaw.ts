@@ -374,6 +374,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
   workspace: NonEmptyString,
   codexAppServerDetected: Type.Optional(Type.Boolean()),
   configuredModel: Type.Optional(Type.String()),
+  configuredModelSharedCodexLogin: Type.Optional(Type.Literal(true)),
   setupModel: Type.Optional(Type.String()),
   utilityModel: Type.Optional(Type.String()),
   setupComplete: Type.Boolean(),

@@ -136,6 +136,7 @@ export type SetupInferenceDetection = {
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
+  configuredModelSharedCodexLogin?: true;
   /** The connected Gateway already has a configured default-agent model. */
   setupComplete: boolean;
 };

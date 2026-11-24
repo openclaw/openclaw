@@ -308,19 +308,26 @@ it("shows detection failures briefly and checks again", async () => {
   findButton(page, "ChatGPT");
 });
 
-it("shows a configured Gateway as done without testing anything", async () => {
-  // The Gateway reports configured setup; an agent's model alone is not proof (fresh
-  // Gateways always name an implicit default).
-  const request = setupRequest(() => ({ ...detection(), setupComplete: true }));
-  const configured = makeBootRoster({
-    agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
-  });
-  const { context } = createContext(request, methods, { agentsList: configured });
-  const { page } = await mountPage(context);
-  await settled(page);
-  await waitForSolid(() => text(page).toContain("You’re all set!"));
-  expect(calls(request, "activate")).toHaveLength(0);
+it("restores shared Codex setup when opening a configured Gateway", async () => {
+  const configuredModel = "openai/gpt-5.5";
+  const notice = "Using your existing Codex login · sessions shared with Codex";
+  const request = setupRequest(
+    () => ({
+      ...detection([]),
+      configuredModel,
+      configuredModelSharedCodexLogin: true,
+      setupComplete: true,
+    }),
+    { "openclaw.setup.auth.start": () => activated(configuredModel) },
+  );
+  const { page } = await mountSetup(request);
+  text(page).toContain(notice);
   text(page).toContain(reply.reply);
+  expect([...calls(request, "auto"), ...calls(request, "activate.start")]).toHaveLength(0);
+
+  await click(page, "Sign in separately", () => page.store.autoSetup.connection !== null);
+  expectRpc(request, "auth.start", expect.objectContaining({ authChoice: chatgpt.id }));
+  text(page).not.toContain(notice);
 });
 
 it("uses shell-neutral native capabilities for Gateway selection and permissions", async () => {

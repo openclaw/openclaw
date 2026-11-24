@@ -21,7 +21,8 @@ const fixture = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Discovery must never use this host's credentials.
-vi.mock("../../system-agent/setup-inference-detect.js", () => ({
+vi.mock("../../system-agent/setup-inference-detect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../system-agent/setup-inference-detect.js")>()),
   detectSetupInference: fixture.detect,
 }));
 // mock-isolation: Keep real admission without provider subprocesses.

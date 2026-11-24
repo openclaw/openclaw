@@ -75,10 +75,12 @@ export function CustodianSetupCard(props: {
       ? t("custodian.autoSetup.usingHere", { label, modelRef })
       : t("custodian.autoSetup.using", { label, modelRef, gateway });
   };
-  const separateSignIn = () =>
-    setup().connection?.shared && setup().detection
-      ? setupPicker(setup().detection!).chatgptSignIn
-      : undefined;
+  const sharedCodexLogin = () =>
+    setup().connection?.shared ?? setup().detection?.configuredModelSharedCodexLogin;
+  const separateSignIn = () => {
+    const detection = setup().detection;
+    return detection ? setupPicker(detection).chatgptSignIn : undefined;
+  };
   const stepIndex = () => STEPS.indexOf(setup().step);
   const go = (step: SetupStep) => setup().setStep(step);
   return (
@@ -103,7 +105,7 @@ export function CustodianSetupCard(props: {
                 </span>
                 <h2>{t("custodian.autoSetup.doneTitle")}</h2>
                 <Show when={summary()}>{(text) => <p class="muted">{text()}</p>}</Show>
-                <Show when={setup().connection?.shared}>
+                <Show when={sharedCodexLogin()}>
                   <p class="muted">{t("custodian.autoSetup.sharedCodexLogin")}</p>
                   <Show when={separateSignIn()}>
                     {(option) => (

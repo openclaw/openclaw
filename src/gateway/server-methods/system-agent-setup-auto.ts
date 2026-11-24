@@ -1,9 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SystemAgentSetupAutoResult } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../../agents/utility-model.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
@@ -19,7 +16,10 @@ import {
   redactSetupInferenceError,
   type SetupInferenceCandidate,
 } from "../../system-agent/setup-inference-core.js";
-import { detectSetupInference } from "../../system-agent/setup-inference-detect.js";
+import {
+  detectSetupInference,
+  resolveConfiguredSetupRuntime,
+} from "../../system-agent/setup-inference-detect.js";
 import { rankSetupInferenceCandidates } from "../../system-agent/setup-inference-ranking.js";
 import {
   captureSetupInferenceFileUndo,
@@ -113,15 +113,9 @@ async function autoSetup(): Promise<SystemAgentSetupAutoResult> {
     const config = initialSnapshot.runtimeConfig ?? initialSnapshot.config;
     const agentId = resolveAmbientOwnerAgentId(config);
     const modelRef = resolveConfiguredPrimaryModelForAgent({ cfg: config, agentId });
-    const ref = modelRef ? parseProviderModelRef(modelRef) : undefined;
-    const appServer = config.plugins?.entries?.codex?.config?.appServer;
-    shared = Boolean(
-      ref &&
-      isRecord(appServer) &&
-      appServer.homeScope === "user" &&
-      resolveModelRuntimePolicy({ config, agentId, provider: ref.provider, modelId: ref.model })
-        .policy?.id === "codex",
-    );
+    shared =
+      resolveConfiguredSetupRuntime(config, modelRef, agentId).configuredModelSharedCodexLogin ===
+      true;
     const selected = ranked.find((candidate) => candidate.kind === "existing-model");
     if (selected) {
       return result("configured", selected);

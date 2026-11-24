@@ -217,6 +217,41 @@ describe("setup inference discovery concurrency", () => {
     expect(fixture.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
+  it.each(["user", "agent"] as const)(
+    "reports configured Codex sharing for the %s home scope",
+    async (homeScope) => {
+      const modelRef = "openai/gpt-5.5";
+      fixture.config = {
+        agents: {
+          defaults: { model: modelRef, models: { [modelRef]: { agentRuntime: { id: "codex" } } } },
+        },
+        plugins: { entries: { codex: { config: { appServer: { homeScope } } } } },
+      };
+      fixture.detectInferenceBackends.mockResolvedValue([
+        nativeCandidate("existing-model", modelRef),
+      ]);
+      const shared = homeScope === "user" ? true : undefined;
+
+      for (const result of [
+        await listManualSetupInferenceDetection(),
+        await detectSetupInference(),
+      ]) {
+        expect(result).toMatchObject({ configuredModel: modelRef, setupComplete: true });
+        expect(result.configuredModelSharedCodexLogin).toBe(shared);
+      }
+
+      const cli = pendingProbe<InferenceBackendCandidate[]>();
+      fixture.detectInferenceBackends.mockImplementationOnce(cli.run);
+      const pending = detectSetupInference();
+      await cli.started;
+      await vi.advanceTimersByTimeAsync(30_000);
+      const partial = await pending;
+      expect(partial.setupComplete).toBe(true);
+      expect(partial.configuredModelSharedCodexLogin).toBe(shared);
+      cli.result.resolve([]);
+    },
+  );
+
   it("probes provider services during CLI detection", async () => {
     const cli = pendingProbe<InferenceBackendCandidate[]>();
     const hook = pendingProbe<ProviderAppGuidedSetupCandidate | null>();
