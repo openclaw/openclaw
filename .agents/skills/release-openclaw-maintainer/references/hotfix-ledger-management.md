@@ -74,18 +74,33 @@ publication or handoff.
 2. List every assessment for the release, including stale records. Reassess each
    stale or newly relevant identity against the observed head using actual commit
    ancestry, destination lineage, diff/coverage evidence, and applicable release
-   proof. Updating only `assessedSha` is not reassessment.
+   proof. Updating only `assessedSha` is not reassessment. Also list eligible
+   hotfixes merged since the scan cursor that have no assessment for this
+   release and are not already in the observed head. A bounded review batch
+   records its remainder as `unknown` assessments with the batch note instead
+   of leaving it unassessed. In 2026.11.10-beta.3, 87 batch-capped candidates
+   and 12 late-ingested high-severity fixes had no assessment, so no checkpoint
+   could surface them before freeze.
 3. Revision-check each assessment write and record one explicit disposition:
    proposed/queued (`needed` plus notes), included (`already_present` plus exact
    destination or ancestry evidence), deferred (`needed` or `not_affected` with
-   `applicabilityReason: deferred` and an owner), or blocked (`handling: blocked`
-   plus the blocker and owner). Preserve genuine release-only identities; never
+   `applicabilityReason: deferred`, an owner, and a resume condition), or
+   blocked (`handling: blocked` only when a named operator decision such as a
+   schema, config, public-contract, permission, or policy change is required,
+   plus that decision and its owner). A missing proof environment is a deferral,
+   not a block. Recheck deferrals whose resume condition has cleared, for
+   example browser or PostgreSQL proof becoming available. Count a destination
+   only when it is an ancestor of the observed head, and mark a `-x`
+   cherry-pick that carries only part of its source as `adaptation_required`
+   with the excluded parts. Preserve genuine release-only identities; never
    infer a canonical main commit from titles or PR-number similarity.
 4. Re-read the release and assessments. The receipt records the remote ref and
    SHA, release revision, assessment revisions/counts by disposition, remaining
    stale count, unresolved decisions, mutation request IDs, and rollback/export
    evidence. Completion requires the stored head to match the remote head and no
-   unexplained stale assessment or unsynchronized decision.
+   unexplained stale assessment or unsynchronized decision. Before candidate
+   freeze, give the release operator the blocked decisions and the unassessed
+   count; freezing with either outstanding is that operator's explicit call.
 
 ## Final closeout integrity check
 
@@ -94,7 +109,9 @@ Release SHA—not just existing ledger rows. When access is available, reconcile
 all landed hotfixes, including late backports and release-first fixes, with complete
 release assessments: source/destination commits, disposition, adaptations,
 dependencies/exclusions, and proof. Account for reverts and partial or superseding
-fixes; don't count later branch commits as shipped.
+fixes; don't count later branch commits as shipped. Give every `needed`
+assessment that did not ship a `deferred` or `policy_excluded` reason and
+carry it to the next release record on the same line.
 
 Use the existing checkpoint flow for corrections. Note the checked range and any
 unresolved gaps in closeout evidence; if access is unavailable, use the
