@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogLocator,
   SessionCatalogSourceProfileRelation,
   SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
@@ -32,6 +33,9 @@ export type SessionCatalogListProviderParams = {
   allowProcessHomeFallback?: boolean;
   /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
   search?: string;
+  /** Private host-owned export lookup. Return only a native row whose visibility
+   * and selected home can be verified without searching unrelated hosts. */
+  exportSource?: Pick<SessionCatalogLocator, "hostId" | "threadId" | "sourceHomeId">;
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;

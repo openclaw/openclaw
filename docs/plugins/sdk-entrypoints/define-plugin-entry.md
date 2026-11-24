@@ -74,6 +74,9 @@ export default definePluginEntry({
   lists only operator-selected catalogs with an `automaticExportHosts` declaration.
   Each listed local source grants bounded visible-text reads for the current service
   and agent. Preserve its exact host, thread and optional source home on every page.
+  Passing that locator as `source` to the reader's list method requests an exact
+  match. Providers receive `exportSource` and use their native membership checks.
+  The reader returns catalog times as Unix epoch milliseconds.
   Listing again, reloading config, or stopping the service retires original grants.
 
   Providers whose rows require current source authorization declare
