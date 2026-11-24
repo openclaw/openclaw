@@ -44,6 +44,7 @@ export function candidatePublicationFixture(
     candidateVersion?: string;
     targetContextRef?: string;
     qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
+    publicationArtifactSource?: { runId: string; runAttempt: number };
     releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
@@ -90,6 +91,9 @@ export function candidatePublicationFixture(
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = {
+    ...(options.publicationArtifactSource
+      ? { publication_artifact_source_json: JSON.stringify(options.publicationArtifactSource) }
+      : {}),
     qualification_baselines_json: options.qualificationBaselines
       ? JSON.stringify(options.qualificationBaselines)
       : extended
@@ -387,6 +391,10 @@ export function candidatePublicationFixture(
     getArtifact() {
       throw new Error("Fresh candidate fixture does not reuse publication artifacts");
     },
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Fresh candidate fixture does not verify retained publication artifacts");
+    },
+    readWorkloadIdentity: denied,
     compareCommitLineage: denied,
     compareCommits: denied,
     getCommit: denied,
