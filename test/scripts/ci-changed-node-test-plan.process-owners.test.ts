@@ -15,6 +15,33 @@ import {
 } from "./ci-changed-node-test-plan.test-support.js";
 
 describe("CI changed Node test plan", () => {
+  it("builds the reconciliation worker when its source changes", () => {
+    const target = "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts";
+    const shards = createChangedNodeTestShards(
+      ["src/config/sessions/session-transcript-reconcile.worker.ts"],
+      { selectionMode: "aggressive", runnerBackend: "github", dedicatedBuildArtifacts: true },
+    );
+    const rows = shards?.filter((row) => selectedFiles([row]).includes(target));
+    expect(rows?.map((row) => row.pretestBuildMode)).toEqual(["runtime"]);
+  });
+
+  it.each([
+    ["src/commands/doctor-auth-canonical-api-key-alias.test.ts", undefined],
+    ["src/config/config-startup-corpus.test.ts", "runtime"],
+  ] as const)("plans the build required by only the selected suite %s", (target, mode) => {
+    const jobs = expectDefined(
+      createSelectedNodeTestShardBundles([target], {
+        runnerBackend: "github",
+        includeReleaseOnlyRuntimeTests: true,
+        includePrExemptRuntimeTests: true,
+      }),
+      "qualified compact selection",
+    );
+    expect(jobs).toHaveLength(1);
+    expect(selectedFiles(jobs)).toEqual([target]);
+    expect(jobs[0]?.pretestBuildMode).toBe(mode);
+  });
+
   it.each(["src/tui/tui-pty-local-test-support.test.ts"])(
     "keeps the TUI support unit owner without a fallback for %s",
     (target) => {

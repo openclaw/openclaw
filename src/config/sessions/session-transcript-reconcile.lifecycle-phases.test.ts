@@ -3,9 +3,8 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import {
@@ -33,20 +32,25 @@ import type {
 
 type Pool = WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>;
 function createPool(failNativeCloseAt?: string): Pool {
+  const workerUrl = new URL(
+    `../../../dist/${runtimeProcessEntrypoints.sessionTranscriptReconcile.distWorkerPath}`,
+    import.meta.url,
+  );
   return new WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>({
-    workerUrl: failNativeCloseAt
-      ? new URL("./session-transcript-reconcile.close-failure.test-support.mjs", import.meta.url)
-      : resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
     ...(failNativeCloseAt
       ? {
+          workerUrl: new URL(
+            "./session-transcript-reconcile.close-failure.test-support.mjs",
+            import.meta.url,
+          ),
           workerOptions: {
             workerData: {
-              sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
-              databasePath: failNativeCloseAt,
+              workerUrl: workerUrl.href,
+              databasePath: resolveNodeSqliteLocation(failNativeCloseAt),
             },
           },
         }
-      : {}),
+      : { workerUrl }),
     maxWorkers: 1,
     maxPendingTasks: 4,
   });
