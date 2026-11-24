@@ -281,7 +281,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const hasWriteScope = hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
     const route = this.catalogAccess.route;
     const composerAccess = catalogKey
-      ? route && route.catalogId === catalogKey.catalogId && route.hello === gatewaySnapshot.hello
+      ? route &&
+        route.catalogId === catalogKey.catalogId &&
+        route.hello === gatewaySnapshot.hello &&
+        route.generation === this.connectionGeneration
         ? Boolean(route.methods.continue)
         : hasWriteScope
       : hasWriteScope || mutationAccess.composeScope.allowed;

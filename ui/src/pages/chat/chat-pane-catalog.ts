@@ -35,6 +35,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     route?: {
       catalogId: string;
       hello: ApplicationGatewaySnapshot["hello"];
+      generation: number;
       methods: SessionCatalogRouteMethods;
     };
   }>({ route: undefined });
@@ -223,7 +224,9 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     try {
       const previous = this.catalogAccess.route;
       const route =
-        previous?.catalogId === key.catalogId && previous.hello === snapshot.hello
+        previous?.catalogId === key.catalogId &&
+        previous.hello === snapshot.hello &&
+        previous.generation === scope.generation
           ? previous
           : await readCatalogRoute(
               client,
@@ -238,6 +241,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         this.catalogAccess.route = {
           catalogId: key.catalogId,
           hello: snapshot.hello,
+          generation: scope.generation,
           methods: route.methods,
         };
       }
