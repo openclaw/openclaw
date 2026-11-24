@@ -504,6 +504,27 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("User: Actual user text");
   });
 
+  it.each([
+    "Exec completed (abcd1234, code 0, 1h2m), last 2000 of 300000 output chars:\nsynthetic-tail\n\nFull output: exec-abcd1234.log",
+    "Exec failed (abcd1234, code null, 3ms):\nThis background command was stopped.\n\nFull output: exec-abcd1234.log",
+  ])("excludes generated exec output from memory while retaining authored text", async (notice) => {
+    const provenance = { kind: "internal_system", sourceTool: "exec", runId: "exec-run" };
+    const messages = [
+      { ...makeUserMessage(notice, 1), provenance },
+      makeUserMessage(notice, 2),
+      { role: "assistant", content: notice, provenance },
+    ];
+    const filePath = path.join(tmpDir, "exec-provenance-session.jsonl");
+    fsSync.writeFileSync(
+      filePath,
+      messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"),
+    );
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    const exported = notice.replace(/\s+/g, " ");
+    expect(entry.content).toBe("User: " + exported + "\nAssistant: " + exported);
+    expect(entry.lineMap).toStrictEqual([2, 3]);
+  });
+
   it("drops Date-invalid numeric message timestamps", async () => {
     const jsonlLines = [
       JSON.stringify({
