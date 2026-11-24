@@ -27,6 +27,11 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Before connecting a model, you can send model-independent commands such as
+`/login` or `/models` as the first message in a new session. Ordinary prompts and
+messages with attachments still require model setup. Provider sign-in remains
+owner/admin-only.
+
 Chat portraits keep a fixed frame while images load. Previously verified
 same-origin portrait URLs reuse the browser image cache within the admitted
 operator's connection scope when using ambient authentication. Unknown URLs and

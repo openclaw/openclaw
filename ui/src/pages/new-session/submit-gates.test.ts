@@ -281,6 +281,50 @@ describe("DraftSubmissionFlow submit gates", () => {
     },
   );
 
+  it.each(["setup", "missing-auth"] as const)(
+    "admits a model-independent first message through the %s gate without relaxing access",
+    async (state) => {
+      const { context, flow, place } = withMessage({
+        ...(state === "setup" ? { agents: [agent({ workspaceGit: false })] } : {}),
+        modelCatalog: async () => ({ models: [unavailableModel("missing-auth")] }),
+      });
+      place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
+      await place.modelControl.metadataRead;
+      const modelGate = state === "setup" ? "model-setup" : "model-unavailable";
+      expect(flow.submitBlock()?.gate).toBe(modelGate);
+      for (const message of ["/login", "/login audit-provider/device", "/models"]) {
+        flow.setMessage(message);
+        expectGate(flow);
+      }
+      for (const message of [
+        "Hello",
+        "/unknown",
+        "/model audit-provider/audit-model explain this",
+      ]) {
+        flow.setMessage(message);
+        expect(flow.submitBlock()?.gate).toBe(modelGate);
+      }
+      flow.setMessage("/login audit-provider/device");
+      flow.attachmentDraft.replace([{ id: "file", mimeType: "text/plain", fileName: "notes.txt" }]);
+      expect(flow.submitBlock()?.gate).toBe(modelGate);
+      flow.attachmentDraft.replace([]);
+      context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+      expect(flow.submitBlock()?.gate).toBe("access");
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      context.gateway.snapshot.hello!.auth!.scopes = adminScopes;
+      vi.mocked(context.sessions.createResult).mockResolvedValue({
+        key: "agent:main:dashboard:login",
+        initialRun: { status: "idle" },
+      });
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "/login audit-provider/device" }),
+        expect.anything(),
+      );
+    },
+  );
+
   it.each(["creating", "dispatching"] as const)(
     "retries a retained personal-account $0 without consulting the neutral draft model",
     async (phase) => {

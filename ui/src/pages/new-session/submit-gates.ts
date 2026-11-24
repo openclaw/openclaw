@@ -4,6 +4,7 @@
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -219,7 +220,9 @@ export function resolveNewSessionSubmitBlock(
   ) {
     return { gate: "cloud", reason: t("newSession.requiredWorkerUnavailable") };
   }
-  if (kind === "session" && draft.requiresModelSetup()) {
+  const modelIndependentCommand =
+    draft.attachmentDraft.attachments.length === 0 && isModelIndependentChatCommand(draft.message);
+  if (kind === "session" && !modelIndependentCommand && draft.requiresModelSetup()) {
     return { gate: "model-setup", reason: t("modelSetup.required.title") };
   }
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
@@ -333,6 +336,7 @@ export function resolveNewSessionSubmitBlock(
   const cloudProfile = gateway.cloudProfiles.find((profile) => profile.id === cloudProfileId);
   const modelUnavailableMessage =
     kind === "session" &&
+    !modelIndependentCommand &&
     place.modelControl.modelSelectionBlockedReason(place.selectedAgent(), cloudProfile?.inference);
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };

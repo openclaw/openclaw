@@ -69,6 +69,7 @@ export function ChatWelcome(
               {t("modelSetup.required.action")}
             </button>
           </Show>
+          {props.composer}
         </div>
       }
     >

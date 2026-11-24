@@ -140,6 +140,7 @@ it.each(["incognito", "model setup"])("preserves %s behavior with agent metadata
       assistantAvatar={null}
       hideSecondaryContent={variant === "incognito"}
       modelSetupRequired={variant === "model setup"}
+      composer={<textarea aria-label="First message" />}
       preparedRecents={[
         { key: "recent", name: "Private recent chat", subtitle: undefined, updatedAt: 0 },
       ]}
@@ -147,6 +148,7 @@ it.each(["incognito", "model setup"])("preserves %s behavior with agent metadata
       onSend={() => {}}
     />
   ));
+  expect(view.container.querySelector('textarea[aria-label="First message"]')).not.toBeNull();
   expect(view.container.textContent).not.toContain("Private recent chat");
   expect(view.container.querySelectorAll(".agent-chat__suggestion")).toHaveLength(0);
   expect(view.container.textContent?.includes("Tracks repositories.")).toBe(
