@@ -308,6 +308,100 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  // Scoped projection of the recovery receipt from Actions artifact 14890042643.
+  const lifecycle = {
+    runId: "00000000-0000-4000-8000-000000000000",
+    phase: "finished",
+    status: "succeeded",
+    reason: null,
+    target: { kind: "package", version: "2026.11.16-first-hop.0" },
+    before: { version: "2026.11.15-beta.1" },
+    after: { version: "2026.11.16-first-hop.0" },
+    steps: [
+      ...[
+        "requested",
+        "staging",
+        "prepare:pack",
+        "prepare:install",
+        "validating",
+        "service-definition",
+        "activating",
+      ].map((step) => ({ step, status: "completed" })),
+      { step: "notice:activating", status: "skipped" },
+    ],
+  };
+  it.each([
+    { name: "terminal success", patch: {}, status: 0 },
+    { name: "prepared activation", patch: { phase: "activating", status: "running" }, status: 1 },
+    { name: "terminal failure", patch: { status: "failed" }, status: 1 },
+    { name: "missing run identity", patch: { runId: undefined }, status: 1 },
+    { name: "different selected version", patch: { target: { version: "2026.11.10" } }, status: 1 },
+    {
+      name: "failed step",
+      patch: { steps: [{ step: "prepare:install", status: "failed" }] },
+      status: 1,
+    },
+    {
+      name: "contradictory wrapper",
+      patch: { status: "ok", phase: undefined, run: { status: "running" } },
+      status: 1,
+    },
+  ])("classifies native receipts: $name", ({ patch, status }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      { ...lifecycle, ...patch },
+      lifecycle.after.version,
+    );
+    expect(result.status, result.stderr).toBe(status);
+  });
+
+  it.each([
+    { name: "wrapped", native: false, verdict: "admit", status: 0 },
+    { name: "native", native: true, verdict: "admit", status: 0 },
+    { name: "rejected verdict", native: true, verdict: "reject", status: 1 },
+    { name: "missing admission", native: true, verdict: undefined, status: 1 },
+  ])("requires first-hop admission evidence: $name", ({ native, verdict, status }) => {
+    const root = mkdtempSync(join(tmpdir(), "first-hop-admission-receipt-"));
+    try {
+      const output = join(root, "update");
+      const warning = "configured-plugin-path-unavailable";
+      const facts = {
+        candidateVersion: lifecycle.after.version,
+        checks: [{ name: "plugin-availability", status: "warn" }],
+      };
+      const run = verdict
+        ? {
+            ...lifecycle,
+            admission: { owner: "candidate", protocol: 1, ...facts },
+            origin: {
+              candidateAdmission: {
+                protocol: 1,
+                verdict,
+                facts,
+                reasons: [],
+                warnings: [{ code: warning }],
+              },
+            },
+            steps: [...lifecycle.steps, { step: "candidate-admission", status: "completed" }],
+          }
+        : lifecycle;
+      writeFileSync(`${output}.stdout`, JSON.stringify(native ? run : { status: "ok", run }));
+      writeFileSync(
+        `${output}-source-package.json`,
+        JSON.stringify({ openclaw: { updateAdmissionProtocol: 1 } }),
+      );
+      const result = spawnSync(
+        testNodeExecPath,
+        [ASSERTIONS_PATH, "assert-first-hop-admission", output, "candidate", warning],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(status);
+      expect(existsSync(`${output}-admission.json`)).toBe(status === 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { name: "skipped startup", patch: {}, succeeds: true },
     { name: "failed startup", patch: { exitCode: 1 }, succeeds: false },

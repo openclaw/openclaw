@@ -1886,9 +1886,40 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   }
 }
 
+/** The historical command receipt and native lifecycle record have different step contracts. */
+function requireCompletedUpdate(result) {
+  if (result?.status === "ok" && result.phase === undefined) {
+    const run = result.run;
+    if (run !== undefined) {
+      assert(run && typeof run === "object" && !Array.isArray(run), "invalid wrapped update run");
+      assert(run.status === undefined || run.status === "succeeded", "wrapped update run failed");
+      assert(
+        run.phase === undefined || run.phase === "finished",
+        "wrapped update run not finished",
+      );
+    }
+    return { format: "legacy", run };
+  }
+  assert(
+    result?.phase === "finished" && result.status === "succeeded" && result.reason === null,
+    `update did not report successful completion: ${String(result?.phase)}/${String(result?.status)}`,
+  );
+  assert(
+    typeof result.runId === "string" &&
+      result.runId.length > 0 &&
+      typeof result.after?.version === "string" &&
+      result.after.version.length > 0 &&
+      result.target?.version === result.after.version &&
+      Array.isArray(result.steps) &&
+      result.steps.length > 0,
+    "malformed finished update run",
+  );
+  return { format: "lifecycle", run: result };
+}
+
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
-  assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  const receipt = requireCompletedUpdate(result);
   if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
@@ -1918,6 +1949,23 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     result?.after?.version === expectedVersion,
     `successful update version changed: ${String(result?.after?.version)}`,
   );
+  if (receipt.format === "lifecycle") {
+    // The launcher reports lifecycle step outcomes, not legacy command exit codes.
+    assert(
+      receipt.run.steps.every(
+        (step) =>
+          typeof step?.step === "string" &&
+          step.step.length > 0 &&
+          (step.status === "completed" || step.status === "skipped") &&
+          (step.exitCode == null || step.exitCode === 0) &&
+          (step.termination === undefined || step.termination === "exit") &&
+          !step.signal &&
+          !step.failureFacts?.length,
+      ),
+      "successful lifecycle update contained a failed or unsettled step",
+    );
+    return;
+  }
   const rejectedStepIndex = Array.isArray(result?.steps)
     ? result.steps.findIndex(
         (step) =>
@@ -1990,6 +2038,62 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     Array.isArray(result?.steps) && rejectedStepIndex === -1,
     `successful update contained a failed core step${rejectedStepContext}`,
   );
+}
+
+function assertFirstHopAdmission([output, owner, warning = ""]) {
+  assert(
+    output && (owner === "installed" || owner === "candidate"),
+    "expected first-hop receipt path and admission owner",
+  );
+  const result = readUpdateJson(`${output}.stdout`);
+  const source = JSON.parse(fs.readFileSync(`${output}-source-package.json`, "utf8"));
+  assertStrict.equal(
+    source.openclaw?.updateAdmissionProtocol,
+    1,
+    "Source must support candidate admission",
+  );
+  const { run, format } = requireCompletedUpdate(result);
+  assertStrict.equal(
+    run?.admission?.owner,
+    owner,
+    `${format} update did not record ${owner} admission`,
+  );
+  const verdict = run.origin?.candidateAdmission;
+  if (owner === "candidate") {
+    assertStrict.equal(run.admission.protocol, 1);
+    assertStrict.equal(verdict?.protocol, 1);
+    assertStrict.equal(verdict.verdict, "admit");
+    assertStrict.deepEqual(verdict.reasons, []);
+    assertStrict.equal(run.admission.candidateVersion, verdict.facts.candidateVersion);
+    assertStrict.deepEqual(run.admission.checks, verdict.facts.checks);
+    assert(
+      run.steps.some((step) => step.step === "candidate-admission" && step.status === "completed"),
+      "candidate admission did not complete",
+    );
+    if (warning) {
+      assert(
+        verdict.warnings.some((entry) => entry.code === warning),
+        `Missing candidate warning ${warning}`,
+      );
+      assert(
+        verdict.facts.checks.some((check) => check.status === "warn"),
+        "Candidate checks omitted warning status",
+      );
+    }
+  } else {
+    assertStrict.equal(
+      verdict,
+      undefined,
+      "Unsupported target must not execute candidate admission",
+    );
+    assertStrict.equal(warning, "update-admission-unsupported-target");
+    assertStrict.equal(run.steps.filter((step) => step.step === `warning:${warning}`).length, 1);
+  }
+  writeJson(`${output}-admission.json`, {
+    status: result.status,
+    admission: run.admission,
+    verdict,
+  });
 }
 
 function assertRepairJson([file]) {
@@ -2147,6 +2251,7 @@ const commands = {
   "assert-status-json": assertStatusJson,
   "assert-recoverable-update-json": assertRecoverableUpdateJson,
   "assert-successful-update-json": assertSuccessfulUpdateJson,
+  "assert-first-hop-admission": assertFirstHopAdmission,
   "assert-repair-json": assertRepairJson,
   "assert-mobile-pairing-evidence": assertMobilePairingEvidence,
 };
