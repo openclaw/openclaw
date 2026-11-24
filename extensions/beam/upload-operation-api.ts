@@ -184,6 +184,7 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
   const session = {
     ...upload,
     publicationId,
+    revision: randomUUID(),
     ...(existing?.continuation ? { continuation: existing.continuation } : {}),
     ...(publisherProfileId ? { publisherProfileId } : {}),
     // Attribution describes this accepted upload, independently of the immutable initial owner.

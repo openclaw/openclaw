@@ -1,4 +1,6 @@
+import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createBeamV2Handler } from "./src/http-v2.js";
 import { createBeamRequestHandler } from "./src/http.js";
 import { createBeamMirrorService } from "./src/mirror.js";
 import { createBeamOwnedViewHandler } from "./src/owned-view.js";
@@ -30,6 +32,16 @@ export default definePluginEntry({
       handler: createBeamRequestHandler({
         store,
         resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
+      }),
+    });
+    api.registerHttpRoute({
+      path: "/api/v2/beam",
+      auth: "gateway",
+      match: "prefix",
+      handler: createBeamV2Handler({
+        readPublication: store.readPublication,
+        currentAuthority: getGatewayRequestAuthorityV1,
+        controlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
     });
     api.registerService(createBeamMirrorService({ runtime: api.runtime }));
