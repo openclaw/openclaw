@@ -1149,19 +1149,11 @@ extension OpenClawChatView {
             self.moveScrollPosition(to: self.scrollerBottomID)
             #endif
         } label: {
-            Image(systemName: "arrow.down")
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 36, height: 36)
-                .background(
-                    Circle()
-                        .fill(OpenClawChatTheme.subtleCard)
-                        .shadow(color: .black.opacity(0.16), radius: 8, y: 3))
-                // Padding keeps a ~44pt tap target around the compact visual circle.
-                .padding(4)
-                .contentShape(Circle())
+            ChatJumpToLatestLabel()
         }
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawChatTheme.assistantText)
+        .modifier(ChatJumpToLatestGlass())
         .accessibilityLabel("Jump to latest reply")
     }
 

@@ -153,6 +153,45 @@ struct ChatJumpToLatestSlot<Content: View>: View {
     }
 }
 
+/// The jump button's face: the size of the chat header's round controls on iOS, a compact
+/// card circle on macOS.
+struct ChatJumpToLatestLabel: View {
+    var body: some View {
+        #if os(iOS)
+        Image(systemName: "arrow.down")
+            .font(.system(size: 16, weight: .semibold))
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        #else
+        Image(systemName: "arrow.down")
+            .font(.system(size: 15, weight: .semibold))
+            .frame(width: 36, height: 36)
+            .background(
+                Circle()
+                    .fill(OpenClawChatTheme.subtleCard)
+                    .shadow(color: .black.opacity(0.16), radius: 8, y: 3))
+            // Padding keeps a ~44pt tap target around the compact visual circle.
+            .padding(4)
+            .contentShape(Circle())
+        #endif
+    }
+}
+
+/// On iOS the button is the same interactive glass circle as the chat header's controls.
+struct ChatJumpToLatestGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            content.background(.regularMaterial, in: Circle())
+        }
+        #else
+        content
+        #endif
+    }
+}
+
 struct ChatScrollCommand {
     struct Request: Equatable {
         // periphery:ignore - Synthesized Equatable keeps identical scroll requests distinct.

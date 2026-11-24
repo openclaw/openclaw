@@ -134,10 +134,21 @@ struct ChatReadingPolicy {
         var passesSinceLanding: Int?
     }
 
+    /// The jump button's glide to the live edge, held as a distance from the end of the content:
+    /// List's compensation and a growing reply both move the end, and the glide lands wherever it is.
+    struct Jump: Equatable {
+        /// From farther away the glide starts this many viewports above the end, so List does not
+        /// realize every row in between.
+        static let maxViewports: CGFloat = 1.5
+        var distance: CGFloat
+        var duration: TimeInterval
+    }
+
     private(set) var mode: ScrollFollowTarget? = .latest
     private(set) var anchor: Anchor?
     private(set) var disclosure: Disclosure?
     private(set) var prepend: Prepend?
+    private(set) var jump: Jump?
 
     /// While a prepend is pending every frame lays out, even if nothing changes: the reader's fling
     /// is re-read before the rows land, and once they land a later, unrelated content change
@@ -153,6 +164,7 @@ struct ChatReadingPolicy {
         self.anchor = nil
         self.disclosure = nil
         self.prepend = nil
+        self.jump = nil
     }
 
     /// The reader's scroll ended away from the live edge: hold the row now at the top.
@@ -190,9 +202,32 @@ struct ChatReadingPolicy {
             contentHeight: geometry.contentHeight)
     }
 
-    mutating func jumpToLatest(_ geometry: ChatReadingGeometry) -> ChatReadingWrite? {
+    /// Unanimated, one write to the bottom. Animated, the write is where the glide starts and
+    /// `jumpFrame` moves it from there.
+    mutating func jumpToLatest(_ geometry: ChatReadingGeometry, animated: Bool) -> ChatReadingWrite? {
         self.setMode(.latest)
-        return Self.write(geometry.bottomOffset, .jump, from: geometry)
+        self.jump = nil
+        guard animated else { return Self.write(geometry.bottomOffset, .jump, from: geometry) }
+        let viewport = geometry.viewportHeight - geometry.insetTop - geometry.insetBottom
+        let limit = max(0, viewport) * Jump.maxViewports
+        let distance = min(geometry.bottomOffset - geometry.offsetY, limit)
+        guard distance > 0.5 else { return nil }
+        self.jump = Jump(distance: distance, duration: 0.26 + 0.16 * Double(distance / limit))
+        return Self.write(geometry.bottomOffset - distance, .jump, from: geometry)
+    }
+
+    /// One display frame of the glide, eased out. The last frame ends it and following takes over.
+    mutating func jumpFrame(_ geometry: ChatReadingGeometry, elapsed: TimeInterval) -> ChatReadingWrite? {
+        guard let jump else { return nil }
+        let progress = min(1, max(0, elapsed / jump.duration))
+        if progress >= 1 { self.jump = nil }
+        let remaining = pow(1 - progress, 3)
+        return Self.write(geometry.bottomOffset - jump.distance * remaining, .jump, from: geometry)
+    }
+
+    /// The reader touched the transcript mid-glide: their scroll owns the offset from here.
+    mutating func cancelJump() {
+        self.jump = nil
     }
 
     /// A content size, viewport size, inset or keyboard change, after List has laid out its cells.
@@ -205,7 +240,8 @@ struct ChatReadingPolicy {
     {
         switch self.mode {
         case .latest:
-            guard !interacting else { return nil }
+            // The glide owns the offset until it lands; a follow write would cut it short.
+            guard !interacting, self.jump == nil else { return nil }
             return Self.write(geometry.bottomOffset, .follow, from: geometry)
         case let .turn(id):
             guard !interacting, let turn = row(.cell(.row(id))) else { return nil }
@@ -311,6 +347,7 @@ final class ChatReadingPosition {
     private var rows: [ChatReadingRowKey: WeakMarker] = [:]
     private var blocks: [ObjectIdentifier: WeakMarker] = [:]
     private var reconciling = false
+    private var jumpClock: JumpClock?
     private var prependSignpost = ChatScrollSignpostInterval("OlderPagePrepend")
 
     private struct WeakMarker {
@@ -354,11 +391,32 @@ final class ChatReadingPosition {
     }
 
     func jumpToLatest() {
+        self.jumpClock?.stop()
+        self.jumpClock = nil
         guard let collection = self.scroller, let geometry = Self.geometry(collection) else {
             self.policy.setMode(.latest)
             return
         }
-        self.apply(self.policy.jumpToLatest(geometry), to: collection)
+        self.apply(
+            self.policy.jumpToLatest(geometry, animated: !UIAccessibility.isReduceMotionEnabled),
+            to: collection)
+        guard self.policy.jump != nil else { return }
+        self.jumpClock = JumpClock { [weak self] elapsed in self?.jumpFrame(elapsed) ?? false }
+    }
+
+    /// Returns false once the glide has landed or the reader took the scroll back.
+    private func jumpFrame(_ elapsed: TimeInterval) -> Bool {
+        guard let collection = self.scroller, let geometry = Self.geometry(collection),
+              !collection.isTracking, !collection.isDragging
+        else {
+            self.policy.cancelJump()
+            return false
+        }
+        self.apply(self.policy.jumpFrame(geometry, elapsed: elapsed), to: collection)
+        guard self.policy.jump == nil else { return true }
+        // Landed: following settles the exact end in the next layout pass.
+        self.sentinel?.setNeedsLayout()
+        return false
     }
 
     /// Keyboard avoidance may move only the safe area; measure after it.
@@ -367,6 +425,8 @@ final class ChatReadingPosition {
     }
 
     func reset() {
+        self.jumpClock?.stop()
+        self.jumpClock = nil
         self.policy = ChatReadingPolicy()
         self.prependSignpost.end()
         self.sentinel?.setNeedsLayout()
@@ -551,7 +611,8 @@ final class ChatReadingPosition {
         case .turn:
             ChatScrollWriter.perform("ReadingPosition.turn") { scroll.setContentOffset(point, animated: false) }
         case .jump:
-            // Unanimated: an animated write reports `.animating`, which releases following.
+            // Unanimated, also for each frame of the glide: UIKit's own animated write reports
+            // `.animating`, which releases following.
             ChatScrollWriter.perform("ReadingPosition.jump") { scroll.setContentOffset(point, animated: false) }
         case .anchor:
             // Assign rather than `setContentOffset(_:animated:)`, so an active fling continues.
@@ -585,6 +646,33 @@ final class ChatReadingPosition {
         override func layoutSubviews() {
             super.layoutSubviews()
             self.owner?.reconcile()
+        }
+    }
+
+    /// Calls `frame` with the elapsed time once per display frame until it returns false.
+    @MainActor
+    private final class JumpClock: NSObject {
+        private var link: CADisplayLink?
+        private var start: CFTimeInterval?
+        private let frame: @MainActor (TimeInterval) -> Bool
+
+        init(frame: @escaping @MainActor (TimeInterval) -> Bool) {
+            self.frame = frame
+            super.init()
+            let link = CADisplayLink(target: self, selector: #selector(self.tick(_:)))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+
+        func stop() {
+            self.link?.invalidate()
+            self.link = nil
+        }
+
+        @objc private func tick(_ link: CADisplayLink) {
+            let start = self.start ?? link.timestamp
+            self.start = start
+            if !self.frame(link.targetTimestamp - start) { self.stop() }
         }
     }
 

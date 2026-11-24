@@ -245,10 +245,46 @@ struct ChatReadingPositionTests {
     @Test func `jump to latest is one unanimated write to the bottom`() {
         var policy = ChatReadingPolicy()
         policy.readerSettled(Self.geometry(offset: 0, content: 2000), topRow: Self.row(Self.key(), y: 0))
-        #expect(policy.jumpToLatest(Self.geometry(offset: 0, content: 2000)) ==
+        #expect(policy.jumpToLatest(Self.geometry(offset: 0, content: 2000), animated: false) ==
             ChatReadingWrite(y: 1400, reason: .jump))
         #expect(policy.mode == .latest)
         #expect(policy.anchor == nil)
+        #expect(policy.jump == nil)
+    }
+
+    @Test func `an animated jump glides to the end and following waits for it to land`() {
+        var policy = ChatReadingPolicy()
+        policy.readerSettled(Self.geometry(offset: 1000, content: 2000), topRow: Self.row(Self.key(), y: 1000))
+        // 400 pt from the end, inside the glide's reach: it starts where the reader is.
+        #expect(policy.jumpToLatest(Self.geometry(offset: 1000, content: 2000), animated: true) == nil)
+        #expect(policy.mode == .latest)
+        #expect(Self.layout(&policy, Self.geometry(offset: 1000, content: 2000)) == nil)
+        let duration = policy.jump?.duration ?? 0
+        let midway = policy.jumpFrame(Self.geometry(offset: 1000, content: 2000), elapsed: duration / 2)
+        #expect(midway == ChatReadingWrite(y: 1350, reason: .jump))
+        // The reply grew 100 pt mid-glide: the glide lands on the new end.
+        #expect(policy.jumpFrame(Self.geometry(offset: 1350, content: 2100), elapsed: duration) ==
+            ChatReadingWrite(y: 1500, reason: .jump))
+        #expect(policy.jump == nil)
+        #expect(Self.layout(&policy, Self.geometry(offset: 1490, content: 2100)) ==
+            ChatReadingWrite(y: 1500, reason: .follow))
+    }
+
+    @Test func `a far jump starts one and a half viewports above the end`() {
+        var policy = ChatReadingPolicy()
+        policy.setMode(nil)
+        #expect(policy.jumpToLatest(Self.geometry(offset: 0, content: 20000), animated: true) ==
+            ChatReadingWrite(y: 18500, reason: .jump))
+        #expect(policy.jump?.distance == 900)
+    }
+
+    @Test func `the reader's scroll ends a glide`() {
+        var policy = ChatReadingPolicy()
+        policy.setMode(nil)
+        _ = policy.jumpToLatest(Self.geometry(offset: 1000, content: 2000), animated: true)
+        policy.setMode(nil)
+        #expect(policy.jump == nil)
+        #expect(policy.jumpFrame(Self.geometry(offset: 1000, content: 2000), elapsed: 0.1) == nil)
     }
 
     @Test func `the reader's scroll releases following and its end holds the top row`() {
