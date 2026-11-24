@@ -158,6 +158,9 @@ it("keeps ordinary input usable while the initial placement turn is pending", ()
 
 it("explains an unresolved initial turn while offline without blocking the outbox", () => {
   const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  // An established account keeps its offline outbox owner while disconnected.
+  assert(state.client);
+  Object.defineProperty(state.client, "offlineRecoveryScope", { get: () => "account:offline" });
   state.hasPendingInitialTurn = () => true;
   state.connected = false;
   try {
