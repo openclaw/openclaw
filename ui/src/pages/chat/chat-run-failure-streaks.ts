@@ -26,7 +26,10 @@ export function projectRunFailureStreaks(items: ChatItem[]): ChatItem[] {
     if (isRealUserInput(item)) {
       latest = undefined;
     } else if (item.kind === "notice" && item.runError) {
-      if (latest?.runError?.summary === item.runError.summary) {
+      if (
+        latest?.runError?.summary === item.runError.summary &&
+        JSON.stringify(latest.runError.cause) === JSON.stringify(item.runError.cause)
+      ) {
         latest = { ...latest, repeatCount: (latest.repeatCount ?? 1) + (item.repeatCount ?? 1) };
         result[latestIndex] = latest;
         continue;

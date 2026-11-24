@@ -49,6 +49,36 @@ async function expectMobileFit(page: Page, alert: Locator) {
 }
 
 suite.define(() => {
+  it("keeps identical failure text separate when reporting classifications differ", async () => {
+    await suite.withPage(diagnosticContext, async ({ page }) => {
+      const summary = "Request timed out.";
+      await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [
+          { failoverReason: "format", providerRuntimeFailureKind: "schema" },
+          { failoverReason: "timeout", providerRuntimeFailureKind: "timeout" },
+        ].map((cause, index) => ({
+          role: "custom",
+          customType: "run-failed-before-reply",
+          content: summary,
+          timestamp: index + 1,
+          openclawRunError: { runId: `failure-${index}`, summary, cause },
+          __openclaw: { id: `failure-${index}`, seq: index + 1, runId: `failure-${index}` },
+        })),
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const notices = page.locator(".chat-run-failure");
+      await notices.first().waitFor();
+      expect(await notices.count()).toBe(2);
+      expect(
+        await notices.nth(0).getByRole("link", { name: "Report a bug", exact: true }).count(),
+      ).toBe(1);
+      expect(
+        await notices.nth(1).getByRole("link", { name: "Report a bug", exact: true }).count(),
+      ).toBe(0);
+    });
+  });
+
   it.each([
     {
       name: "routine",

@@ -207,13 +207,18 @@ export function applyHistoryRun(params: {
       setChatRunOwner(state, terminalRunId);
       const terminal = projection.runs[terminalRunId];
       if (terminal?.errorMessage) {
-        if (state.chatRunError?.runId !== terminalRunId || !knownRun?.errorMessage) {
+        if (
+          state.chatRunError?.runId !== terminalRunId ||
+          !knownRun?.errorMessage ||
+          failureCause
+        ) {
           setChatRunError(
             state,
             terminal.errorMessage,
             terminalRunId,
             terminal.errorKind === "state_contention" ? terminal.errorKind : undefined,
-            failureCause,
+            failureCause ??
+              (state.chatRunError?.runId === terminalRunId ? state.chatRunError.cause : undefined),
           );
         }
       } else if (
