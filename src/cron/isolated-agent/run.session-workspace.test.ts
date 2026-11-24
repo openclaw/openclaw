@@ -30,12 +30,11 @@ vi.mock("../../agents/worktrees/run-lease.js", () => ({
 }));
 
 // Keep external eligibility fixed, but exercise real snapshot reuse and filesystem discovery.
-vi.doMock("../../skills/runtime/cron-snapshot.runtime.js", async () => ({
+vi.doMock("../../skills/runtime/cron-snapshot.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/cron-snapshot.runtime.js")>()),
   resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   getRemoteSkillEligibility: () => undefined,
   resolveEffectiveAgentSkillFilter: () => undefined,
-  resolveReusableWorkspaceSkillSnapshot: (await import("../../skills/runtime/session-snapshot.js"))
-    .resolveReusableWorkspaceSkillSnapshot,
 }));
 const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
 const releases: Array<() => void> = [];
@@ -54,12 +53,11 @@ function bindSession(
   const binding = {
     id: "workspace-1",
     branch: "fix/session-workspace",
-    ...(canonicalWorkspaceDir ? { canonicalWorkspaceDir } : {}),
     repoRoot: path.dirname(workspaceDir),
   };
   const entry = harness.makeCronSessionEntry({
     spawnedCwd: workspaceDir,
-    ...(managed ? { worktree: binding } : {}),
+    ...(managed ? { worktree: { ...binding, canonicalWorkspaceDir } } : {}),
   });
   harness.loadSessionEntryMock.mockReturnValue(entry);
   const session = harness.makeCronSession({
@@ -172,6 +170,7 @@ it("keeps an unbound node workspace off the same-named Gateway catalog", async (
       loadSkills: async () => ({
         entries: loadWorkspaceSkills(remote, { workspaceOnly: true }),
         executionEntries: [],
+        runtime: { platform: process.platform, bins: [] },
       }),
     }),
   );
