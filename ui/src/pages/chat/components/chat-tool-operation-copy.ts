@@ -1,5 +1,9 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import type { IconName } from "../../../components/icon-data.ts";
 import { registerChatToolOperationsEnglish } from "../../../i18n/locales/en-chat-tool-operations.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -81,6 +85,16 @@ export function catalogToolIcon(name: string): IconName | undefined {
   return operationIcons.get(name.trim().toLowerCase());
 }
 
+function readMessageReactionReceipt(card: ToolCard) {
+  const details = asNullableRecord(card.details);
+  // History keeps ok/changed in details, but channels report removed in their JSON output.
+  const receipt = {
+    ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+    ...(asNullableRecord(asNullableRecord(details?.result)?.details) ?? details),
+  };
+  return receipt.ok === true ? receipt : undefined;
+}
+
 function browserOperation(args: Record<string, unknown> | null, labels: object): string {
   const kind = asNullableRecord(args?.request)?.kind ?? args?.kind;
   if (typeof kind !== "string") {
@@ -127,10 +141,31 @@ export function catalogToolLabel(
   }
   let action = typeof args?.action === "string" ? args.action : undefined;
   if (name === "message" && action === "react") {
-    if (args?.remove === true) {
+    const receipt =
+      outcome === "succeeded" && args?.dryRun !== true
+        ? readMessageReactionReceipt(card)
+        : undefined;
+    const removed = receipt?.removed;
+    const clearCount = Array.isArray(removed)
+      ? removed.length
+      : typeof removed === "number"
+        ? removed
+        : undefined;
+    if (args?.remove === true || receipt?.remove === true || removed === null) {
       action = "remove_reaction";
-    } else if (typeof args?.emoji === "string" && !args.emoji.trim()) {
+    } else if (
+      clearCount !== undefined ||
+      (typeof args?.emoji === "string"
+        ? !args.emoji.trim()
+        : args?.channel === "feishu" && args.clearAll === true)
+    ) {
       action = "clear_reactions";
+    }
+    if (receipt?.dryRun === true) {
+      return t(`chat.toolCards.operationLabels.message.${action}.action`);
+    }
+    if (receipt?.changed === false || removed === null || clearCount === 0) {
+      return t(`chat.toolCards.operationLabels.message.${action}.unchanged`);
     }
   }
   const key =

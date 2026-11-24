@@ -31,16 +31,19 @@ const enChatToolOperations = {
             action: "React to message",
             running: "Reacting to message",
             done: "Reacted to message",
+            unchanged: "Reaction already present",
           },
           remove_reaction: {
             action: "Remove reaction",
             running: "Removing reaction",
             done: "Removed reaction",
+            unchanged: "No reaction removed",
           },
           clear_reactions: {
             action: "Clear reactions",
             running: "Clearing reactions",
             done: "Cleared reactions",
+            unchanged: "No reactions cleared",
           },
           reactions: {
             action: "Read reactions",
