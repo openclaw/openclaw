@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
 import { Icon } from "../../components/solid/icon.tsx";
 
@@ -34,18 +34,21 @@ export async function preloadTemplateArtwork(urls: readonly string[]): Promise<v
   clearTimeout(budget);
 }
 
-// Artwork the catalog has already decoded, newest last. An Add reuses it as the new
-// agent's first avatar, so nothing is fetched or awaited between the click and the chat.
-const DECODED_ARTWORK_LIMIT = 48;
+// Artwork the catalog is showing right now, by source. An Add reuses it as the new agent's
+// first avatar, so nothing is fetched or awaited between the click and the chat. An image
+// stays here for as long as its card is mounted, however many others load after it.
 const AVATAR_PIXELS = 128;
-const decodedArtwork = new Map<string, HTMLImageElement>();
+const mountedArtwork = new Map<string, Set<HTMLImageElement>>();
 
-function rememberDecodedArtwork(src: string, image: HTMLImageElement) {
-  decodedArtwork.delete(src);
-  decodedArtwork.set(src, image);
-  if (decodedArtwork.size > DECODED_ARTWORK_LIMIT) {
-    decodedArtwork.delete(decodedArtwork.keys().next().value!);
-  }
+function retainMountedArtwork(src: string, image: HTMLImageElement): () => void {
+  const images = mountedArtwork.get(src) ?? new Set();
+  mountedArtwork.set(src, images.add(image));
+  return () => {
+    images.delete(image);
+    if (images.size === 0 && mountedArtwork.get(src) === images) {
+      mountedArtwork.delete(src);
+    }
+  };
 }
 
 /**
@@ -54,7 +57,9 @@ function rememberDecodedArtwork(src: string, image: HTMLImageElement) {
  * so the decoded pixels are what the chat chrome can show before the agent exists.
  */
 export function templateArtworkAvatar(src: string | undefined): string | undefined {
-  const image = src ? decodedArtwork.get(src) : undefined;
+  const image = [...((src && mountedArtwork.get(src)) || [])].find(
+    (candidate) => candidate.complete && candidate.naturalWidth > 0,
+  );
   const side = image ? Math.min(image.naturalWidth, image.naturalHeight) : 0;
   if (!image || side === 0) {
     return undefined;
@@ -112,6 +117,9 @@ export function TemplateArtwork(props: { src?: string; packageName?: string }) {
     >
       {(src) => {
         const [failed, setFailed] = createSignal(false);
+        let image: HTMLImageElement | undefined;
+        // Offered to an Add for exactly as long as this artwork is mounted.
+        onSettled(() => (image ? retainMountedArtwork(src, image) : undefined));
         return (
           <Show
             when={!failed()}
@@ -124,7 +132,9 @@ export function TemplateArtwork(props: { src?: string; packageName?: string }) {
               loading="lazy"
               decoding="async"
               referrerpolicy="no-referrer"
-              onLoad={(event) => rememberDecodedArtwork(src, event.currentTarget)}
+              ref={(element) => {
+                image = element;
+              }}
               onError={() => setFailed(true)}
             />
           </Show>
