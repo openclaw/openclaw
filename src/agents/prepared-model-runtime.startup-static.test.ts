@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -21,6 +23,9 @@ import type { ModelRegistry } from "./sessions/model-registry.js";
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
+
+const tempDirs = createTempDirTracker();
+let fixtureRoot: string;
 
 const mocks = vi.hoisted(() => {
   const model = (provider = "openai", id = "gpt-5.5", name = "GPT-5.5") => ({
@@ -118,7 +123,7 @@ const mocks = vi.hoisted(() => {
     discoverModels: vi.fn(() => modelRegistry),
     ensureOpenClawModelsJson: vi.fn(
       async (_config: unknown, _agentDir: unknown, _options?: unknown) => ({
-        agentDir: "/tmp/agent",
+        agentDir: path.join(fixtureRoot, "source-agent"),
         wrote: false,
       }),
     ),
@@ -245,14 +250,14 @@ vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("./legacy-inherited-auth-dir.js", () => ({
-  resolveLegacyInheritedAuthDir: () => "/tmp/prepared-static-agent",
+  resolveLegacyInheritedAuthDir: () => path.join(fixtureRoot, "agent"),
 }));
 
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
   listAgentIds: () => ["default"],
-  resolveAgentDir: () => "/tmp/prepared-static-agent",
-  resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
+  resolveAgentDir: () => path.join(fixtureRoot, "agent"),
+  resolveAgentWorkspaceDir: () => path.join(fixtureRoot, "workspace"),
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
@@ -290,7 +295,7 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: vi.fn() }),
+  createSubsystemLogger: () => ({ debug: vi.fn(), warn: vi.fn() }),
 }));
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
@@ -306,9 +311,9 @@ const snapshotFor = (config: OpenClawConfig) =>
   getPreparedModelRuntimeSnapshot({
     agentId: "default",
     config,
-    agentDir: "/tmp/prepared-static-agent",
-    inheritedAuthDir: "/tmp/prepared-static-agent",
-    workspaceDir: "/tmp/prepared-static-workspace",
+    agentDir: path.join(fixtureRoot, "agent"),
+    inheritedAuthDir: path.join(fixtureRoot, "agent"),
+    workspaceDir: path.join(fixtureRoot, "workspace"),
   });
 const refresh = (config: OpenClawConfig) =>
   refreshPreparedModelRuntimeSnapshots(config, {
@@ -333,6 +338,7 @@ async function withScopedCatalogCache<T>(read: () => Promise<T>): Promise<T> {
 
 beforeEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
+  fixtureRoot = tempDirs.make("prepared-static-catalog-");
   bindPluginMetadataSnapshotCache(mocks.metadataSnapshot, getPluginCache());
   mocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
@@ -341,6 +347,14 @@ beforeEach(async () => {
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
   mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
+});
+
+afterEach(async () => {
+  try {
+    await resetPreparedModelRuntimeSnapshotsForTest();
+  } finally {
+    tempDirs.cleanup();
+  }
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
@@ -376,8 +390,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
       getPreparedModelCatalogSnapshot({
         agentId: "default",
         config,
-        agentDir: "/tmp/prepared-static-agent",
-        workspaceDir: "/tmp/prepared-static-workspace",
+        agentDir: path.join(fixtureRoot, "agent"),
+        workspaceDir: path.join(fixtureRoot, "workspace"),
       })?.entries,
     ).toEqual(configuredCatalog.entries);
     expect(configuredCatalog.entries).toHaveLength(1);
@@ -443,7 +457,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
               agents: { defaults: { model: "openai/gpt-5.5" } },
               models: { mode },
             },
-            agentDir: "/tmp/prepared-scoped-static-projection",
+            agentDir: path.join(fixtureRoot, "scoped-agent"),
             env: {},
             readOnly: true,
           },
