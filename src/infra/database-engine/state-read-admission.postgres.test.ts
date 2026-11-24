@@ -12,6 +12,7 @@ import {
 import { ensureUserBackgroundSchema } from "../../state/user-background.store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readGatewayLockProcessNamespace } from "../gateway-lock-payload.js";
+import { readGatewayLockProcessStartTime } from "../gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../gateway-state-owner.js";
 import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { getSqliteDatabaseSchemaRevision } from "../sqlite-database-admission.js";
@@ -201,6 +202,8 @@ it.skipIf(!connection)(
             createdAt: new Date().toISOString(),
             configPath: state.configPath,
             role: "gateway",
+            startTime:
+              readGatewayLockProcessStartTime(process.pid, process.platform, 1_000) ?? undefined,
             processNamespace: readGatewayLockProcessNamespace(),
           },
         });
