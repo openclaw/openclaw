@@ -44,10 +44,12 @@ async function readGh(args: string[]): Promise<string> {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
-      if (
-        attempt === retryDelays.length ||
-        !isRetryableGhJsonErrorMessage(error instanceof Error ? error.message : String(error))
-      ) {
+      // The async transport reports its child timeout as code ETIMEDOUT, not in the message.
+      const detail =
+        error instanceof Error
+          ? `${(error as NodeJS.ErrnoException).code ?? ""} ${error.message}`
+          : String(error);
+      if (attempt === retryDelays.length || !isRetryableGhJsonErrorMessage(detail)) {
         throw error;
       }
       await setTimeout(retryDelays[attempt]);
