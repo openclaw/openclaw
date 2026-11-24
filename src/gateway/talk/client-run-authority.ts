@@ -41,7 +41,6 @@ export async function retainTalkClientRunAuthority(
       if (released || sourceCurrent?.() === false) {
         throw new Error("Talk caller source ended or changed. Start a new request.");
       }
-      captured?.authority.assertCurrent();
     },
     accept() {
       // Retention during provider setup is not acceptance. The logical voice
@@ -49,7 +48,6 @@ export async function retainTalkClientRunAuthority(
       if (released || params.hasCurrentClientAuthority?.() === false) {
         throw new Error("Talk caller source is no longer current for admission");
       }
-      captured?.authority.assertCurrent();
       acceptGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
     },
     async retainRun(runId: string) {
@@ -64,7 +62,7 @@ export async function retainTalkClientRunAuthority(
         entry: getRpcSourceForGateway(runId, params.context.resolveGatewayContext),
       });
       const assertSourceCurrent = () => {
-        retained.authority?.assertCurrent();
+        retained.authority?.signal?.throwIfAborted();
       };
       try {
         assertSourceCurrent();

@@ -14,6 +14,25 @@ export async function readReleaseValidationWaiversAsync(readSource) {
   return parseReleaseValidationWaivers(await readSource(RELEASE_VALIDATION_WAIVERS_PATH));
 }
 
+function waiverEvidenceRunId(value) {
+  return typeof value === "string" && /^[1-9][0-9]*$/u.test(value)
+    ? value
+    : Number.isSafeInteger(value) && value > 0
+      ? String(value)
+      : undefined;
+}
+
+export function releaseWaiverEvidenceMatches(evidence, runId, runAttempt) {
+  const id = waiverEvidenceRunId(evidence?.runId);
+  return (
+    id !== undefined &&
+    id === runId &&
+    Number.isSafeInteger(evidence.runAttempt) &&
+    evidence.runAttempt > 0 &&
+    evidence.runAttempt === runAttempt
+  );
+}
+
 export function parseReleaseValidationWaivers(source) {
   const policy = JSON.parse(source);
   if (
@@ -30,6 +49,10 @@ export function parseReleaseValidationWaivers(source) {
         (key) => typeof waiver[key] === "string" && waiver[key].length > 0,
       ) ||
       (waiver.targetSha !== undefined && !/^[a-f0-9]{40}$/u.test(waiver.targetSha)) ||
+      (waiver.evidence !== undefined &&
+        (waiverEvidenceRunId(waiver.evidence?.runId) === undefined ||
+          !Number.isSafeInteger(waiver.evidence.runAttempt) ||
+          waiver.evidence.runAttempt <= 0)) ||
       (waiver.cancelledStep !== undefined &&
         (typeof waiver.cancelledStep !== "string" ||
           waiver.cancelledStep.length === 0 ||
@@ -179,8 +202,7 @@ export function evaluateReleaseChildPolicy({
       waiver.childRole === child.key &&
       // A reviewed historical failure never grants leniency to a new execution.
       (!waiver.evidence ||
-        (waiver.evidence.runId === child.runId &&
-          waiver.evidence.runAttempt === child.runAttempt)) &&
+        releaseWaiverEvidenceMatches(waiver.evidence, child.runId, child.runAttempt)) &&
       child.jobs.some(
         (job) =>
           job.name === waiver.jobName &&

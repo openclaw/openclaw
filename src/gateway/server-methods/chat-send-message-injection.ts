@@ -137,7 +137,6 @@ export function createChatSendMessageInjectionStarter(params: {
     const assertCurrent = () => {
       params.abortSignal.throwIfAborted();
       params.assertCurrent?.();
-      params.operatorAuthority?.assertCurrent();
       assertSendNowCurrent?.();
     };
     const target = params.target;

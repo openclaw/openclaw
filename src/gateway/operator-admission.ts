@@ -255,10 +255,8 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
   try {
     if (live) {
       assertAdmittedRunOperatorAuthority(live);
-      if (!identity && live.readCurrentRoleFacts) {
-        issuedFacts = live.readCurrentRoleFacts();
-      } else {
-        live.assertCurrent();
+      if (!identity) {
+        issuedFacts = live.readCurrentRoleFacts?.();
       }
     }
     if (principal) {
@@ -543,7 +541,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         openclawIdAccountIds: profile?.openclawIdAccountIds ?? issuedFacts?.openclawIdAccountIds,
         policy: role,
       }),
-      assertCurrent: () => {},
     });
     const row = gateway
       ? readResidentUserProfileRevision(profileId, profileCatalogPath({}))

@@ -49,12 +49,11 @@ import {
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
-export function assertCurrentOperatorAuthority(
+export function assertIssuedOperatorAuthority(
   authority: AdmittedRunOperatorAuthority | undefined,
 ): void {
   if (authority) {
     assertAdmittedRunOperatorAuthority(authority);
-    authority.assertCurrent();
   }
 }
 
@@ -141,12 +140,7 @@ export function captureReplyToolAuthorityContinuation({
       ) {
         return undefined;
       }
-      return () => {
-        if (shared) {
-          assertAdmittedRunOperatorAuthority(shared);
-          shared.assertCurrent();
-        }
-      };
+      return () => assertIssuedOperatorAuthority(shared);
     })();
   const continuationKind = backgroundOwner
     ? "owner-guidance"
@@ -175,10 +169,7 @@ export function captureReplyToolAuthorityContinuation({
     continuationKind,
     allowPendingUserInputAnswer,
     assertCurrent: () => {
-      if (backgroundOwner) {
-        assertAdmittedRunOperatorAuthority(backgroundOwner);
-        backgroundOwner.assertCurrent();
-      }
+      assertIssuedOperatorAuthority(backgroundOwner);
       if (matchingProfile && !matchingProfile.isCurrent()) {
         throw new MessageInjectionAuthorityError({
           cause: new Error("Requester profile binding is no longer current"),

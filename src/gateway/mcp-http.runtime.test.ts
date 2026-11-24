@@ -139,7 +139,6 @@ describe("McpLoopbackToolCache", () => {
       profileId: "archive-writer",
       scopes: ["operator.write"],
       signal: controller.signal,
-      assertCurrent: () => {},
     });
     const admission = mcp.prepareAdmission("cached-session-controls", "mcp-cache-test", {
       operatorAuthority: authority,

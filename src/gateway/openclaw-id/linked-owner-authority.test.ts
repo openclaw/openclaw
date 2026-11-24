@@ -51,7 +51,6 @@ function dispatchClient(principal?: OpenClawIdTunnelPrincipal) {
     profileId: "person",
     ...(principal ? { openclawIdPrincipal: principal } : {}),
     scopes: ["operator.admin"],
-    assertCurrent: () => {},
     readCurrentRoleFacts: () => ({ assignedRole: null }),
   });
   // The same synthetic operator client tool dispatch builds from an admitted run.
