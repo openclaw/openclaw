@@ -289,6 +289,12 @@ if (result.status === "refused") {
   a denied tool returns `{ status: "refused", reason: "tool_policy" }` before any
   model call. `read`, `ls` and `exec` are never added to that policy: the session
   must already allow them. Pass `[]` for a tool-free fork.
+- A plugin Gateway method that opts into [own-session writes](/plugins/sdk-runtime/gateway-and-nodes#session-resource-methods)
+  can call `runForkedTurn` for the same existing session when the caller has
+  `operator.sessions.write` but not general write access. Request `[]`, `read`,
+  `ls`, or both read tools. Tool-bearing forks require a WebChat turn from that
+  person; `exec` and plugin tools are not admitted through this route.
+  Calling a sessionless agent still requires its usual permission.
 - `exec` runs only when the anchored turn came from the owner. A fork never asks
   for approval: a command the agent's exec approvals would ask about is denied,
   and nothing is queued for approval. Allowlist entries and full-permission exec

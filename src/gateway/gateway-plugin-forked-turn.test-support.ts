@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
@@ -8,6 +8,7 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
@@ -72,7 +73,7 @@ const FORK_PROOF_SOURCE = `module.exports = { id: "fork-proof", register(api) {
       return { content: [{ type: "text", text: "noted" }] };
     },
   }), { name: "fork_proof_note" });
-  api.registerGatewayMethod("forkproof.run", async ({ params, respond }) => {
+  const runFork = async ({ params, respond }) => {
     try {
       const result = await api.runtime.subagent.runForkedTurn({
         sessionKey: params.sessionKey,
@@ -96,7 +97,9 @@ const FORK_PROOF_SOURCE = `module.exports = { id: "fork-proof", register(api) {
     } catch (error) {
       respond(true, { ok: false, message: String(error?.message ?? error) });
     }
-  }, { scope: "operator.write" });
+  };
+  api.registerGatewayMethod("forkproof.run", runFork, { scope: "operator.write" });
+  api.registerGatewayMethod("forkproof.own", runFork, { scope: "operator.write", sessionAccess: { mode: "write", allowOwnSessionScope: true } });
   // Starts a fork from background work that outlives the request, like a scheduler.
   api.registerGatewayMethod("forkproof.start", async ({ params, respond }) => {
     state().background = api.runtime.subagent
@@ -241,6 +244,7 @@ type Fixture = {
     params: Record<string, unknown>,
     client?: GatewayClient,
   ) => Promise<MethodResult>;
+  ownFork: (sessionKey: string, tools: string[]) => Promise<MethodResult>;
   patchConfig: (patch: Record<string, unknown>) => Promise<void>;
 };
 export type Turn = {
@@ -254,7 +258,7 @@ export async function withForkGateway(
   configure: (config: OpenClawConfig) => OpenClawConfig,
   run: (fixture: Fixture) => Promise<void>,
   /** Also load `fork-claim`, which registers tools named like core `exec` and `write`. */
-  options: { claimPlugin?: boolean } = {},
+  options: { claimPlugin?: boolean; sessionWriter?: boolean } = {},
 ) {
   const state = await createOpenClawTestState({
     layout: "home",
@@ -390,11 +394,54 @@ export async function withForkGateway(
           tools: { profile: "coding" },
           skills: { load: { watch: false } },
         });
+        const connection: Partial<Parameters<typeof startGatewayWithClient>[0]> = {};
+        if (options.sessionWriter) {
+          const user = "fork-writer@example.test";
+          const origin = "https://control.example.test";
+          const scopes = ["operator.sessions.write" as const];
+          const auth = {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              allowUsers: [user],
+              allowLoopback: true,
+              deviceAutoApprove: { enabled: true, scopes },
+            },
+            identityScopes: { [user]: scopes },
+          };
+          config.gateway = {
+            ...config.gateway,
+            auth,
+            trustedProxies: ["127.0.0.1", "::1"],
+            controlUi: { allowedOrigins: [origin] },
+            tls: {
+              enabled: true,
+              autoGenerate: false,
+              certPath: await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM),
+              keyPath: await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM),
+            },
+          };
+          Object.assign(connection, {
+            auth,
+            secure: true,
+            tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
+            clientName: "openclaw-control-ui",
+            mode: "webchat",
+            origin,
+            scopes,
+            edgeAuthHeaders: {
+              "x-forwarded-user": user,
+              "x-forwarded-proto": "https",
+              "x-forwarded-for": "203.0.113.50",
+            },
+          });
+        }
         const active = await startGatewayWithClient({
           cfg: config,
           configPath: state.configPath,
-          token,
+          token: options.sessionWriter ? undefined : token,
           scopes: ["operator.admin", "operator.read", "operator.write"],
+          ...connection,
         });
         gateway = active;
         await activateTestChannelRegistry(
@@ -523,6 +570,14 @@ export async function withForkGateway(
               },
               { timeoutMs: 120_000 },
             ),
+          ownFork: (sessionKey, tools) => {
+            mode = "fork";
+            return client.request<MethodResult>(
+              "forkproof.own",
+              { sessionKey, tools },
+              { timeoutMs: 60_000 },
+            );
+          },
           patchConfig: async (patch) => {
             const current = await client.request<{ hash: string }>("config.get", {});
             await client.request("config.patch", {

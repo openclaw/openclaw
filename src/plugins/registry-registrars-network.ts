@@ -130,6 +130,7 @@ function adaptPluginGatewayMethodHandler(
         ? opts.client
         : undefined;
     const invoke = () => handler({ ...opts, respond, assertHandlerCurrent });
+    const sessionResource = opts.sessionAccessAuthority;
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
@@ -139,6 +140,12 @@ function adaptPluginGatewayMethodHandler(
               ...scope,
               revalidate: parent ? () => parent.revalidate() : scope.revalidate,
               gatewayMethodDispatchAllowed: mayDispatch && scope.client != null,
+              sessionResourceForFork: sessionResource
+                ? () => {
+                    sessionResource.assertCurrent();
+                    return sessionResource.target;
+                  }
+                : undefined,
             },
             invoke,
             parent || operator

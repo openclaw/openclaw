@@ -81,7 +81,31 @@ export async function runPluginForkedTurn<T>(
     sessionKey: params.sessionKey,
     config: context.getRuntimeConfig(),
   });
+  // Only RPCs admitted for an existing writable session carry this target. An arbitrary
+  // session key supplied by a plugin is not an execution grant.
+  const scopes = scope?.client?.connect.scopes ?? [];
+  const profileId = scope?.client?.authenticatedUserProfile?.profileId;
+  const source =
+    profileId &&
+    scopes.includes("operator.sessions.write") &&
+    !scopes.includes("operator.write") &&
+    !scopes.includes("operator.admin")
+      ? scope?.sessionResourceForFork?.()
+      : undefined;
+  if (source && (source.sessionKey !== params.sessionKey || source.agentId !== agentId)) {
+    throw new Error("Plugin fork must use the admitted session.");
+  }
+  if (source && params.tools.some((tool) => tool !== "read" && tool !== "ls")) {
+    return { status: "refused", reason: "tool_policy" };
+  }
+  const sessionRun = source && {
+    sessionKey: source.sessionKey,
+    sessionId: source.sessionId,
+    lifecycleRevision: source.lifecycleRevision ?? null,
+    runId,
+  };
   const execution = await prepareInProcessAgentExecution({
+    ...(sessionRun ? { sessionRun } : {}),
     agentId,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
@@ -118,6 +142,14 @@ export async function runPluginForkedTurn<T>(
         if (!target.entry?.sessionId) {
           throw new Error(`No active session context for "${params.sessionKey}".`);
         }
+        if (
+          sessionRun &&
+          (sessionRun.sessionKey !== target.canonicalKey ||
+            sessionRun.sessionId !== target.entry.sessionId ||
+            sessionRun.lifecycleRevision !== (target.entry.lifecycleRevision ?? null))
+        ) {
+          throw new Error("Plugin fork source changed during admission.");
+        }
         if (params.through && target.entry.sessionId !== params.through.sessionId) {
           throw new Error(
             `Session "${params.sessionKey}" was reset or replaced after the requested entry.`,
@@ -142,6 +174,7 @@ export async function runPluginForkedTurn<T>(
             : {}),
           authorizeModelOverride: deps.authorizeModelOverride,
           operatorAuthority: execution.operatorAuthority,
+          ...(sessionRun && profileId ? { requiredForkProfileId: profileId } : {}),
           runId,
           timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 120_000),
           ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
@@ -179,6 +212,7 @@ export async function forkPluginSession<T>(input: {
   override?: { provider: string; model: string };
   authorizeModelOverride?: (model: ModelRef, authProfileId?: string) => void;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  requiredForkProfileId?: string;
   runId: string;
   timeoutMs: number;
   maxTokens?: number;
@@ -222,6 +256,14 @@ export async function forkPluginSession<T>(input: {
   // The anchored turn supplies its own requester and model, never the plugin.
   const turn = await readSessionForkTurn(source, input.abortSignal);
   assertCurrent();
+  if (
+    input.requiredForkProfileId &&
+    input.tools.length > 0 &&
+    (turn?.requester?.senderId !== input.requiredForkProfileId ||
+      turn.requester.messageProvider !== "webchat")
+  ) {
+    return { status: "refused", reason: "tool_policy" };
+  }
   if (!turn && input.tools.length > 0) {
     // Without the turn's own requester, sender-specific tool policy cannot be checked. A
     // tool-free fork runs nothing, so it proceeds on the session's own facts.

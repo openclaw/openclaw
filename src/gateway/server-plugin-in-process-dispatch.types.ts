@@ -22,6 +22,8 @@ import type {
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 export type PrepareInProcessAgentExecutionOptions = {
+  /** Captured by the host from an authorized existing fork source; never a wire field. */
+  sessionRun?: import("./in-process-session-run.js").PreparedSessionRun;
   agentId: string;
   pluginRuntimeOwnerId: string;
   resolveGatewayContext?: GatewayContextResolver;
