@@ -11,16 +11,15 @@ import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 type RouteSnapshot = Pick<ApplicationGatewaySnapshot, "hello">;
 type CatalogAccess = { catalogId?: string; methods: SessionCatalogRouteMethods };
 
-function sharedCatalogMethods(snapshot: RouteSnapshot): SessionCatalogRouteMethods {
+function sharedCatalogMethods(snapshot: RouteSnapshot): SessionCatalogRouteMethods | null {
   const auth = snapshot.hello?.auth ?? null;
+  if (!hasOperatorReadAccess(auth)) {
+    return null;
+  }
   return {
-    ...(hasOperatorReadAccess(auth)
-      ? {
-          list: "sessions.catalog.list",
-          read: "sessions.catalog.read",
-          resolve: "sessions.catalog.resolve",
-        }
-      : {}),
+    list: "sessions.catalog.list",
+    read: "sessions.catalog.read",
+    resolve: "sessions.catalog.resolve",
     ...(hasOperatorWriteAccess(auth) ? { continue: "sessions.catalog.continue" } : {}),
   };
 }
@@ -45,5 +44,5 @@ export async function readCatalogRoute(
   // Published clients and catalogs without a pretty link use the shared methods
   // when admitted. A restricted caller needs a route declared by its provider.
   const methods = sharedCatalogMethods(snapshot);
-  return methods.list ? { methods } : null;
+  return methods ? { methods } : null;
 }
