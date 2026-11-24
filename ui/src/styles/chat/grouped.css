@@ -86,13 +86,13 @@
 
 /* An adjacent standalone activity is not part of this run. Keep its neighbor's
    identity available, without reserving a second row between operations. */
-.chat-group.assistant.chat-group--compact-activity-gap {
+.chat-virtual-row--compact-activity > .chat-group.assistant {
   grid-template-columns: var(--chat-avatar-column) minmax(0, 1fr) fit-content(30%);
   grid-template-rows: auto;
 }
 
-.chat-group.assistant.chat-group--compact-activity-gap > .chat-avatar,
-.chat-group.assistant.chat-group--compact-activity-gap > .chat-avatar-slot {
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-avatar,
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-avatar-slot {
   width: 21px;
   height: 21px;
   margin-block-end: 0;
@@ -100,7 +100,7 @@
   justify-self: center;
 }
 
-.chat-group.assistant.chat-group--compact-activity-gap > .chat-group-footer {
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-group-footer {
   grid-column: 3;
   grid-row: 1;
   width: auto;
@@ -109,7 +109,7 @@
   margin-block-start: 0;
 }
 
-.chat-group--compact-activity-gap .chat-group-footer__meta {
+.chat-virtual-row--compact-activity > .chat-group > .chat-group-footer .chat-group-footer__meta {
   min-width: 0;
 }
 
@@ -157,6 +157,14 @@
    not turn ends: no footer row, and the inline run-frame gap to what follows. */
 .chat-group.chat-group--turn-block {
   margin-block-end: var(--chat-run-block-gap);
+}
+
+.chat-group.chat-group--frame-fragment {
+  margin-block-end: calc(var(--chat-run-block-gap) - 2px);
+}
+
+.chat-virtual-row--compact-activity > .chat-group {
+  margin-block-end: var(--chat-activity-row-gap);
 }
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {

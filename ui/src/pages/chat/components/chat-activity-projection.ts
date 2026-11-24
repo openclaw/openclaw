@@ -62,6 +62,7 @@ function activityEntryGroupKey(
 
 export type ProjectedActivity = ReturnType<typeof readPreparedActivity>[number] & {
   compaction?: ChatCompaction;
+  sourceOrder?: number;
 };
 
 export function collectActivityGroup(
@@ -82,11 +83,12 @@ export function collectActivityGroup(
   const preparedByCall = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
   const suppressedCards = new Set<ToolCard>();
   const activityKeys = new Map<ReturnType<typeof readPreparedActivity>[number], string>();
-  const activity = shownGroups.flatMap<ProjectedActivity>((group) => {
+  const activity = shownGroups.flatMap<ProjectedActivity>((group, sourceOrder) => {
     if (group.compaction) {
       const compaction = group.compaction;
       const item: ProjectedActivity = {
         compaction,
+        sourceOrder,
         itemId: group.key,
         kind: "compaction",
         phase: compaction.phase === "active" ? "start" : "end",
@@ -130,6 +132,7 @@ export function collectActivityGroup(
         cards.push(card);
         toolContexts.set(card, {
           messageKey: entry.key,
+          sourceOrder,
           runId: card.runId ?? runId,
           disclosureId: `${entry.key}:toolcard:${index}`,
           onOpenWorkspaceFile: fileOptions.onOpenWorkspaceFile,
@@ -385,7 +388,7 @@ export function segmentActivityGroup<State extends ActivityStructure>(
   for (const group of context.groups) {
     if (group.compaction) {
       const activity = context.state.unmatchedActivity.find(
-        (item) => item.compaction === group.compaction,
+        (item) => item.itemId === group.key && item.compaction,
       )!;
       append({ key: group.key, activity }, false, false, group.key);
       continue;

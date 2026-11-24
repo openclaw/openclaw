@@ -3,7 +3,6 @@ import { t } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount } from "../../lib/format.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
 
@@ -25,13 +24,12 @@ export function isContextCompactionMessage(message: unknown): boolean {
 }
 
 export function matchesCompactionOperation(message: unknown, status: CompactionStatus): boolean {
-  const record = asRecord(message);
-  const marker = asRecord(record?.["__openclaw"]);
+  const marker = asRecord(asRecord(message)?.["__openclaw"]);
   return Boolean(
-    (marker?.kind === "compaction" || isContextCompactionMessage(message)) &&
     status.runId &&
     marker?.runId === status.runId &&
-    (!status.itemId || marker.itemId === status.itemId),
+    (!status.itemId || marker.itemId === status.itemId) &&
+    (marker.kind === "compaction" || isContextCompactionMessage(message)),
   );
 }
 
@@ -123,20 +121,6 @@ export function buildCompactionActivityItem(
   index: number,
   phase: "active" | "complete" = "complete",
 ): Extract<ChatItem, { kind: "compaction" }> {
-  const tokensBefore = marker.tokensBefore;
-  const tokensAfter = marker.tokensAfter;
-  const metric =
-    typeof tokensBefore === "number" &&
-    Number.isFinite(tokensBefore) &&
-    typeof tokensAfter === "number" &&
-    Number.isFinite(tokensAfter) &&
-    tokensAfter >= 0 &&
-    tokensBefore > tokensAfter
-      ? t("chat.compaction.savedTokensWithPercent", {
-          count: formatCompactTokenCount(Math.floor(tokensBefore - tokensAfter)),
-          percent: String(Math.round(((tokensBefore - tokensAfter) / tokensBefore) * 1_000) / 10),
-        })
-      : null;
   return {
     kind: "compaction",
     key:
@@ -146,7 +130,8 @@ export function buildCompactionActivityItem(
         : `compaction:${timestamp}:${index}`),
     label: t(phase === "active" ? "chat.compaction.running" : "chat.compaction.completed"),
     phase,
-    ...(metric === null ? {} : { metric }),
+    tokensBefore: typeof marker.tokensBefore === "number" ? marker.tokensBefore : undefined,
+    tokensAfter: typeof marker.tokensAfter === "number" ? marker.tokensAfter : undefined,
     timestamp,
   };
 }

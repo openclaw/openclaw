@@ -54,7 +54,6 @@ import {
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   expandReplyTargetWork,
-  projectCompactActivitySpacing,
   projectTranscriptChain,
   projectTranscriptIndex,
   projectTranscriptRows,
@@ -533,10 +532,7 @@ export function projectChatTranscript(
       overflow: props.typingOverflow,
     });
   }
-  const placedRows = projectTranscriptRows(rows, contentRows);
-  const activitySpacing = searchFiltering ? undefined : projectCompactActivitySpacing(placedRows);
-  const transcriptRows = activitySpacing?.rows ?? placedRows;
-  const compactActivityGaps = activitySpacing?.gaps;
+  const transcriptRows = projectTranscriptRows(rows, contentRows, !searchFiltering);
   const renderDependencies = createTranscriptRenderDependencies(
     state.transcriptRenderDependencies,
     (item) => {
@@ -550,7 +546,6 @@ export function projectChatTranscript(
         asyncQuestions &&
         groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
       return [
-        compactActivityGaps?.has(item.key),
         liveStatusSignature(item),
         item.kind === "stream" || item.key === liveItem?.key ? resolveLiveStream : undefined,
         ...transcriptContextDependencies(item, loadedReplySources, props, presented),
@@ -602,10 +597,7 @@ export function projectChatTranscript(
       return {
         kind: "activity",
         groups: item.groups,
-        options: {
-          ...renderGroupOptions(firstGroup),
-          compactActivityGap: compactActivityGaps?.has(item.key),
-        },
+        options: renderGroupOptions(firstGroup),
         presentation: "standalone",
       };
     }
@@ -617,7 +609,6 @@ export function projectChatTranscript(
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
           streamOptions: streamGroupOptions,
-          compactActivityGap: compactActivityGaps?.has(item.key),
           renderGroupOptions,
           partDependencies: renderDependencies,
           isWorkExpanded,

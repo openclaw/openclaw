@@ -212,9 +212,9 @@ suite.define(() => {
           const gap = compactBox!.y - readBox!.y - readBox!.height;
           console.log("COMPACTION_ACTIVITY_GAP", { gap, toolGap });
           expect(gap).toBeCloseTo(toolGap, 0);
-          const toolFrame = read.locator(
-            "xpath=ancestor::div[contains(@class, 'chat-group--compact-activity-gap')]",
-          );
+          const toolFrame = read
+            .locator("xpath=ancestor::*[@data-virtual-row-key]")
+            .locator(":scope > .chat-group");
           const footer = toolFrame.locator(":scope > .chat-group-footer");
           expect(await footer.count()).toBe(1);
           const footerBox = await footer.boundingBox();

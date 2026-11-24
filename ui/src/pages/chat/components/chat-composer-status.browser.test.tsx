@@ -87,7 +87,7 @@ describe("inline compaction status", () => {
     },
   );
 
-  it("keeps the expanded compaction savings readable in a narrow pane", () => {
+  it("keeps the expanded compaction savings readable in a narrow pane", async () => {
     container.style.width = "260px";
     mountSolid(
       () => (
@@ -103,12 +103,12 @@ describe("inline compaction status", () => {
     );
     const row = container.querySelector<HTMLDetailsElement>(".chat-compaction-activity")!;
     row.open = true;
+    await expect.poll(() => row.textContent).toContain("saved 48.9k tokens (48.4%)");
     const title = row.querySelector(".chat-tool-row__title")!.getBoundingClientRect();
     const metric = row.querySelector(".chat-tool-kv > div")!;
     const range = document.createRange();
     range.selectNodeContents(metric);
     const rects = [...range.getClientRects()];
-    expect(metric.textContent).toBe("saved 48.9k tokens (48.4%)");
     expect(rects).toHaveLength(1);
     expect(rects[0]!.top).toBeGreaterThanOrEqual(title.bottom);
     expect(rects[0]!.right).toBeLessThanOrEqual(container.getBoundingClientRect().right);

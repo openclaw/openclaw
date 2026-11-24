@@ -1010,11 +1010,6 @@
   margin: 0;
 }
 
-/* Separately owned activity rows can share the same rhythm as a tool list. */
-.chat-group.chat-group--compact-activity-gap {
-  margin-block-end: var(--chat-activity-row-gap);
-}
-
 .chat-activity-group:not(.chat-activity-group--inline):not(.chat-activity-group--step)
   > .chat-activity-group__body {
   margin-inline-start: 8px;

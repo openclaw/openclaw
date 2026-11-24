@@ -671,80 +671,60 @@ export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
   after?: string | null;
 };
 
-const activitySpacing = new WeakMap<
-  readonly TranscriptRow<ChatRenderItem>[],
-  { gaps: ReadonlySet<string>; rows: readonly TranscriptRow<ChatRenderItem>[] }
->();
-
-/** Visual adjacency does not give an idle or legacy operation an agent-run owner. */
-export function projectCompactActivitySpacing(rows: readonly TranscriptRow<ChatRenderItem>[]) {
-  const cached = activitySpacing.get(rows);
-  if (cached) {
-    return cached;
-  }
-  const gaps = new Set<string>();
-  let spacedRows: TranscriptRow<ChatRenderItem>[] | undefined;
-  for (let index = 1; index < rows.length; index++) {
-    const row = rows[index - 1];
-    const next = rows[index];
-    if (row?.kind !== "item" || next?.kind !== "item") {
-      continue;
-    }
-    const item = row.item;
-    const following = next.item;
-    const isStandaloneCompaction =
-      following.kind === "group" && following.compaction && !following.runId;
-    if (
-      isStandaloneCompaction &&
-      !following.startsActivityGroup &&
-      (item.kind === "activity-run" ||
-        (item.kind === "agent-run-frame" &&
-          (item.outcome.kind === "active" ||
-            (item.outcome.kind === "completed" && !item.outcome.actionOwner)) &&
-          item.parts.every((part) => part.kind === "activity-run")))
-    ) {
-      gaps.add(item.key);
-      // Do not restore a height measured with roomier chrome.
-      if (row.revision) {
-        (spacedRows ??= [...rows])[index - 1] = {
-          ...row,
-          revision: row.revision + ":compact-activity",
-        };
-      }
-    }
-  }
-  const result = { gaps, rows: spacedRows ?? rows };
-  activitySpacing.set(rows, result);
-  return result;
-}
-
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
   contentRows: readonly PlacedContentRow[],
-): readonly TranscriptRow<ChatRenderItem>[] {
-  const key = contentRows.flatMap((row) => [row.key, row.after]);
+  compactActivity: boolean,
+) {
+  if (!compactActivity && !contentRows.length) {
+    return rows;
+  }
+  const key = [compactActivity, ...contentRows.flatMap((row) => [row.key, row.after])];
   return presentationRows(rows, key, () => {
-    if (!contentRows.length) {
-      return rows;
-    }
-    const placed = Map.groupBy(
-      contentRows.filter((row) => row.after !== undefined),
-      (row) => row.after,
-    );
-    const take = (after: string | null) => {
-      const found = placed.get(after) ?? [];
-      placed.delete(after);
-      return found;
-    };
-    const result: TranscriptRow<ChatRenderItem>[] = take(null);
-    for (const row of rows) {
-      result.push(row);
-      result.push(...take(row.key));
+    const placed = contentRows.length ? Map.groupBy(contentRows, (row) => row.after) : undefined;
+    const trailing = placed?.get(undefined);
+    let result: TranscriptRow<ChatRenderItem>[] | undefined = placed
+      ? (placed.get(null) ?? [])
+      : undefined;
+    placed?.delete(undefined);
+    placed?.delete(null);
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index]!;
+      const next = rows[index + 1];
+      const after = placed?.get(row.key);
+      const item = row.kind === "item" ? row.item : undefined;
+      const following = next?.kind === "item" ? next.item : undefined;
+      // Inserted content breaks visual adjacency; it never transfers run ownership.
+      if (
+        compactActivity &&
+        !after &&
+        row.kind === "item" &&
+        following?.kind === "group" &&
+        following.compaction &&
+        !following.runId &&
+        !following.startsActivityGroup &&
+        (item?.kind === "activity-run" ||
+          (item?.kind === "agent-run-frame" &&
+            (item.outcome.kind === "active" ||
+              (item.outcome.kind === "completed" && !item.outcome.actionOwner)) &&
+            item.parts.every((part) => part.kind === "activity-run")))
+      ) {
+        (result ??= rows.slice(0, index)).push({
+          ...row,
+          compactActivity: true,
+          revision: row.revision && row.revision + ":compact-activity",
+        });
+      } else {
+        result?.push(row);
+      }
+      if (after) {
+        result?.push(...after);
+        placed?.delete(row.key);
+      }
     }
     // An anchor outside these rows keeps its content visible at the end.
-    return result.concat(
-      [...placed.values()].flat(),
-      contentRows.filter((row) => row.after === undefined),
-    );
+    return placed
+      ? (result ?? []).concat([...placed.values()].flat(), trailing ?? [])
+      : (result ?? rows);
   });
 }

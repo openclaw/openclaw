@@ -222,7 +222,8 @@ export type ChatCompaction = {
   compactionId?: string;
   phase: "active" | "complete";
   label: string;
-  metric?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
   durationMs?: number;
   timestamp: number;
   /** An actual agent run, never the standalone manual operation ID. */

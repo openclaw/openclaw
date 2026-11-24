@@ -57,11 +57,13 @@ it("shows an idle manual operation once with tools hidden and does not claim the
     completedAt: 3000,
   };
   const messages = [message("assistant", "Done.", 1000), marker("manual", runId)];
+  const live = buildItems({ compactionStatus, showToolCalls: false }).at(-1)?.key;
   const items = buildItems({ messages, compactionStatus, showToolCalls: false });
   expect(rows(items)).toMatchObject([{ durationMs: 1000 }]);
-  expect(rows(items)).toHaveLength(1);
   expect(rows(items)[0]?.runId).toBeUndefined();
   expect(coalesceAgentRunFrames(items).at(-1)?.kind).toBe("group");
+  expect(items.at(-1)?.key).toBe(live);
+  expect(buildItems({ messages, showToolCalls: false }).at(-1)?.key).toBe(live);
 });
 
 it("keeps old markers distinct and does not hide fresh itemless progress", () => {

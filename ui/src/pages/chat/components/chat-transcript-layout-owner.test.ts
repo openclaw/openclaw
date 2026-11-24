@@ -6,7 +6,7 @@ import {
   phases,
   scheduledCallbacks,
 } from "./chat-transcript-layout.test-support.ts";
-import { projectCompactActivitySpacing } from "./chat-transcript-message-index.ts";
+import { projectTranscriptRows } from "./chat-transcript-message-index.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -35,12 +35,14 @@ it("invalidates a warmed tool row height while retaining its identity", () => {
   };
   const tool = { kind: "item" as const, key: activity.key, item: activity, revision: "measured" };
   const standalone = { kind: "item" as const, key: compaction.key, item: compaction };
-  expect(projectCompactActivitySpacing([tool]).rows[0]).toBe(tool);
   const neighbors = [tool, standalone];
-  const compacted = projectCompactActivitySpacing(neighbors);
-  expect(compacted.rows[0]).toMatchObject({ key: tool.key, revision: "measured:compact-activity" });
-  expect(compacted.rows[1]).toBe(standalone);
-  expect(projectCompactActivitySpacing(neighbors)).toBe(compacted);
+  const inserted = { kind: "content" as const, key: "barrier", after: tool.key, content: null };
+  expect(projectTranscriptRows(neighbors, [inserted], true)).toEqual([tool, inserted, standalone]);
+  const compacted = projectTranscriptRows(neighbors, [], true);
+  const revision = "measured:compact-activity";
+  expect(compacted[0]).toMatchObject({ key: tool.key, revision, compactActivity: true });
+  expect(compacted[1]).toBe(standalone);
+  expect(projectTranscriptRows(neighbors, [], true)).toBe(compacted);
 });
 
 describe("transcript layout callbacks", () => {
