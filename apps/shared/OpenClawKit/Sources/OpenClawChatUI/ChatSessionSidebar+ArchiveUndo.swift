@@ -4,6 +4,18 @@ import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 import SwiftUI
 
+enum ChatSidebarRestoreNotice: CaseIterable {
+    case notSent, unconfirmed
+
+    var message: String {
+        switch self {
+        case .notSent: String(localized: "Restore was not sent. Open Threads… → Archived on the original Gateway.")
+        case .unconfirmed: String(
+                localized: "Restore was not confirmed. Check Active and Archived in Threads… on the original Gateway.")
+        }
+    }
+}
+
 struct ChatSidebarArchiveRecovery: Identifiable {
     let id = UUID()
     let row: OpenClawChatSessionEntry
@@ -12,12 +24,14 @@ struct ChatSidebarArchiveRecovery: Identifiable {
     let archivedAt: Int
     let lifecycleRevision: String?
 
-    @MainActor var title: String { ChatSessionSidebarModel.sidebarDisplayName(for: self.row) }
+    @MainActor var title: String {
+        ChatSessionSidebarModel.sidebarDisplayName(for: self.row)
+    }
 
     var targetDescription: String {
         let key = OpenClawChatSessionKey.agentID(from: self.row.key) == nil
-            ? [self.row.agentId, self.row.key].compactMap { $0 }.joined(separator: " · ") : self.row.key
-        return [key, self.row.sessionId].compactMap { $0 }.joined(separator: " · ")
+            ? [self.row.agentId, self.row.key].compactMap(\.self).joined(separator: " · ") : self.row.key
+        return [key, self.row.sessionId].compactMap(\.self).joined(separator: " · ")
     }
 }
 
@@ -182,15 +196,20 @@ extension ChatSessionSidebarBatch {
                 owner?.confirmFields(confirmed, target: row, fields: [.pinned])
             }
             return confirmed
+        } catch OpenClawChatTransportSendError.notDispatched where recovery != nil {
+            self.restoreNotices.insert(.notSent)
+            return nil
         } catch {
             if recovery != nil, !connection.isCurrent() || !(error is GatewayResponseError) {
-                self.restoreOutcomeUnknown = true
+                self.restoreNotices.insert(.unconfirmed)
                 return nil
             }
             if connection.isCurrent() {
                 var message = error.localizedDescription
                 if recovery != nil {
-                    message += " " + String(localized: "Check Threads… → Archived after refreshing. If the thread is Active, it was restored.")
+                    message += " " +
+                        String(
+                            localized: "Refresh Threads… → Archived. If the thread is Active, it was restored.")
                 }
                 errors[OpenClawChatSessionSidebarData.identity(row)] = message
                 if archiveUndoToken != nil, let response = error as? GatewayResponseError,
@@ -199,19 +218,28 @@ extension ChatSessionSidebarBatch {
                    let archivedAt = response.details["archivedAt"]?.value as? Int
                 {
                     self.archiveRecoveries[Self.archiveIdentity(row)] = .init(
-                        row: row, connection: connection, message: error.localizedDescription,
-                        archivedAt: archivedAt, lifecycleRevision: response.details["lifecycleRevision"]?.stringValue)
+                        row: row,
+                        connection: connection,
+                        message: error.localizedDescription,
+                        archivedAt: archivedAt,
+                        lifecycleRevision: response.details["lifecycleRevision"]?.stringValue)
                 }
             }
             return nil
         }
     }
 
-    func restoreArchivedSnapshot(_ displayed: ChatSidebarArchiveRecovery, owner: OpenClawChatSessionSidebarData?) async {
+    func restoreArchivedSnapshot(
+        _ displayed: ChatSidebarArchiveRecovery,
+        owner: OpenClawChatSessionSidebarData?) async
+    {
         let key = Self.archiveIdentity(displayed.row)
         guard archiveRecoveries[key]?.id == displayed.id else { return }
         archiveRecoveries.removeValue(forKey: key)
-        guard displayed.connection.isCurrent() else { return }
+        guard displayed.connection.isCurrent() else {
+            self.restoreNotices.insert(.notSent)
+            return
+        }
         let errorKey = OpenClawChatSessionSidebarData.identity(displayed.row)
         if self.errors[errorKey] == displayed.message { self.errors[errorKey] = nil }
         // A separate user choice starts ordinary Restore; it never sends a pin or redeems the receipt.
@@ -294,11 +322,11 @@ extension ChatSessionSidebar {
     }
 
     @ViewBuilder var archiveUndoNotice: some View {
-        ChatSidebarArchiveNotice(batch: batch, undo: undoSidebarArchive)
-        if batch.restoreOutcomeUnknown {
+        ChatSidebarArchiveNotice(batch: batch, undo: self.undoSidebarArchive)
+        ForEach(ChatSidebarRestoreNotice.allCases.filter(batch.restoreNotices.contains), id: \.self) { notice in
             HStack {
-                Text(String(localized: "Restore was not confirmed. On the original Gateway, check Threads… → Archived and Active before trying again."))
-                Button(String(localized: "Dismiss"), systemImage: "xmark") { self.batch.restoreOutcomeUnknown = false }
+                Text(notice.message)
+                Button(String(localized: "Dismiss"), systemImage: "xmark") { self.batch.restoreNotices.remove(notice) }
                     .labelStyle(.iconOnly)
             }.padding(8)
         }

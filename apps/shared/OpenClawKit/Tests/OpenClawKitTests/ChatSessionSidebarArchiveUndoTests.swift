@@ -289,57 +289,88 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.archiveUndo == nil)
     }
 
-    enum RestoreOutcome: CaseIterable { case restored, reconnect, unavailable, timedOut, disconnected }
+    enum RestoreOutcome: CaseIterable { case restored, reconnect, notDispatched, unavailable, timedOut, disconnected }
 
     @Test(arguments: RestoreOutcome.allCases)
-    func `retired checkout offers a separate ordinary Restore on the original connection`(_ outcome: RestoreOutcome) async throws {
+    func `retired checkout offers a separate ordinary Restore on the original connection`(
+        _ outcome: RestoreOutcome) async throws
+    {
         let batch = ChatSessionSidebarBatch(), row = try self.row()
         var calls: [OpenClawChatGatewayRequest] = []
         var current = true
-        let connection = try self.connection(capabilities: ["personal-session-pins", "session-archive-undo-v1"], current: { current }) { request in
-            calls.append(request)
-            if request.params["requestArchiveUndo"]?.value as? Bool == true {
-                return try self.acknowledgement(row, archived: true, token: "one-use")
-            }
-            if request.params["archiveUndoToken"]?.value as? String == "one-use" {
-                throw GatewayResponseError(method: "sessions.patch", code: "INVALID_REQUEST", message: "Retired",
-                                           details: ["reason": .init("ARCHIVE_UNDO_REQUIRES_RESTORE"), "archivedAt": .init(20), "lifecycleRevision": .init("generation")])
-            }
-            if outcome == .unavailable {
-                throw GatewayResponseError(method: "sessions.patch", code: "UNAVAILABLE", message: "Not ready",
-                                           details: nil, retryable: true)
-            }
-            if outcome == .disconnected {
-                current = false
-                batch.reset()
-                throw URLError(.networkConnectionLost)
-            }
-            if outcome == .timedOut { throw URLError(.timedOut) }
-            return try self.acknowledgement(row, archived: false)
-        }
+        let connection = try self.connection(
+            capabilities: ["personal-session-pins", "session-archive-undo-v1"],
+            current: { current },
+            request: { request in
+                if outcome == .notDispatched, request.params["expectedArchivedAt"] != nil {
+                    current = false
+                    batch.reset()
+                    throw OpenClawChatTransportSendError.notDispatched // Lease guard, before the socket call.
+                }
+                calls.append(request)
+                if request.params["requestArchiveUndo"]?.value as? Bool == true {
+                    return try self.acknowledgement(row, archived: true, token: "one-use")
+                }
+                if request.params["archiveUndoToken"]?.value as? String == "one-use" {
+                    throw GatewayResponseError(
+                        method: "sessions.patch",
+                        code: "INVALID_REQUEST",
+                        message: "Retired",
+                        details: [
+                            "reason": .init("ARCHIVE_UNDO_REQUIRES_RESTORE"),
+                            "archivedAt": .init(20),
+                            "lifecycleRevision": .init("generation"),
+                        ])
+                }
+                if outcome == .unavailable {
+                    throw GatewayResponseError(
+                        method: "sessions.patch",
+                        code: "UNAVAILABLE",
+                        message: "Not ready",
+                        details: nil,
+                        retryable: true)
+                }
+                if outcome == .disconnected {
+                    current = false
+                    batch.reset()
+                    throw URLError(.networkConnectionLost)
+                }
+                if outcome == .timedOut { throw URLError(.timedOut) }
+                return try self.acknowledgement(row, archived: false)
+            })
         _ = await batch.archive(row, mainKey: "main", connection: connection, owner: nil)
-        await undo(batch, owner: nil)
+        await self.undo(batch, owner: nil)
         #expect(calls.count == 2) // Refusing Undo never creates a checkout or sends a shared write.
         let action = try #require(batch.archiveRecoveries.values.first)
         current = outcome != .reconnect
         await batch.restoreArchivedSnapshot(action, owner: nil)
         await batch.restoreArchivedSnapshot(action, owner: nil)
         #expect(batch.archiveRecoveries.isEmpty)
-        if outcome == .reconnect {
-            #expect(calls.count == 2); return
+        if outcome == .reconnect || outcome == .notDispatched {
+            batch.reset()
+            #expect(calls.count == 2 && batch.restoreNotices == [.notSent])
+            #expect(batch.errors.isEmpty && batch.notices.isEmpty)
+            return
         }
         #expect(calls.count == 3)
         let params = try #require(calls.last?.params)
-        #expect(Set(params.keys) == ["key", "agentId", "expectedSessionId", "expectedLifecycleRevision", "expectedArchivedAt", "archived"])
+        #expect(Set(params.keys) == [
+            "key",
+            "agentId",
+            "expectedSessionId",
+            "expectedLifecycleRevision",
+            "expectedArchivedAt",
+            "archived",
+        ])
         #expect(params["expectedSessionId"]?.value as? String == row.sessionId)
         #expect(params["expectedLifecycleRevision"]?.value as? String == "generation")
         #expect(params["expectedArchivedAt"]?.value as? Int == 20)
         #expect(params["archived"]?.value as? Bool == false)
         if outcome == .timedOut || outcome == .disconnected {
             batch.reset() // Disconnect can arrive before or after the failed completion.
-            #expect(batch.restoreOutcomeUnknown)
+            #expect(batch.restoreNotices == [.unconfirmed])
             #expect(batch.errors.isEmpty && batch.notices.isEmpty && batch.archiveRecoveries.isEmpty)
-        } else if outcome == .restored { #expect(batch.errors.isEmpty && !batch.restoreOutcomeUnknown) } else {
+        } else if outcome == .restored { #expect(batch.errors.isEmpty && batch.restoreNotices.isEmpty) } else {
             let message = try #require(batch.errors[OpenClawChatSessionSidebarData.identity(row)])
             #expect(message.contains("Threads… → Archived"))
         }

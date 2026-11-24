@@ -25,6 +25,32 @@ struct ChatSidebarSelection {
 }
 
 @MainActor @Observable
+final class ChatSidebarPinProfile {
+    private(set) var verified = false
+    static let pinKey = "ui.railShortcuts"
+    private struct PinSnapshot: Decodable {
+        let status: String
+        let entries: [String: [AnyCodable]]?
+    }
+
+    func read(
+        _ connection: OpenClawSessionMenuConnection,
+        forDisplay: Bool = false) async throws -> [AnyCodable]
+    {
+        var verified = false
+        defer { self.verified = verified }
+        let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
+        if reply.status == "no_durable_identity" {
+            guard forDisplay else { throw URLError(.userAuthenticationRequired) }
+            return []
+        }
+        guard reply.status == "ok", let entries = reply.entries else { throw CocoaError(.coderReadCorrupt) }
+        verified = true
+        return entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"].map(AnyCodable.init)
+    }
+}
+
+@MainActor @Observable
 final class ChatSessionSidebarBatch {
     enum Action: Equatable {
         case unread(Bool), category(String?), newGroup(String), archived(Bool), delete
@@ -49,12 +75,6 @@ final class ChatSessionSidebarBatch {
         struct Failure: Decodable { let message: String }
     }
 
-    private static let pinKey = "ui.railShortcuts"
-    private struct PinSnapshot: Decodable {
-        let status: String
-        let entries: [String: [AnyCodable]]?
-    }
-
     /// Display only: an old Gateway's pin order belongs to its shared config. Never write it here.
     private struct LegacyPinOrder: Decodable {
         let valid: Bool
@@ -69,26 +89,13 @@ final class ChatSessionSidebarBatch {
     }
 
     private struct PinWrite: Decodable { let status: String }
-    private func pinEntries(
-        _ connection: OpenClawSessionMenuConnection,
-        forDisplay: Bool = false) async throws -> [AnyCodable]
-    {
-        let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
-        if reply.status == "no_durable_identity" {
-            guard forDisplay else { throw URLError(.userAuthenticationRequired) }
-            return []
-        }
-        guard reply.status == "ok", let entries = reply.entries else { throw CocoaError(.coderReadCorrupt) }
-        return entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"].map(AnyCodable.init)
-    }
-
     var selection = ChatSidebarSelection()
     var errors: [String: String] = [:]
     var notices: [String] = []
     var archiveUndo: ChatSidebarArchiveReceipt?
     var archiveRecoveries: [String: ChatSidebarArchiveRecovery] = [:]
     // Survives a connection reset; never retain a target, endpoint, or error from the old lease.
-    var restoreOutcomeUnknown = false
+    var restoreNotices: Set<ChatSidebarRestoreNotice> = []
     var pendingArchives: [String: UUID] = [:]
     var running = false
     var pendingDelete: [OpenClawChatSessionEntry] = []
@@ -123,8 +130,9 @@ final class ChatSessionSidebarBatch {
         let scope = self.scope
         let entries: [String]
         if connection.supportsPersonalPins {
-            guard connection.allows("users.prefs.get", scope: "operator.read") else { return }
-            entries = try await self.pinEntries(connection, forDisplay: true).compactMap { $0.value as? String }
+            guard connection.allows("users.prefs.get", scope: "operator.sessions.read") else { return }
+            entries = try await connection.pinProfile.read(connection, forDisplay: true)
+                .compactMap { $0.value as? String }
         } else {
             guard connection.allows("config.get", scope: "operator.read") else { return }
             let snapshot: LegacyPinOrder = try await connection.read("config.get")
@@ -189,14 +197,15 @@ final class ChatSessionSidebarBatch {
         }
         do {
             for attempt in 0..<2 {
-                let previous = try await pinEntries(connection)
+                let previous = try await connection.pinProfile.read(connection)
                 guard self.scope == scope else { return }
                 do {
                     let next = try Self.movingPin(previous, key: key, target: target, after: after)
                     self.sidebarEntries = next.compactMap { $0.value as? String }
                     guard next != previous else { return }
                     let result: PinWrite = try await connection.read("users.prefs.set", [
-                        "entries": .init([Self.pinKey: next]), "expectedEntries": .init([Self.pinKey: previous]),
+                        "entries": .init([ChatSidebarPinProfile.pinKey: next]),
+                        "expectedEntries": .init([ChatSidebarPinProfile.pinKey: previous]),
                     ])
                     guard self.scope == scope else { return }
                     if result.status == "conflict", attempt == 0 {
@@ -211,7 +220,7 @@ final class ChatSessionSidebarBatch {
                     throw error
                 }
                 // The write was acknowledged. A newer peer order can supersede it, but a failed read cannot.
-                if let latest = try? await pinEntries(connection), self.scope == scope {
+                if let latest = try? await connection.pinProfile.read(connection), self.scope == scope {
                     self.sidebarEntries = latest.compactMap { $0.value as? String }
                 }
                 return

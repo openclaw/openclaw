@@ -30,7 +30,7 @@ extension ChatSessionSidebar {
             return .init(id: section.id, title: section.title, nodes: nodes)
         }
         // Preserve the roster owner's grouping and empty-group filters; only Pages needs an empty drop target.
-        if self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        if self.menuActions.canEditPins, self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !sections.contains(where: { $0.id == "pinned" })
         {
             sections.insert(.init(id: "pinned", title: String(localized: "Pinned"), nodes: []), at: 0)
@@ -315,11 +315,10 @@ extension ChatSessionSidebar {
             after: after)
         {
         case .selfDrop?: return true
-        case let .mutation(fields)? where connection.supportsPersonalPins: patch = fields
+        case let .mutation(fields)? where self.menuActions.canEditPins: patch = fields
         case let .mutation(fields)?:
-            // A legacy pin is read-only, but its thread can still change groups.
+            // A read-only pin does not prevent a separate group change.
             guard let category = fields?["category"] else {
-                self.batch.notices = [OpenClawPersonalPinError.unsupportedGateway.localizedDescription]
                 return false
             }
             patch = ["category": category]
@@ -375,7 +374,7 @@ struct ChatSidebarSectionInteraction: ViewModifier {
     @State private var height: CGFloat = 0
 
     func body(content: Content) -> some View {
-        if self.section.isEmpty {
+        if self.section.isEmpty || (self.section == "pinned" && !self.sidebar.menuActions.canEditPins) {
             content
         } else {
             Group {

@@ -4,6 +4,9 @@ import OpenClawProtocol
 
 @MainActor
 public struct OpenClawSessionMenuConnection {
+    #if os(macOS)
+    let pinProfile = ChatSidebarPinProfile()
+    #endif
     public let hello: HelloOk
     private let methods: Set<String>
     private let scopes: Set<String>
@@ -90,7 +93,7 @@ public struct OpenClawSessionMenuConnection {
 
     @discardableResult
     public func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
-        guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
+        guard self.isCurrent(), !Task.isCancelled else { throw OpenClawChatTransportSendError.notDispatched }
         let data = try await sendRequest(request)
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
         return data

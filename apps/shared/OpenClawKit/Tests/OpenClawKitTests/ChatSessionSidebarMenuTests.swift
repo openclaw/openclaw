@@ -18,7 +18,8 @@ func sidebarMenuConnection(
 {
     var payload = try #require(JSONSerialization.jsonObject(with: Data(#"""
     {"type":"hello-ok","protocol":3,"server":{},
-     "features":{"methods":["sessions.patch","sessions.assignOwner","users.list","users.self","chat.history"]},
+     "features":{"methods":["sessions.patch","sessions.assignOwner",
+         "users.prefs.get","users.list","users.self","chat.history"]},
      "snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},
      "auth":{"scopes":["operator.admin"]},"policy":{}}
     """#.utf8)) as? [String: Any])
@@ -123,19 +124,46 @@ struct ChatSessionSidebarMenuTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func `Threads keeps historical pins visible but only offers a swipe on a negotiated window`(
-        personalPins: Bool) async throws
+    enum PinAccess: CaseIterable { case legacy, verified, missing, unavailable, readOnly, reconnected }
+
+    @Test(arguments: PinAccess.allCases)
+    func `Threads offers pin edits only to the current durable preference owner with write access`(
+        access: PinAccess) async throws
     {
         let fixture = try SidebarSnoozeMenuFixture()
         defer { fixture.close() }
         fixture.model.sessions = [fixture.row]
         let commands = OpenClawChatWindowCommands()
+        var current = true
+        let granted = Data(#"{"status":"ok","entries":{}}"#.utf8)
+        if access == .reconnected {
+            try commands.setSessionMenuConnection(sidebarMenuConnection(
+                current: { current },
+                capabilities: ["personal-session-pins"],
+                request: { request in
+                    guard request.method == "users.prefs.get" else { throw URLError(.unsupportedURL) }
+                    return granted
+                }))
+            let retired = commands.sessionMenuActions
+            await retired.refreshTask?.value
+            #expect(retired.canEditPins)
+            current = false
+            #expect(!retired.canEditPins)
+        }
         try commands.setSessionMenuConnection(sidebarMenuConnection(
-            scopes: ["operator.sessions.write"], capabilities: personalPins ? ["personal-session-pins"] : [])
-        { _ in
-            throw URLError(.unsupportedURL)
+            selfProfileID: "presence-only",
+            scopes: [access == .readOnly ? "operator.read" :
+                "operator.sessions.write"],
+            capabilities: access == .legacy ? [] :
+                ["personal-session-pins"])
+        { request in
+            if request.method == "users.self" { return Data(#"{"profile":{"id":"alias","emails":[]}}"#.utf8) }
+            guard request.method == "users.prefs.get",
+                  access != .unavailable else { throw URLError(.unsupportedURL) }
+            return access == .missing || access == .reconnected ? Data(#"{"status":"no_durable_identity"}"#.utf8) :
+                granted
         })
+        #expect(!commands.sessionMenuActions.canEditPins)
         await commands.sessionMenuActions.refreshTask?.value
         let host = NSHostingController(rootView: ChatSessionsSheet(viewModel: fixture.model)
             .environment(\.openClawChatWindowCommands, commands)
@@ -167,10 +195,10 @@ struct ChatSessionSidebarMenuTests {
             return (row, menu)
         }
         let (index, menu) = try #require(menus.first { $0.1.item(withTitle: "Unpin") != nil })
-        #expect(menu.item(withTitle: "Unpin")?.isEnabled == personalPins)
+        #expect(menu.item(withTitle: "Unpin")?.isEnabled == (access == .verified))
         let leading = table.delegate?.tableView?(table, rowActionsForRow: index, edge: .leading)
-        #expect(leading?.map(\.title) == (personalPins ? ["Unpin"] : []))
-        #expect(menu.item(withTitle: "Archive")?.isEnabled == true)
+        #expect(leading?.map(\.title) == (access == .verified ? ["Unpin"] : []))
+        if access != .readOnly { #expect(menu.item(withTitle: "Archive")?.isEnabled == true) }
     }
 
     @Test func `appearance reset and involvement address the row incarnation and agent`() async throws {
@@ -336,7 +364,7 @@ struct ChatSessionSidebarMenuTests {
             current = false
             return Data(#"{"profiles":[]}"#.utf8)
         })
-        await #expect(throws: CancellationError.self) {
+        await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
             try await connection.request(.init(method: "sessions.patch", timeoutMs: 15000))
         }
         #expect(calls == 0)
