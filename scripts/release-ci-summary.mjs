@@ -36,6 +36,7 @@ import {
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
   composeReleaseAttemptJobs,
+  resolveReleaseAttemptJobs,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   isReleaseGhServerError,
@@ -3728,14 +3729,42 @@ export async function validateReleaseRunEvidence(
       await import("./lib/release-fast-track-publication.mts");
     const executionPlan = sourcePlans.get(currentEvidence.manifest.runId);
     const jobs = [];
-    const collect = async (run, selectedId, attempt) => {
+    const collect = async (run, selectedId, attempt, firstAttempt) => {
       if (String(run.id) !== String(selectedId) || Number(run.run_attempt) !== Number(attempt)) {
         throw new Error("Fast-track job attempt changed.");
       }
-      const observed = await evidenceClient.getRunAttemptJobs(selectedId, attempt, {
-        requireComplete: true,
+      const attempts = [];
+      for (let current = firstAttempt; current <= attempt; current++) {
+        attempts.push({
+          runAttempt: current,
+          jobs: await evidenceClient.getRunAttemptJobs(selectedId, current, {
+            requireComplete: true,
+          }),
+        });
+      }
+      const composite = composeReleaseAttemptJobs(attempts, {
+        plannedRunAttempt: firstAttempt,
+        effectiveRunAttempt: attempt,
+        effectiveRunStatus: run.status,
       });
-      for (const job of observed) {
+      const observed = new Map();
+      for (const accepted of composite.jobs) {
+        const original = attempts.find((entry) => entry.runAttempt === accepted.acceptedRunAttempt);
+        const job = resolveReleaseAttemptJobs(original.jobs, original.runAttempt, {
+          allowRunning: true,
+        }).find((entry) => entry.name === accepted.name);
+        observed.set(job.name, { ...job, acceptedRunAttempt: original.runAttempt });
+      }
+      // Composition carries earlier executions over skipped rerun projections.
+      // Still enumerate checks that never executed in any bound attempt.
+      for (const entry of attempts) {
+        for (const job of entry.jobs) {
+          if (!observed.has(job.name)) {
+            observed.set(job.name, { ...job, acceptedRunAttempt: entry.runAttempt });
+          }
+        }
+      }
+      for (const job of observed.values()) {
         const status =
           job.status !== "completed"
             ? "unfinished"
@@ -3750,12 +3779,17 @@ export async function validateReleaseRunEvidence(
           name: job.name,
           jobId: String(job.id),
           runId: String(selectedId),
-          runAttempt: String(attempt),
+          runAttempt: String(job.acceptedRunAttempt),
           status,
         });
       }
     };
-    await collect(selectedRun, normalizedRunId, selectedRun.run_attempt);
+    await collect(
+      selectedRun,
+      normalizedRunId,
+      selectedRun.run_attempt,
+      executionPlan.parentRunAttempt,
+    );
     for (const child of executionPlan.children.filter((entry) => entry.selected && !entry.runId)) {
       const { parentJobName } = releaseChildSpec(child.key);
       if (!jobs.some((job) => job.name === parentJobName && job.status !== "passed")) {
@@ -3769,18 +3803,16 @@ export async function validateReleaseRunEvidence(
       throw new Error("Fast-track candidate differs from the original admitted artifact plan.");
     }
     for (const child of executionPlan.children.filter((entry) => entry.selected && entry.runId)) {
-      const run = await evidenceClient.getRun(child.runId);
+      const boundAttempt =
+        currentEvidence.manifest.childEvidence?.[child.key]?.effectiveRunAttempt ??
+        child.runAttempt;
+      const run = await evidenceClient.getRunAttempt(child.runId, boundAttempt);
       validateReleaseChildRunProvenance(run, {
         ...child,
         plannedRunAttempt: child.runAttempt,
         repository: normalizedRepository,
       });
-      await collect(
-        run,
-        child.runId,
-        currentEvidence.manifest.childEvidence?.[child.key]?.effectiveRunAttempt ??
-          child.runAttempt,
-      );
+      await collect(run, child.runId, boundAttempt, child.runAttempt);
     }
     const packet = parseFastTrackApproval(fastTrackApproval);
     const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));

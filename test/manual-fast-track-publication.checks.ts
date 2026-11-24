@@ -11,6 +11,7 @@ import {
   buildReleaseStateArtifact,
   classifyReleaseSnapshot,
   composeReleaseAttemptJobs,
+  composeReleaseChildAttemptEvidence,
 } from "../scripts/full-release-validation-policy.mjs";
 import { buildReleaseValidationManifest } from "../scripts/lib/full-release-manifest.mjs";
 import {
@@ -25,7 +26,10 @@ import {
   type FastTrackJob,
 } from "../scripts/lib/release-fast-track-publication.mts";
 import { evaluateReleasePublishGates } from "../scripts/lib/release-publish-gates.mts";
-import { verifyNpmPreflightPublicationLineage } from "../scripts/npm-preflight-tooling-identity.mjs";
+import {
+  resolveFullReleaseNpmPreflight,
+  verifyNpmPreflightPublicationLineage,
+} from "../scripts/npm-preflight-tooling-identity.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { candidatePublicationFixture } from "./scripts/candidate-publication.test-support.js";
@@ -33,7 +37,7 @@ import { candidatePublicationFixture } from "./scripts/candidate-publication.tes
 const roots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
-async function partialPublication() {
+async function partialPublication(rerun?: "bound" | "later") {
   const f = candidatePublicationFixture();
   const parent = { ...f.parent, conclusion: "failure" };
   const client = {
@@ -43,7 +47,7 @@ async function partialPublication() {
       ...(await f.client.getRunView(id)),
       conclusion: "failure",
     }),
-    getRunAttemptJobs: async (id: string) => {
+    getRunAttemptJobs: async (id: string, _attempt = 1) => {
       const jobs = await f.client.getRunAttemptJobs(id);
       return id === f.runId
         ? [
@@ -53,17 +57,63 @@ async function partialPublication() {
         : jobs.map((job) => Object.assign({}, job, { id: Number(id) * 1000 + job.id }));
     },
   };
+  const selectedChild = f.plan.children[0]!;
+  if (rerun) {
+    const originalRun = await f.client.getRun(selectedChild.runId);
+    const laterRun = {
+      ...originalRun,
+      run_attempt: 2,
+      triggering_actor: { login: "synthetic-human" },
+    };
+    const originals = await client.getRunAttemptJobs(selectedChild.runId);
+    const first = [
+      ...originals,
+      { ...originals[0]!, id: 999900, name: "Unrerun failure", conclusion: "failure" },
+    ];
+    const second = originals.map((job) =>
+      Object.assign({}, job, {
+        id: job.id + 10000,
+        started_at: "2026-07-11T01:00:00Z",
+        completed_at: "2026-07-11T01:10:00Z",
+      }),
+    );
+    const readRun = client.getRun;
+    const readAttempt = client.getRunAttempt;
+    const readJobs = client.getRunAttemptJobs;
+    client.getRun = async (id: string) => (id === selectedChild.runId ? laterRun : readRun(id));
+    client.getRunAttempt = (id: string, attempt: number) =>
+      id === selectedChild.runId
+        ? attempt === 1
+          ? originalRun
+          : laterRun
+        : readAttempt(id, attempt);
+    client.getRunAttemptJobs = async (id: string, attempt?: number) =>
+      id === selectedChild.runId ? ((attempt ?? 1) === 1 ? first : second) : readJobs(id, attempt);
+    if (rerun === "bound") {
+      Object.assign(f.manifest.childEvidence, {
+        [selectedChild.key]: composeReleaseChildAttemptEvidence({
+          attempts: [
+            { runAttempt: 1, jobs: first },
+            { runAttempt: 2, jobs: second },
+          ],
+          expected: { ...selectedChild, plannedRunAttempt: 1, repository: f.repository },
+          run: laterRun,
+        }),
+      });
+    }
+  }
   const jobs: FastTrackJob[] = [];
   for (const id of [
     f.runId,
     ...f.plan.children.filter((child) => child.selected && child.runId).map((child) => child.runId),
   ]) {
-    for (const job of await client.getRunAttemptJobs(id)) {
+    const attempt = rerun === "bound" && id === selectedChild.runId ? 2 : 1;
+    for (const job of await client.getRunAttemptJobs(id, attempt)) {
       jobs.push({
         name: job.name,
         jobId: String(job.id),
         runId: id,
-        runAttempt: "1",
+        runAttempt: String(attempt),
         status: job.conclusion === "failure" ? "failed" : "passed",
       });
     }
@@ -524,4 +574,87 @@ it("generates truthful failed-decision evidence and validates it without passing
   ).toContainEqual(
     expect.objectContaining({ name: "Synthetic validation failure", conclusion: "failure" }),
   );
+});
+
+it("requires and accepts the complete partial-rerun snapshot with original attempt identity", async () => {
+  const { f, client, packet, options } = await partialPublication("bound");
+  await expect(
+    authenticateFullReleaseValidationEvidence({ ...options, fastTrackApproval: packet }, client),
+  ).rejects.toThrow("all outstanding jobs");
+  assert(packet.request.policy === "approved-partial-frv-v1");
+  const snapshot = packet.request.validationSnapshot;
+  const request = {
+    ...packet.request,
+    validationSnapshot: {
+      ...snapshot,
+      summary: { ...snapshot.summary, failed: snapshot.summary.failed + 1 },
+      outstandingChecks: [
+        ...snapshot.outstandingChecks,
+        {
+          name: "Unrerun failure",
+          jobId: "999900",
+          runId: f.plan.children[0]!.runId,
+          runAttempt: "1",
+          status: "failed" as const,
+        },
+      ],
+    },
+  };
+  const complete = { ...packet, request, digest: fastTrackRequestDigest(request) };
+  await expect(
+    authenticateFullReleaseValidationEvidence({ ...options, fastTrackApproval: complete }, client),
+  ).resolves.toMatchObject({ evidence: { fastTrack: { digest: complete.digest } } });
+});
+
+it("authenticates the frozen child attempt after a later rerun", async () => {
+  const { client, packet, options } = await partialPublication("later");
+  await expect(
+    authenticateFullReleaseValidationEvidence({ ...options, fastTrackApproval: packet }, client),
+  ).resolves.toMatchObject({ evidence: { fastTrack: { digest: packet.digest } } });
+});
+
+it("resolves sealed inline npm bytes from failed FRV only for downstream fast-track authentication", () => {
+  const f = candidatePublicationFixture();
+  const read = (args: string[]) => {
+    const endpoint = args.find((arg) => arg.startsWith("repos/"))!;
+    const value = f.readApi(endpoint);
+    return JSON.stringify(
+      endpoint.endsWith(`/actions/runs/${f.runId}`) ||
+        endpoint.endsWith(`/actions/runs/${f.runId}/attempts/1`)
+        ? { ...value, conclusion: "failure" }
+        : value,
+    );
+  };
+  const operation = {
+    manifest: f.manifest,
+    repository: f.repository,
+    runId: f.runId,
+    runAttempt: "1",
+    sourceSha: f.c,
+    toolingSha: f.q,
+    runGh: read,
+  };
+  expect(() => resolveFullReleaseNpmPreflight(operation)).toThrow("successful producer parent");
+  expect(
+    resolveFullReleaseNpmPreflight({
+      ...operation,
+      fastTrackApproval: "transport only; owner authenticates separately",
+    }).producer.runId,
+  ).toBe(f.runId);
+  const failedSeal = (args: string[]) => {
+    const value = JSON.parse(read(args));
+    if (Array.isArray(value.jobs)) {
+      value.jobs = value.jobs.map((job: { id: number }) =>
+        job.id === 780 ? { ...job, conclusion: "failure" } : job,
+      );
+    }
+    return JSON.stringify(value);
+  };
+  expect(() =>
+    resolveFullReleaseNpmPreflight({
+      ...operation,
+      fastTrackApproval: "transport only",
+      runGh: failedSeal,
+    }),
+  ).toThrow("completed producer job");
 });

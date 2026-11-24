@@ -632,7 +632,7 @@ jobs:
             echo "OpenClaw npm preflight run must come from main, the active protected release branch, or a verified protected release-publish tag." >&2
             exit 1
           fi
-          if [[ "$preflight_conclusion" != "success" || "$(jq -r '.status' <<<"$preflight_run")" != "completed" || "$preflight_event" != "workflow_dispatch" || ( "$preflight_path" != ".github/workflows/openclaw-npm-release.yml" && "$full_release_preflight" != "true" ) ]]; then
+          if [[ ( "$preflight_conclusion" != "success" && !( -n "$FAST_TRACK_APPROVAL_JSON" && "$full_release_preflight" == "true" && "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ) ) || "$(jq -r '.status' <<<"$preflight_run")" != "completed" || "$preflight_event" != "workflow_dispatch" || ( "$preflight_path" != ".github/workflows/openclaw-npm-release.yml" && "$full_release_preflight" != "true" ) ]]; then
             echo "OpenClaw npm preflight evidence requires a successful NPM Release or exact Full Release Validation dispatch." >&2
             exit 1
           fi

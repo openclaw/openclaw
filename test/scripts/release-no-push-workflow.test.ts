@@ -2085,6 +2085,8 @@ describe("release validation no-push transport", () => {
     expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
     expect(dockerCall.with).toEqual({
       runner_group: "${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}",
+      release_publish_run_id: "${{ github.run_id }}",
+      release_publish_run_attempt: "${{ needs.publish.outputs.publication_attempt }}",
       fast_track_approval: "${{ inputs.fast_track_approval }}",
       full_release_validation_run_id: "${{ inputs.full_release_validation_run_id }}",
       full_release_validation_run_attempt:
