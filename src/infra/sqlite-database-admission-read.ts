@@ -8,6 +8,7 @@ import {
 } from "./sql-connection.js";
 import {
   isSqliteDatabaseAdmissionFactCurrent as valid,
+  isSqliteDatabaseAdmissionRetired as isRetired,
   hasSqliteDatabaseSchemaAdmission,
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseGeneration,
@@ -18,8 +19,8 @@ import {
   type AdmissionFactValue,
   type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
-  type SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
+import type { SqliteDatabaseAdmissionRegistry } from "./sqlite-database-admission-registry.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import type { DatabaseFileIdentity, DatabasePathIdentity } from "./sqlite-worker-identity.js";
 
@@ -273,7 +274,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     let fact = record.facts.get(key.name);
     let current = fact && new Int32Array(fact.current);
     return () => {
-      if (Atomics.load(generation, SqliteDatabaseGenerationSlot.retired) !== 0) {
+      if (isRetired(record)) {
         return undefined;
       }
       const published = record.facts.get(key.name);

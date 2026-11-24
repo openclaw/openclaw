@@ -5,7 +5,6 @@ import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
-  SqliteDatabaseAdmissionRegistry,
   readSqliteDatabaseAdmissions,
   type Admission,
   type SqliteDatabaseAdmissionCursor,
@@ -14,6 +13,7 @@ import {
   type SqliteDatabaseAdmissionExchange as Exchange,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
+import { SqliteDatabaseAdmissionRegistry } from "./sqlite-database-admission-registry.js";
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
   registry: new SqliteDatabaseAdmissionRegistry(),

@@ -21,8 +21,8 @@ import {
   publishSqliteDatabaseFact,
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseAdmissionFact as readFact,
-  SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
+import { SqliteDatabaseAdmissionRegistry } from "./sqlite-database-admission-registry.js";
 import {
   beginSqliteDatabaseAdmissionOperation as beginOperation,
   discardSqliteDatabaseTransactionAdmissions as discardFacts,

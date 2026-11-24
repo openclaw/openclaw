@@ -35,6 +35,7 @@ import {
 } from "./sqlite-database-admission-seal.js";
 import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
+import { isSqliteDescriptorCustodyOpen } from "./sqlite-descriptor-custody.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { sqliteSchemaOwners } from "./sqlite-schema-scope.js";
@@ -67,7 +68,7 @@ const seals = resolveGlobalSingleton(
       retain: (record) => state.registry.changeReferences(record, 1),
       release: releaseReference,
       publish: (record) => state.registry.publish(record),
-      descriptor: (record) => state.registry.descriptors.get(record.identity),
+      descriptor: (record) => state.registry.getDescriptorCustody(record.identity),
     }),
 );
 
@@ -211,7 +212,7 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
   }
   // Restore descriptor-held facts before schema tracking initializes the new handle.
   const known = state.registry.records.get(observed);
-  if ((known && !isRetired(known)) || state.registry.descriptors.get(observed)?.facts.size) {
+  if ((known && !isRetired(known)) || state.registry.getDescriptorCustody(observed)?.facts.size) {
     admission(database);
   }
 }
@@ -255,6 +256,9 @@ function retainConnection(database: DatabaseSync, record: Admission): Admission 
           exchange(current);
         }
         const retirement = readSqliteDatabaseGeneration(current, "retired");
+        if (!isSqliteDescriptorCustodyOpen(current.descriptorCustody)) {
+          throw new Error("SQLite physical descriptor custody retired during native open");
+        }
         if (retirement === 0) {
           state.connections.set(database, current);
           retained = true;

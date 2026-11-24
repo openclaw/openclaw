@@ -15,6 +15,7 @@ import {
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseGeneration,
   isSqliteDatabaseAdmissionFactCurrent as valid,
+  isSqliteDatabaseAdmissionRetired as isRetired,
   type Admission,
   type SqliteDatabaseDescriptorCustody,
   type AdmissionFactValue,
@@ -318,7 +319,7 @@ export class SqliteDatabaseCleanCloseSeals {
     return () => {
       if (
         database.isOpen ||
-        readSqliteDatabaseGeneration(record, "retired") !== 0 ||
+        isRetired(record) ||
         facts.some(
           ([, fact]) =>
             Atomics.load(new Int32Array(fact.current), 0) !== 1 ||

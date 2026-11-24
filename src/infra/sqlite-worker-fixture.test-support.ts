@@ -56,8 +56,8 @@ export type SqliteFixtureOpenArguments =
       callback: OpenCallback,
     ];
 
-// Hold the actual successful OS creation callback while its native owner settles.
-export function holdCreatedFileCallback(pathname: string) {
+// Hold the actual successful OS callback while its native owner settles.
+function holdFileCallback(pathname: string, expectedFlags: "r" | "wx") {
   const entered = createDeferredCore();
   let descriptor: number | undefined;
   let released = false;
@@ -73,7 +73,7 @@ export function holdCreatedFileCallback(pathname: string) {
         return open(...args);
       }
       const [file, flags, mode, callback] = args;
-      if (String(file) !== pathname || flags !== "wx") {
+      if (String(file) !== pathname || flags !== expectedFlags) {
         return open(file, flags, mode, callback);
       }
       return open(file, flags, mode, (error, fd) => {
@@ -103,4 +103,12 @@ export function holdCreatedFileCallback(pathname: string) {
       interception.mockRestore();
     },
   };
+}
+
+export function holdCreatedFileCallback(pathname: string) {
+  return holdFileCallback(pathname, "wx");
+}
+
+export function holdReadFileCallback(pathname: string) {
+  return holdFileCallback(pathname, "r");
 }

@@ -156,7 +156,7 @@ function createOperationAdmission(
     assertRelayCurrent,
     inOwnerContext: AsyncLocalStorage.snapshot(),
   };
-  // Only accepted broker creation attaches filesystem completion to its decision.
+  // Submitted physical acquisition remains owned even after its waiting decision is refused.
   const decisions = new Map<Int32Array, Promise<void> | undefined>();
   let finishing: Promise<void> | undefined;
   const databaseReplies = createSqliteDatabaseAdmissionReplies();
@@ -276,6 +276,14 @@ function createOperationAdmission(
                 expectedIdentity,
                 observedLocation,
                 assertCurrent,
+                retainAcquisition(completion) {
+                  decisions.set(decision, completion);
+                  void completion.catch((error: unknown) => {
+                    if (!cleanupFailures.includes(error)) {
+                      cleanupFailures.push(error);
+                    }
+                  });
+                },
                 ...(createRequest
                   ? {
                       create: {
@@ -310,15 +318,6 @@ function createOperationAdmission(
                           assertCurrent();
                           currentCallbacks.inOwnerContext(() => authority.assertAccess());
                           coldOpenPath = undefined;
-                        },
-                        retain(completion: Promise<void>) {
-                          // The same waiting decision now also owns the submitted host effect.
-                          decisions.set(decision, completion);
-                          void completion.catch((error: unknown) => {
-                            if (!cleanupFailures.includes(error)) {
-                              cleanupFailures.push(error);
-                            }
-                          });
                         },
                       },
                     }
@@ -631,7 +630,7 @@ function createOperationAdmission(
           "closed",
         );
       }
-      // Finish closes before draining, so queued requests cannot submit a new CREATE.
+      // Finish closes before draining, so queued requests cannot submit another acquisition.
       // Use the actual method so installed finish observers retain their existing order.
       const completion = admission.finish();
       if (completion !== undefined) {
@@ -648,7 +647,7 @@ function createOperationAdmission(
       closed = true;
       // Receipts remain observable; late requests can no longer obtain authority.
       service();
-      const acceptedCreations = [...decisions.values()].filter(
+      const acceptedAcquisitions = [...decisions.values()].filter(
         (pending): pending is Promise<void> => pending !== undefined,
       );
       for (const decision of decisions.keys()) {
@@ -680,11 +679,11 @@ function createOperationAdmission(
         callbacks = undefined;
         databaseReplies.release(admission);
       };
-      if (acceptedCreations.length === 0) {
+      if (acceptedAcquisitions.length === 0) {
         release();
         return undefined;
       }
-      finishing = Promise.allSettled(acceptedCreations)
+      finishing = Promise.allSettled(acceptedAcquisitions)
         .then(release)
         .finally(() => {
           finishing = undefined;

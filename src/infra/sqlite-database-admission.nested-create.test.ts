@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,12 +12,17 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { sqliteDatabaseAdmissionState } from "./sqlite-database-admission-context.js";
 import * as databaseAdmission from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
 } from "./sqlite-database-admission.task.test-support.js";
-import { holdCreatedFileCallback } from "./sqlite-worker-fixture.test-support.js";
+import {
+  holdCreatedFileCallback,
+  holdReadFileCallback,
+} from "./sqlite-worker-fixture.test-support.js";
 import * as workerIdentity from "./sqlite-worker-identity.js";
 import * as operationAdmission from "./sqlite-worker-operation-admission.js";
 import * as nativeLifetime from "./worker-native-lifecycle.js";
@@ -32,6 +38,87 @@ function createPool() {
     { retainedTransport: true },
   );
 }
+
+it("retains overlapping nested creation descriptors until their native consumers join", async ({
+  signal,
+}) => {
+  const databasePath = path.join(directories.make("nested-create-overlap-"), "created.sqlite");
+  using creation = holdCreatedFileCallback(databasePath);
+  const closed = new Set<number>();
+  let canonicalDescriptor: number | undefined;
+  const close = fsSync.closeSync;
+  using closing = vi.spyOn(fsSync, "closeSync").mockImplementation((descriptor) => {
+    close(descriptor);
+    if (descriptor === creation.descriptor || descriptor === canonicalDescriptor) {
+      closed.add(descriptor);
+    }
+  });
+  const pool = createPool();
+  const result = pool.run({ path: databasePath, nested: true, broker: true, writeProof: true }, {});
+  const outcome = Promise.allSettled([result]);
+  let sibling: DatabaseSync | undefined;
+  let physical: workerIdentity.DatabaseFileIdentity | undefined;
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        creation.entered,
+        result,
+        "Creation bypassed the real open callback",
+      ),
+      signal,
+    );
+    const fact = { name: "descriptor-overlap-proof" };
+    expect(
+      databaseAdmission.getOrLoadSqliteDatabaseAdmissionForPath(databasePath, fact, () => 42),
+    ).toBe(42);
+    sibling = openNodeSqliteDatabase(databasePath);
+    const record = sqliteDatabaseAdmissionState.registry.forLocation(databasePath);
+    assert(record, "The synchronous opener must publish its admission first");
+    const custody = sqliteDatabaseAdmissionState.registry.descriptors.get(record.identity);
+    assert(custody && creation.descriptor !== undefined);
+    physical = record.physicalIdentity;
+    canonicalDescriptor = custody.descriptor;
+    expect(custody.descriptor).not.toBe(creation.descriptor);
+
+    // The callback returns a second real fd while the synchronous native reader remains live.
+    creation.release();
+    expect((await withinTest(result, signal)).threadId).toBeGreaterThan(0);
+    expect(sqliteDatabaseAdmissionState.registry.forLocation(databasePath)).toBe(record);
+    expect(sqliteDatabaseAdmissionState.registry.descriptors.get(record.identity)).toBe(custody);
+    expect(record.descriptor).toBe(custody.descriptor);
+    expect(databaseAdmission.getSqliteDatabaseAdmission(sibling, fact)).toBe(42);
+    expect(closed.has(custody.descriptor)).toBe(false);
+    expect(closed.has(creation.descriptor)).toBe(false);
+    expect(sibling.prepare("SELECT value FROM nested_creation_proof").all()).toEqual([
+      { value: 42 },
+    ]);
+
+    await pool.close();
+    sibling.close();
+    databaseAdmission.retireSqliteDatabaseAdmissionForPath(databasePath);
+    expect(closed.has(custody.descriptor)).toBe(true);
+    expect(closed.has(creation.descriptor)).toBe(true);
+  } finally {
+    creation.release();
+    await outcome;
+    try {
+      await pool.close();
+    } finally {
+      if (sibling?.isOpen) {
+        sibling.close();
+      }
+    }
+    databaseAdmission.retireSqliteDatabaseAdmissionForPath(databasePath);
+    // The broken baseline never adopts its callback fd. Dispose it only after every native user joined.
+    if (physical && creation.descriptor !== undefined && !closed.has(creation.descriptor)) {
+      workerIdentity.assertDatabaseFileIdentity(
+        fsSync.fstatSync(creation.descriptor, { bigint: true }),
+        physical,
+      );
+      fsSync.closeSync(creation.descriptor);
+    }
+  }
+});
 
 it.for(["event", "pump"] as const)(
   "nested broker creation performs no main-thread Sync FS through %s delivery and cleanup",
@@ -187,11 +274,22 @@ it("refuses nested creation when its actual task relay retires during physical p
   }
 });
 
-it.for(["queued work", "pool close"] as const)(
-  "joins nested accepted creation after real worker exit before releasing %s",
-  async (mode, { signal }) => {
-    const databasePath = path.join(directories.make("nested-create-exit-"), "created.sqlite");
-    using creation = holdCreatedFileCallback(databasePath);
+it.for([
+  ["creation", "queued work"],
+  ["creation", "pool close"],
+  ["read", "queued work"],
+  ["read", "pool close"],
+] as const)(
+  "joins nested accepted %s after real worker exit before releasing %s",
+  async ([acquisition, mode], { signal }) => {
+    const databasePath = path.join(directories.make("nested-open-exit-"), "created.sqlite");
+    if (acquisition === "read") {
+      new DatabaseSync(databasePath).close();
+    }
+    using creation =
+      acquisition === "creation"
+        ? holdCreatedFileCallback(databasePath)
+        : holdReadFileCallback(databasePath);
     const createWorker = nativeLifetime.createRetainedNativeWorker;
     let worker: ReturnType<typeof createWorker> | undefined;
     using workerCapture = vi.spyOn(nativeLifetime, "createRetainedNativeWorker");

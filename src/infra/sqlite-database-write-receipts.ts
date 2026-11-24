@@ -321,7 +321,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     let released = false;
     return {
       read(): number | undefined {
-        if (released || Atomics.load(generation, SqliteDatabaseGenerationSlot.retired) !== 0) {
+        if (released || isRetired(record)) {
           return undefined;
         }
         pending = false;
