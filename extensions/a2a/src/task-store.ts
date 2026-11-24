@@ -5,7 +5,7 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import type { A2aMessageRecord, A2aTaskRecord } from "./protocol.js";
+import { A2aProtocolError, type A2aMessageRecord, type A2aTaskRecord } from "./protocol.js";
 
 const A2A_TERMINAL_MAX_TASKS = 500;
 const A2A_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -188,6 +188,12 @@ export class A2aTaskStore {
       } catch (error) {
         if (isDefiniteStorageRefusal(error)) {
           this.#deleteTask(task.id);
+          if (error.code === "PLUGIN_STATE_LIMIT_EXCEEDED") {
+            throw new A2aProtocolError(
+              -32000,
+              "Pending task capacity reached. No task was admitted. Wait for pending tasks to settle, then retry with the same message ID.",
+            );
+          }
         }
         throw error;
       }
