@@ -258,7 +258,7 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
     <button
       type="button"
       class="settings-row settings-row--nav channels-item"
-      id={`channels.${params.channelId}`}
+      id={`channelsPage.channel.${params.channelId}`}
       onClick={() => params.props.onShowDetail(params.channelId)}
     >
       <ChannelIcon
