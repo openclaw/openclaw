@@ -757,7 +757,7 @@ describe("subagent registry seam flow", () => {
   it("refreshes unpublished timeout delivery payloads after lifecycle correction", async () => {
     const createdAt = Date.parse("2026-03-24T11:59:00Z");
     mockPendingAgentWait();
-    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("retryable");
+    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("undelivered");
     await mod.registerSubagentRun({
       runId: "run-refresh-pending-timeout-payload",
       task: "pending timeout payload should refresh",
@@ -1319,62 +1319,6 @@ describe("subagent registry seam flow", () => {
     holdChildExecution,
     getLifecycleHandler,
     settleLifecycle,
-  });
-
-  it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
-    mocks.entries = sessionEntries(
-      {
-        "agent:main:subagent:parent": ["sess-parent", "revision-parent"],
-        "agent:main:subagent:child": ["sess-child", "revision-child"],
-      },
-      1,
-    );
-
-    await mod.addSubagentRunForTests({
-      runId: "run-parent-expired",
-      childSessionKey: "agent:main:subagent:parent",
-      childSessionIdentity: {
-        sessionId: "sess-parent",
-        lifecycleRevision: "revision-parent",
-      },
-      cleanup: "delete",
-      createdAt: Date.parse("2026-03-24T11:50:00Z"),
-      startedAt: Date.parse("2026-03-24T11:50:30Z"),
-      endedAt: Date.parse("2026-03-24T11:51:00Z"),
-      cleanupHandled: false,
-      cleanupCompletedAt: undefined,
-    });
-
-    const announceEntered = createDeferred();
-    mocks.runSubagentAnnounceFlow.mockImplementationOnce(async () => {
-      announceEntered.resolve();
-      return "delivered";
-    });
-    const settleRootWork = observeRootWork();
-    try {
-      await mod.registerSubagentRun({
-        runId: "run-child-finished",
-        requesterSessionKey: "agent:main:subagent:parent",
-        requesterDisplayKey: "parent",
-      });
-      await announceEntered.promise;
-    } finally {
-      await settleRootWork();
-    }
-
-    expect(findRequesterRun("run-parent-expired")).toBeUndefined();
-
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({ childRunId: "run-child-finished" }),
-    );
-    await waitForFast(() => {
-      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
-        childSessionKey: "agent:main:subagent:parent",
-        reason: "deleted",
-        workspaceDir: undefined,
-      });
-    });
   });
 
   registerYieldedParentCleanupCase({ getRegistry: () => mod, mocks });

@@ -232,45 +232,53 @@ function publicationSourceFixture(
   fixture: ReturnType<typeof trustedMainNpmFixture>,
   fullCoverage: boolean,
   route: "normal" | "prepared" = "normal",
+  legacyArtifactInput = false,
 ) {
-  return createPublicationSourceFact(
-    publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: fixture.targetSha,
-        release_profile: "beta",
-        rerun_group: "all",
-        skip_package_telegram_e2e: true,
-        ...(fullCoverage
-          ? {
-              provider: fixture.manifest.validationInputs.provider,
-              mode: fixture.manifest.validationInputs.mode,
-              npm_telegram_provider_mode: fixture.manifest.validationInputs.npmTelegramProviderMode,
-            }
-          : {}),
-        trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: {
-            route,
-            npmDistTag: "beta",
-            publishOpenclawNpm: true,
-            pluginPublishScope: "all-publishable",
-            plugins: [],
-          },
-        }),
+  const request = publicationSourceRequest({
+    PUBLICATION_INPUTS_JSON: JSON.stringify({
+      ref: fixture.targetSha,
+      release_profile: "beta",
+      rerun_group: "all",
+      skip_package_telegram_e2e: true,
+      ...(fullCoverage
+        ? {
+            provider: fixture.manifest.validationInputs.provider,
+            mode: fixture.manifest.validationInputs.mode,
+            npm_telegram_provider_mode: fixture.manifest.validationInputs.npmTelegramProviderMode,
+          }
+        : {}),
+      trusted_workflow_json: publicationDispatchEnvelope(null, {
+        validationPurpose: "publish",
+        publicationSelection: {
+          route,
+          npmDistTag: "beta",
+          publishOpenclawNpm: true,
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+        },
       }),
-      PUBLICATION_TOOLING_JSON: JSON.stringify({
-        fullRef: "refs/heads/main",
-        sha: fixture.workflowSha,
-      }),
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_TARGET_CONTEXT: "release/2026.8.28",
-      PUBLICATION_TARGET_SHA: fixture.targetSha,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_SHA: fixture.workflowSha,
-      GITHUB_RUN_ID: fixture.runId,
-      GITHUB_RUN_ATTEMPT: "1",
     }),
+    PUBLICATION_TOOLING_JSON: JSON.stringify({
+      fullRef: "refs/heads/main",
+      sha: fixture.workflowSha,
+    }),
+    PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
+    PUBLICATION_TARGET_CONTEXT: "release/2026.8.28",
+    PUBLICATION_TARGET_SHA: fixture.targetSha,
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_SHA: fixture.workflowSha,
+    GITHUB_RUN_ID: fixture.runId,
+    GITHUB_RUN_ATTEMPT: "1",
+  });
+  return createPublicationSourceFact(
+    {
+      ...request,
+      coverage: {
+        ...request.coverage,
+        ...(legacyArtifactInput && { publication_artifact_source_json: "" }),
+      },
+    },
     { packages: [], platforms: [] },
     {
       version: "2026.8.28-beta.1",
@@ -280,9 +288,13 @@ function publicationSourceFixture(
   );
 }
 
-function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prepared" = "normal") {
+function publicationRestoreFixture(
+  fullCoverage = false,
+  route: "normal" | "prepared" = "normal",
+  legacyArtifactInput = false,
+) {
   const fixture = trustedMainNpmFixture();
-  const source = publicationSourceFixture(fixture, fullCoverage, route);
+  const source = publicationSourceFixture(fixture, fullCoverage, route, legacyArtifactInput);
   const time = "2026-08-28T12:00:00.000Z";
   const observations = createPublicationObservations(source, {
     sourceDigest: source.digest,
@@ -340,10 +352,21 @@ function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prep
 }
 
 describe("original publication admission reader", () => {
-  it.each(["cached", "artifact", "wrong-producer", "wrong-attempt"] as const)(
+  it.each([
+    "cached",
+    "artifact",
+    "legacy-empty-operand",
+    "wrong-producer",
+    "wrong-attempt",
+  ] as const)(
     "authenticates a %s plan against its later pre-seal recovery attempt",
     async (planSource) => {
-      const fixture = publicationRestoreFixture();
+      const fixture = publicationRestoreFixture(
+        false,
+        "normal",
+        planSource === "legacy-empty-operand",
+      );
+      const { publication_artifact_source_json: _retired, ...coverage } = fixture.request.coverage;
       fixture.plan.sealParentRunAttempt = planSource === "wrong-attempt" ? 3 : 2;
       fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
       const parent = publicationParent(fixture);
@@ -380,7 +403,7 @@ describe("original publication admission reader", () => {
         }),
       };
       const operation = restoreOriginalPublicationAdmission({
-        request: fixture.request,
+        request: { ...fixture.request, coverage },
         client,
         cachedPlan: planSource === "cached" ? fixture.plan : undefined,
       });

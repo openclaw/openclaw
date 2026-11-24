@@ -21,29 +21,32 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed", "retryable"] as const)(
-  "applies session-run retention after six minutes (%s)",
-  async (deliveryStatus) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const settledAt = Date.now() - 6 * 60_000;
-      const entry = createArchivedSubagentSweeperRun({
-        spawnMode: "session",
-        cleanup: "keep",
-        archiveAtMs: undefined,
-        cleanupCompletedAt: settledAt,
-        delivery: {
-          status: "failed",
-          ...(deliveryStatus === "retryable" ? { disposition: "retryable" as const } : {}),
-          lastError: "completion agent failed",
-        },
-      });
-      const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
-      await sweeper.sweepOnce();
-      expect(runs.has(entry.runId)).toBe(deliveryStatus !== "failed");
-      expect(callGateway).not.toHaveBeenCalled();
+it("settles a legacy failed result into requester history before session-run retention", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const settledAt = Date.now() - 6 * 60_000;
+    const entry = createArchivedSubagentSweeperRun({
+      spawnMode: "session",
+      cleanup: "keep",
+      archiveAtMs: undefined,
+      cleanupCompletedAt: settledAt,
+      expectsCompletionMessage: true,
+      // Older builds left an undelivered result like this after their retry gave up.
+      delivery: { status: "failed", lastError: "completion agent failed" },
     });
-  },
-);
+    const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
+    const settle = vi
+      .spyOn(completionStore, "settleSubagentCompletionInHistory")
+      .mockResolvedValue(false);
+    try {
+      await sweeper.sweepOnce();
+      expect(settle.mock.calls.map(([{ subagent }]) => subagent.runId)).toEqual([entry.runId]);
+      expect(runs.has(entry.runId)).toBe(true);
+      expect(callGateway).not.toHaveBeenCalled();
+    } finally {
+      settle.mockRestore();
+    }
+  });
+});
 
 it("lets I/O run during a retained backlog and skips owners replaced between batches", async () => {
   vi.useRealTimers();

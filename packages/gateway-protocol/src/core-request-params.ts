@@ -42,6 +42,7 @@ export type GatewayCoreRequestParams = {
   "templates.drafts.read": TemplateDraftSchema.TemplatesDraftsReadParams;
   "templates.drafts.save": TemplateDraftSchema.TemplatesDraftsSaveParams;
   "templates.drafts.review": TemplateDraftSchema.TemplatesDraftsReviewParams;
+  "templates.drafts.signIn": TemplateDraftSchema.TemplatesDraftsSignInParams;
   "templates.drafts.publish": TemplateDraftSchema.TemplatesDraftsPublishParams;
   "catalog.browse": CatalogBrowseParams;
   "catalog.searchKeywords": CatalogSearchKeywordsParams;

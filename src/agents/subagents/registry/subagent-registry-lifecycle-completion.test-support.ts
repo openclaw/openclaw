@@ -255,11 +255,9 @@ export function registerPrivateCompletionSettlementTests({
         async (params) => {
           if (params.signal?.aborted) {
             await params.onDeliveryResult?.({ delivered: false, path: "none" });
-            return "retryable";
+            return "undelivered";
           }
-          return params.isCompletionOwnedByRequesterYield?.()
-            ? "intentional_non_delivery"
-            : "delivered";
+          return params.isCompletionOwnedByRequesterYield?.() ? "session_queued" : "delivered";
         },
       );
       const runs = new Map([

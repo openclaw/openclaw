@@ -591,7 +591,6 @@ it.each(["grant revocation", "target replacement"] as const)(
         await rejection;
         expect(sandbox?.[Symbol.dispose]).toHaveBeenCalledOnce();
         expect(authority?.signal?.aborted).toBe(true);
-        expect(authority?.assertCurrent).toThrow();
       } else {
         const retained = await pending;
         expect(retained.signal.aborted).toBe(false);

@@ -9,20 +9,11 @@ const silentResult = { payloads: [], meta: { terminalReply: { disposition: "sile
 const failedReply = {
   delivered: false,
   path: "direct",
-  reason: undefined,
-  disposition: "permanent_failure",
 };
-const abortedReply = {
-  delivered: false,
-  reason: "requester_aborted",
-  disposition: "permanent_failure",
-};
-const timedOutReply = { ...abortedReply, reason: "requester_timed_out" };
+const abortedReply = { delivered: false };
 const visibleReply = { delivered: true, requesterVisibleFinalDelivered: true };
 const intentionalNonDelivery = {
   delivered: false,
-  disposition: "intentional_non_delivery",
-  terminal: true,
 };
 const ok = (result: unknown) => ({ status: "ok", result });
 const policySuppression = {
@@ -58,8 +49,8 @@ it.each`
   ${"required public reply"}                               | ${ok(visibleResult)}                                                | ${visibleReply}           | ${publicGroup}
   ${"required public silence"}                             | ${ok(silentResult)}                                                 | ${{ delivered: true }}    | ${publicGroup}
   ${"normalized silent result: ok"}                        | ${ok(normalizedSilence)}                                            | ${{ delivered: true }}    | ${undefined}
-  ${"normalized silent result: timeout"}                   | ${{ status: "timeout", result: normalizedSilence }}                 | ${timedOutReply}          | ${undefined}
-  ${"runtime timeout"}                                     | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${timedOutReply}          | ${undefined}
+  ${"normalized silent result: timeout"}                   | ${{ status: "timeout", result: normalizedSilence }}                 | ${abortedReply}           | ${undefined}
+  ${"runtime timeout"}                                     | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${abortedReply}           | ${undefined}
   ${"failed turn"}                                         | ${{ status: "error" }}                                              | ${failedReply}            | ${undefined}
   ${"empty successful optional turn"}                      | ${ok({ payloads: [] })}                                             | ${{ delivered: true }}    | ${undefined}
   ${"optional silence promoted to a required human reply"} | ${ok(requiredSilence)}                                              | ${{ delivered: true }}    | ${undefined}
