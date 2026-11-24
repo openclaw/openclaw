@@ -498,7 +498,7 @@ export function claimAgentRunApprovalAuthority(
   const state = getAgentRunRegistryState();
   const context = state.contexts.get(parent.operationalRunInstance.runId);
   if (!context?.delegatedAuthority || !validateAgentRunDelegatedAuthority(parent)) {
-    throw new Error("agent run approval authority is no longer active");
+    throw new Error("The approval scope ended. Start a new turn to retry.");
   }
   const leases = (context.approvalLeases ??= new AgentRunApprovalLeases((authority, reason) =>
     notifyDelegatedAuthorityClosed(state, authority, reason),

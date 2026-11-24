@@ -394,8 +394,6 @@ export async function handleInlineActions(
         // The execution owner can observe revocation while arming cancellation.
         await opts?.awaitSessionDiffBaseline?.();
         opts?.abortSignal?.throwIfAborted();
-        opts?.operatorAuthority?.assertCurrent();
-        command.assertOwnerCurrent?.();
         const result = asOptionalObjectRecord(
           await tool.execute(toolCallId, toolArgs, opts?.abortSignal),
         );
@@ -506,8 +504,6 @@ export async function handleInlineActions(
     const { handleCommands } = await commandsRuntimeLoader.load();
     await opts?.awaitSessionDiffBaseline?.();
     opts?.abortSignal?.throwIfAborted();
-    opts?.operatorAuthority?.assertCurrent();
-    commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
       ...params,
       // Native directive results carry turn-local fast mode; commands resolve their own status.

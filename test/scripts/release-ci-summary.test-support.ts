@@ -219,6 +219,8 @@ export function trustedMainPackageFixture({
   };
   const client = {
     validateChildReuse: unsupported,
+    selectPublicationArtifactSource: unsupported,
+    verifyReleaseRecoveryProducer: unsupported,
     getRunAttempt: unsupported,
     getRunAttemptJobs: unsupported,
     loadExecutionPlan: unsupported,
@@ -226,6 +228,8 @@ export function trustedMainPackageFixture({
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
     getArtifact: unsupported,
+    getCommit: unsupported,
+    resolveQualificationAdmissionDescriptor: unsupported,
     loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");

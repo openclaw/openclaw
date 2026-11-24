@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const fileDigest = (file) => sha256(fs.readFileSync(file));
 export const fileIdentity = (file) => {
   const stat = fs.lstatSync(file, { bigint: true });

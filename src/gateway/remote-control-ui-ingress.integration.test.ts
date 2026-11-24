@@ -921,7 +921,6 @@ describe("remote Control UI ingress production composition", () => {
             ).toMatchObject({ ok: true });
             setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
             await expect(binding.request("voicewake.get", {})).rejects.toThrow();
-            recovered?.authority.assertCurrent();
             await expect(restore()).rejects.toThrow();
             await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
           });

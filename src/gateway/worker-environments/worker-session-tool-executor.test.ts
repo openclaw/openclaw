@@ -203,9 +203,7 @@ describe("worker session tool topology", () => {
       }
       release.resolve();
       if (authorityState === "run-ended") {
-        await expect(pending).rejects.toThrow(
-          /source worker run ended|agent tool caller authority is no longer/,
-        );
+        await expect(pending).rejects.toThrow(/source worker run ended|The agent run ended/);
       } else {
         expect((await pending).details).toEqual(snapshot);
         await placements.authorizeWorkerTurnTools(sourceClaim, []);

@@ -63,7 +63,6 @@ it.each(["durable", "incognito"])(
           "close",
           "admission",
           "restart",
-          "permission",
           "session",
           "placement",
           "gateway",
@@ -150,7 +149,7 @@ it.each(["durable", "incognito"])(
                   return;
                 }
                 if (change === "plugin") {
-                  await expect(result).rejects.toThrow("no longer current");
+                  await expect(result).rejects.toThrow("The run or its session ended");
                   expect(dispatched).not.toHaveBeenCalled();
                   return;
                 }
@@ -164,9 +163,6 @@ it.each(["durable", "incognito"])(
                     break;
                   case "restart":
                     rotateAgentRunRegistryLifecycleGeneration();
-                    break;
-                  case "permission":
-                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
                     break;
                   case "session":
                     await upsertSessionEntryCore(sessionTarget, { sessionId: "replacement" });
@@ -192,7 +188,9 @@ it.each(["durable", "incognito"])(
                     placementGrantAuthority?.assertCurrent(placementGrantRequest),
                   ).toThrow("no longer active");
                 } else {
-                  await expect(result).rejects.toThrow(/no longer (active|current)/);
+                  await expect(result).rejects.toThrow(
+                    /no longer (active|current)|The run or its session ended/,
+                  );
                   expect(dispatched).not.toHaveBeenCalled();
                 }
               }),

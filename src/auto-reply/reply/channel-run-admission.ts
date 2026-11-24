@@ -101,7 +101,6 @@ export function prepareChannelRunAdmission(params: {
       return;
     }
     params.assertSourceCurrent?.();
-    params.operatorAuthority?.assertCurrent();
   };
   return Object.freeze({
     operationalRunInstance,

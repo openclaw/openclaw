@@ -9322,12 +9322,13 @@ test "$package_manager" = "pnpm@12.1.0"
         expect.arrayContaining([
           `target_ref=${"b".repeat(40)}`,
           `release_scope=${scope}`,
-          `include_android=${scope === "full"}`,
+          "dispatch_id=full-release-validation-77-2-ci",
         ]),
       );
       expect(
         args.filter((arg) => /^(historical_target_tag|target_context_ref)=/u.test(arg)),
       ).toEqual([contextInput]);
+      expect(args.some((arg) => /^(include_android|include_mobile)=/u.test(arg))).toBe(false);
       expect(args.some((arg) => arg.startsWith("release_candidate_ref="))).toBe(false);
     },
   );
@@ -10064,9 +10065,14 @@ describe("package artifact reuse", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE:
         "${{ needs.validate_selected_ref.outputs.upgrade_baseline_scope }}",
     });
-    const maxParallel = workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.[
-      "max-parallel"
-    ];
+    expect(workflowJob(LIVE_E2E_WORKFLOW, "plan_docker_lane_groups").outputs?.max_parallel).toBe(
+      "${{ steps.groups.outputs.max_parallel }}",
+    );
+    expect(groupPlanner.run).toContain('echo "max_parallel=${MAX_PARALLEL}" >> "$GITHUB_OUTPUT"');
+    expect(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.["max-parallel"]).toBe(
+      "${{ fromJSON(needs.plan_docker_lane_groups.outputs.max_parallel) }}",
+    );
+    const maxParallel = groupPlanner.env?.MAX_PARALLEL;
     const hostedDefault = reusable.on?.workflow_call?.inputs?.use_github_hosted_runners?.default;
     for (const [overrides, packagePresent, expected] of [
       [{}, "true", 64],

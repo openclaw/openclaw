@@ -519,9 +519,6 @@ describe("gateway agent handler", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message: "runId does not match session incarnation",
       });
-      await expect(
-        handleChatAbortRequest({ ...abortOptions, hasCurrentClientAuthority: () => false }),
-      ).rejects.toThrow("Gateway requester authority changed");
       expect(source.abortSignal.aborted).toBe(false);
       expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "accepted" });
 

@@ -157,7 +157,6 @@ it("restricts invited members to their own approvals across generic lookup, reso
             operatorRunAuthority: createTestOperatorAuthority({
               profileId: profiles[name]!,
               scopes: ["operator.approvals"],
-              assertCurrent() {},
               readCurrentRoleFacts: () => ({
                 assignedRole: "invited",
                 policy: cfg.gateway!.roles!.definitions.invited,

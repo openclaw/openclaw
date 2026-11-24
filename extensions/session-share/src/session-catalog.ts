@@ -187,6 +187,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       async run() {
         const releasePermit = await refreshes.acquire({ signal });
         const previousError = entry.error;
+        let filterError: SessionCatalogHost["error"];
         try {
           if (!releasePermit || !current(entry)) {
             return;
@@ -201,7 +202,6 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
               let cursor: string | undefined;
               let bytes = 0;
               let relation = entry.profileRelation;
-              entry.error = undefined;
               let retry: boolean;
               // Start over without the relation and let the receiver match rows client-side.
               const fallBackToClientFilter = () => {
@@ -210,7 +210,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                 sessions.length = 0;
                 bytes = 0;
                 retry = true;
-                entry.error = {
+                filterError = {
                   code: "FILTER_PARTIAL",
                   message:
                     "Source relationship filtering is unavailable. Showing authorized rows with client-side matching; check the identity link and catalog command approvals.",
@@ -305,9 +305,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           entry.sessions = snapshot;
           entry.refreshedAt = performance.now();
           entry.retryMs = REFRESH_MS;
-          if (entry.error?.code !== "FILTER_PARTIAL") {
-            entry.error = undefined;
-          }
+          entry.error = filterError;
         } catch (error) {
           entry.retryMs = previousError ? Math.min(entry.retryMs * 2, 300_000) : REFRESH_MS;
           entry.error =

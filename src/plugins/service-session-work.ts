@@ -128,7 +128,6 @@ export function createPluginServiceSessionWork(params: {
           throw new Error("Session work Gateway changed");
         }
         captured.assertInvocationCurrent?.();
-        captured.authority?.assertCurrent();
         assertSession?.();
       };
       assertCurrent();
@@ -301,7 +300,6 @@ export function createPluginServiceSessionWork(params: {
         const assertCurrent = () => {
           try {
             signal.throwIfAborted();
-            authority.assertCurrent();
             assertBorrow();
           } catch (error) {
             // A transient preparation failure closes this borrow. Catch handlers
@@ -349,10 +347,7 @@ export function createPluginServiceSessionWork(params: {
             }),
             context: owner,
             ownSessionOnly: false,
-            assertInvocationCurrent: () => {
-              assertTarget();
-              authority.assertCurrent();
-            },
+            assertInvocationCurrent: assertTarget,
           }),
         );
         const retained = session.authority.retain();

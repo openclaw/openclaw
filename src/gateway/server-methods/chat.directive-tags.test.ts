@@ -4926,11 +4926,9 @@ describe("chat.send local operator client sender context", () => {
       });
 
       expect(resolvedGrant).toMatchObject({ runId: `idem-cron-authority-${clientId}` });
-      await expect(retainedResolver!()).rejects.toThrow(
-        "Configured MCP cron authority is no longer active",
-      );
+      await expect(retainedResolver!()).rejects.toThrow("This run's MCP cron access has ended");
       expect(() => consumeCronCreatorAuthorityGrant(resolvedGrant!)).toThrow(
-        "Configured MCP cron authority is no longer active",
+        "This run's MCP cron access has ended",
       );
     },
   );

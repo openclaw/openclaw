@@ -500,7 +500,13 @@ export class TranscriptReaderAnchor {
       if (!above || owned || !held) {
         // Prepend restores the measured bubble absolutely; relative compensation
         // can replay after its anchor retires during iOS's post-touch grace.
-        return above && this.host.prependAnchor.messageKey === null;
+        const adjust = above && this.host.prependAnchor.messageKey === null;
+        if (adjust) {
+          // Virtual-core writes its cached offset plus the delta; a reader scroll whose event
+          // has not arrived yet would be undone by that stale base.
+          this.host.offsetState.syncNativeOffset?.(true);
+        }
+        return adjust;
       }
       this.columnShift += delta;
       this.landedShift += delta;
@@ -577,7 +583,11 @@ export class TranscriptReaderAnchor {
     this.columnShift = 0;
     this.shiftVirtual(-shift);
     this.syncColumn();
-    this.scrollBy(shift);
+    // Native zero is the reader's start: rows that grew above it while the offset was held are
+    // revealed, not scrolled past, so a reader who reached the top stays at the top.
+    if (shift < 0 || offset > 0) {
+      this.scrollBy(shift);
+    }
   }
 
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */

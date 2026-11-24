@@ -171,7 +171,6 @@ it.each(
     const authority = createTestOperatorAuthority({
       profileId: "reviewer-caller",
       scopes: [],
-      assertCurrent() {},
     });
     const skillsSnapshot = {
       prompt: "",
