@@ -104,7 +104,11 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
         const reader = openPostgresEngineTestStore({
           anchor: writer.anchor,
           schema,
-          input: { connection: connection!, schemaPrefix: "floor", readOnly },
+          input: {
+            connection: connection!,
+            schemaPrefix: "floor",
+            readOnly: readOnly ? true : undefined,
+          },
         });
         try {
           expect(getPostgresPhysicalFacts(reader)).toMatchObject({ version: 2, minReader: 1 });
@@ -142,7 +146,11 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
           openPostgresEngineTestStore({
             anchor: writer.anchor,
             schema: { ...schema, postgres: "SELECT forbidden_schema_work_before_reader_floor" },
-            input: { connection: connection!, schemaPrefix: "floor", readOnly },
+            input: {
+              connection: connection!,
+              schemaPrefix: "floor",
+              readOnly: readOnly ? true : undefined,
+            },
           }),
         ).toThrow(StartupMaintenanceRequiredError);
       });

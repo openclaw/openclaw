@@ -41,8 +41,8 @@ export async function readPostgresStoreMetadata(
   anchor: { namespace: string; storeId: string },
 ): Promise<{ store: string; version: number; minReader: number }> {
   const rows = await client
-    .query<{ store: string; store_id: string; version: string; min_reader: string | null }>(
-      `SELECT store, store_id, version, to_jsonb(meta)->>'min_reader' AS min_reader FROM ${quote(anchor.namespace)}.openclaw_schema_meta AS meta`,
+    .query<{ store: string; store_id: string; version: string; min_reader?: string | null }>(
+      `SELECT * FROM ${quote(anchor.namespace)}.openclaw_schema_meta`,
     )
     .then(
       (result) => result.rows,

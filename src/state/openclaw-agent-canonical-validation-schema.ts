@@ -107,10 +107,11 @@ export function assertCanonicalSessionValidationSchema(database: EngineConnectio
             "canonical agent catalog",
           )
             .tables.filter((table) => table.name === name)
-            .map((table) => ({
-              ...table,
-              indexes: table.indexes.filter((index) => index.unique === 1),
-            })),
+            .map((table) =>
+              Object.assign({}, table, {
+                indexes: table.indexes.filter((index) => index.unique === 1),
+              }),
+            ),
           views: [],
         };
         if (
