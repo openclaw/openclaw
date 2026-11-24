@@ -113,7 +113,7 @@ describe("update failure triage diagnostics", () => {
         },
       });
       expect("result" in failure && failure.result.steps.map((step) => step.name)).toEqual([
-        "step-1",
+        "step-0",
         "step-2",
         "step-3",
       ]);
@@ -127,6 +127,35 @@ describe("update failure triage diagnostics", () => {
       }
     },
   );
+
+  it("keeps the failure that started recovery when recovery steps also fail", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const result: UpdateRunResult = {
+      status: "error",
+      mode: "npm",
+      durationMs: 4,
+      steps: [
+        "package activation",
+        "package rollback",
+        "database rollback",
+        "Gateway recovery",
+      ].map((name) => ({
+        name,
+        command: "openclaw update",
+        cwd: stateDir,
+        durationMs: 1,
+        exitCode: 1,
+      })),
+    };
+    const artifact = await writeTriageUpdateFailure({ result }, { env });
+    const recorded = await readTriageUpdateFailure(artifact, { env, stateDir });
+    expect("result" in recorded && recorded.result.steps.map((step) => step.name)).toEqual([
+      "package activation",
+      "database rollback",
+      "Gateway recovery",
+    ]);
+  });
 
   it("preserves a post-install activation error even when the core update succeeded", async () => {
     const stateDir = tempDirs.make("openclaw-update-triage-");

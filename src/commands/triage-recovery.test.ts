@@ -462,7 +462,7 @@ describe("triage external recovery handoff", () => {
         result: {
           recovery: { serviceRestartSafe: false },
           steps: [
-            { name: "latest-failure", exitCode: 1 },
+            { name: "older-failure", exitCode: 1 },
             {
               name: "doctor",
               exitCode: 1,
