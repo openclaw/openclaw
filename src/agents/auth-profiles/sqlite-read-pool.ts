@@ -15,10 +15,9 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { assertSupportedAgentSchemaVersion } from "../../state/openclaw-agent-db-schema-read.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 
 export type AuthProfileReadDatabaseOpener = (
@@ -133,16 +132,20 @@ export function acquireAuthProfileReadDatabase(
     return { status: "missing" };
   }
   const inspection = isArtifactPreservingStateRead("agent", resolvedPath);
-  if (!inspection && schema && schema.userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    closeAuthProfileReadDatabase(resolvedPath);
-    return { status: "unreadable" };
-  }
   const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
   if (
     cached?.ready &&
     cached.db.isOpen &&
     (expectedIdentity === undefined || cached.identity === expectedIdentity)
   ) {
+    if (schema) {
+      try {
+        assertSupportedAgentSchemaVersion(cached.db, resolvedPath, schema.userVersion);
+      } catch {
+        closeAuthProfileReadDatabase(resolvedPath);
+        return { status: "unreadable" };
+      }
+    }
     authProfileReadDatabases.delete(resolvedPath);
     authProfileReadDatabases.set(resolvedPath, cached);
     armReadHandleIdleClose(resolvedPath, cached);
@@ -176,18 +179,14 @@ export function acquireAuthProfileReadDatabase(
   let readable = false;
   try {
     enableNodeSqliteKyselyStatementCache(db);
-    if (inspection) {
-      readable = readSqliteUserVersion(db) <= OPENCLAW_AGENT_SCHEMA_VERSION;
-    } else if (schema) {
-      readable = true;
+    if (inspection || schema) {
+      assertSupportedAgentSchemaVersion(db, resolvedPath, schema?.userVersion);
     } else {
-      admitSqliteSchema(db, (version) => {
-        if (version > OPENCLAW_AGENT_SCHEMA_VERSION) {
-          throw new Error("Auth profile database uses a newer agent schema");
-        }
-      });
-      readable = true;
+      admitSqliteSchema(db, (version) =>
+        assertSupportedAgentSchemaVersion(db, resolvedPath, version),
+      );
     }
+    readable = true;
   } catch {
     // Invalid readers are disposed below, where native close failures propagate.
   }
