@@ -41,13 +41,12 @@ export function resolveSessionCatalogRoute(
         hasCurrentGatewayOperatorAccess(authority)));
   const available: SessionCatalogRouteMethods = {};
   for (const operation of ["list", "read", "resolve", "continue"] as const) {
-    if (operation === "resolve" && !provider.resolveGatewayConversation) {
-      continue;
-    }
-    if (operation === "continue" && !provider.continueSession && !provider.copyToGatewaySession) {
-      continue;
-    }
-    const shared = methods.getDescriptor(`sessions.catalog.${operation}`);
+    const supportsShared =
+      (operation !== "resolve" || provider.resolveGatewayConversation) &&
+      (operation !== "continue" || provider.continueSession || provider.copyToGatewaySession);
+    const shared = supportsShared
+      ? methods.getDescriptor(`sessions.catalog.${operation}`)
+      : undefined;
     if (shared?.owner.kind === "core" && operatorScopeSatisfied(shared.scope, scopes)) {
       available[operation] = shared.name;
       continue;
@@ -59,7 +58,8 @@ export function resolveSessionCatalogRoute(
       owned.owner.kind === "plugin" &&
       owned.owner.pluginId === pluginId &&
       owned.profileAccess === "required" &&
-      (owned.scope === "operator.sessions.read" || owned.scope === "operator.sessions.write") &&
+      (owned.scope === "operator.sessions.write" ||
+        (operation !== "continue" && owned.scope === "operator.sessions.read")) &&
       owned.advertise !== false &&
       !owned.controlPlaneWrite &&
       operatorScopeSatisfied(owned.scope, scopes)

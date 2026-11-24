@@ -79,6 +79,7 @@ it("resolves a cold route against this caller's read and write scopes", async ()
   const ownedRouteMethods = {
     list: "notebook.mine.list",
     read: "notebook.mine.read",
+    resolve: "notebook.mine.resolve",
     continue: "notebook.mine.continue",
   };
   const provider = catalogProvider("notebook-catalog", {
@@ -89,7 +90,7 @@ it("resolves a cold route against this caller's read and write scopes", async ()
   hoisted.activeRegistry.sessionCatalogs = [{ provider, pluginId: "notebook" }];
   const registry = createGatewayMethodRegistry(
     [
-      ...(["list", "read", "continue"] as const).map((op) => ({
+      ...(["list", "read", "resolve", "continue"] as const).map((op) => ({
         name: `sessions.catalog.${op}`,
         scope: op === "continue" ? ("operator.write" as const) : ("operator.read" as const),
         owner: { kind: "core" as const, area: "session-catalog" },
@@ -101,6 +102,12 @@ it("resolves a cold route against this caller's read and write scopes", async ()
         owner: { kind: "plugin" as const, pluginId: "notebook" },
         handler: () => {},
       })),
+      {
+        name: "notebook.readOnly",
+        scope: "operator.sessions.read",
+        owner: { kind: "plugin", pluginId: "notebook" },
+        handler: () => {},
+      },
     ],
     hoisted.activeRegistry as PluginRegistry,
   );
@@ -168,6 +175,18 @@ it("resolves a cold route against this caller's read and write scopes", async ()
     null,
   ]);
   expect((await resolve(["operator.read"], { ...lookup, ...byId }))[0]).toBe(false);
+  ownedRouteMethods.continue = "notebook.readOnly";
+  expect(await resolve(["operator.sessions.write"], lookup)).toEqual([
+    true,
+    {
+      ...base,
+      methods: {
+        list: ownedRouteMethods.list,
+        read: ownedRouteMethods.read,
+        resolve: ownedRouteMethods.resolve,
+      },
+    },
+  ]);
   hoisted.activeRegistry.sessionCatalogs = [{ provider, pluginId: "another-plugin" }];
   expect(await resolve(["operator.sessions.write"], lookup)).toEqual([true, null]);
   expect(provider.list).not.toHaveBeenCalled();

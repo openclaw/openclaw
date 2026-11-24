@@ -202,7 +202,7 @@ export type SessionCatalogProvider = {
   /** Owned RPCs used when the caller lacks the shared operation's scope. The host verifies ownership. */
   ownedRoute?: {
     methods: SessionCatalogRouteMethods;
-    /** An original, current grant from this policy plugin is required for these methods. */
+    /** Owning methods require the caller's live role-required policy from this plugin. */
     requiredGrantPluginId?: string;
   };
   /** Declares that every HOME-sensitive action honors the host isolation policy. */

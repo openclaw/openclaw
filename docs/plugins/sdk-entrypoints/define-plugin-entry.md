@@ -225,8 +225,10 @@ export default definePluginEntry({
   profile and a session-scoped permission. Set `ownedRoute.requiredGrantPluginId`
   when these operations require admission by a particular policy plugin. Each
   operation still checks the caller's authority for the requested transcript.
-  The Gateway chooses the shared or owned method independently for each
-  operation, so a caller can have shared read and publisher-only continuation.
+  The Gateway returns a route when the caller has both list and read access.
+  It chooses the shared or owned method independently for each operation, so a
+  caller can have shared read and publisher-only continuation. An owned
+  continuation requires `operator.sessions.write`.
 
   Named share links use `/<routeSegment>/<title-slug>-<id-prefix>` with the same
   bounded slug as regular session links. Return the title in the catalog row's
