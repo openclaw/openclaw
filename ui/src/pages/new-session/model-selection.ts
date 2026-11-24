@@ -329,7 +329,8 @@ export abstract class NewSessionModelSelection {
         selection.agentRuntime,
       ) ?? resolveDraftDefaultModelTarget(options);
     if (catalogReady && target?.entry?.availableAccessPrograms?.cyber !== undefined) {
-      const { selected } = resolveDraftAccessProgram({
+      // Remap from the normalized program this draft displays and would submit.
+      const current = resolveDraftAccessProgram({
         ...options,
         model: effectiveModel,
         agentRuntime: this.agentRuntime,
@@ -337,7 +338,7 @@ export abstract class NewSessionModelSelection {
       });
       const { remap } = resolveDaybreakAccessProgram(
         target.entry.availableAccessPrograms.cyber,
-        selected,
+        current,
       );
       this.cyberAccessProgram = remap ?? this.cyberAccessProgram;
     }

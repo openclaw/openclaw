@@ -459,7 +459,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       defaults: this.pendingContext?.sessions.state.result?.defaults,
       requested: this.cyberAccessProgram,
       ...this.metadataState,
-    }).submission;
+    });
   }
 
   modelForSubmission(): string {

@@ -85,7 +85,7 @@ export function resolveDraftAccessProgram(
     target?.entry?.availableAccessPrograms?.cyber,
     selected,
   );
-  return { selected, submission: locked ? program : selected };
+  return locked ? program : selected;
 }
 
 export function resolveDraftModelControls(params: {
