@@ -1,2 +1,2 @@
-# A2A crash recovery, admission ordering, storage refusal, and stale cleanup regressions.
-239
+# A2A crash recovery, admission ordering, storage refusal and peer-visible retry guidance, and stale cleanup regressions.
+257
