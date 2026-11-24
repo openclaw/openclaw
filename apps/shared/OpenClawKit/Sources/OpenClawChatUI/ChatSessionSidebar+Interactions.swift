@@ -315,14 +315,17 @@ extension ChatSessionSidebar {
             after: after)
         {
         case .selfDrop?: return true
-        case let .mutation(fields)?: patch = fields
+        case let .mutation(fields)? where connection.supportsPersonalPins: patch = fields
+        case let .mutation(fields)?:
+            // A legacy pin is read-only, but its thread can still change groups.
+            guard let category = fields?["category"] else {
+                self.batch.notices = [OpenClawPersonalPinError.unsupportedGateway.localizedDescription]
+                return false
+            }
+            patch = ["category": category]
         case nil: return false
         }
-        if section == "pinned" || patch?["pinned"] != nil, !connection.supportsPersonalPins {
-            self.batch.notices = [OpenClawPersonalPinError.unsupportedGateway.localizedDescription]
-            return false
-        }
-        if section == "pinned", !connection.allows(patch == nil ? "users.prefs.set" : "sessions.patch") { return false }
+        guard connection.allows(patch == nil ? "users.prefs.set" : "sessions.patch") else { return false }
         let owner = self.viewModel.sidebarData
         self.interact(refresh: patch != nil) { connection in
             self.batch.errors = [:]

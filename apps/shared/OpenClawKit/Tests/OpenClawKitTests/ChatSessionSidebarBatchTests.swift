@@ -297,19 +297,38 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.sidebarEntries == server)
     }
 
-    @Test func `post-commit reconciliation accepts another client's newer pin order`() async throws {
+    enum Refresh: CaseIterable { case newerOrder, unavailable, reset }
+
+    @Test(arguments: Refresh.allCases)
+    func `an acknowledged move survives a lost refresh but yields to a newer order or connection`(
+        refresh: Refresh) async throws
+    {
         let before = ["session:a", "route:home", "session:b"]
+        let accepted = ["session:b", "route:home", "session:a"]
         let external = ["session:a", "route:home", "session:b", "future:added"]
-        var committed = false
+        let batch = ChatSessionSidebarBatch()
+        var methods: [String] = []
         let connection = try self.connection { request in
-            if request.method == "users.prefs.set" { committed = true
+            methods.append(request.method)
+            if methods.count == 1 { return try self.pinSnapshot(before) }
+            if request.method == "users.prefs.set" {
+                #expect(try self.pinPatch(request) == accepted)
                 return Data(#"{"status":"ok"}"#.utf8)
             }
-            return try self.pinSnapshot(committed ? external : before)
+            if refresh == .unavailable { throw URLError(.timedOut) }
+            if refresh == .reset { batch.reset() }
+            return try self.pinSnapshot(external)
         }
-        let batch = ChatSessionSidebarBatch()
-        try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
-        #expect(batch.sidebarEntries == external)
+        do {
+            try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
+        } catch { Issue.record("An acknowledged drop was reported as failed: \(error)") }
+        #expect(methods == ["users.prefs.get", "users.prefs.set", "users.prefs.get"])
+        #expect(batch.notices.isEmpty)
+        switch refresh {
+        case .newerOrder: #expect(batch.sidebarEntries == external)
+        case .unavailable: #expect(batch.sidebarEntries == accepted)
+        case .reset: #expect(batch.sidebarEntries.isEmpty)
+        }
     }
 
     @Test func `missing and empty personal preferences are read without writing shared navigation`() async throws {
@@ -690,6 +709,63 @@ struct ChatSessionSidebarBatchTests {
         #expect(Set(batch.errors.keys) == [OpenClawChatSessionSidebarData.identity(rows[0])])
     }
 
+    @Test(arguments: ["group:Ops", "recent"])
+    func `a shared pin can change category on an old Gateway without changing its pin`(section: String) async throws {
+        let pinned = try self.row(0, fields: ["pinned": true, "category": "Research"])
+        let suite = "LegacyCategoryDrop.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let model = OpenClawChatViewModel(
+            sessionKey: pinned.key,
+            transport: TestChatTransport(historyResponses: []),
+            activeAgentId: "bulk",
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer {
+            model.detachTransport()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        model.sessions = [pinned]
+        let batch = ChatSessionSidebarBatch()
+        var requests: [OpenClawChatGatewayRequest] = []
+        func sidebar(methods: Set<String>, scopes: Set<String>) -> ChatSessionSidebar {
+            let connection = OpenClawSessionMenuConnection(
+                methods: methods,
+                scopes: scopes,
+                isCurrent: { true },
+                request: {
+                    requests.append($0)
+                    return Data(#"{"key":"agent:bulk:thread-0","entry":{"sessionId":"id-0","pinnedAt":10}}"#.utf8)
+                })
+            return ChatSessionSidebar(
+                viewModel: model,
+                query: .constant(""),
+                groups: .constant([]),
+                previews: .init(),
+                menuActions: .init(connection: connection),
+                batch: batch)
+        }
+        let methods: Set = ["sessions.groups.put", "sessions.patch"]
+        let writer = sidebar(methods: methods, scopes: ["operator.write"])
+        var drag = ChatSidebarDrag(scope: batch.scope, key: writer.interactionIdentity(pinned), sessionID: "stale")
+        #expect(!writer.dropInteraction(drag, section: section, after: false))
+        drag.sessionID = pinned.sessionId
+        for target in ["group:Research", "list", "pinned"] {
+            #expect(!writer.dropInteraction(drag, section: target, after: false))
+        }
+        let reader = sidebar(methods: methods, scopes: ["operator.read"])
+        let noPatch = sidebar(methods: ["sessions.groups.put"], scopes: ["operator.write"])
+        #expect(!reader.dropInteraction(drag, section: section, after: false))
+        #expect(!noPatch.dropInteraction(drag, section: section, after: false))
+        try #require(writer.dropInteraction(drag, section: section, after: false))
+        await waitForObservedState { !batch.running }
+        #expect(batch.notices.isEmpty)
+        #expect(requests.map(\.method) == ["sessions.patch"])
+        let params = try self.params(#require(requests.first))
+        #expect(params as NSDictionary == [
+            "key": pinned.key, "agentId": "bulk", "expectedSessionId": "id-0",
+            "category": section == "recent" ? NSNull() as Any : "Ops",
+        ] as NSDictionary)
+    }
+
     @Test func `drop destinations distinguish unpin from category removal and reject nonpinnable roots`() throws {
         let pinned = try self.row(0, fields: ["pinned": true, "category": "Research"])
         func patch(_ row: OpenClawChatSessionEntry, _ section: String) throws -> NSDictionary? {
@@ -697,6 +773,7 @@ struct ChatSessionSidebarBatchTests {
                   let value else { return nil }
             return try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? NSDictionary
         }
+        #expect(try patch(pinned, "group:Research") == ["pinned": false] as NSDictionary)
         #expect(try patch(pinned, "group:Ops") == ["category": "Ops", "pinned": false] as NSDictionary)
         #expect(try patch(pinned, "recent") == ["category": NSNull(), "pinned": false] as NSDictionary)
         #expect(try patch(pinned, "list") == ["pinned": false] as NSDictionary)

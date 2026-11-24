@@ -203,8 +203,10 @@ final class ChatSessionSidebarBatch {
                     self.sidebarEntries = previous.compactMap { $0.value as? String }
                     throw error
                 }
-                let committed = try await self.pinEntries(connection)
-                if self.scope == scope { self.sidebarEntries = committed.compactMap { $0.value as? String } }
+                // The write was acknowledged. A newer peer order can supersede it, but a failed read cannot.
+                if let latest = try? await self.pinEntries(connection), self.scope == scope {
+                    self.sidebarEntries = latest.compactMap { $0.value as? String }
+                }
                 return
             }
         } catch {
@@ -446,11 +448,9 @@ final class ChatSessionSidebarBatch {
         // Web drop entry points: session-organizer.ts sectionDrop and handleSessionListDrop.
         if section.hasPrefix("group:") || section == "recent" {
             let category = section == "recent" ? nil : String(section.dropFirst(6))
-            guard row.category != category || row.pinned == true else { return nil }
-            var patch: [String: AnyCodable] =
-                ["category": section == "recent" ? .init(NSNull()) : .init(String(section.dropFirst(6)))]
+            var patch = row.category == category ? [:] : Action.category(category).patch
             if row.pinned == true { patch["pinned"] = .init(false) }
-            return .mutation(patch)
+            return patch.isEmpty ? nil : .mutation(patch)
         }
         return section == "list" && row.pinned == true ? .mutation(["pinned": .init(false)]) : nil
     }
