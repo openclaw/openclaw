@@ -406,6 +406,34 @@ struct TalkModeManagerTests {
         _ = manager.cancelPushToTalk(captureId: capture.captureId)
     }
 
+    @Test(.testWaitLimit)
+    func `native call cues readiness, a completed reply and a clean end in order and recovers the microphone`() async {
+        var trace: [String] = []
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            chimePlaybackOverride: { cue in trace.append("cue \(cue)") })
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+
+        await manager.start()
+        trace.append("listening=\(manager.isListening)")
+        // The assistant's reply played to its end: native recognition resumes for the next turn.
+        manager.isListening = false
+        await manager.start(afterNativeReply: true)
+        trace.append("listening=\(manager.isListening) (microphone recovered after reply)")
+        manager.stop()
+
+        print("TALK_CUE_TRACE " + trace.joined(separator: " | "))
+        #expect(trace == [
+            "cue wake",
+            "listening=true",
+            "cue follow",
+            "listening=true (microphone recovered after reply)",
+            "cue bye",
+        ])
+    }
+
     @Test func `preserves the released realtime model override`() {
         let parsed = Self.parseRealtime(
             provider: "openai",

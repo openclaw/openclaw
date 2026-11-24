@@ -3473,7 +3473,8 @@ final class TalkModeManager {
         guard self.isCurrentSpeechGeneration(speechGeneration) else { return false }
         if !self.incrementalSpeechUsed {
             // A reply with no incremental segment (for example a single-line JSON reply) is spoken whole.
-            if !(await self.playAssistant(text: text)) { self.incrementalSpeechIncomplete = true }
+            let played = await self.playAssistant(text: text)
+            if !played { self.incrementalSpeechIncomplete = true }
         }
         return !Task.isCancelled && !self.incrementalSpeechIncomplete
     }
