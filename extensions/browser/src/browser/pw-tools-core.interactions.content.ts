@@ -314,7 +314,7 @@ async function startScreenshotScreencast(page: Page): Promise<(() => Promise<voi
     .newCDPSession(page)
     .catch(() => undefined);
   if (!session) {
-    return;
+    return undefined;
   }
   session.on("Page.screencastFrame", ({ sessionId }) => {
     void session.send("Page.screencastFrameAck", { sessionId }).catch(() => {});

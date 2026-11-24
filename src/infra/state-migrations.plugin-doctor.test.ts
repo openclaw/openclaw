@@ -382,7 +382,7 @@ it("waits out a lifecycle lease that a stopped pre-2026.11.5 Gateway left behind
     ).run(now + 300_000, now, null, now, now);
   }
   // Advance the deadline clock only when acquisition really meets the abandoned lease.
-  const secondRetry = createDeferredCore<void>();
+  const secondRetry = createDeferredCore();
   const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const computeBackoff = leaseBackoff.computeBackoff;
   const backoff = vi.spyOn(leaseBackoff, "computeBackoff").mockImplementation((policy, attempt) => {

@@ -16,7 +16,7 @@ import { loadWorkboardPortDescriptor } from "./workboard-port.js";
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const scope = { assertCurrent() {} };
+const scope = { assertCurrent: () => {} };
 const hash = async (file: string) =>
   createHash("sha256")
     .update(await fs.readFile(file))

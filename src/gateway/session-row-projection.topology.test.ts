@@ -739,6 +739,6 @@ it("reads an agentDir row through another spelling of its database file (#201423
       await projection.ensureMaterialized();
       expect(projection.readCapabilityEntry(query)?.entry?.sessionId).toBe("child-id");
     } finally {
-      await projection.dispose();
+      projection.dispose();
     }
   }));

@@ -143,7 +143,7 @@ type OperationToolAuthority = Pick<
   | "setAutomaticFallbackRoute"
   | "personalToolParticipants"
 > & {
-  originalSenderId(): string | undefined;
+  originalSenderId(this: void): string | undefined;
   bindBackendFingerprint(fingerprint: string | undefined): void;
   close(): void;
 };
