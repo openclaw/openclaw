@@ -24,9 +24,7 @@ export async function retainTalkClientRunAuthority(
     captured?.release();
     throw error;
   }
-  const sourceCurrent =
-    readGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority) ??
-    params.hasCurrentClientAuthority;
+  const sourceCurrent = readGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
   const committedSource =
     sourceCurrent && bindGatewayDeviceRevocation(sourceCurrent, params.hasCurrentClientAuthority);
   const client =
@@ -41,7 +39,7 @@ export async function retainTalkClientRunAuthority(
     operatorAuthority: captured?.authority,
     assertCurrent() {
       if (released || sourceCurrent?.() === false) {
-        throw new Error("Talk caller source authority is no longer active");
+        throw new Error("Talk caller source ended or changed. Start a new request.");
       }
       captured?.authority.assertCurrent();
     },
@@ -56,7 +54,7 @@ export async function retainTalkClientRunAuthority(
     },
     async retainRun(runId: string) {
       if (released || sourceCurrent?.() === false) {
-        throw new Error("Talk caller source authority is no longer active");
+        throw new Error("Talk caller source ended or changed. Start a new request.");
       }
       const retained = await retainGatewayOperatorRun({
         client: client ?? null,

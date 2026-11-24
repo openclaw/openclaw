@@ -861,9 +861,7 @@ describe("CLI message authority integration", () => {
         release();
         expectDenied(
           await pending,
-          retire === "source" || retire === "abort"
-            ? /message turn has ended/i
-            : /no longer active|permission revoked/i,
+          retire === "registration" ? /was reloaded during/i : /message turn has ended/i,
         );
         expect(acceptedChannelEdits).toBe(0);
         expect(requests.every((entry) => entry.method === "GET")).toBe(true);

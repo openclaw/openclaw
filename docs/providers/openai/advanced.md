@@ -303,8 +303,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Uses `store: true` until input contains a compaction checkpoint, then uses
       `store: false` for replay (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
-    - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
-      unavailable)
+    - Default `compact_threshold`: 85% of `contextWindow` (or `80000` when
+      unavailable), the same fraction as client compaction
 
     The same resolved route and effective threshold gate the client preflight,
     so OpenClaw does not delay local compaction unless the transport will inject
@@ -371,13 +371,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     including after the session is restored.
 
     V2 starts when the known or projected request occupancy reaches
-    `min(context window - effective reserve, floor(0.8 × context window))`,
+    `min(context window - effective reserve, floor(0.85 × context window))`,
     the same trigger as client maintenance on every other route.
-    With a 500,000-token window and 20,000-token reserve, this is 400,000 tokens.
+    With a 500,000-token window and 20,000-token reserve, this is 425,000 tokens.
     It uses completed-request usage when available and prices pending content at
     the next normal request boundary. This earlier trigger leaves room for tool
     output and the compaction request; it does not lower the model's physical
-    context limit or change the public API-key route's 70% inline threshold.
+    context limit or change the public API-key route's 85% inline threshold.
 
     The entire outgoing request must still fit that physical window. If one
     pending message or tool result crosses it before V2 can run, OpenClaw falls

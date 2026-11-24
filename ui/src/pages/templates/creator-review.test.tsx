@@ -86,7 +86,7 @@ const target = {
   draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
   sessionKey: "agent:research:main",
 };
-async function fixture(review = reviewed) {
+function setup(review = reviewed) {
   const request = vi.fn(
     async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
       if (method === "plugins.catalog.get") {
@@ -123,6 +123,10 @@ async function fixture(review = reviewed) {
     }),
   });
   context.router.subscribe = () => () => false;
+  return { request, context };
+}
+async function fixture(review = reviewed) {
+  const { request, context } = setup(review);
   const flow = templateCreatorFlow(context);
   flow.open(target.agentId, target.draftId);
   const page = mountSolid(() => <TemplateCreatorReview context={context} />);
@@ -139,6 +143,35 @@ beforeEach(async () => {
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+it("offers retry without presenting a review card for a failed initial preparation", async () => {
+  const { request, context } = setup();
+  request
+    .mockResolvedValueOnce({
+      revision: reviewed.revision,
+      content: JSON.stringify({ scope: reviewed.scope }),
+    })
+    .mockRejectedValueOnce(new Error("Draft review failed"));
+  const page = mountSolid(() => (
+    <TemplateCreatorInlineReview
+      context={context}
+      payload={target}
+      sessionKey={target.sessionKey}
+    />
+  ));
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(page.getByRole("alert").textContent).toContain("Draft review failed"),
+  );
+  expect(page.queryByRole("region", { name: "Publish Template" })).toBeNull();
+  const retry = createDeferred<typeof reviewed>();
+  request.mockReturnValueOnce(retry.promise);
+  fireEvent.click(page.getByRole("button", { name: "Try again" }));
+  await waitForSolid(() => expect(page.container.textContent).toBe(""));
+  retry.resolve(reviewed);
+  await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+  expect(page.getAllByRole("region", { name: "Publish Template" })).toHaveLength(1);
 });
 
 it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (kind) => {
@@ -259,7 +292,7 @@ it("keeps the original card through a single explicit publication and pending re
   );
   expect(status()).toBe("Pending");
   expect(page.getByRole("link", { name: "View submission" }).getAttribute("href")).toBe(
-    pendingPublication.url,
+    "https://example.test/maker/templates/release-brief?view=submission",
   );
 });
 

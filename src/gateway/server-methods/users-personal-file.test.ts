@@ -438,7 +438,7 @@ describe("personal USER.md self-service", () => {
       const checked =
         boundary === "live"
           ? expect(pending).resolves.toBeUndefined()
-          : expect(pending).rejects.toThrow(/authority|connection/);
+          : expect(pending).rejects.toThrow(/could not start|connection/);
       try {
         if (boundary !== "live") {
           await Promise.race([entered.promise, pending]);

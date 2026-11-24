@@ -87,7 +87,7 @@ function createCorrelatedRun() {
     requesterAgentId: "main",
     expectsCompletionMessage: true,
     completion: { required: true, resultText: "done", capturedAt: now },
-    delivery: { status: "pending", disposition: "retryable" },
+    delivery: { status: "pending" },
     createdAt: now - 1,
     endedAt: now,
     outcome: { status: "ok" },
@@ -256,7 +256,11 @@ it("refuses correlated announcement publication when its source retires during s
       expect.soft(await queue.loadPendingSessionDeliveries(context)).toEqual([]);
       expect.soft(subagentRuns.get(run.runId)).toEqual(sourceBefore);
       expect.soft(readSubagentRun(database, run.runId)).toEqual(persistedBefore);
-      expect(outcome).toMatchObject({ delivered: false, disposition: "permanent_failure" });
+      expect(outcome).toMatchObject({
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_unavailable",
+      });
     } finally {
       admission.resume();
       await publication;
