@@ -1,31 +1,13 @@
 import fs from "node:fs/promises";
 import { runExec } from "../process/exec.js";
-import {
-  estimateControlUiBrowserSupport,
-  type ControlUiBrowserFamily,
-} from "../shared/control-ui-browser-requirements.js";
+import { estimateControlUiBrowserSupport } from "../shared/control-ui-browser-requirements.js";
 import type { BrowserOpenOptions } from "./browser-open.js";
+import type { ControlUiBrowserDiscovery } from "./control-ui-browser-discovery-types.js";
 import { discoverLinuxControlUiBrowsers } from "./control-ui-browser-linux.js";
 import { discoverMacControlUiBrowsers } from "./control-ui-browser-macos.js";
 import { discoverWindowsControlUiBrowsers } from "./control-ui-browser-windows.js";
 import { isRemoteEnvironment } from "./remote-env.js";
 import { isWSL } from "./wsl.js";
-
-export type ControlUiBrowserInstallation = {
-  family: ControlUiBrowserFamily;
-  /** Fixed display name supplied by the platform adapter, never raw OS output. */
-  name: string;
-  version: string;
-  /** Browser application only: no automation profiles, URL placeholders, or credentials. */
-  command: string[];
-};
-
-export type ControlUiBrowserDiscovery = {
-  defaultBrowser?: ControlUiBrowserInstallation;
-  /** Already ordered deterministically by the platform adapter. */
-  alternatives: ControlUiBrowserInstallation[];
-  headless?: boolean;
-};
 
 export type ControlUiBrowserChoice = {
   canOpen: boolean;

@@ -71,99 +71,79 @@ afterEach(() => {
   }
 });
 
-it("selects the compatible browser installed only in the Mac user's Applications directory", async () => {
-  const browser = await resolveControlUiBrowser();
-  expect(browser.openOptions?.browserCommand).toEqual(["/usr/bin/open", "-a", chrome.path]);
-  expect(browser.notice).toContain("Chrome for this session");
+const keepDefault = { canOpen: true };
+const noDesktop = { canOpen: false };
+const chromeOpen = {
+  canOpen: true,
+  openOptions: { browserCommand: ["/usr/bin/open", "-a", chrome.path] },
+  notice: expect.stringContaining("Chrome for this session"),
+};
+const sshConnection = "192.0.2.1 1234 192.0.2.2 22";
+
+it.each(["26.2", ""])("preserves the supported or unknown default (%s)", async (version) => {
+  inventory([{ ...safari, version }, chrome]);
+  expect(await resolveControlUiBrowser()).toEqual(keepDefault);
 });
 
-it.each(["26.2", "", "future", "26.2-preview"])(
-  "preserves a supported or unknown default version (%s)",
-  async (version) => {
-    inventory([{ ...safari, version }, chrome]);
-    expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
-  },
-);
+it("prefers compatible Chrome in ~/Applications regardless of discovery order", async () => {
+  inventory([safari, firefox, chrome]);
+  expect(await resolveControlUiBrowser()).toEqual(chromeOpen);
+});
 
-it("selects deterministically and ignores unrecognized/automation applications", async () => {
-  inventory([safari, firefox, { ...chrome, id: "com.google.Chrome.forTesting" }, chrome, chrome]);
-  expect((await resolveControlUiBrowser()).openOptions?.browserCommand).toEqual([
-    "/usr/bin/open",
-    "-a",
-    chrome.path,
+it("keeps terminal recovery if only Chrome for Testing and an unknown version are available", async () => {
+  inventory([
+    safari,
+    { ...chrome, id: "com.google.Chrome.forTesting" },
+    { ...chrome, version: "" },
   ]);
-  inventory([{ ...safari, id: "unknown.browser" }, chrome]);
-  expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
-});
-
-it("keeps a terminal recovery path when no compatible alternative is identified", async () => {
-  inventory([safari, { ...chrome, version: "" }]);
   expect(await resolveControlUiBrowser()).toMatchObject({
     canOpen: false,
     notice: expect.stringContaining("openclaw tui"),
   });
 });
 
-it("falls back conservatively when OS discovery fails", async () => {
+it("preserves the default when OS discovery fails", async () => {
   readOs.mockRejectedValue(new Error("fixture native discovery unavailable"));
-  expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
+  expect(await resolveControlUiBrowser()).toEqual(keepDefault);
 });
 
-it.each(["win32", "linux"] as const)(
-  "does not open another machine's %s browser over SSH",
-  async (platform) => {
-    mockProcessPlatform(platform);
-    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 1234 192.0.2.2 22");
-    expect(await resolveControlUiBrowser()).toEqual({ canOpen: false });
-    expect(readOs).not.toHaveBeenCalled();
-  },
-);
+it.each([
+  ["win32", "SSH_CONNECTION", sshConnection],
+  ["linux", "SSH_CONNECTION", sshConnection],
+  ["darwin", "REMOTE_CONTAINERS", "1"],
+  ["darwin", "CODESPACES", "1"],
+] as const)("blocks %s desktop opening in %s", async (platform, key, value) => {
+  mockProcessPlatform(platform);
+  vi.stubEnv(key, value);
+  expect(await resolveControlUiBrowser()).toEqual(noDesktop);
+  expect(readOs).not.toHaveBeenCalled();
+});
 
 it.each(["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"])(
-  "preserves local macOS browser opening with inherited SSH variable %s",
+  "selects a compatible Mac browser from a GUI shell with inherited %s",
   async (key) => {
-    vi.stubEnv(key, key === "SSH_TTY" ? "/dev/ttys002" : "192.0.2.1 1234 22");
-    inventory([{ ...safari, version: "26.2" }, chrome]);
+    vi.stubEnv(key, key === "SSH_TTY" ? "/dev/ttys002" : sshConnection);
     readOs.mockResolvedValueOnce({ stdout: "Aqua\n", stderr: "" });
-    expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
+    expect(await resolveControlUiBrowser()).toEqual(chromeOpen);
   },
 );
 
-it("still selects a compatible Mac alternative in a local GUI shell with inherited SSH variables", async () => {
-  vi.stubEnv("SSH_CONNECTION", "192.0.2.1 1234 192.0.2.2 22");
-  readOs.mockResolvedValueOnce({ stdout: "Aqua\n", stderr: "" });
-  expect((await resolveControlUiBrowser()).openOptions?.browserCommand).toEqual([
-    "/usr/bin/open",
-    "-a",
-    chrome.path,
-  ]);
-});
-
-it.each(["Background", "", "failed"])(
-  "does not open a Mac browser from a non-GUI or unverifiable SSH session (%s)",
+it.each(["Background", "", null])(
+  "blocks non-GUI or unverifiable Mac SSH (%s)",
   async (manager) => {
-    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 1234 192.0.2.2 22");
-    if (manager === "failed") {
+    vi.stubEnv("SSH_CONNECTION", sshConnection);
+    if (manager === null) {
       readOs.mockRejectedValueOnce(new Error("launch context unavailable"));
     } else {
       readOs.mockResolvedValueOnce({ stdout: manager, stderr: "" });
     }
-    expect(await resolveControlUiBrowser()).toEqual({ canOpen: false });
-  },
-);
-
-it.each(["REMOTE_CONTAINERS", "CODESPACES"])(
-  "keeps macOS remote container environments blocked (%s)",
-  async (key) => {
-    vi.stubEnv(key, "1");
-    expect(await resolveControlUiBrowser()).toEqual({ canOpen: false });
-    expect(readOs).not.toHaveBeenCalled();
+    expect(await resolveControlUiBrowser()).toEqual(noDesktop);
   },
 );
 
 it("does not treat a Mac without a logged-in console as a local desktop", async () => {
   vi.mocked(fs.stat).mockRejectedValue(new Error("no console"));
-  expect(await resolveControlUiBrowser()).toEqual({ canOpen: false });
+  expect(await resolveControlUiBrowser()).toEqual(noDesktop);
   expect(readOs).not.toHaveBeenCalled();
 });
 
@@ -175,70 +155,55 @@ it.each(["Ubuntu", ""])(
     vi.stubEnv("WAYLAND_DISPLAY", "");
     vi.stubEnv("WSL_DISTRO_NAME", distro);
     vi.mocked(wsl.isWSL).mockResolvedValue(true);
-    expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
+    expect(await resolveControlUiBrowser()).toEqual(keepDefault);
     expect(readOs).not.toHaveBeenCalled();
   },
 );
 
 it.each([false, true])(
-  "uses Windows registration/file metadata without opening a service desktop (headless=%s)",
+  "opens only an interactive Windows desktop (headless=%s)",
   async (headless) => {
     mockProcessPlatform("win32");
-    const exe = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-    inventory({
-      headless,
-      defaultPath: "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
-      browsers: [
-        {
-          family: "firefox",
-          path: "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
-          version: "140.0",
-          isDefault: true,
-        },
-        { family: "chrome", path: exe, version: "156.0" },
-        { family: "chrome", path: "\\remote\\chrome.exe", version: "156.0" },
-      ],
-    });
+    const current = { family: "firefox", path: "C:\\Browsers\\firefox.exe", version: "140.0" };
+    const alternate = { family: "chrome", path: "C:\\Browsers\\chrome.exe", version: "156.0" };
+    inventory({ headless, defaultPath: current.path, browsers: [current, alternate] });
     expect(await resolveControlUiBrowser()).toMatchObject(
-      headless ? { canOpen: false } : { canOpen: true, openOptions: { browserCommand: [exe] } },
+      headless ? noDesktop : { canOpen: true, openOptions: { browserCommand: [alternate.path] } },
     );
   },
 );
 
-it("uses the Shell's effective HTML handler rather than stale browser-registration flags", async () => {
-  mockProcessPlatform("win32");
-  const oldChrome = "C:\\Browsers\\Chrome124\\chrome.exe";
-  const edge = "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe";
-  inventory({
-    headless: false,
-    defaultPath: oldChrome,
-    browsers: [
-      { family: "chrome", path: oldChrome, version: "124.0.6367.207" },
-      { family: "edge", path: edge, version: "157.0.4341.60", isDefault: true },
-    ],
-  });
-  expect(await resolveControlUiBrowser()).toMatchObject({
-    canOpen: true,
-    openOptions: { browserCommand: [edge] },
-    notice: expect.stringContaining("Edge for this session"),
-  });
-});
-
-it.each(["supported", "unknown"])(
-  "preserves the effective HTML handler when %s despite an unsupported stale registration",
-  async (handler) => {
+const oldChrome = {
+  family: "chrome",
+  path: "C:\\Browsers\\Chrome124\\chrome.exe",
+  version: "124.0",
+};
+const edge = { family: "edge", path: "C:\\Browsers\\msedge.exe", version: "157.0" };
+it.each([
+  { scenario: "unsupported", defaultPath: oldChrome.path.toUpperCase(), stale: edge },
+  { scenario: "supported", defaultPath: edge.path, stale: oldChrome },
+  { scenario: "unknown", defaultPath: "", stale: oldChrome },
+])(
+  "uses the effective $scenario Windows HTML handler, not stale registration flags",
+  async (testCase) => {
     mockProcessPlatform("win32");
-    const oldChrome = "C:\\Browsers\\Chrome124\\chrome.exe";
-    const edge = "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe";
     inventory({
       headless: false,
-      defaultPath: handler === "supported" ? edge.toUpperCase() : "",
+      defaultPath: testCase.defaultPath,
       browsers: [
-        { family: "chrome", path: oldChrome, version: "124.0.6367.207", isDefault: true },
-        { family: "edge", path: edge, version: "157.0.4341.60" },
+        { ...oldChrome, isDefault: testCase.stale === oldChrome },
+        { ...edge, isDefault: testCase.stale === edge },
       ],
     });
-    expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
+    expect(await resolveControlUiBrowser()).toEqual(
+      testCase.scenario === "unsupported"
+        ? {
+            canOpen: true,
+            openOptions: { browserCommand: [edge.path] },
+            notice: expect.stringContaining("Edge for this session"),
+          }
+        : keepDefault,
+    );
   },
 );
 

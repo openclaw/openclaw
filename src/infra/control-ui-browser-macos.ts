@@ -4,7 +4,7 @@ import { runExec } from "../process/exec.js";
 import type {
   ControlUiBrowserDiscovery,
   ControlUiBrowserInstallation,
-} from "./control-ui-browser.js";
+} from "./control-ui-browser-discovery-types.js";
 
 const BROWSERS = [
   { id: "com.google.Chrome", app: "Google Chrome.app", family: "chrome", name: "Chrome" },
