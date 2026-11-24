@@ -171,7 +171,11 @@ assert.equal(fs.existsSync(path.join(root, ".cache", "vitest")), false);
       numTotalTests: 1,
       numPassedTests: 1,
     });
-    for (const directory of ["node_modules/.vite/vitest", "node_modules/.vitest-cache", "transforms"]) {
+    for (const directory of [
+      "node_modules/.vite/vitest",
+      "node_modules/.vitest-cache",
+      "transforms",
+    ]) {
       expect(fs.existsSync(path.join(root, directory)), directory).toBe(false);
     }
   });
