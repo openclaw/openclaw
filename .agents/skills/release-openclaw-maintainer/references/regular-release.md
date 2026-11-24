@@ -209,8 +209,10 @@ For either path, final SDK reports cover both
 beta and latest; publication selects the appropriate one. Run release-note,
 package/install/update acceptance against these exact prepared bytes.
 
-Review the Plugin SDK API diff. If it reports changes, record its reviewed
-8-character acknowledgement digest; otherwise omit the acknowledgement.
+Review the Plugin SDK API diff yourself ([SDK review](../SKILL.md#review-plugin-sdk-api-changes)).
+With no changes, omit the acknowledgement. With acceptable changes, record and
+pass its reviewed 8-character acknowledgement digest without waiting for the
+operator. Stop only for a change you judge harmful.
 Confirm the core npm version is unpublished. A plugin whose `YYYY.M.PATCH`
 already exists on npm from an earlier slip is skipped by the publish plan when
 its delta is release metadata only; record the skip, it is not a blocker. A

@@ -317,3 +317,16 @@ or main closeout.
 Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
 block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.
+
+### Review Plugin SDK API changes
+
+The release agent reviews the Plugin SDK API diff and supplies its
+acknowledgement digest itself. The checklist's acknowledgement requirement is
+a prompt for that review, not an operator approval gate: do not stop, hand off,
+or report the release as blocked solely to have the operator acknowledge the
+digest. Check each change against its source PR or commit: intended additions,
+compatible signature changes, and documented deprecations are acceptable.
+Stop and ask the operator only when a change looks harmful, such as an
+unintended removal or breaking change, leaked internal, or contract change
+without its migration. Record the reviewed digest and a one-line verdict in the
+release ledger.
