@@ -104,6 +104,7 @@ export function beamTestBarrier() {
 
 export type BeamTestSession = {
   threadId: string;
+  sourceHomeId?: string;
   name?: string;
   modelProvider?: string;
   recencyAt: number;
@@ -132,7 +133,7 @@ export function createBeamTestCatalog(
     hostCursor?: string;
     hostKind?: SessionCatalogHost["kind"];
     onList?: () => unknown;
-    onRead?: (threadId: string) => unknown;
+    onRead?: (threadId: string, sourceHomeId?: string, agentId?: string) => unknown;
     processHomeFallbackAllowed?: boolean;
   } = {},
 ): sessionCatalogRuntime.ActiveSessionCatalog {
@@ -154,6 +155,7 @@ export function createBeamTestCatalog(
           ...(params.hostCursor ? { nextCursor: params.hostCursor } : {}),
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
+            ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
             name: session.name,
             modelProvider: session.modelProvider,
             recencyAt: session.recencyAt,
@@ -165,8 +167,8 @@ export function createBeamTestCatalog(
         },
       ];
     },
-    read: async ({ hostId, threadId }) => {
-      await params.onRead?.(threadId);
+    read: async ({ hostId, threadId, sourceHomeId, agentId }) => {
+      await params.onRead?.(threadId, sourceHomeId, agentId);
       const items = typeof params.items === "function" ? params.items(threadId) : params.items;
       return {
         hostId,

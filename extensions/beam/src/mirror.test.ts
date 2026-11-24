@@ -301,6 +301,55 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
+  it("keeps same-thread snapshots in distinct source homes through reads and completion", async () => {
+    let clock = beamTestNow;
+    const reads = vi.fn();
+    const runner = fixture.runner(
+      {
+        sessions: ["home-a", "home-b"].map((sourceHomeId) => ({
+          threadId: "shared",
+          sourceHomeId,
+          recencyAt: beamTestNow,
+        })),
+        onRead: reads,
+      },
+      { now: () => clock },
+    );
+    await runner.tick();
+    clock += 4 * 60 * 60_000;
+    await runner.tick();
+    expect(reads.mock.calls).toEqual([
+      ["shared", "home-a", "main"],
+      ["shared", "home-b", "main"],
+      ["shared", "home-a", "main"],
+      ["shared", "home-b", "main"],
+    ]);
+    const ids = fixture.sent.map(({ payload }) => payload.beamId);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.slice(0, 2)).toEqual(ids.slice(2));
+    expect(fixture.sent.map(({ payload }) => payload.completed)).toEqual([
+      false,
+      false,
+      true,
+      true,
+    ]);
+  });
+
+  it("does not upload a pending read after catalog consent changes", async () => {
+    const config = beamTestMirrorConfig();
+    const pause = beamTestBarrier();
+    const runner = fixture.runner(
+      { onRead: pause.run },
+      { runtime: createBeamTestRuntime(config) },
+    );
+    const tick = runner.tick();
+    await pause.started;
+    config.plugins.entries.beam.config.mirror.catalogs = ["codex"];
+    pause.release();
+    await tick;
+    expect(fixture.sent).toEqual([]);
+  });
+
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
     const catalogs = [
       createBeamTestCatalog({ sessions: beamTestSessions(["old"], beamTestNow - 86_400_000) }),

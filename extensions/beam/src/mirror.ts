@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
+import type {
+  SessionCatalogLocator,
+  SessionCatalogTranscriptItem,
+} from "openclaw/plugin-sdk/session-catalog";
 import {
   listActiveSessionCatalogs,
   type ActiveSessionCatalog,
@@ -115,11 +118,26 @@ export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]
   };
 }
 
-export function beamMirrorId(catalogId: string, hostId: string, threadId: string): string {
-  return createHash("sha256")
-    .update(`${catalogId}\0${hostId}\0${threadId}`)
-    .digest("hex")
-    .slice(0, 32);
+export function beamMirrorId(
+  catalogId: string,
+  hostId: string,
+  threadId: string,
+  scope?: { agentId: string; sourceHomeId?: string },
+): string {
+  // The original v1 key belongs to the implicit main agent and an unqualified
+  // source. A home- or agent-qualified source must never overwrite that URL.
+  const identity =
+    scope && (scope.sourceHomeId || scope.agentId !== "main")
+      ? JSON.stringify([
+          "beam-catalog-locator-v1",
+          catalogId,
+          hostId,
+          threadId,
+          scope.agentId,
+          scope.sourceHomeId ?? null,
+        ])
+      : `${catalogId}\0${hostId}\0${threadId}`;
+  return createHash("sha256").update(identity).digest("hex").slice(0, 32);
 }
 
 /**
@@ -176,11 +194,9 @@ function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
   return { ...fitted, items: items.slice(start) };
 }
 
-type BeamMirrorCandidate = {
-  catalogId: string;
-  hostId: string;
+type BeamMirrorCandidate = SessionCatalogLocator & {
+  agentId: string;
   modelProvider?: string;
-  threadId: string;
   title: string;
   recencyAt: number;
 };
@@ -203,7 +219,7 @@ function sourceModelForMirror(
 }
 
 function mirrorCandidateKey(candidate: BeamMirrorCandidate): string {
-  return `${candidate.catalogId}\0${candidate.hostId}\0${candidate.threadId}`;
+  return beamMirrorId(candidate.catalogId, candidate.hostId, candidate.threadId, candidate);
 }
 
 type TrackedMirrorSession = {
@@ -259,17 +275,25 @@ export function createBeamMirrorRunner(params: {
     }
   };
 
-  const upload = async (payload: BeamUpload): Promise<boolean | "retired"> => {
+  const upload = async (
+    payload: BeamUpload,
+    candidate: BeamMirrorCandidate,
+  ): Promise<boolean | "retired"> => {
     if (signal.aborted || redirectBlocked) {
       return false;
     }
-    // Catalog reads may outlive a secret reload. Use the current credential at dispatch.
-    const current = parseBeamMirrorConfig(params.runtime.config.current());
+    // Check consent again at dispatch; a pending read may have outlived its agent
+    // or catalog selection even when the receiver and credential still match.
+    const config = params.runtime.config.current();
+    const current = parseBeamMirrorConfig(config);
     if (
       !current ||
       typeof current === "string" ||
       current.token === null ||
-      current.endpoint !== endpoint
+      current.endpoint !== endpoint ||
+      !current.catalogs.includes(candidate.catalogId) ||
+      resolveSessionAgentIdsStrict({ config: config as OpenClawConfig }).defaultAgentId !==
+        candidate.agentId
     ) {
       return false;
     }
@@ -349,14 +373,14 @@ export function createBeamMirrorRunner(params: {
   };
 
   const buildUpload = async (
-    agentId: string,
     catalog: ActiveSessionCatalog,
     candidate: BeamMirrorCandidate,
     completed: boolean,
   ): Promise<BeamUpload> => {
     const transcript = await raceCatalog(
       catalog.read({
-        agentId,
+        agentId: candidate.agentId,
+        ...(candidate.sourceHomeId !== undefined ? { sourceHomeId: candidate.sourceHomeId } : {}),
         hostId: candidate.hostId,
         threadId: candidate.threadId,
         limit: MIRROR_READ_LIMIT,
@@ -370,7 +394,7 @@ export function createBeamMirrorRunner(params: {
       : [{ type: "other" as const, text: "no shareable messages yet" }];
     return fitBeamMirrorUpload({
       version: 1,
-      beamId: beamMirrorId(candidate.catalogId, candidate.hostId, candidate.threadId),
+      beamId: mirrorCandidateKey(candidate),
       source: candidate.catalogId,
       title: truncateUtf16Safe(candidate.title, 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
@@ -451,7 +475,11 @@ export function createBeamMirrorRunner(params: {
             }
             for (const session of host.sessions) {
               const candidate = {
+                agentId,
                 catalogId: catalog.id,
+                ...(session.sourceHomeId !== undefined
+                  ? { sourceHomeId: session.sourceHomeId }
+                  : {}),
                 hostId: host.hostId,
                 modelProvider: session.modelProvider,
                 threadId: session.threadId,
@@ -482,13 +510,13 @@ export function createBeamMirrorRunner(params: {
           continue;
         }
         try {
-          const payload = await buildUpload(agentId, catalog, candidate, false);
+          const payload = await buildUpload(catalog, candidate, false);
           signal.throwIfAborted();
           const fingerprint = mirrorFingerprint(payload);
           if (tracked.get(key)?.fingerprint === fingerprint) {
             continue;
           }
-          const uploaded = await upload(payload);
+          const uploaded = await upload(payload, candidate);
           signal.throwIfAborted();
           if (uploaded) {
             trackSuccessfulUpload(key, candidate, fingerprint, uploaded === "retired");
@@ -504,6 +532,13 @@ export function createBeamMirrorRunner(params: {
       const terminalEntries: Array<[string, TrackedMirrorSession]> = [];
       for (const [key, entry] of tracked) {
         signal.throwIfAborted();
+        if (
+          entry.candidate.agentId !== agentId ||
+          !mirror.catalogs.includes(entry.candidate.catalogId)
+        ) {
+          tracked.delete(key);
+          continue;
+        }
         if (entry.retired) {
           if (entry.expiresAt <= tickNow) {
             tracked.delete(key);
@@ -532,9 +567,9 @@ export function createBeamMirrorRunner(params: {
         const catalog = catalogById.get(entry.candidate.catalogId);
         if (catalog) {
           try {
-            const payload = await buildUpload(agentId, catalog, entry.candidate, true);
+            const payload = await buildUpload(catalog, entry.candidate, true);
             signal.throwIfAborted();
-            uploaded = (await upload(payload)) !== false;
+            uploaded = (await upload(payload, entry.candidate)) !== false;
             signal.throwIfAborted();
           } catch {
             signal.throwIfAborted();
