@@ -446,6 +446,9 @@ async function catalogEvidence(
   return facts;
 }
 
+const postgresSchemaMetaSql =
+  "CREATE TABLE openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)";
+
 async function referenceCatalog(
   endpoint: Extract<Endpoint, { engine: "postgres" }>,
   descriptor: PortDescriptor,
@@ -462,6 +465,8 @@ async function referenceCatalog(
       descriptor.preData +
         "\n;\n" +
         descriptor.postData +
+        "\n;\n" +
+        postgresSchemaMetaSql +
         "\n;\n" +
         (descriptor.postgresPostData?.(reference.namespace) ?? ""),
     );
@@ -666,20 +671,19 @@ export async function materializeDatabasePort(params: {
     }
     if (destination.engine === "postgres") {
       assertCurrent();
-      await destination.db.query(
-        descriptor.postData +
-          "\n;\n" +
-          (descriptor.postgresPostData?.(destination.namespace) ?? ""),
-      );
-      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions.base);
-      await destination.db.query(
-        "CREATE TABLE openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
-      );
+      await destination.db.query(descriptor.postData);
+      await destination.db.query(postgresSchemaMetaSql);
       await destination.db.query("INSERT INTO openclaw_schema_meta VALUES ($1,$2,$3)", [
         descriptor.id,
         descriptor.version,
         params.storeId,
       ]);
+      // Internal metadata participates in clone ACL replay in this same transaction.
+      const postgresPostData = descriptor.postgresPostData?.(destination.namespace);
+      if (postgresPostData) {
+        await destination.db.query(postgresPostData);
+      }
+      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions.base);
     } else {
       for (const trigger of descriptor.triggers ?? []) {
         destination.db.exec(trigger.sql);

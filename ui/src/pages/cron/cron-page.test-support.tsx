@@ -50,9 +50,11 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
   let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
+    hello: connected ? operatorHello(["operator.admin"]) : null,
     sessionKey: "main",
   });
   const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
+  metadataObserver.synchronize(createApplicationGatewaySnapshot(), snapshot);
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const allEventListeners: GatewayEventListener[] = [];
@@ -83,6 +85,13 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
       }
     },
     emitRetiredEvent(event: Parameters<GatewayEventListener>[0]) {
+      const publication =
+        eventListeners.size > 0 && snapshot.phase === "connected"
+          ? metadataObserver.receive(event, snapshot)
+          : event;
+      if (!publication) {
+        return;
+      }
       if (
         eventListeners.size > 0 &&
         (event.event === "config.changed" || event.event === "chat.metadata.changed")
@@ -90,7 +99,7 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
         invalidateChatMetadataStore(client);
       }
       for (const listener of allEventListeners) {
-        listener(event);
+        listener(publication);
       }
     },
   } as unknown as TestGateway;
@@ -100,6 +109,7 @@ export function operatorHello(scopes: string[]): NonNullable<ApplicationGatewayS
   return {
     type: "hello-ok",
     protocol: 4,
+    features: { events: ["cron.inventory.changed"] },
     auth: { role: "operator", scopes },
   };
 }
@@ -272,7 +282,7 @@ export function cronListResponse(jobs: CronJob[]): CronJobsListResult {
     snapshotRevision: "cron-page-fixture",
     total: jobs.length,
     offset: 0,
-    limit: 50,
+    limit: 200,
     hasMore: false,
     nextOffset: null,
   };

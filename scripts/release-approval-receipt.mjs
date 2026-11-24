@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +9,7 @@ import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
 } from "./lib/actions-artifact-archive.mjs";
+import { canonicalizeJsonValue } from "./lib/canonical-json.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   classifyReleaseTrain,
@@ -32,6 +34,15 @@ const RECEIPT_KEYS =
   "version kind repository parentWorkflow parentRunId parentRunAttempt toolingRef toolingFullRef toolingSha releaseTag targetSha npmDistTag environment approvalJob approver".split(
     " ",
   );
+
+// Schema/policy admission belongs to the fast-track evidence owner. This
+// dependency-free receipt binds the entire admitted JSON packet as opaque data.
+function fastTrackPacketDigest(value) {
+  const packet = typeof value === "string" ? JSON.parse(value) : value;
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify(canonicalizeJsonValue(packet)))
+    .digest("hex")}`;
+}
 
 function pattern(value, expression, label) {
   if (typeof value !== "string" || !expression.test(value)) {
@@ -113,15 +124,34 @@ export function validateCorePluginDeferrals(value, { targetSha, releaseTag, npmD
 }
 
 export function validateReleaseApprovalReceipt(value) {
+  if (!isRecord(value) || RECEIPT_KEYS.some((key) => !Object.hasOwn(value, key))) {
+    throw new Error("Release approval receipt fields are invalid.");
+  }
+  if (![1, 2, 3, 4].includes(value.version)) {
+    throw new Error("Release approval receipt version must be 1, 2, 3 or 4.");
+  }
+  const optionalKeys =
+    value.version === 4
+      ? [
+          "fastTrackDigest",
+          ...["retiredLineReason", "corePluginDeferrals"].filter((key) =>
+            Object.hasOwn(value, key),
+          ),
+        ]
+      : value.version === 3
+        ? ["corePluginDeferrals"]
+        : value.version === 2
+          ? ["retiredLineReason"]
+          : [];
   if (
-    !isRecord(value) ||
-    Object.keys(value).length !== RECEIPT_KEYS.length + ([2, 3].includes(value.version) ? 1 : 0) ||
-    RECEIPT_KEYS.some((key) => !Object.hasOwn(value, key))
+    Object.keys(value).length !== RECEIPT_KEYS.length + optionalKeys.length ||
+    optionalKeys.some((key) => !Object.hasOwn(value, key)) ||
+    (Object.hasOwn(value, "retiredLineReason") && Object.hasOwn(value, "corePluginDeferrals"))
   ) {
     throw new Error("Release approval receipt fields are invalid.");
   }
-  if (![1, 2, 3].includes(value.version)) {
-    throw new Error("Release approval receipt version must be 1, 2 or 3.");
+  if (value.version === 4) {
+    pattern(value.fastTrackDigest, /^sha256:[a-f0-9]{64}$/u, "Fast-track packet digest");
   }
   for (const key of RECEIPT_KEYS.slice(1)) {
     if (typeof value[key] !== "string") {
@@ -150,7 +180,7 @@ export function validateReleaseApprovalReceipt(value) {
   ) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
-  if (value.version === 2) {
+  if (Object.hasOwn(value, "retiredLineReason")) {
     validateRetiredLineReason(value.retiredLineReason);
     const version = parseReleaseVersion(value.releaseTag.slice(1));
     if (
@@ -161,7 +191,7 @@ export function validateReleaseApprovalReceipt(value) {
       throw new Error("Retired-line approval is only valid for extended-stable.");
     }
   }
-  if (value.version === 3) {
+  if (Object.hasOwn(value, "corePluginDeferrals")) {
     validateCorePluginDeferrals(value.corePluginDeferrals, value);
   }
   refIdentity(value.toolingRef, value.toolingFullRef, value.toolingSha);
@@ -188,6 +218,9 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
     ? JSON.parse(env.PREPARED_PUBLICATION_INPUT)
     : {};
   const corePluginDeferrals = preparedInput.corePluginDeferrals;
+  const fastTrackDigest = env.FAST_TRACK_APPROVAL_JSON
+    ? fastTrackPacketDigest(env.FAST_TRACK_APPROVAL_JSON)
+    : undefined;
   if (
     corePluginDeferrals !== undefined &&
     (env.PUBLISH_OPENCLAW_NPM !== "true" ||
@@ -210,8 +243,30 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
   if (approvals.length === 0) {
     throw new Error("Release approval requires an approved npm-release environment entry.");
   }
+  if (env.FAST_TRACK_APPROVAL_JSON) {
+    // Environment approval may wait past the preflight's expiry check. Minting
+    // this receipt starts publication; only an existing receipt can replay it.
+    const packet = JSON.parse(env.FAST_TRACK_APPROVAL_JSON);
+    const expiresAt = packet?.request?.expiresAt;
+    if (
+      typeof expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(expiresAt)) ||
+      Date.parse(expiresAt) <= Date.now()
+    ) {
+      throw new Error(
+        "Fast-track request expired before publication admission. Obtain fresh explicit approval.",
+      );
+    }
+  }
   return validateReleaseApprovalReceipt({
-    version: corePluginDeferrals !== undefined ? 3 : env.RETIRED_LINE_PUBLICATION_REASON ? 2 : 1,
+    version: fastTrackDigest
+      ? 4
+      : corePluginDeferrals !== undefined
+        ? 3
+        : env.RETIRED_LINE_PUBLICATION_REASON
+          ? 2
+          : 1,
+    ...(fastTrackDigest ? { fastTrackDigest } : {}),
     ...(corePluginDeferrals !== undefined ? { corePluginDeferrals } : {}),
     ...(env.RETIRED_LINE_PUBLICATION_REASON
       ? { retiredLineReason: env.RETIRED_LINE_PUBLICATION_REASON }
@@ -242,6 +297,12 @@ export function verifyReleaseApprovalReceipt({
   artifact,
 }) {
   validateReleaseApprovalReceipt(receipt);
+  const expectedFastTrackDigest = expected.fastTrackApproval
+    ? fastTrackPacketDigest(expected.fastTrackApproval)
+    : undefined;
+  if (receipt.fastTrackDigest !== expectedFastTrackDigest) {
+    throw new Error("Release approval receipt fast-track packet does not match this publication.");
+  }
   for (const key of [
     "repository",
     "parentRunId",
@@ -322,7 +383,18 @@ function api(path) {
   return JSON.parse(raw);
 }
 
-async function readReleaseApprovalReceipt({ expected, token, runGhJson = api, fetchImpl }) {
+async function readReleaseApprovalReceipt({
+  expected: inputExpected,
+  token,
+  runGhJson = api,
+  fetchImpl,
+}) {
+  // Programmatic consumers share the workflow input boundary with the CLI.
+  const expected = {
+    ...inputExpected,
+    fastTrackApproval:
+      inputExpected.fastTrackApproval ?? (process.env.FAST_TRACK_APPROVAL_JSON || undefined),
+  };
   const name = releaseApprovalArtifactName(expected);
   const runPath = `actions/runs/${expected.parentRunId}/attempts/${expected.parentRunAttempt}`;
   const deadline = Date.now() + 5 * 60 * 1000;
@@ -368,20 +440,29 @@ async function readReleaseApprovalReceipt({ expected, token, runGhJson = api, fe
     maxEntryBytes: () => MAX_RECEIPT_BYTES,
   });
   const receiptBytes = files.get("approval.json");
+  const parentRun = runGhJson(runPath);
+  const parentJobs = runGhJson(`${runPath}/jobs?per_page=100`);
   const receipt = verifyReleaseApprovalReceipt({
     receipt: JSON.parse(receiptBytes.toString("utf8")),
     expected,
-    parentRun: runGhJson(runPath),
-    parentJobs: runGhJson(`${runPath}/jobs?per_page=100`),
+    parentRun,
+    parentJobs,
     approvals: runGhJson(`actions/runs/${expected.parentRunId}/approvals`),
     artifact,
   });
-  return { receipt, artifact, receiptBytes };
+  const approvedAt = parentJobs.jobs.find((job) => job.name === PARENT_APPROVAL_JOB).started_at;
+  if (
+    approvedAt !== undefined &&
+    (typeof approvedAt !== "string" || !Number.isFinite(Date.parse(approvedAt)))
+  ) {
+    throw new Error("Original publication approval job has no valid start timestamp.");
+  }
+  return { receipt, artifact, receiptBytes, parentRun, approvedAt };
 }
 
 export async function downloadReleaseApprovalReceipt(params) {
-  const { receipt, artifact } = await readReleaseApprovalReceipt(params);
-  return { receipt, artifact };
+  const { receipt, artifact, approvedAt } = await readReleaseApprovalReceipt(params);
+  return { receipt, artifact, ...(approvedAt === undefined ? {} : { approvedAt }) };
 }
 
 // ClawHub may finish after its parent; npm publication requires a live parent
@@ -493,6 +574,7 @@ async function main() {
         ...(env.RELEASE_TARGET_SHA ? { targetSha: env.RELEASE_TARGET_SHA } : {}),
         ...(env.RELEASE_NPM_DIST_TAG ? { npmDistTag: env.RELEASE_NPM_DIST_TAG } : {}),
         parentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY || "active",
+        fastTrackApproval: env.FAST_TRACK_APPROVAL_JSON || undefined,
       },
       token: env.GH_TOKEN,
     });
