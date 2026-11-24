@@ -151,8 +151,26 @@ export function skipEntry(name: string): boolean {
   return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
 }
 
+/** Paths the frozen launcher can discover when restoring a prior generation. */
+export function isUpgradeRestorePath(stateDir: string, file: string): boolean {
+  const relative = path.relative(stateDir, file);
+  const parts = relative.split(path.sep);
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative) &&
+    parts.length <= 5 &&
+    !parts.some(
+      (part, index) =>
+        skipEntry(part) ||
+        (index < parts.length - 1 &&
+          ["git-install", "npm", "node_modules", "tmp", "logs"].includes(part)),
+    )
+  );
+}
+
 /** Changes on any write, replacement or mode change of the file. */
-function fileStamp(pathname: string): string | undefined {
+export function fileStamp(pathname: string): string | undefined {
   const stat = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
