@@ -1,4 +1,4 @@
-# Security Policy
+DOCS-AGENT# Security Policy
 
 If you believe you've found a security issue in OpenClaw, report it privately first.
 
