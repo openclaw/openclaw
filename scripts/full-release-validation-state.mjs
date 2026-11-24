@@ -54,7 +54,12 @@ import {
   buildReleaseValidationManifest,
   manifestContextFromEnvironment,
   releaseManifestChildEvidence,
+  releaseManifestRootPublication,
 } from "./lib/full-release-manifest.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  promotionSourceIdentity,
+} from "./lib/release-beta-promotion.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
@@ -611,13 +616,26 @@ async function validateReuse(executionPlan, signal) {
     ) {
       throw new Error("reused release evidence manifest differs from the immutable plan");
     }
-    validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    const promotion = evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY;
+    // The frozen admitted coverage is checked above. Only its version-derived
+    // npm-stable label differs between the beta and final candidates.
+    if (!promotion) {
+      validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    }
     const source = validatePublicationSourceBinding(evidence.manifest, {
       sourceAdmissionContract: executionPlan.sourceAdmissionContract,
     });
     if (
-      JSON.stringify(publicationSourceReuseIdentity(source)) !==
-      JSON.stringify(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(source))
+          : publicationSourceReuseIdentity(source),
+      ) !==
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+          : publicationSourceReuseIdentity(executionPlan.sourceAdmission),
+      )
     ) {
       throw new Error("reused source admission differs from the requested publication source");
     }
@@ -1097,9 +1115,7 @@ async function publicationMode(mode) {
   writeArtifact(admissionPath, record);
 }
 
-async function writeManifestMode() {
-  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
-  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+async function reuseManifestForPlan(plan) {
   let reusedManifest = plan.evidenceReuse.sourceManifest;
   if (plan.evidenceReuse.requested && !reusedManifest) {
     const reuse = await validateReuse(plan);
@@ -1108,6 +1124,13 @@ async function writeManifestMode() {
     }
     reusedManifest = reuse.sourceManifest;
   }
+  return reusedManifest;
+}
+
+async function writeManifestMode() {
+  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
+  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+  const reusedManifest = await reuseManifestForPlan(plan);
   const manifest = buildReleaseValidationManifest({
     plan,
     drain,
@@ -1723,6 +1746,10 @@ async function validateManifestMode({ preserveValidationOutcome = false } = {}) 
       child.selected ? stringValue(child.runId) : "",
     ]),
   );
+  const rootPublication = releaseManifestRootPublication(
+    await reuseManifestForPlan(executionPlan),
+    executionPlan.evidenceReuse,
+  );
   const expectedEvidenceReuse = executionPlan.evidenceReuse.requested
     ? {
         changedPaths: executionPlan.evidenceReuse.changedPaths,
@@ -1730,6 +1757,7 @@ async function validateManifestMode({ preserveValidationOutcome = false } = {}) 
         policy: executionPlan.evidenceReuse.policy,
         runId: executionPlan.evidenceReuse.rootRunId,
         selectedRunId: executionPlan.evidenceReuse.selectedRunId,
+        ...(rootPublication ? { publication: rootPublication } : {}),
       }
     : undefined;
   const expectedChildEvidence = drain

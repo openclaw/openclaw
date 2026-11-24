@@ -27,6 +27,11 @@ import {
   buildReleaseValidationManifest,
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  classifyBetaPromotionComparison,
+  isBetaPromotionPath,
+} from "./lib/release-beta-promotion.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
@@ -177,7 +182,29 @@ export function isSplitChangelogEvidenceDelta(paths, version) {
   }
 }
 
-export function classifyReleaseChangelogEvidenceComparison(comparison, { baseSha, version }) {
+export function classifyReleaseEvidenceComparison(
+  comparison,
+  {
+    baseSha,
+    targetSha,
+    version,
+    readSourceFile,
+    readSourceFiles,
+    rootManifest,
+    targetCoveragePolicy,
+  },
+) {
+  if (comparison?.files?.some((file) => file.filename === "package.json")) {
+    return classifyBetaPromotionComparison(comparison, {
+      baseSha,
+      targetSha,
+      version,
+      readSourceFile,
+      readSourceFiles,
+      rootManifest,
+      targetCoveragePolicy,
+    });
+  }
   const files = Array.isArray(comparison?.files) ? comparison.files : [];
   const changedPaths = files.map((file) => file.filename);
   const legacy = changedPaths.length === 1 && changedPaths[0] === "CHANGELOG.md";
@@ -1171,6 +1198,9 @@ function validEvidenceReuseIdentity(evidenceReuse, targetVersion, allowPendingAr
     return true;
   }
   const validChangedPaths =
+    (evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY &&
+      evidenceReuse.changedPaths.includes("package.json") &&
+      evidenceReuse.changedPaths.every((path) => isBetaPromotionPath(path, targetVersion))) ||
     (evidenceReuse.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
       evidenceReuse.changedPaths.length === 0) ||
     (evidenceReuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&

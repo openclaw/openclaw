@@ -41,7 +41,7 @@ import {
   isReleaseGhArtifactMissingError,
   isReleaseGhServerError,
   isSplitChangelogEvidenceDelta,
-  classifyReleaseChangelogEvidenceComparison,
+  classifyReleaseEvidenceComparison,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
@@ -78,6 +78,12 @@ import {
   plainGhAuthenticatedEnv,
   resolvePlainGhBin,
 } from "./lib/plain-gh.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  promotionValidationInputs,
+  promotionSourceIdentity,
+  promotionSelection,
+} from "./lib/release-beta-promotion.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import {
   RELEASE_EVIDENCE_FILE,
@@ -171,6 +177,7 @@ class ReleaseEvidenceRefreshRequiredError extends Error {
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 const EVIDENCE_REUSE_POLICIES = new Set([
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
   EXACT_TARGET_EVIDENCE_REUSE_POLICY,
   CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
@@ -1169,9 +1176,11 @@ function normalizeManifestChildEvidence(value) {
   );
 }
 
-function manifestEvidenceIdentity(manifest) {
+function manifestEvidenceIdentity(manifest, promotion = false) {
   return sortReleaseJsonValueKeys({
-    sourceAdmission: publicationSourceReuseIdentity(manifest.sourceAdmission) ?? null,
+    sourceAdmission: promotion
+      ? promotionSourceIdentity(publicationSourceReuseIdentity(manifest.sourceAdmission))
+      : (publicationSourceReuseIdentity(manifest.sourceAdmission) ?? null),
     ...(manifest.qualificationCoverage
       ? { qualificationCoverage: manifest.qualificationCoverage }
       : {}),
@@ -1181,7 +1190,9 @@ function manifestEvidenceIdentity(manifest) {
     releaseProfile: manifest.releaseProfile,
     rerunGroup: manifest.rerunGroup,
     runReleaseSoak: manifest.runReleaseSoak,
-    validationInputs: manifest.validationInputs,
+    validationInputs: promotion
+      ? promotionValidationInputs(manifest.validationInputs)
+      : manifest.validationInputs,
   });
 }
 
@@ -1513,6 +1524,8 @@ export function validateEvidenceReuseChain(
   selectedManifest,
   rootManifest,
   compareCommits,
+  readSourceFile,
+  readSourceFiles,
 ) {
   const reuse = currentManifest.evidenceReuse;
   if (!reuse) {
@@ -1554,6 +1567,29 @@ export function validateEvidenceReuseChain(
     if (reuse.changedPaths.length !== 0 || currentManifest.targetSha !== reuse.evidenceSha) {
       throw new Error("exact-target release evidence reuse requires no changed paths");
     }
+  } else if (reuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY) {
+    const version = JSON.parse(readSourceFile(currentManifest.targetSha, "package.json")).version;
+    if (currentManifest.validationInputs.targetVersion !== version) {
+      throw new Error("beta-to-final evidence versions differ from their source packages");
+    }
+    const verified = classifyReleaseEvidenceComparison(
+      compareCommits(reuse.evidenceSha, currentManifest.targetSha),
+      {
+        baseSha: reuse.evidenceSha,
+        targetSha: currentManifest.targetSha,
+        version,
+        readSourceFile,
+        rootManifest,
+        targetCoveragePolicy: currentManifest.validationInputs.coveragePolicy,
+        readSourceFiles,
+      },
+    );
+    if (
+      verified.policy !== reuse.policy ||
+      !isDeepStrictEqual(verified.changedPaths, reuse.changedPaths)
+    ) {
+      throw new Error("beta-to-final changed paths differ from the authenticated comparison");
+    }
   } else if (
     reuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY ||
     reuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY
@@ -1574,7 +1610,7 @@ export function validateEvidenceReuseChain(
       throw new Error("changelog-only release evidence reuse requires commit comparison");
     }
     const comparison = compareCommits(reuse.evidenceSha, currentManifest.targetSha);
-    const verified = classifyReleaseChangelogEvidenceComparison(comparison, {
+    const verified = classifyReleaseEvidenceComparison(comparison, {
       baseSha: reuse.evidenceSha,
       version,
     });
@@ -1589,12 +1625,18 @@ export function validateEvidenceReuseChain(
     throw new Error("release validation manifest evidence reuse policy is invalid");
   }
 
-  const rootIdentity = JSON.stringify(manifestEvidenceIdentity(rootManifest));
+  const rootIdentity = JSON.stringify(
+    manifestEvidenceIdentity(rootManifest, reuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY),
+  );
   for (const [label, manifest] of [
     ["selected", selectedManifest],
     ["current", currentManifest],
   ]) {
-    if (JSON.stringify(manifestEvidenceIdentity(manifest)) !== rootIdentity) {
+    if (
+      JSON.stringify(
+        manifestEvidenceIdentity(manifest, reuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY),
+      ) !== rootIdentity
+    ) {
       throw new Error(`evidence reuse ${label} manifest policy differs from the chain root`);
     }
   }
@@ -1614,6 +1656,8 @@ export function validateRequestedEvidenceReuse(
     expectedTargetSha,
   },
   compareCommits,
+  readSourceFile,
+  readSourceFiles,
 ) {
   if (
     !Array.isArray(expectedChangedPaths) ||
@@ -1649,10 +1693,21 @@ export function validateRequestedEvidenceReuse(
         ...currentManifest,
         evidenceReuse: { ...requested, publication: retainedRootPublication(rootManifest) },
         targetSha: expectedTarget,
+        ...(requested.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY
+          ? {
+              validationInputs: {
+                ...currentManifest.validationInputs,
+                targetVersion: JSON.parse(readSourceFile(expectedTarget, "package.json")).version,
+                coveragePolicy: "npm-stable-v1",
+              },
+            }
+          : {}),
       },
       selectedManifest,
       rootManifest,
       compareCommits,
+      readSourceFile,
+      readSourceFiles,
     );
     return;
   }
@@ -2186,6 +2241,30 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       ? immutableReads.bytes(route, load)
       : immutableReads.text(route, load);
   };
+  function readImmutableSourceFile(sha, sourceWorkflowPath) {
+    const exactSha = normalizeSha(sha, "source admission workflow SHA");
+    const route = "contents/" + sourceWorkflowPath + "?ref=" + exactSha;
+    const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
+    const payload = JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
+    if (
+      payload?.type !== "file" ||
+      payload.encoding !== "base64" ||
+      payload.path !== sourceWorkflowPath ||
+      !Number.isSafeInteger(payload.size) ||
+      payload.size < 1 ||
+      payload.size > 1024 * 1024 ||
+      typeof payload.content !== "string" ||
+      payload.content.length > 2 * 1024 * 1024
+    ) {
+      throw new Error("invalid immutable source-admission workflow response");
+    }
+    const bytes = Buffer.from(payload.content, "base64");
+    const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    if (bytes.length !== payload.size || blob !== payload.sha) {
+      throw new Error("source-admission workflow blob mismatch");
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  }
   return {
     readWorkloadIdentity: readJson,
     validateChildReuse(selection, request, { deadlineMs, waiverPolicy } = {}) {
@@ -2195,6 +2274,52 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         waiverPolicy,
         getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
+    },
+    getSourceFiles(requests) {
+      const sources = new Map();
+      const [owner, name] = normalizedRepository.split("/");
+      // Bound GraphQL response size and request count for publication recovery:
+      // even 299 changed metadata paths use at most 19 batch requests, not 598.
+      for (let offset = 0; offset < requests.length; offset += 32) {
+        const batch = requests.slice(offset, offset + 32);
+        const fields = batch
+          .map(
+            ({ sha, path }, index) =>
+              `f${index}:object(expression:${JSON.stringify(sha + ":" + path)}){...on Blob{oid byteSize isBinary isTruncated text}}`,
+          )
+          .join(" ");
+        const query = `query{repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}){${fields}}}`;
+        const response = JSON.parse(runReleaseCiGh(["api", "graphql", "-f", "query=" + query]));
+        if (response.errors?.length) {
+          throw new Error("immutable promotion source query failed");
+        }
+        for (const [index, request] of batch.entries()) {
+          const blob = response.data?.repository?.["f" + index];
+          if (
+            typeof blob?.text !== "string" ||
+            blob.isBinary !== false ||
+            blob.isTruncated !== false ||
+            !Number.isSafeInteger(blob.byteSize) ||
+            blob.byteSize < 1 ||
+            blob.byteSize > 1024 * 1024
+          ) {
+            throw new Error("invalid immutable promotion source blob");
+          }
+          const bytes = Buffer.from(blob.text, "utf8");
+          if (
+            bytes.length !== blob.byteSize ||
+            createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex") !==
+              blob.oid
+          ) {
+            throw new Error("immutable promotion source blob mismatch");
+          }
+          sources.set(request.sha + ":" + request.path, blob.text);
+        }
+      }
+      return sources;
+    },
+    getSourceFile(sha, sourceWorkflowPath) {
+      return readImmutableSourceFile(sha, sourceWorkflowPath);
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
@@ -2211,28 +2336,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       ) {
         throw new Error("Unsupported immutable release workflow path");
       }
-      const exactSha = normalizeSha(sha, "source admission workflow SHA");
-      const route = "contents/" + sourceWorkflowPath + "?ref=" + exactSha;
-      const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
-      const payload = JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
-      if (
-        payload?.type !== "file" ||
-        payload.encoding !== "base64" ||
-        payload.path !== sourceWorkflowPath ||
-        !Number.isSafeInteger(payload.size) ||
-        payload.size < 1 ||
-        payload.size > 1024 * 1024 ||
-        typeof payload.content !== "string" ||
-        payload.content.length > 2 * 1024 * 1024
-      ) {
-        throw new Error("invalid immutable source-admission workflow response");
-      }
-      const bytes = Buffer.from(payload.content, "base64");
-      const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-      if (bytes.length !== payload.size || blob !== payload.sha) {
-        throw new Error("source-admission workflow blob mismatch");
-      }
-      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return readImmutableSourceFile(sha, sourceWorkflowPath);
     },
     compareCommitLineage(base, head) {
       return readJson(`compare/${base}...${head}?per_page=1&page=2`);
@@ -3160,10 +3264,16 @@ function qualificationReuseIdentity(admission) {
   };
 }
 
-function qualificationReusePolicyIdentity(admission) {
+function qualificationReusePolicyIdentity(admission, promotion = false) {
   const identity = qualificationReuseIdentity(admission);
   const inputs = { ...identity.inputs };
   const envelope = JSON.parse(inputs.trusted_workflow_json);
+  if (promotion) {
+    // Discovery is dispatch control, not a measured qualification input. The
+    // authenticated source must already be a direct root with all groups.
+    delete inputs.reuse_evidence;
+    envelope.publicationSelection = promotionSelection(envelope.publicationSelection);
+  }
   // Changelog-only C descendants can advance their C-owned Q with C. An
   // independently selected Q is policy, not product identity, and stays exact.
   const qualificationSha =
@@ -3178,6 +3288,15 @@ function qualificationReusePolicyIdentity(admission) {
   );
   return {
     ...identity,
+    ...(promotion
+      ? {
+          baselinePolicy: {
+            ...identity.baselinePolicy,
+            candidateVersion: "<promoted-version>",
+            packageSourceDigest: "<versioned-package>",
+          },
+        }
+      : {}),
     candidateSha: "<candidate>",
     qualificationSha,
     inputs,
@@ -3373,9 +3492,7 @@ export async function validateReleaseRunEvidence(
       manifest.evidenceReuse ||
       manifest.rerunGroup !== "all" ||
       manifest.releaseProfile !== reuseRequest.releaseProfile ||
-      manifest.runReleaseSoak !== reuseRequest.runReleaseSoak ||
-      JSON.stringify(sortReleaseJsonValueKeys(manifest.validationInputs)) !==
-        JSON.stringify(sortReleaseJsonValueKeys(reuseRequest.validationInputs))
+      manifest.runReleaseSoak !== reuseRequest.runReleaseSoak
     ) {
       throw new Error(
         "ineligible reuse candidate: requires a direct full run with matching profile, soak, and inputs",
@@ -3387,26 +3504,31 @@ export async function validateReleaseRunEvidence(
       : evidenceClient.compareCommits(manifest.targetSha, reuseRequest.targetSha);
     const delta = exactTarget
       ? { changedPaths: [], policy: EXACT_TARGET_EVIDENCE_REUSE_POLICY }
-      : classifyReleaseChangelogEvidenceComparison(comparison, {
+      : classifyReleaseEvidenceComparison(comparison, {
           baseSha: manifest.targetSha,
+          rootManifest: manifest,
+          targetCoveragePolicy: reuseRequest.validationInputs?.coveragePolicy,
+          readSourceFiles: (requests) => evidenceClient.getSourceFiles(requests),
+          targetSha: reuseRequest.targetSha,
+          readSourceFile: (sha, path) => evidenceClient.getSourceFile(sha, path),
           version:
-            manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
+            reuseRequest.validationInputs?.targetVersion ??
+            manifest.validationInputs?.targetVersion,
         });
+    const promotion = delta.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY;
+    if (
+      !isDeepStrictEqual(
+        promotion
+          ? promotionValidationInputs(manifest.validationInputs)
+          : manifest.validationInputs,
+        promotion
+          ? promotionValidationInputs(reuseRequest.validationInputs)
+          : reuseRequest.validationInputs,
+      )
+    ) {
+      throw new Error("ineligible reuse candidate: requires matching validation inputs");
+    }
     requestedReuseDelta = delta;
-    validateRequestedEvidenceReuse(
-      manifest,
-      manifest,
-      manifest,
-      {
-        expectedChangedPaths: delta.changedPaths,
-        expectedEvidencePolicy: delta.policy,
-        expectedEvidenceSha: manifest.targetSha,
-        expectedRootRunId: manifest.runId,
-        expectedSelectedRunId: manifest.runId,
-        expectedTargetSha: reuseRequest.targetSha,
-      },
-      () => comparison,
-    );
   }
   let validatedDirectRequestedReuse = false;
   let expectedReuseDescendant = false;
@@ -3421,6 +3543,8 @@ export async function validateReleaseRunEvidence(
       currentEvidence.manifest,
       requestedReuse,
       (base, head) => evidenceClient.compareCommits(base, head),
+      (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
     validatedDirectRequestedReuse = true;
     expectedReuseDescendant =
@@ -3529,8 +3653,16 @@ export async function validateReleaseRunEvidence(
           expectedTargetSha === requestedAdmission.request.candidateSha)) &&
       currentEvidence.manifest.targetSha === selectedAdmission.request.candidateSha &&
       isDeepStrictEqual(
-        qualificationReusePolicyIdentity(selectedAdmission),
-        qualificationReusePolicyIdentity(requestedAdmission),
+        qualificationReusePolicyIdentity(
+          selectedAdmission,
+          (requestedReuseDelta?.policy ?? expectedEvidencePolicy) ===
+            BETA_FINAL_EVIDENCE_REUSE_POLICY,
+        ),
+        qualificationReusePolicyIdentity(
+          requestedAdmission,
+          (requestedReuseDelta?.policy ?? expectedEvidencePolicy) ===
+            BETA_FINAL_EVIDENCE_REUSE_POLICY,
+        ),
       );
     if (
       (reuseRequest !== undefined &&
@@ -3570,6 +3702,8 @@ export async function validateReleaseRunEvidence(
       selectedEvidence.manifest,
       rootEvidence.manifest,
       (base, head) => evidenceClient.compareCommits(base, head),
+      (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
   }
   if (hasRequestedEvidenceReuse(requestedReuse) && !validatedDirectRequestedReuse) {
@@ -3579,6 +3713,8 @@ export async function validateReleaseRunEvidence(
       rootEvidence.manifest,
       requestedReuse,
       (base, head) => evidenceClient.compareCommits(base, head),
+      (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
   }
 
@@ -3688,6 +3824,15 @@ export async function validateReleaseRunEvidence(
   }
   const qualification = qualificationAdmissions.get(rootEvidence.manifest.runId);
   const currentQualification = qualificationAdmissions.get(currentEvidence.manifest.runId);
+  if (
+    reuse?.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY &&
+    !isDeepStrictEqual(
+      qualificationReusePolicyIdentity(currentQualification, true),
+      qualificationReusePolicyIdentity(qualification, true),
+    )
+  ) {
+    throw new Error("Beta promotion changed admitted qualification policy or lane inputs");
+  }
   if (reuse?.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY) {
     if (
       !qualification ||
@@ -4066,6 +4211,14 @@ export async function validateReleaseRunEvidence(
   if (waivers.some((waiver) => waiver.targetSha && waiver.targetSha !== destinationTargetSha)) {
     throw new Error("candidate-bound release waiver cannot qualify a different target SHA");
   }
+  const destinationVersion =
+    reuseRequest?.validationInputs?.targetVersion ??
+    (expectedEvidencePolicy === BETA_FINAL_EVIDENCE_REUSE_POLICY
+      ? JSON.parse(evidenceClient.getSourceFile(expectedTargetSha, "package.json")).version
+      : currentEvidence.manifest.validationInputs?.targetVersion);
+  if (waivers.some((waiver) => waiver.targetVersion !== destinationVersion)) {
+    throw new Error("version-bound release waiver cannot qualify a different target version");
+  }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(
       `expected run attempts contain unvalidated run IDs: ${[...remainingExpectedRunAttempts.keys()].join(", ")}`,
@@ -4097,6 +4250,9 @@ export async function validateReleaseRunEvidence(
     controls: rootEvidence.manifest.controls,
     current,
     directRoot: !reuse,
+    ...(requestedReuseDelta
+      ? { reuseSelection: { ...requestedReuseDelta, targetSha: reuseRequest.targetSha } }
+      : {}),
     evidenceReuse: reuse
       ? {
           changedPaths: reuse.changedPaths,
