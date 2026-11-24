@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseNodeCacheDiagnostic } from "../../scripts/lib/node-compile-cache-diagnostics.mts";
 import {
   analyzeBenchmark,
   analyzeNodeCacheBenchmark,
@@ -473,6 +474,123 @@ describe("Node compile-cache benchmark contract", () => {
     expect(existsSync(outputDir)).toBe(false);
   });
 });
+
+describe("native Node cache evidence", () => {
+  const source = "file:///work/entry.mjs";
+  const cache = "/work/cache";
+  const hit = `[compile cache] reading cache from ${cache}/version/12345678 for ESM ${source}...[1 20 40 50 60]... success, size=40\n`;
+  const accepted = `[compile cache] V8 code cache for ESM ${source} was accepted, keeping the in-memory entry\n`;
+  const missing = `[compile cache] reading cache from ${cache}/version/12345678 for ESM ${source}... no such file or directory\n`;
+  const generated = `[compile cache] V8 code cache for ESM ${source} was not initialized, initializing the in-memory entry\n`;
+
+  it("distinguishes a disk read from V8 acceptance and first generation", () => {
+    expect(parseNodeCacheDiagnostic(hit + accepted, source, cache)).toMatchObject({
+      read: "hit",
+      state: "accepted",
+      cacheFile: "version/12345678",
+    });
+    expect(parseNodeCacheDiagnostic(missing + generated, source, cache)).toMatchObject({
+      read: "missing",
+      state: "not initialized",
+    });
+    expect(parseNodeCacheDiagnostic("", source, cache)).toBeNull();
+  });
+
+  it.each([
+    [hit, "one ordered"],
+    [accepted + hit, "one ordered"],
+    [hit + accepted + accepted, "one ordered"],
+    [hit + accepted.replace("entry\n", "ent"), "Incomplete or interleaved"],
+    [hit + accepted.trimEnd(), "Incomplete or interleaved"],
+    [
+      hit + accepted + "[compile cache] V8 code cache for ESM file:///work/entry.\n",
+      "Incomplete or interleaved",
+    ],
+    [
+      hit +
+        accepted +
+        "[compile cache] reading cache from /work/cache/key for ESM file:///work/entry.\n",
+      "Incomplete or interleaved",
+    ],
+    [hit + accepted.replace("accepted,", "accepted, [compile cache]"), "Incomplete or interleaved"],
+    [hit + accepted.replace("ESM", "CommonJS"), "Incomplete or interleaved"],
+    [missing + accepted, "disagree"],
+    [hit.replace("success, size=40", "success, size=") + accepted, "Incomplete or interleaved"],
+    [
+      hit.replace(" success, size=40", "code hash mismatch: expected 1") + generated,
+      "Incomplete or interleaved",
+    ],
+    [
+      hit.replace(
+        " success, size=40",
+        "code hash mismatch: expected 1, actual 2 [compile cache] interleaved",
+      ) + generated,
+      "Incomplete or interleaved",
+    ],
+    [hit.replace(`${cache}/version`, "/elsewhere/version") + accepted, "escapes"],
+  ])("rejects incomplete or contradictory native evidence %#", (log, message) => {
+    expect(() => parseNodeCacheDiagnostic(log, source, cache)).toThrow(message);
+  });
+
+  it("keeps V8 rejection distinct from source invalidation", () => {
+    expect(
+      parseNodeCacheDiagnostic(
+        hit + accepted.replace("accepted, keeping", "rejected, refreshing"),
+        source,
+        cache,
+      ),
+    ).toMatchObject({ read: "hit", state: "rejected" });
+    expect(
+      parseNodeCacheDiagnostic(
+        hit.replace(" success, size=40", "code hash mismatch: expected 1, actual 2") + generated,
+        source,
+        cache,
+      ),
+    ).toMatchObject({ read: "invalid", state: "not initialized" });
+  });
+});
+
+it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !process.versions.bun)(
+  "qualifies native cache diagnostics through the real CLI and Node runtime",
+  async () => {
+    const root = realpathSync(tempDirs.make("node-cache-diagnostics-"));
+    const output = path.join(root, "output");
+    const result = await runOwnedCommand({
+      bin: process.execPath,
+      args: [
+        path.resolve("scripts/vitest-pair-benchmark.mts"),
+        "--mode",
+        "node-cache-diagnostics",
+        "--output",
+        output,
+        "--run-attempt",
+        "1",
+      ],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH, HOME: root },
+      logPath: path.join(root, "cli.log"),
+      timeoutMs: 30_000,
+    });
+    expect(result.exitCode, readFileSync(path.join(root, "cli.log"), "utf8")).toBe(0);
+    const receipt = JSON.parse(readFileSync(path.join(output, "diagnostics.json"), "utf8"));
+    expect(
+      receipt.controls.map((control: { kind: string; observation: { state: string } | null }) => [
+        control.kind,
+        control.observation?.state ?? null,
+      ]),
+    ).toEqual([
+      ["disabled", null],
+      ["empty", "not initialized"],
+      ["seeded", "accepted"],
+      ["invalidated", "not initialized"],
+    ]);
+    expect(
+      JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")).status,
+    ).toBe("success");
+    expect(existsSync(path.join(output, "scratch"))).toBe(false);
+  },
+  40_000,
+);
 
 // The production case requires GNU time and the pinned runtime. macOS/Bun helper
 // controls above do not substitute for this Linux execution proof.
