@@ -15,7 +15,9 @@ it.skipIf(process.platform === "win32")(
     const credential = path.join(dir, "credential.json");
     try {
       expect(spawnSync("mkfifo", [credential], { timeout: 5_000 }).status).toBe(0);
-      // Bound the real process: a blocked open would otherwise strand a libuv worker.
+      // Use the normal hook deadline so CI's cold TypeScript loader does not consume
+      // the test stimulus before the credential is read. The outer process bound
+      // still catches a blocked open that strands a libuv worker.
       const result = spawnSync(
         process.execPath,
         [
@@ -32,8 +34,6 @@ it.skipIf(process.platform === "win32")(
           "pre_tool_use",
           "--remote-credential",
           credential,
-          "--timeout",
-          "1000",
         ],
         { input: "{}", encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
       );
