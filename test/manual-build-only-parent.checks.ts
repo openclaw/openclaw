@@ -58,7 +58,6 @@ it.each([
           RUNNER_TEMP: directory,
           GITHUB_OUTPUT: join(directory, "output"),
           RELEASE_TAG: "v2026.11.9",
-          FAST_TRACK_APPROVAL_JSON: request,
           FAST_TRACK_REQUEST_JSON: request,
         },
       },

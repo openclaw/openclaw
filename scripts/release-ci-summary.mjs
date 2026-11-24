@@ -3320,7 +3320,7 @@ function qualificationReusePolicyIdentity(admission, promotion = false) {
 /**
  * @param {{
  *   manifestPath?: string,
- *   fastTrackApproval?: unknown,
+ *   fastTrackRequest?: unknown,
  *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   qualificationReuse?: { candidateSha: string, qualificationSha: string, workflowRef: string, descriptor: object, inputs: Record<string, string> },
  *   repository?: string,
@@ -3343,7 +3343,7 @@ function qualificationReusePolicyIdentity(admission, promotion = false) {
 async function validateReleaseEvidenceGraph(
   {
     manifestPath,
-    fastTrackApproval,
+    fastTrackRequest,
     fastTrackPublication,
     qualificationReuse,
     repository = DEFAULT_REPO,
@@ -3369,7 +3369,7 @@ async function validateReleaseEvidenceGraph(
   const buildOnlyPreparation = preparationMode === BUILD_ONLY_PREPARATION;
   if (
     buildOnlyPreparation &&
-    (fastTrackApproval || qualificationReuse || reuseRequest || recoveryDraft)
+    (fastTrackRequest || qualificationReuse || reuseRequest || recoveryDraft)
   ) {
     throw new Error(
       "Build-only preparation cannot approve, recover, or reuse release qualification.",
@@ -3446,7 +3446,7 @@ async function validateReleaseEvidenceGraph(
     return { ...evidence, fastTrack: undefined, qualification: qualificationFacts(evidence) };
   }
   if (
-    fastTrackApproval &&
+    fastTrackRequest &&
     workflowPath(selectedRun) !== ".github/workflows/full-release-validation.yml"
   ) {
     throw new Error(
@@ -3469,7 +3469,7 @@ async function validateReleaseEvidenceGraph(
     : await loadValidatedParentEvidence({
         client: evidenceClient,
         preloadedRun: selectedRun,
-        allowIncomplete: Boolean(fastTrackApproval),
+        allowIncomplete: Boolean(fastTrackRequest),
         expectedRunAttempts: remainingExpectedRunAttempts,
         manifestPath,
         repository: normalizedRepository,
@@ -3477,11 +3477,11 @@ async function validateReleaseEvidenceGraph(
       });
   if (
     currentEvidence.manifest.rerunGroup === "build-only" &&
-    !fastTrackApproval &&
+    !fastTrackRequest &&
     !buildOnlyPreparation
   ) {
     throw new Error(
-      "Build-only artifacts require explicit fast-track approval; they are not validated release evidence.",
+      "Build-only artifacts require a fast-track request and npm-release environment approval; they are not validated release evidence.",
     );
   }
   if (
@@ -3990,11 +3990,11 @@ async function validateReleaseEvidenceGraph(
       };
     }
   }
-  if (fastTrackApproval) {
+  if (fastTrackRequest) {
     if (reuse || qualificationReuse || reuseRequest) {
       throw new Error("Fast-track binds the original direct FRV, not reused qualification.");
     }
-    const { authenticateFastTrackPolicy, parseFastTrackApproval } =
+    const { authenticateFastTrackPolicy, parseFastTrackPacket } =
       await import("./lib/release-fast-track-publication.mts");
     const executionPlan = sourcePlans.get(currentEvidence.manifest.runId);
     const jobs = [];
@@ -4083,7 +4083,7 @@ async function validateReleaseEvidenceGraph(
       });
       await collect(run, child.runId, boundAttempt, child.runAttempt);
     }
-    const packet = parseFastTrackApproval(fastTrackApproval);
+    const packet = parseFastTrackPacket(fastTrackRequest);
     const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
     if (packet.request.policy === "approved-fast-track-v1") {
       if (
@@ -4108,7 +4108,7 @@ async function validateReleaseEvidenceGraph(
       }
     }
     const fastTrack = await authenticateFastTrackPolicy({
-      packet: fastTrackApproval,
+      packet: fastTrackRequest,
       publication: fastTrackPublication,
       manifest: currentEvidence.manifestJson,
       jobs,
@@ -4154,8 +4154,10 @@ async function validateReleaseEvidenceGraph(
         return {
           ...release,
           targetSha: target.type === "commit" ? target.sha : undefined,
-          fastTracked: release.assets?.some((asset) =>
-            asset.name.endsWith("-fast-track-approval.json"),
+          fastTracked: release.assets?.some(
+            (asset) =>
+              asset.name.endsWith("-fast-track-request.json") ||
+              asset.name.endsWith("-fast-track-approval.json"),
           ),
         };
       },
@@ -4448,7 +4450,7 @@ export async function validateReleaseRunEvidence(options, client, recoveryDraft 
 }
 
 // This read-only result proves preparation, never qualification or publication authority.
-// Publishers must authenticate an explicit fast-track approval and verify the sealed bytes.
+// Publishers must authenticate a fast-track request and npm-release environment approval and verify the sealed bytes.
 export async function validateReleaseBuildOnlyEvidence(options, client) {
   const evidence = await validateReleaseEvidenceGraph(
     options,
@@ -4906,7 +4908,7 @@ export async function acquirePublicationManifest(
   const evidence = await loadValidatedParentEvidence({
     client: evidenceClient,
     preloadedRun: selectedRun,
-    allowIncomplete: Boolean(process.env.FAST_TRACK_APPROVAL_JSON),
+    allowIncomplete: Boolean(process.env.FAST_TRACK_REQUEST_JSON),
     repository,
     runId,
     expectedRunAttempts: attempts,

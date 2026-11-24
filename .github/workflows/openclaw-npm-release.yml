@@ -4,8 +4,8 @@ run-name: "openclaw-npm-release.yml [${{ inputs.tag }}] ${{ inputs.preflight_onl
 on:
   workflow_dispatch:
     inputs:
-      fast_track_approval:
-        description: Exact human-approved fast-track request and decision JSON; never an agent approval
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
         required: false
         type: string
       tag:
@@ -102,7 +102,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
   RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -222,7 +222,7 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_EVIDENCE_MODE="${RELEASE_EVIDENCE_MODE:-full-release-validation}"
-          if [[ -n "${FAST_TRACK_APPROVAL_JSON}" && ( "$RELEASE_EVIDENCE_MODE" != full-release-validation || -z "$FULL_RELEASE_VALIDATION_RUN_ID" || -z "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ) ]]; then
+          if [[ -n "${FAST_TRACK_REQUEST_JSON}" && ( "$RELEASE_EVIDENCE_MODE" != full-release-validation || -z "$FULL_RELEASE_VALIDATION_RUN_ID" || -z "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ) ]]; then
             echo "Fast-track requires the original full-release evidence mode and exact run/attempt." >&2
             exit 1
           fi
@@ -406,7 +406,7 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           # Frozen preflight evidence already binds the exact release SHA and
           # tarball, so real publishes do not need the repository's full history.
-          fetch-depth: ${{ (inputs.fast_track_approval != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || (inputs.preflight_run_id != '' && '1' || '0') }}
+          fetch-depth: ${{ (inputs.fast_track_request != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || (inputs.preflight_run_id != '' && '1' || '0') }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

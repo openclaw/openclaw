@@ -32,7 +32,7 @@ const QUALIFIED_WORKFLOWS = new Set([FULL_RELEASE_WORKFLOW, ARTIFACT_WORKFLOW]);
 /**
  * @typedef {object} NpmPreflightProducerOptions
  * @property {unknown} manifest
- * @property {unknown} [fastTrackApproval]
+ * @property {unknown} [fastTrackRequest]
  * @property {string} repository
  * @property {string} workflowFullRef
  * @property {string} workflowSha
@@ -161,7 +161,7 @@ export function validateNpmPreflightProducer({
 /** @param {NpmPreflightProducerOptions & {manifestSha256?: string, runGh?: typeof runReleaseToolingGh}} options */
 export function verifyNpmPreflightProducer({
   runGh = runReleaseToolingGh,
-  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
   ...options
 }) {
   const identity = validateNpmPreflightProducer(options);
@@ -171,7 +171,7 @@ export function verifyNpmPreflightProducer({
   const producer = options.manifest.producer;
   if (QUALIFIED_WORKFLOWS.has(options.workflowPath)) {
     const { descriptor: qualified } = resolveFullReleaseNpmPreflight({
-      fastTrackApproval,
+      fastTrackRequest,
       manifest: options.fullReleaseManifest,
       repository: options.repository,
       runId: options.fullReleaseRunId ?? options.runId,
@@ -270,17 +270,17 @@ export function validateFullReleaseNpmPreflight({
 
 // The FRV run authorizes publication; its descriptor identifies the independent
 // producer whose immutable archive survives a rerun of that authorization.
-/** @param {FullReleaseNpmPreflightOptions & {repository: string, fastTrackApproval?: unknown, runGh?: typeof runReleaseToolingGh}} options */
+/** @param {FullReleaseNpmPreflightOptions & {repository: string, fastTrackRequest?: unknown, runGh?: typeof runReleaseToolingGh}} options */
 export function resolveFullReleaseNpmPreflight({
   runGh = runReleaseToolingGh,
-  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
   ...options
 }) {
   const descriptor = validateFullReleaseNpmPreflight(options);
   const producer = descriptor.producer;
   // This resolves transport and the exact successful seal only. Publication consumers
   // must authenticate the packet through the full evidence owner before publishing.
-  const inlineException = Boolean(fastTrackApproval) && producer.runId === String(options.runId);
+  const inlineException = Boolean(fastTrackRequest) && producer.runId === String(options.runId);
   const { run } = verifyNpmBundleProducer({
     producer,
     repository: options.repository,
@@ -427,7 +427,7 @@ export function validateNpmPreflightQualification({
  *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
  *   publisherFullRef?: string, runGh?: typeof runReleaseToolingGh,
  *   publicationAuthority?: Parameters<typeof verifyReleaseToolingIdentity>[0],
- *   fastTrackApproval?: unknown,
+ *   fastTrackRequest?: unknown,
  *   evidenceClient?: Parameters<typeof import("./release-ci-summary.mjs").validateReleaseRunEvidence>[1] }} options
  */
 export async function verifyNpmPreflightPublicationLineage({
@@ -439,7 +439,7 @@ export async function verifyNpmPreflightPublicationLineage({
   producerRunId,
   producerRunAttempt,
   evidenceClient,
-  fastTrackApproval,
+  fastTrackRequest,
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
 }) {
@@ -453,7 +453,7 @@ export async function verifyNpmPreflightPublicationLineage({
     publisherSha,
     publisherFullRef,
     client: evidenceClient,
-    fastTrackApproval,
+    fastTrackRequest,
   });
   const qualified = validateNpmPreflightQualification({
     manifest,
