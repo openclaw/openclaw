@@ -212,13 +212,14 @@ export type CliBackendMessageInjection = {
   /**
    * Ask the host to prepare current authority and invoke the synchronous native write.
    * Resolve only after the runtime acknowledges consumption, not after the write.
+   * A native transcript owner can return the accepted input and session IDs.
    */
   queueMessage(
     text: string,
     withCurrent: (submit: () => void) => Promise<void>,
     /** Per-input attribution and private context; never inherit the initial turn's. */
     options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
-  ): Promise<void>;
+  ): Promise<void | { cliSessionId: string; externalId: string }>;
 };
 
 /** Graceful end of the admitted turn without retiring its reusable native session. */
