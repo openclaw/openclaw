@@ -68,9 +68,7 @@ export function buildRoleTree(
           ? Math.floor(raw.backendDOMNodeId)
           : undefined,
       children: [],
-      ...(rootBackendNodeId !== undefined
-        ? { transparent: isWrapperNode(raw, role, name) }
-        : {}),
+      ...(rootBackendNodeId !== undefined ? { transparent: isWrapperNode(raw, role, name) } : {}),
     });
   }
 

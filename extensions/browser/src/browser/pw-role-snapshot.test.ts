@@ -63,12 +63,13 @@ describe("pw-role-snapshot", () => {
   });
 
   it("does not count unnamed generic wrappers toward maxDepth", () => {
-    const wrapped = (depth: number, line: string): string =>
-      Array.from({ length: depth }, (_, level) => `${"  ".repeat(level)}- generic [ref=f1e${level + 10}]:`)
-        .concat(`${"  ".repeat(depth)}${line}`)
-        .join("\n");
+    const wrappers = Array.from(
+      { length: 8 },
+      (_, level) => `${"  ".repeat(level)}- generic [ref=f1e${level + 10}]:`,
+    );
     const snapshot = [
-      wrapped(8, '- button "Deep" [ref=f1e1]'),
+      ...wrappers,
+      `${"  ".repeat(8)}- button "Deep" [ref=f1e1]`,
       '- generic "Named" [ref=f1e2]:',
       '  - group "Toolbar":',
       '    - button "Below named" [ref=f1e3]',
