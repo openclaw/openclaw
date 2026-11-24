@@ -101,11 +101,16 @@ Choose your provider and its **API key** sign-in method. Enter the saved key
 only into the masked credential prompt, never into chat. An OpenAI API key and
 a ChatGPT subscription are different connections; choose the one you have.
 
-For an **OpenAI API key only**, if you already use the 1Password CLI and want
-to avoid clipboard handling,
-run the following **in a terminal on the Gateway host**, not in agent chat.
-On a fresh state directory only, first complete `openclaw setup --baseline`
-successfully; stop at its error if it fails. Existing installs skip that step.
+If your Gateway is already running, use **Settings → Models → Set API key**.
+For terminal input, follow the [running Gateway import](/cli/models#auth-profiles)
+and omit `--profile-id`. That form can replace the configured or active saved
+key, so check which connection you intend to update.
+
+The named-profile example below is for **OpenAI API keys** and runs **only
+while the local Gateway is stopped**. Use Bash on the Gateway host to read
+the key with the 1Password CLI. On a fresh state directory, first run
+`openclaw setup --baseline` and continue only if it succeeds. On an existing
+state directory with a stopped Gateway, skip the baseline step.
 Baseline writes setup state and can create the default proactive automation;
 it is not a read-only credential check. Inspect `openclaw agents list` for the
 actual agent ID, and replace the `op://` reference with one field you may read.
