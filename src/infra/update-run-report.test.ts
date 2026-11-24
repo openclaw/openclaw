@@ -289,6 +289,35 @@ it("reports repeated database-path advisories once across Doctor phases", () => 
   ]);
   expect(report.headline).toContain("1 warning needs attention");
 });
+
+it("loads an earlier completed model repair without counting its historical completion warning", () => {
+  const completed = render({
+    steps: [
+      { step: "finalize:doctor:model-retirement", status: "completed" },
+      {
+        step: "warning:finalize:doctor:model-retirement",
+        status: "completed",
+        detail: "Deferred model retirement repair completed after plugin convergence.",
+      },
+      { step: "warning:doctor", status: "completed", detail: "Other repair still pending." },
+    ],
+  });
+  expect(completed.headline).toContain("1 warning needs attention");
+  expect(completed.lines.filter((line) => line.startsWith("Warning: "))).toEqual([
+    "Warning: Other repair still pending.",
+  ]);
+
+  const pending = render({
+    steps: [
+      {
+        step: "warning:finalize:doctor:model-retirement",
+        status: "completed",
+        detail: "Model retirement repair is pending.",
+      },
+    ],
+  });
+  expect(pending.headline).toContain("1 warning needs attention");
+});
 it.each([true, false])("bounds runtime guidance (saved=%s)", (saved) => {
   const action = `Keep the candidate installed and do not roll back code alone. ${"🦞".repeat(600)}`;
   const reason = saved ? "node-runtime-preflight" : "preflight-node-runtime-incompatible";

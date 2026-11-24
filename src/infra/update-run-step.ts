@@ -187,11 +187,17 @@ export function projectUpdateRunResultSteps<T extends Pick<UpdateRunRecord, "ste
 }
 
 export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
+  // Earlier updates stored a completed retirement as a warning as well as a
+  // normal completion receipt. Treat the durable receipt as settled on read.
+  const modelRetirementCompleted = steps.some(
+    (step) => step.step === "finalize:doctor:model-retirement" && step.status === "completed",
+  );
   return [
     ...new Set(
       steps.flatMap((step) =>
         (step.step === "reconcile:settle" ||
           (step.status === "completed" && step.step.startsWith("warning:"))) &&
+        !(modelRetirementCompleted && step.step === "warning:finalize:doctor:model-retirement") &&
         step.detail
           ? [step.detail]
           : [],
