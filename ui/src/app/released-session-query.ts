@@ -2,14 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import type { AgentsListResult } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-
-type ReleasedSessionQuery = {
-  face: BoardFace;
-  sessionKey: string;
-  search: string;
-};
 
 export function resolvePersistedAgentId(
   selectedAgentId: string | null | undefined,
@@ -28,34 +21,31 @@ export function resolvePersistedAgentId(
 export function releasedSessionQuery(
   location: Pick<RouteLocation, "pathname" | "search">,
   basePath: string,
-): ReleasedSessionQuery | null {
-  const params = new URLSearchParams(location.search);
-  if (!params.has("session")) {
+) {
+  if (!location.search) {
     return null;
   }
-  const chatRoot = pathForRoute("chat", basePath);
-  const dashboardRoot = pathForRoute("dashboard", basePath);
-  const pathFace =
-    location.pathname === chatRoot || location.pathname === `${chatRoot}/`
-      ? "chat"
-      : location.pathname === dashboardRoot || location.pathname === `${dashboardRoot}/`
-        ? "dashboard"
-        : null;
+  const params = new URLSearchParams(location.search);
+  const session = params.get("session");
+  if (session === null) {
+    return null;
+  }
+  const root = location.pathname.replace(/\/$/u, "");
+  const pathFace = (["chat", "dashboard"] as const).find(
+    (face) => root === pathForRoute(face, basePath),
+  );
   if (!pathFace) {
     return null;
   }
   const face = params.get("face") === "dashboard" ? "dashboard" : pathFace;
-  const sessionKey = params.get("session")?.trim() ?? "";
+  const sessionKey = session.trim();
   params.delete("session");
   params.delete("face");
-  return { face, sessionKey, search: params.size ? `?${params}` : "" };
-}
-
-export function releasedSessionPath(
-  released: ReleasedSessionQuery,
-  basePath: string,
-  fallbackAgentId: string,
-  mainKey?: string,
-) {
-  return pathForSession(released.face, fallbackAgentId, released.sessionKey, basePath, { mainKey });
+  return {
+    face,
+    sessionKey,
+    search: params.size ? `?${params}` : "",
+    path: (fallbackAgentId: string, mainKey?: string) =>
+      pathForSession(face, fallbackAgentId, sessionKey, basePath, { mainKey }),
+  };
 }

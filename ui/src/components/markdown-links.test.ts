@@ -649,6 +649,17 @@ describe("session navigation", () => {
       parseLocalMarkdownSessionUrl(href.replace("chat.example", "other.example"), options),
     ).toBeNull();
   });
+  it("only claims a released link for an explicit session owner on this mount", () => {
+    const options = { basePath: "/control", mainKey: "home" };
+    const href = "/control/chat/?session=";
+    for (const key of ["", "home", "agent:research:"]) {
+      expect(parseLocalMarkdownSessionUrl(href + key, options)).toBeNull();
+    }
+    expect(parseLocalMarkdownSessionUrl("/chat?session=agent:research:home", options)).toBeNull();
+    expect(parseLocalMarkdownSessionUrl(href + "agent:research:home", options)?.url.pathname).toBe(
+      "/control/chat/research",
+    );
+  });
   it.each([
     ["click", "a"],
     [" ", "a"],

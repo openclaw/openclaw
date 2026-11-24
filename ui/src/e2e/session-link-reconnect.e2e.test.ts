@@ -22,6 +22,8 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const href = new URL("chat", suite.server.baseUrl);
       href.searchParams.set("session", destinationKey);
+      href.searchParams.set("view", "full");
+      href.hash = "latest";
       await installMockGateway(page, {
         sessionKey: sourceKey,
         sessions: [
@@ -36,13 +38,15 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sourceKey));
       const link = page.locator(".chat-thread a");
       await link.waitFor({ state: "visible" });
+      const sourceUrl = page.url();
       const documentStart = await page.evaluate(() => performance.timeOrigin);
       await link.click();
       await page.getByText(destinationText, { exact: true }).waitFor({ state: "visible" });
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
-      expect(new URL(page.url()).searchParams.has("session")).toBe(false);
+      expect(new URL(page.url())).toMatchObject({ search: "?view=full", hash: "#latest" });
       await page.goBack();
       await link.waitFor({ state: "visible" });
+      expect(page.url()).toBe(sourceUrl);
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
     });
   });
