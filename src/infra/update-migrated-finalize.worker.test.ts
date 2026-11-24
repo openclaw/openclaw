@@ -482,15 +482,9 @@ it.each([
     vi.doMock("./update-early-release-recovery.js", () => ({
       startEarlyGitReleaseRecovery: start,
     }));
-    // A started recovery moved this release away; the worker exits before loading more code.
-    const exited: unknown[] = [];
-    const exit = vi
-      .spyOn(process, "exit")
-      .mockImplementation(((code: unknown) => void exited.push(code)) as never);
     try {
       await runWorker({}, "--check");
     } finally {
-      exit.mockRestore();
       vi.doUnmock("./openclaw-root.js");
       vi.doUnmock("./update-early-release-recovery.js");
       vi.unstubAllEnvs();
@@ -500,7 +494,7 @@ it.each([
       expect.objectContaining({ root, pending: expect.anything() }),
     );
     expect(stdout.join("")).toBe("");
-    expect(recovery.started ? exited : process.exitCode).toEqual(recovery.started ? [1] : 1);
+    expect(process.exitCode).toBe(1);
     expect(stderr.join("")).toContain(message);
   },
 );

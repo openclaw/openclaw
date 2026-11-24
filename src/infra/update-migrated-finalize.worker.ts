@@ -98,9 +98,10 @@ async function finalizeMigratedUpdate(): Promise<void> {
     const { plan, finish } = recovery.readEarlyGitReleaseRecoveryArgs(process.argv.slice(3));
     if (finish) {
       await recovery.finishEarlyGitReleaseRecovery(plan, finish);
-    } else if (await recovery.runEarlyGitReleaseRecovery(plan)) {
-      // The finishing step removed the release this process runs from.
-      process.exit(0);
+    } else {
+      // On success the finishing step removed the release this process runs from; the
+      // cleanup below loads nothing more, because this mode opened no database.
+      await recovery.runEarlyGitReleaseRecovery(plan);
     }
     return;
   }
@@ -124,10 +125,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
       const recovery = await startEarlyGitReleaseRecovery(early);
       // The early release updater reports this stderr as the failed check before any change.
       process.stderr.write(`${formatEarlyGitReleaseRefusal(early, recovery)}\n`);
-      if (recovery.started) {
-        // This release now lives outside the updater's cleanup path; loading more code would fail.
-        process.exit(1);
-      }
+      // A started recovery moved this release out of the updater's cleanup path. The cleanup
+      // below loads nothing more, because the check opened no database through its owners.
       process.exitCode = 1;
       return;
     }
