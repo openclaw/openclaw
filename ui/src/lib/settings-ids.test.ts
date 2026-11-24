@@ -3,6 +3,11 @@ import { CONTROL_UI_SETTINGS_PAGES } from "../../../src/shared/control-ui-settin
 import { isSettingsNavigationRouteVisible } from "../app-navigation.ts";
 import { agentRouteFromPath, routeIdFromPath } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
+import {
+  CONFIG_PAGE_IDS,
+  configSectionKeysForPage,
+  type ConfigPageId,
+} from "../pages/config/config-sections.ts";
 import { createChromeExtensionSetupResult } from "../test-helpers/chrome-extension-setup.ts";
 import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
 
@@ -34,6 +39,13 @@ describe("Control UI settings pages", () => {
           agentId: "main",
           invalidPanel: false,
         });
+      }
+      // A declared section must be one the page shows; Advanced shows every uncurated one.
+      const pageId = CONFIG_PAGE_IDS.find((id) => id === routeId) as ConfigPageId | undefined;
+      for (const entry of Object.values<{ section?: string }>(page.settings)) {
+        if (entry.section && pageId !== "advanced") {
+          expect(pageId && configSectionKeysForPage(pageId)).toContain(entry.section);
+        }
       }
     },
   );

@@ -4,7 +4,6 @@ export const ADVANCED_SETTINGS = defineSettingsPage({
   path: "/settings/advanced",
   title: "Advanced",
   settings: {
-    "advanced.setupWizard": { label: "Setup" },
-    "advanced.rawConfig": { label: "Raw config (JSON/JSON5)" },
+    "advanced.setupWizard": { label: "Setup", section: "wizard" },
   },
 });

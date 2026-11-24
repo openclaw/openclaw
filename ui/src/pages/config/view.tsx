@@ -370,7 +370,7 @@ export function Config(props: ConfigProps) {
           </details>
         ) : null}
         <div class="settings-group">
-          <div id="advanced.rawConfig" class="settings-row settings-row--stacked">
+          <div class="settings-row settings-row--stacked" data-settings-info>
             <div class="config-raw-actions">
               {props.onOpenFile && props.openFileAllowed !== false ? (
                 <button class="btn btn--sm" disabled={busy()} onClick={() => void command("open")}>

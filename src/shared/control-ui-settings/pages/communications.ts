@@ -5,11 +5,11 @@ export const COMMUNICATIONS_SETTINGS = defineSettingsPage({
   title: "Communications",
   settings: {
     "transcripts.enabled": { label: "Enable transcript storage" },
-    "communications.transcriptLibrary": { label: "Transcript library" },
+    "communications.transcriptLibrary": { label: "Transcript library", section: "transcripts" },
     // One row per configured source, by its place in the list.
-    "communications.meetingSources.*": { label: "Auto-start source" },
-    "communications.meetingSourceProvider": { label: "Provider" },
-    "communications.meetingSourceField.*": { label: "Source field" },
-    "communications.meetingCaptureAdvanced": { label: "Advanced settings" },
+    "communications.meetingSources.*": { label: "Auto-start source", section: "transcripts" },
+    "communications.meetingSourceProvider": { label: "Provider", section: "transcripts" },
+    "communications.meetingSourceField.*": { label: "Source field", section: "transcripts" },
+    "communications.meetingCaptureAdvanced": { label: "Advanced settings", section: "transcripts" },
   },
 });

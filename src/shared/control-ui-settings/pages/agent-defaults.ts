@@ -7,10 +7,10 @@ export const AGENT_DEFAULTS_SETTINGS = defineSettingsPage({
     "tools.codeMode.enabled": { label: "Code Mode" },
     "tools.codeMode.executor": { label: "Code Mode executor" },
     "tools.toolSearch.enabled": { label: "Tool Search" },
-    "aiAgents.sessionStorageByAgent": { label: "Details by agent" },
+    "aiAgents.sessionStorageByAgent": { label: "Details by agent", section: "session" },
     "session.maintenance.coldStorage.enabled": { label: "Archive older chats" },
     "session.maintenance.coldStorage.afterDays": { label: "Archive after (days)" },
-    "aiAgents.sessionStorageRunNow": { label: "Run now" },
-    "aiAgents.sessionStorageAdvanced": { label: "Advanced session settings" },
+    "aiAgents.sessionStorageRunNow": { label: "Run now", section: "session" },
+    "aiAgents.sessionStorageAdvanced": { label: "Advanced session settings", section: "session" },
   },
 });

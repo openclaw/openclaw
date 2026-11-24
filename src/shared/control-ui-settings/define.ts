@@ -4,6 +4,11 @@ export type ControlUiSettingEntry = {
   readonly label: string;
   /** Setting ID of the disclosure that hides this row until it opens. */
   readonly within?: string;
+  /**
+   * Config section that shows the row on a page with several, when the ID does not start
+   * with it; a link opens that section.
+   */
+  readonly section?: string;
 };
 
 /** A Settings page and the settings it shows, keyed by setting ID. */

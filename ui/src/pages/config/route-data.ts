@@ -1,4 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import { findControlUiSetting } from "../../../../src/shared/control-ui-settings/index.ts";
 import { INTERNAL_MEMORY_PATH_PARAM, pathForRoute } from "../../app-route-paths.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import { configSettingSection } from "../../lib/config-form-utils.ts";
@@ -77,14 +78,16 @@ export function configRouteData(location: RouteLocation) {
   const targetBlockId = configTargetIdFromHash(location.hash);
   // A link to one schema setting needs no `?section=` or `?advanced=1`: its ID names the
   // section, and the setting may sit in the advanced group or a closed object.
-  const settingSection = configSettingSection(targetBlockId);
+  const place = targetBlockId ? findControlUiSetting(targetBlockId) : undefined;
+  const settingSection = place?.entry.section ?? configSettingSection(targetBlockId);
   const section = searchParams.get("section")?.trim() || settingSection;
   return {
     pathname,
     search: search ? `?${search}` : "",
     hash: location.hash,
     section,
-    advanced: searchParams.get("advanced") === "1" || settingSection !== null,
+    // Hand-built rows sit outside the advanced group; only generic form rows need it open.
+    advanced: searchParams.get("advanced") === "1" || (!place && settingSection !== null),
     /** Raw `?tab=`; curated hub pages normalize it against their own tab set. */
     tab: searchParams.get("tab")?.trim() || null,
     targetBlockId,
