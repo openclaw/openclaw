@@ -441,6 +441,20 @@ node scripts/vitest-pair-benchmark.mts \
   --run-attempt 1
 ```
 
+For a hosted check, select the branch containing the helper and bind `target_ref`
+to that branch's exact commit:
+
+```bash
+gh workflow run openclaw-performance.yml --ref <branch> \
+  -f mode=node-cache-diagnostics \
+  -f target_ref=<exact-40-character-sha> \
+  -f publish_reports=false
+```
+
+This starts one five-minute Ubuntu job with the pinned Node runtime. It does not
+install packages, use provider secrets, or start the other performance jobs.
+The workflow uploads the diagnostic output even when qualification fails.
+
 The output directory must not exist. This runs a tiny ESM fixture with caching
 disabled, an empty cache, a restored seed, and changed source at the same path.
 It requires a successful native cache read and explicit V8 acceptance for the
