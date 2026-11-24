@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogRouteMethods,
+  SessionCatalogSourceProfileRelation,
   SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
   SessionsCatalogContinueParams,
@@ -24,6 +26,7 @@ export type {
 } from "./session-catalog-upstream.types.js";
 
 export type SessionCatalogListProviderParams = {
+  profileRelation?: SessionCatalogSourceProfileRelation;
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
   agentId?: string;
   /** False when Gateway-local scans must not inherit a root from process HOME. */
@@ -46,7 +49,11 @@ export type SessionCatalogListProviderParams = {
   /** Catalog owner retirement, independent of the requesting connection's lifetime. */
   signal?: AbortSignal;
 };
-export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
+export type SessionCatalogReadProviderParams = Omit<
+  SessionsCatalogReadParams,
+  "catalogId" | "profileRelation"
+> & {
+  profileRelation?: SessionCatalogSourceProfileRelation;
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
   agentId?: string;
   /** False when Gateway-local reads must not inherit a root from process HOME. */
@@ -188,8 +195,16 @@ export type SessionCatalogProvider = {
   audience?: "gateway-operators" | "session-viewers";
   /** Source authorization must be refreshed before reusing a previous list snapshot. */
   requiresFreshList?: true;
+  /** Applies requested relationships at the source before pagination. */
+  supportsProfileRelation?: true;
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
+  /** Owned RPCs used when the caller lacks the shared operation's scope. The host verifies ownership. */
+  ownedRoute?: {
+    methods: Partial<SessionCatalogRouteMethods>;
+    /** Owning methods require the caller's live role-required policy from this plugin. */
+    requiredGrantPluginId?: string;
+  };
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */

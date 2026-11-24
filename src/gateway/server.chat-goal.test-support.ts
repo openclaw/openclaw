@@ -73,16 +73,16 @@ export function registerGoalChatRestartSettlementCase(fixture: {
   scope: () => GoalChatScope;
   createStorePath: () => string;
   send: (params: Record<string, unknown>) => Promise<Mock<RespondFn>>;
-  assertNoModelRun: () => void;
+  assertOneModelRun: () => void;
 }) {
-  it("records a first Goal's retryable failure in its new store when input publication throws after commit", async () => {
+  it("keeps a committed first Goal replayable when its identity notification fails", async () => {
     await releaseGatewaySessionStoreFixture(path.dirname(fixture.scope().storePath));
     const storePath = fixture.createStorePath();
     await prepareGatewayReplyRuntimeForTest({ force: true });
     expect(existsSync(storePath)).toBe(false);
     const { sessionId: _sessionId, ...request } = createGoalChatStartRequest(
       fixture.scope(),
-      "Keep the committed Goal after publication fails",
+      "Keep the committed Goal after its notification fails",
       "goal-publication-failure",
     );
     const publish = sessionIdentity.publishCommittedSessionIdentity;
@@ -99,19 +99,54 @@ export function registerGoalChatRestartSettlementCase(fixture: {
     try {
       const response = await fixture.send(request);
       expect(rejected, `Publication calls: ${notification.mock.calls.length}`).toBe(true);
-      expect(response.mock.calls[0]?.[0]).toBe(false);
-      fixture.assertNoModelRun();
+      expect(response.mock.calls[0]).toMatchObject({
+        0: true,
+        1: { status: "started", runId: request.idempotencyKey },
+      });
+      expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
+      fixture.assertOneModelRun();
+      expect(loadSessionEntry(fixture.scope())?.lastRunId).toBeUndefined();
       expect(loadSessionEntry(fixture.scope())).toMatchObject({
-        status: "failed",
-        lastRunId: request.idempotencyKey,
         abortedLastRun: false,
         goal: { objective: request.message },
       });
+      expect(readGoalChatUserMessages(fixture.scope())).toHaveLength(1);
+      const replay = await fixture.send(request);
+      expect(replay.mock.calls[0]?.[0]).toBe(true);
+      expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
+      fixture.assertOneModelRun();
       expect(readGoalChatUserMessages(fixture.scope())).toHaveLength(1);
     } finally {
       notification.mockRestore();
     }
   });
+}
+
+export function createGoalChatRunGate(throws: boolean) {
+  const hook = vi.fn(async () => {
+    if (throws) {
+      throw new Error("Synthetic policy failure");
+    }
+    return { outcome: "block" as const, reason: "policy", message: "Request blocked." };
+  });
+  const registration = {
+    pluginId: "goal-worker-policy",
+    hookName: "before_agent_run" as const,
+    handler: hook,
+    source: "test",
+  };
+  const registry = getTestPluginRegistry();
+  return {
+    hook,
+    installHook: () => {
+      registry.typedHooks.push(registration);
+      initializeGlobalHookRunner(registry);
+    },
+    removeHook: () => {
+      registry.typedHooks = registry.typedHooks.filter((entry) => entry !== registration);
+      initializeGlobalHookRunner(registry);
+    },
+  };
 }
 
 export function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {

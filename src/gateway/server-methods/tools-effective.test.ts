@@ -83,6 +83,7 @@ const runtimeMocks = vi.hoisted(() => ({
   peekSessionMcpRuntime: vi.fn<() => SessionMcpRuntimeView | undefined>(() => undefined),
   resolveSessionMcpConfigSummary: vi.fn(() => ({
     fingerprint: "mcp:1:test",
+    pluginIdsByServer: new Map<string, string>(),
     serverNames: [] as string[],
   })),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
@@ -225,9 +226,16 @@ function payloadOf(respond: ReturnType<typeof vi.fn>) {
 
 const makeMcpCatalog = () => ({ version: 1, generatedAt: 1, servers: {}, tools: [] });
 
-function mockMcpConfigSummary(params: { fingerprint?: string; serverNames?: string[] } = {}): void {
+function mockMcpConfigSummary(
+  params: {
+    fingerprint?: string;
+    serverNames?: string[];
+    pluginIdsByServer?: Map<string, string>;
+  } = {},
+): void {
   runtimeMocks.resolveSessionMcpConfigSummary.mockReturnValueOnce({
     fingerprint: params.fingerprint ?? "mcp:1:test",
+    pluginIdsByServer: params.pluginIdsByServer ?? new Map(),
     serverNames: params.serverNames ?? ["reproProbe"],
   });
 }
@@ -784,7 +792,7 @@ describe("tools.effective handler", () => {
     async (available) => {
       const toolOverrides = { mcpToolsDeny: { docs: ["delete"] } };
       mockSession({ agentHarnessId: "codex", toolOverrides });
-      mockMcpConfigSummary();
+      mockMcpConfigSummary({ pluginIdsByServer: new Map([["reproProbe", "installed-probe"]]) });
       const catalog = makeMcpCatalog();
       const loadMcpToolCatalog = vi.fn().mockResolvedValue(available ? catalog : undefined);
       runtimeMocks.getRegisteredAgentHarness.mockReturnValueOnce({
@@ -811,6 +819,7 @@ describe("tools.effective handler", () => {
           includeSessionDenied: true,
         });
         expectPayloadGroupIds(respond, ["core", "mcp"]);
+        expect(payloadOf(respond).groups[1]?.tools[0]?.pluginId).toBe("installed-probe");
       } else {
         expectPayloadGroupIds(respond, ["core"], "mcp-not-yet-connected");
       }
@@ -855,7 +864,7 @@ describe("tools.effective handler", () => {
       };
     });
     const tool = {
-      ...createStubTool("fixture_lookup"),
+      ...createStubTool("fixture__lookup"),
       label: "Lookup",
       displaySummary: "Search the fixture.",
     };
@@ -870,7 +879,10 @@ describe("tools.effective handler", () => {
         deniedBySession: true,
       },
     });
-    mockMcpConfigSummary();
+    mockMcpConfigSummary({
+      serverNames: ["fixture"],
+      pluginIdsByServer: new Map([["fixture", "installed-owner"]]),
+    });
     mockWarmMcpRuntime(makeMcpCatalog());
     runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([
       tool,
@@ -889,12 +901,12 @@ describe("tools.effective handler", () => {
     expectPayloadGroupIds(respond, ["core", "mcp"]);
     const payload = payloadOf(respond);
     expect(payload.groups[1]?.tools[0]).toEqual({
-      id: "fixture_lookup",
-      label: "Lookup (bundle-mcp)",
+      id: "fixture__lookup",
+      label: "Lookup (installed-owner)",
       description: "Search the fixture.",
       rawDescription: "Search the fixture.",
       source: "mcp",
-      pluginId: "bundle-mcp",
+      pluginId: "installed-owner",
       mcpServer: "fixture",
       mcpToolName: "lookup",
       deniedBySession: true,

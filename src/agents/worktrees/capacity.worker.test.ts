@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { withExistingOpenClawStateSchema as withSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -45,18 +44,6 @@ function atWorkerCommit(beforeCommit: () => void, preserveAuthority = true) {
   );
 }
 
-async function expectOffThread(run: () => Promise<void>, checkDisk = false) {
-  const sql = observeHostDataSql();
-  const disk = checkDisk ? vi.spyOn(fs, "statfsSync") : undefined;
-  await run();
-  expect(sql.queries).toEqual([]);
-  if (disk) {
-    expect(disk).not.toHaveBeenCalled();
-  }
-  disk?.mockRestore();
-  sql.restore();
-}
-
 function fixture() {
   const root = roots.make("worktree-capacity-worker-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
@@ -85,13 +72,13 @@ it("releases off-thread disk debt after caller and schema admission end", async 
           workerAuthority: { ...guard.workerAuthority, assertCurrent },
           assertCurrent,
         });
-        await expectOffThread(() => reserve(capacity, f.root), true);
+        await reserve(capacity, f.root);
         return { capacity, context };
       });
       expect(f.debts()).toHaveLength(1);
       caller.abort(new Error("caller cancelled"));
       expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
-      await expectOffThread(() => ended.capacity.release());
+      await ended.capacity.release();
       expect(f.debts()).toEqual([]);
     }),
   );

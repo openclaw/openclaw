@@ -285,5 +285,5 @@ it("keeps a retained workspace usable through personal Hide and Show, but reject
       expect(await fs.readFile(path.join(repo, "project.txt"), "utf8")).toBe(contents);
     }
     await f.setSession({ lifecycleRevision: "reset-after-personal-actions" });
-    expect(() => owner.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+    expect(() => owner.assertCurrent()).toThrow("Local sandbox workspace changed");
   }));

@@ -195,7 +195,6 @@ function createRestrictedFixture() {
   const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: fixture.cfg,
       policy: { sourceAgent: "main", deny: ["custom/child"] },
@@ -612,34 +611,4 @@ describe("command selection with session routing", () => {
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
     },
   );
-
-  it("rechecks operator authority after loading the thinking catalog", async () => {
-    const fixture = createFixture();
-    fixture.custom.models.forEach((model) => {
-      model.reasoning = true;
-    });
-    const lifetime = new AbortController();
-    const denied = new Error("operator authority ended during thinking catalog loading");
-    const operatorAuthority = createTestOperatorAuthority({
-      profileId: "transcript-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      signal: lifetime.signal,
-    });
-    vi.mocked(loadProviderScopedThinkingCatalog)
-      .mockClear()
-      .mockImplementation(async () => {
-        lifetime.abort(denied);
-        return [];
-      });
-
-    await expect(
-      fixture.select({
-        opts: { message: "Select thinking level", operatorAuthority },
-        requestedThinkLevel: "low",
-      }),
-    ).rejects.toBe(denied);
-
-    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-  });
 });

@@ -39,6 +39,85 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
+  it("describes first-run sign-in without requiring an API key", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "models.authLogin",
+            "wizard.next",
+            "openclaw.setup.detect",
+          ],
+          methodResponses: {
+            "models.list": { models: [] },
+            "openclaw.setup.detect": {
+              candidates: [],
+              manualProviders: [],
+              setupComplete: false,
+              workspace: "/workspace",
+            },
+            "models.authStatus": {
+              ts: 1,
+              providers: [],
+              providerCapabilities: [
+                {
+                  provider: "example",
+                  apiKeySupported: false,
+                  quickApiKeySetup: false,
+                  loginOptions: [
+                    {
+                      id: "example-browser",
+                      brandId: "example",
+                      groupLabel: "Example Cloud",
+                      label: "Sign in with browser",
+                      kind: "oauth",
+                      featured: true,
+                    },
+                    {
+                      id: "example-device",
+                      brandId: "example",
+                      groupLabel: "Example Cloud",
+                      label: "Sign in with a device code",
+                      kind: "device-code",
+                      featured: false,
+                    },
+                  ],
+                },
+              ],
+            },
+            "models.authLogin": { sessionId: "example-sign-in", done: false, status: "running" },
+            "wizard.next": {
+              done: false,
+              status: "running",
+              step: {
+                id: "continue",
+                type: "text",
+                executor: "client",
+                message: "Enter the verification code.",
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/model-providers");
+        await page.locator('[data-models-catalog-provider="example"] button').click();
+        const dialog = page.locator(".model-provider-login");
+        await dialog.getByRole("heading", { name: "Example Cloud" }).waitFor();
+        await captureProviderProof("sign-in-only-setup.png", dialog);
+        expect(await dialog.locator(".oc-dialog__description").textContent()).not.toContain(
+          "API key",
+        );
+        expect(await dialog.locator("[data-models-login-api-key]").count()).toBe(0);
+        await dialog.getByRole("button", { name: "Sign in with browser", exact: true }).click();
+        expect((await gateway.waitForRequest("models.authLogin")).params).toMatchObject({
+          authChoice: "example-browser",
+          selectModel: true,
+        });
+      },
+    );
+  });
+
   it("anchors text sign-in actions while retaining the stable dialog height", async () => {
     await suite.withPage(
       { viewport: { width: 1400, height: 900 }, reducedMotion: "reduce" },
@@ -249,9 +328,7 @@ suite.define(() => {
         await dialog.locator('[data-models-login-provider="openai"]').waitFor();
         expect(
           (await dialog.locator(".oc-dialog__description p").first().textContent())?.trim(),
-        ).toBe(
-          "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
-        );
+        ).toBe("Choose how to connect. Setup can also verify and select a model for this agent.");
         if (recordVisuals) {
           await writeFile(
             path.join(suite.artifactDir, "first-run-provider-picker.png"),

@@ -51,6 +51,7 @@ import {
 } from "./update-command-result.js";
 import {
   assertPendingMigrationsAdmitted,
+  assertNodeServiceReleasesUpdateState,
   captureUpdateActivationSchemas,
 } from "./update-command-schema.js";
 import {
@@ -438,6 +439,8 @@ export async function executeMutableUpdate(
       timeoutMs: params.updateStepTimeoutMs,
     });
     ({ previousSchemaVersions, schemaVersions } = activationSchemas);
+    // Refuse before the Gateway stops: Doctor cannot take the state from a running node service.
+    await assertNodeServiceReleasesUpdateState({ env, timeoutMs: params.updateStepTimeoutMs });
     if (
       preManagedServiceStop?.running &&
       !servicePrepared &&

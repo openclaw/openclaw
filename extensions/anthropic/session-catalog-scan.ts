@@ -105,6 +105,7 @@ const projectTreeSlots = new Map<
 >();
 
 export type ClaudeProjectsTreeSnapshot = {
+  complete?: boolean;
   root: string;
   resolvedRoot?: string;
   projectDirectories: ClaudeProjectDirectorySnapshot[];
@@ -387,6 +388,7 @@ export async function readProjectsTreeSnapshot(
     return {
       root,
       resolvedRoot,
+      complete,
       projectDirectories,
       treeStamp: JSON.stringify([resolvedRoot, projectDirectories.map((dir) => dir.stamp)]),
     };

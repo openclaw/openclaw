@@ -56,7 +56,6 @@ beforeAll(() => {
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/docker-e2e-plan.mts",
     "scripts/lib/docker-e2e-scenarios.mts",
-    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/record-shared.mjs",
@@ -2086,6 +2085,9 @@ describe("release validation no-push transport", () => {
     expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
     expect(dockerCall.with).toEqual({
       runner_group: "${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}",
+      release_publish_run_id: "${{ github.run_id }}",
+      release_publish_run_attempt: "${{ needs.publish.outputs.publication_attempt }}",
+      fast_track_approval: "${{ inputs.fast_track_approval }}",
       full_release_validation_run_id: "${{ inputs.full_release_validation_run_id }}",
       full_release_validation_run_attempt:
         "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
@@ -2221,7 +2223,8 @@ describe("release validation no-push transport", () => {
   it("keeps approval-only intent on the original publication route within the input budget", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     expect(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {})).toHaveLength(25);
-    expect(workflow.on?.workflow_dispatch?.inputs?.wait_for_clawhub).toBeDefined();
+    expect(workflow.on?.workflow_dispatch?.inputs?.fast_track_approval).toBeDefined();
+    expect(workflow.on?.workflow_dispatch?.inputs?.wait_for_clawhub).toBeUndefined();
     const validate = step(job(workflow, "resolve_release_target"), "Validate inputs");
     const projection = validate.run?.split('RELEASE_EVIDENCE_MODE="')[0];
     if (!projection) {

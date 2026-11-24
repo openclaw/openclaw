@@ -61,7 +61,11 @@ export type BeamStore = {
   list: (handoffPrefix?: string) => Promise<BeamSessionSummary[]>;
 };
 
-export function createBeamStore(runtime: PluginRuntime): BeamStore {
+export type BeamPublication = { snapshot?: BeamStoredSession; ownership?: BeamHandoff };
+
+export function createBeamStore(runtime: PluginRuntime): BeamStore & {
+  readPublication: (beamId: string) => Promise<BeamPublication>;
+} {
   const store = runtime.state.openKeyedStoreV2<BeamStoredSession>({
     namespace: "sessions",
     maxEntries: BEAM_MAX_SESSIONS,
@@ -153,6 +157,12 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
         // Also invalidate uncertain writes; never retry a failed operation.
         invalidate();
       }
+    },
+    async readPublication(beamId) {
+      const snapshot = await store.lookup(beamId);
+      // Release outlives transcript retention. A direct publication link can distinguish
+      // expiry for an authorized caller without making expired history readable.
+      return snapshot ? { snapshot } : { ownership: await handoffs.lookup(beamId) };
     },
     async get(beamId) {
       const snapshot = await store.lookup(beamId);

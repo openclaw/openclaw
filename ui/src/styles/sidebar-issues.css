@@ -617,6 +617,14 @@ footer.sidebar-issues-panel__mentions-note {
   pointer-events: auto;
 }
 
+.sidebar-issues-panel__update .sidebar-issues-panel__entity {
+  display: -webkit-box;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .sidebar-update-issue__body {
   padding-inline-start: calc(
     var(--sidebar-issues-row-inset) + var(--sidebar-issues-marker-size) +
@@ -626,6 +634,10 @@ footer.sidebar-issues-panel__mentions-note {
 
 .sidebar-update-issue__body .sidebar-update-card {
   margin: 0;
+}
+
+.sidebar-update-issue__body .sidebar-update-card__action {
+  max-inline-size: 100%;
 }
 
 .sidebar-update-card--compact-details {

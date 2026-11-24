@@ -1324,7 +1324,7 @@ async function prepareCliRunContextWithinReadFence(
         accountId: params.agentAccountId,
         requester: params,
       });
-    const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
+    const operatorAuthority = readRunOperatorAuthority(params);
     const builtSystemPrompt = isSideQuestion
       ? extraSystemPrompt
       : skipsTurnPrefix
@@ -1332,7 +1332,7 @@ async function prepareCliRunContextWithinReadFence(
         : await prepareCliSystemPrompt({
             preparedTtsPreferences: params.preparedTtsPreferences,
             preparedSessionEntry: params.sessionEntry,
-            requesterProfileId,
+            requester: { operatorAuthority, senderIsOwner: params.senderIsOwner },
             workspaceDir,
             cwd,
             config: params.config,
@@ -1475,7 +1475,7 @@ async function prepareCliRunContextWithinReadFence(
           promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
         ],
-        requesterProfileId,
+        requesterProfileId: operatorAuthority?.profileId,
         capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
         sessionKey: params.sessionKey,
         agentId: sessionAgentId,

@@ -245,6 +245,14 @@ blocked tool list indicates an unsupported runtime. Clients offer **Send now**
 only for `available`; blocked state should explain why the input must wait.
 `sessions.changed` with reason `agent.input.steering` refreshes this projection.
 
+For a send that must reach a previously resolved physical session, pass its
+`sessionKey` and `expectedSessionId` to `chat.send`. The Gateway checks the ID
+before preparation can create a session and again at send admission. A missing
+or replaced target returns `INVALID_REQUEST` with
+`details.reason: "session-incarnation-changed"`. Resolve the destination again
+before deciding whether to send a new request. Ordinary sends can keep using
+the logical session key across a reset.
+
 The `chat-input-custody-v1` server capability advertises `chat.send.queueMode`
 (`steer`, `followup`, `collect`, `interrupt`) and exact input receipts. It does not
 promise active-backend injection or mid-response model steering: input that
@@ -296,3 +304,16 @@ Source plugins must separately enable their writer handlers and grant access.
 The switch is checked at each request admission. Disabling denies new requests
 but does not revoke admitted work, which may still deliver. Retries pass admission
 and keep their original message ID.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

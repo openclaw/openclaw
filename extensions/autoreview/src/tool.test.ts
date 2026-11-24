@@ -48,6 +48,9 @@ let next: Record<string, unknown>;
 let result: ReturnType<typeof commandResult>;
 let helperFailure: string;
 let submissionFailure: "exit" | "throw" | undefined;
+let captureStall: boolean;
+let helperKillError: Error | undefined;
+let helperHang: boolean;
 type Response = { pass: number; status: string; output: string | null; model: string | null };
 let response: Response | undefined;
 let cwd: string | undefined;
@@ -71,6 +74,9 @@ beforeEach(() => {
   result = commandResult({ stdout: "complete", cleanup: "normal" });
   helperFailure = "";
   submissionFailure = undefined;
+  captureStall = false;
+  helperKillError = undefined;
+  helperHang = false;
   response = undefined;
   cwd = undefined;
   helperArgv = undefined;
@@ -99,12 +105,16 @@ beforeEach(() => {
       async run({ argv, input, signal }) {
         if (argv.includes("--native-handoff")) {
           helperArgv = argv;
-          return Promise.race([helper.promise, rejectOnAbort(signal)]);
+          return Promise.race([
+            helperKillError ? rejectOnAbort(signal, helperKillError) : helper.promise,
+            rejectOnAbort(signal),
+          ]);
         }
         if (argv.includes("--native-submit")) {
           response = JSON.parse(input!);
           const done = response?.status === "done";
           if (
+            !helperHang &&
             (!done || response?.pass === request.passes) &&
             (!submissionFailure || helperFailure)
           ) {
@@ -120,6 +130,10 @@ beforeEach(() => {
             return { code: 1, stdout: "", stderr: "FileNotFoundError: response exchange" };
           }
           return { code: 0, stdout: "", stderr: "" };
+        }
+        if (captureStall) {
+          // A blocked sandbox Git read: the prepared pass never appears.
+          return rejectOnAbort(signal);
         }
         return json(
           argv.some((arg) => arg.endsWith("/1.request.json"))
@@ -285,4 +299,52 @@ it.each(["caller", "model authority"])("cancels after %s revocation", async (own
   expect(options.signal?.aborted).toBe(true);
   expect(response).toBeUndefined();
   await expect(fs.stat(path.dirname(options.cwd!))).rejects.toMatchObject({ code: "ENOENT" });
+});
+it("ends a stalled helper capture at the timeoutSeconds budget with the phase", async () => {
+  captureStall = true;
+  const started = Date.now();
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("exceeded its 1 second timeoutSeconds budget");
+  expect(failure.message).toContain("waiting for the helper to prepare pass 1");
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeGreaterThanOrEqual(900);
+  expect(elapsed).toBeLessThan(5000);
+});
+it("keeps a non-abort helper kill failure from replacing the budget error", async () => {
+  captureStall = true;
+  helperKillError = new Error("sandbox helper exited 143 during termination");
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("exceeded its 1 second timeoutSeconds budget");
+  expect(failure.message).not.toContain("exited 143");
+});
+it("ends a stalled reviewer pass at the timeoutSeconds budget with the phase", async () => {
+  command.mockImplementation(async (_argv, options) => {
+    assert(typeof options !== "number");
+    return rejectOnAbort(options.signal);
+  });
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("running reviewer pass 1");
+});
+it("ends a stalled final delivery at the timeoutSeconds budget with the phase", async () => {
+  helperHang = true;
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("waiting for the helper to deliver the final report");
+});
+it("stays pending past its own pace without timeoutSeconds until the caller cancels", async () => {
+  captureStall = true;
+  const authority = new AbortController();
+  let settled = false;
+  const pending = execute(params, authority.signal).finally(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => {
+    setTimeout(resolve, 100);
+  });
+  expect(settled).toBe(false);
+  authority.abort(abortError);
+  await expect(pending).rejects.toBe(abortError);
 });

@@ -236,7 +236,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           contextWindowAccess: mutationAccess.contextWindow,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          onModelSetup: () => this.context.navigate("model-setup"),
+          onModelSetup: (provider) =>
+            navigateToModelProvider(this.context, currentAgentId, provider, { connect: true }),
           onProviderSettings: (provider) =>
             navigateToModelProvider(this.context, currentAgentId, provider),
           onModelAccounts: () => this.context.navigate("profile"),
@@ -369,7 +370,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       transcript: this.transcript,
       // Ends with cachedSessionStatePending(); live overflow keeps its entrance fade.
       restoring: Boolean(cachedSession),
-      onHistorySentinelRef: this.registerHistorySentinel,
       onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
       onComposerShellRef: this.registerComposerShell,
       onComposerFloatRef: this.registerComposerFloat,
@@ -411,6 +411,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       readProviderReview,
+      hideComposerSessionCards: this.inputRegion === "dock" && !this.onBackToSubagents,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
       progressCardLifetime: progressPresentation?.lifetime,
@@ -433,7 +434,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
-        prompts: conversationAttention.gatewayQuestionPrompts,
         sendActions: createChatPaneSendActions(state, {
           canSend: composerAvailability.canSend,
           modelRequiredReason: composerAvailability.modelRequiredReason,

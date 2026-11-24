@@ -35,7 +35,6 @@ const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
   profileId: "requester",
   scopes: ["operator.admin"],
   requesterOwner: true,
-  assertCurrent() {},
 };
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {

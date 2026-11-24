@@ -410,7 +410,7 @@ export async function executeCliProcess(params: {
       let processCancelled = false;
       const assertProcessCurrent = () => {
         if (processCancelled) {
-          throw new Error("CLI process authority is no longer active");
+          throw new Error("The CLI process was stopped. Start a new turn to retry.");
         }
       };
       const abortManagedRun = () => {
