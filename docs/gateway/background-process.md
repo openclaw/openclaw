@@ -321,6 +321,9 @@ lifetime, so detached work also uses it after leaving a request's async context.
 Asynchronous child-runtime probes, including readiness and health observations,
 also launch through the broker when available. Each observation still launches
 the runtime to detect removed executables and shared-library loader failures.
+Git workspace imports and file-backed media probes use the broker when available.
+The broker verifies the input file's identity before handing its descriptor to
+the child. If the file was replaced or can no longer be opened, the launch fails.
 Explicit native-only scopes still keep their local transport. The existing process supervisors and
 service relays still own cancellation, output, and cleanup. After the broker first
 becomes ready, broker loss fails affected commands rather than rerunning them; later commands use the restarted

@@ -125,6 +125,7 @@ describe("Codex native configuration", () => {
     "missing-account",
     "api-key-account",
     "missing-capability",
+    "different-program",
     "revoked-account",
     "replaced-account",
     "replaced-catalog",
@@ -185,7 +186,11 @@ describe("Codex native configuration", () => {
               supportedReasoningEfforts: [],
               availableAccessPrograms: {
                 cyber:
-                  outcome === "missing-capability" ? ["standard"] : ["standard", "daybreakBlue"],
+                  outcome === "missing-capability"
+                    ? ["standard"]
+                    : outcome === "different-program"
+                      ? ["standard", "daybreakRed"]
+                      : ["standard", "daybreakBlue"],
               },
             },
           ],
@@ -252,8 +257,10 @@ describe("Codex native configuration", () => {
             outcome === "missing-account"
               ? "requires an authenticated OpenAI account"
               : outcome === "missing-capability"
-                ? "not advertised for the current account and model"
-                : "Codex account changed while preparing the access program",
+                ? "gpt-5.4-codex supports Standard only. This chat requested Daybreak Blue. Turn Daybreak off for this chat."
+                : outcome === "different-program"
+                  ? "gpt-5.4-codex supports Standard and Daybreak Red. This chat requested Daybreak Blue. Turn on Daybreak for this chat to use Daybreak Red."
+                  : "Codex account changed while preparing the access program",
           );
         }
         await catalogMutation;
