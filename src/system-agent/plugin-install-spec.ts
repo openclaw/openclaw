@@ -1,9 +1,9 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { parseGitPluginSpec } from "../plugins/git-install.js";
 import {
   pluginInstallRequiresLocalHost,
   resolvePluginInstallSourcePlan,
 } from "../plugins/install-source-plan.js";
+import { parseGitPluginSpec } from "../plugins/install-source-spec.js";
 
 export function validateSystemAgentPluginInstallSpec(spec: string): string | null {
   const trimmed = spec.trim();

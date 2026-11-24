@@ -13,7 +13,6 @@ import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
-import { parseGitPluginSpec } from "./git-install.js";
 import {
   resolveOpenClawTrustedNpmPackageInstall,
   type NonClawHubInstallSourceClass,
@@ -22,6 +21,7 @@ import {
   isBareNpmPackageName,
   resolveBundledInstallPlanBeforeNpm,
   type BundledLookup,
+  parseGitPluginSpec,
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
   resolveFileNpmSpecToLocalPath,
