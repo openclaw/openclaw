@@ -61,6 +61,33 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
+  it("reads a completed model repair from a saved run without its historical warning", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli", after: { version: "2026.11.7" } }, options);
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "warning:finalize:doctor:model-retirement",
+        status: "completed",
+        detail: "Deferred model retirement repair completed after plugin convergence.",
+      },
+      options,
+    );
+    recordUpdateRunStep(
+      run.runId,
+      { step: "finalize:doctor:model-retirement", status: "completed" },
+      options,
+    );
+    const saved = finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    const loaded = getUpdateRun(run.runId, options);
+    expect(loaded?.steps).toEqual(saved.steps);
+    const report = renderUpdateRunReport(loaded!);
+    expect(report.headline).not.toContain("warning needs attention");
+    expect(report.lines).not.toContain(
+      "Warning: Deferred model retirement repair completed after plugin convergence.",
+    );
+  });
+
   it("confirms channel-only outages without inheriting a stale core proof", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);
