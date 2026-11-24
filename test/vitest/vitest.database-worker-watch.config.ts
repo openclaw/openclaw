@@ -1,4 +1,3 @@
-import path from "node:path";
 import { loadConfigFromFile, type UserConfig } from "vite";
 import { defineConfig } from "vitest/config";
 import {
@@ -8,13 +7,7 @@ import {
 } from "./vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createExtensionDatabaseWorkersVitestConfig } from "./vitest.extension-database-workers.config.ts";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import { createInfraVitestConfig } from "./vitest.infra.config.ts";
-import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
-  relativizeScopedPatterns,
-} from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath } from "./vitest.shared.config.ts";
 
 export function createDatabaseWorkerWatchVitestConfig(
@@ -25,28 +18,14 @@ export function createDatabaseWorkerWatchVitestConfig(
   const createWorkerConfig = workerTests.some((file) => file.startsWith("extensions/"))
     ? createExtensionDatabaseWorkersVitestConfig
     : createInfraVitestConfig;
-  const worker = createWorkerConfig({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: undefined });
+  const worker = createWorkerConfig(env, workerTests);
   return defineConfig({
     ...owner,
     test: {
       ...owner.test,
       projects: [
         { ...owner, extends: false },
-        {
-          ...worker,
-          extends: false,
-          test: {
-            ...worker.test,
-            include: relativizeScopedPatterns(
-              intersectIncludePatterns(
-                workerTests,
-                loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
-                matchesVitestGlob,
-              ) ?? workerTests,
-              path.relative(process.cwd(), worker.test?.dir ?? process.cwd()),
-            ),
-          },
-        },
+        { ...worker, extends: false },
       ],
     },
   });

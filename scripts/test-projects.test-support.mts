@@ -49,7 +49,11 @@ import {
   gatewayServerIsolatedTestFiles,
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
-import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
+import {
+  intersectIncludePatterns,
+  serializeIncludePatterns,
+  splitIncludePatterns,
+} from "../test/vitest/vitest.include-patterns.ts";
 import { markdownTestFiles } from "../test/vitest/vitest.markdown-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
@@ -1277,18 +1281,16 @@ function resolveInheritedIncludeScope(
   includePatterns: string[],
   inheritedPatterns: string[],
   ownedTargets?: ReadonlySet<string>,
+  root?: string,
 ) {
   const owned = includePatterns.filter((pattern) => ownedTargets?.has(pattern));
-  if (owned.length === includePatterns.length) {
-    return includePatterns;
-  }
-  return (
-    intersectIncludePatterns(
-      uniqueOrdered([...inheritedPatterns, ...owned]),
-      includePatterns,
-      path.matchesGlob,
-    ) ?? includePatterns
+  const selection = intersectIncludePatterns(
+    uniqueOrdered([...inheritedPatterns, ...owned]),
+    includePatterns,
+    path.matchesGlob,
+    root,
   );
+  return selection ? serializeIncludePatterns(selection) : includePatterns;
 }
 
 function createBoundedExtensionPlans(
@@ -1302,23 +1304,42 @@ function createBoundedExtensionPlans(
   if (watchMode || !roots) {
     return [plan];
   }
-  // Broad CI selections keep their inherited scope and process limits.
-  // Explicit owned selections do not depend on borrowed include metadata.
-  const includeFilePath = ownsIncludeSelection(plan.includePatterns, ownedTargets)
-    ? undefined
-    : env?.[INCLUDE_FILE_ENV_KEY]?.trim();
+  // Explicit files may outlive borrowed metadata, but an existing transport's
+  // negative constraints still apply to those files.
+  const includeFilePath = env?.[INCLUDE_FILE_ENV_KEY]?.trim();
   if (includeFilePath) {
     if (!fs.existsSync(includeFilePath)) {
-      return [{ ...plan, includePatterns: null }];
+      return ownsIncludeSelection(plan.includePatterns, ownedTargets)
+        ? [plan]
+        : [{ ...plan, includePatterns: null }];
     }
     const inheritedTargets = loadIncludePatternsForSpecFilter(env ?? {}) ?? [];
     const scopedTargets = plan.includePatterns
-      ? resolveInheritedIncludeScope(plan.includePatterns, inheritedTargets, ownedTargets)
+      ? resolveInheritedIncludeScope(plan.includePatterns, inheritedTargets, ownedTargets, cwd)
       : inheritedTargets;
     if (scopedTargets.length === 0) {
       return [];
     }
-    const chunks = splitExtensionTestProcessTargets(config, scopedTargets);
+    const selection = splitIncludePatterns(scopedTargets);
+    const originalTargets = new Map<string, string[]>();
+    for (const target of selection.include) {
+      const identity = normalizePathPattern(path.relative(cwd, path.resolve(cwd, target)));
+      const originals = originalTargets.get(identity) ?? [];
+      originals.push(target);
+      originalTargets.set(identity, originals);
+    }
+    const chunks = splitExtensionTestProcessTargets(config, [...originalTargets.keys()]).map(
+      (chunk) =>
+        serializeIncludePatterns({
+          include: chunk.flatMap((target) => {
+            const originals = originalTargets.get(target);
+            if (!originals)
+              throw new Error(`extension split returned an unknown test target: ${target}`);
+            return originals;
+          }),
+          exclude: selection.exclude,
+        }),
+    );
     if (chunks.length === 0) {
       return [];
     }
@@ -1533,6 +1554,8 @@ function includePatternMatchesAnyFile(pattern: string, files: string[]) {
 }
 
 function createIncludePatternMatcher(patterns: string[]) {
+  const selection = splitIncludePatterns(patterns);
+  patterns = selection.include;
   const literals = new Set<string>();
   const globs: string[] = [];
   for (const pattern of patterns) {
@@ -1543,6 +1566,7 @@ function createIncludePatternMatcher(patterns: string[]) {
     }
   }
   return (file: string) => {
+    if (selection.exclude.some((pattern) => path.matchesGlob(file, pattern))) return false;
     if (literals.has(file)) {
       return true;
     }
@@ -6217,12 +6241,13 @@ export function createVitestRunSpecs(
     }),
     baseEnv,
     ownedTargets,
+    cwd,
   );
-  const inheritedIncludes = plans.some(
-    (plan) =>
-      plan.includePatterns !== null && !ownsIncludeSelection(plan.includePatterns, ownedTargets),
-  )
-    ? loadIncludePatternsForSpecFilter(baseEnv)
+  const inheritedIncludes = plans.some((plan) => plan.includePatterns !== null)
+    ? loadIncludePatternsForSpecFilter(
+        baseEnv,
+        plans.every((plan) => ownsIncludeSelection(plan.includePatterns, ownedTargets)),
+      )
     : null;
   const scopedPlans = plans.flatMap((originalPlan) => {
     const plan =
@@ -6233,6 +6258,7 @@ export function createVitestRunSpecs(
               originalPlan.includePatterns,
               inheritedIncludes,
               ownedTargets,
+              cwd,
             ),
           }
         : originalPlan;
@@ -6288,9 +6314,9 @@ export function createVitestRunSpecs(
   });
 }
 
-function loadIncludePatternsForSpecFilter(env: NodeJS.ProcessEnv) {
+function loadIncludePatternsForSpecFilter(env: NodeJS.ProcessEnv, allowMissing = false) {
   const filePath = env[INCLUDE_FILE_ENV_KEY]?.trim();
-  if (!filePath) {
+  if (!filePath || (allowMissing && !fs.existsSync(filePath))) {
     return null;
   }
   const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -6300,16 +6326,11 @@ function loadIncludePatternsForSpecFilter(env: NodeJS.ProcessEnv) {
   return parsed.filter((value): value is string => typeof value === "string" && value.length > 0);
 }
 
-function includePatternMatchesConfig(candidate: string, configPatterns: readonly string[]) {
-  return configPatterns.some(
-    (pattern) => path.matchesGlob(candidate, pattern) || path.matchesGlob(pattern, candidate),
-  );
-}
-
 function filterPlansForContractIncludeFile(
   plans: VitestRunPlan[],
   env: NodeJS.ProcessEnv,
   ownedTargets?: ReadonlySet<string>,
+  cwd = process.cwd(),
 ) {
   if (
     !plans.some(
@@ -6332,24 +6353,38 @@ function filterPlansForContractIncludeFile(
     if (!configPatterns) {
       return true;
     }
-    return includePatterns.some((candidate) =>
-      includePatternMatchesConfig(candidate, configPatterns),
+    const selection = intersectIncludePatterns(
+      [...configPatterns],
+      includePatterns,
+      path.matchesGlob,
+      cwd,
+    );
+    return (
+      selection !== null &&
+      selection.include.some(
+        (candidate) =>
+          isGlobTarget(candidate) ||
+          !selection.exclude.some((excluded) => path.matchesGlob(candidate, excluded)),
+      )
     );
   });
 }
 
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {
-  const candidateFiles = includePatterns.some(isGlobTarget)
+  const selection = splitIncludePatterns(includePatterns);
+  const candidateFiles = selection.include.some(isGlobTarget)
     ? listExplicitTestTargetFilesForCwd(cwd).toSorted()
     : [];
+  const matches = (file: string, pattern: string) =>
+    path.matchesGlob(path.resolve(cwd, file), path.resolve(cwd, pattern));
   return uniqueOrdered(
-    includePatterns.flatMap((pattern) => {
-      if (!isGlobTarget(pattern)) {
-        return [pattern];
-      }
-      return candidateFiles.filter((file) => path.matchesGlob(file, pattern));
+    selection.include.flatMap((pattern) => {
+      if (!isGlobTarget(pattern)) return [pattern];
+      return candidateFiles
+        .filter((file) => matches(file, pattern))
+        .map((file) => (path.isAbsolute(pattern) ? path.resolve(cwd, file) : file));
     }),
-  );
+  ).filter((file) => !selection.exclude.some((pattern) => matches(file, pattern)));
 }
 
 export function writeVitestIncludeFile(
@@ -6380,9 +6415,15 @@ function shellQuote(value: string) {
 function formatFailedShardRerunCommand(failure: FailedVitestShard) {
   const includePatterns = failure.includePatterns ?? [];
   if (includePatterns.length > 0) {
-    return ["pnpm", "test", ...includePatterns.map(shellQuote), "--", "--reporter=verbose"].join(
-      " ",
-    );
+    const selection = splitIncludePatterns(includePatterns);
+    return [
+      "pnpm",
+      "test",
+      ...selection.include.map(shellQuote),
+      "--",
+      ...selection.exclude.flatMap((pattern) => ["--exclude", shellQuote(pattern)]),
+      "--reporter=verbose",
+    ].join(" ");
   }
   return [
     "node",

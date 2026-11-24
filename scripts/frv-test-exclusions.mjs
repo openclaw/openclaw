@@ -132,6 +132,13 @@ export async function validateTestExclusions({ paths, configs, cwd = process.cwd
   }
 }
 
+function hasNoPluginOptions(plugins) {
+  return (
+    Array.isArray(plugins) &&
+    plugins.every((plugin) => !plugin || (Array.isArray(plugin) && hasNoPluginOptions(plugin)))
+  );
+}
+
 /** Absolute exclusions preserve exact identity across differently scoped inline projects. */
 export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -147,14 +154,37 @@ export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
     }
     return applyTestExclusions(project, paths, cwd, defaultExcludes);
   });
-  return {
+  const result = {
     ...config,
     test: {
       ...test,
-      exclude: [...(test.exclude ?? defaultExcludes), ...exclusions],
       ...(projects ? { projects } : {}),
     },
   };
+  const appendExclusions = (test) => {
+    test.exclude = [...(test.exclude ?? defaultExcludes), ...exclusions];
+  };
+  // Plain inline projects use Vitest's captured raw config and share its server.
+  // Adding a plugin would change that ownership. Existing plugin owners instead
+  // finish their deferred selection before this additive overlay is applied.
+  if (config.plugins === undefined || hasNoPluginOptions(config.plugins)) {
+    appendExclusions(result.test);
+  } else {
+    result.plugins = [
+      ...config.plugins,
+      {
+        name: "openclaw:frv-test-exclusions",
+        enforce: "post",
+        config: {
+          order: "post",
+          handler(config) {
+            appendExclusions((config.test ??= {}));
+          },
+        },
+      },
+    ];
+  }
+  return result;
 }
 
 /** Keep canonical config names: the candidate's native runners use them for preparation. */

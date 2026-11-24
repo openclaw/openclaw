@@ -4,7 +4,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { narrowIncludePatterns, resolveNonBrowserTestPattern } from "./vitest.include-patterns.ts";
+import {
+  narrowIncludePatterns,
+  resolveNonBrowserTestPattern,
+  splitIncludePatterns,
+} from "./vitest.include-patterns.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
@@ -85,7 +89,7 @@ function normalizeCliPattern(value: string): string {
 }
 
 function normalizeScopedDir(value: string | undefined): string {
-  return value?.trim().replaceAll("\\", "/").replace(/\/+$/u, "") ?? "";
+  return value ? normalizeVitestPath(value.trim()).replace(/\/+$/u, "") : "";
 }
 
 function hasRepoRootPrefix(value: string): boolean {
@@ -102,10 +106,7 @@ function looksLikeDirRelativePath(value: string): boolean {
 }
 
 function applyScopedDir(value: string, scopedDir: string): string {
-  const normalizedValue = value
-    .trim()
-    .replace(/^\.\/+/u, "")
-    .replaceAll("\\", "/");
+  const normalizedValue = normalizeVitestPath(value.trim().replace(/^\.\/+/u, ""));
   if (
     !scopedDir ||
     hasRepoRootPrefix(normalizedValue) ||
@@ -174,49 +175,69 @@ function normalizeCliFileFilter(filter: string): string {
   return normalizeVitestPath(filter.replace(/:\d+$/u, ""));
 }
 
-function loadPatternListFromArgvForScope(
-  argv: string[] = process.argv,
-  options: { scopedDir?: string } = {},
-): string[] | null {
+function narrowIncludePatternsForFilters(
+  includePatterns: string[],
+  filters: string[],
+  options: { scopedDir?: string; root?: string },
+) {
   const scopedDir = normalizeScopedDir(options.scopedDir);
-  const patterns = collectVitestFileFilters(argv.slice(2))
-    .map(normalizeCliFileFilter)
+  const patterns = filters
     .map((value) => applyScopedDir(value, scopedDir))
     .filter(looksLikeCliIncludePattern)
     .map(normalizeCliPattern);
-
-  return patterns.length > 0 ? [...new Set(patterns)] : null;
+  if (patterns.length === 0) return null;
+  const root = options.root ?? repoRoot;
+  return narrowIncludePatterns(includePatterns, [...new Set(patterns)], (value, pattern) =>
+    matchesVitestGlob(path.resolve(root, value), path.resolve(root, pattern)),
+  );
 }
 
 export function narrowIncludePatternsForCli(
   includePatterns: string[],
   argv: string[] = process.argv,
-  options: { scopedDir?: string } = {},
+  options: { scopedDir?: string; root?: string } = {},
 ): string[] | null {
-  const cliPatterns = loadPatternListFromArgvForScope(argv, options);
-  if (!cliPatterns) {
-    return null;
-  }
-
   // CLI operands may be absolute while canonical project ownership is repo-relative.
-  return narrowIncludePatterns(includePatterns, cliPatterns, (value, pattern) =>
-    matchesVitestGlob(path.resolve(repoRoot, value), path.resolve(repoRoot, pattern)),
+  return narrowIncludePatternsForFilters(
+    includePatterns,
+    collectVitestFileFilters(argv.slice(2)).map(normalizeCliFileFilter),
+    options,
   );
 }
 
 export function relativizeScopedPatterns(values: readonly string[], dir = ""): string[] {
-  const normalizedDir = dir.replaceAll("\\", "/").replace(/\/+$/u, "");
+  const normalizedDir = normalizeVitestPath(dir).replace(/\/+$/u, "");
   return values.map((value) => {
-    const normalized = value.replaceAll("\\", "/");
+    const sign = value[0] === "!" && value[1] !== "(" ? "!" : "";
+    const normalized = normalizeVitestPath(value.slice(sign.length));
     if (!normalizedDir) {
-      return normalized;
+      return sign + normalized;
     }
     if (normalized === normalizedDir) {
-      return ".";
+      return sign + ".";
     }
     const prefix = `${normalizedDir}/`;
-    return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+    return sign + (normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized);
   });
+}
+
+/** Absolute selections keep owner exclusions in the same physical project, even under --dir. */
+export function resolveNativeVitestExcludes(
+  values: readonly string[],
+  include: readonly string[],
+  dir: string,
+  effectiveDir = dir,
+): string[] {
+  const exclude = splitIncludePatterns(values).include;
+  if (
+    path.resolve(dir) === path.resolve(effectiveDir) &&
+    !splitIncludePatterns(include).include.some((pattern) => path.isAbsolute(pattern))
+  ) {
+    return exclude;
+  }
+  const { convertPathToPattern }: typeof import("tinyglobby") = require("tinyglobby");
+  const base = convertPathToPattern(path.resolve(dir));
+  return exclude.map((value) => (path.isAbsolute(value) ? value : `${base}/${value}`));
 }
 
 /** Project one candidate through the same scoped include and CLI file filters as Vitest. */
@@ -233,13 +254,17 @@ export function matchesVitestCliSelection(
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
     narrowIncludePatternsForCli(include, ["node", "vitest", ...args], { scopedDir }) ??
     include;
+  const selection = splitIncludePatterns(patterns);
   const relativeFile = path.posix.relative(scopedDir, file);
   const absoluteFile = normalizeVitestPath(path.resolve(repoRoot, file));
   if (
-    !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
+    !relativizeScopedPatterns(selection.include, scopedDir).some((pattern) =>
       matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
     ) ||
-    collectVitestExcludePatterns(args).some((pattern) =>
+    [
+      ...relativizeScopedPatterns(selection.exclude, scopedDir),
+      ...collectVitestExcludePatterns(args),
+    ].some((pattern) =>
       matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
     )
   ) {

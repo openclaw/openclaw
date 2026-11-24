@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
@@ -32,9 +33,55 @@ describe("unit-fast vitest lane", () => {
     unitFastAnalysis = paths.collectUnitFastTestFileAnalysis();
   });
 
+  it("keeps all three fast owners and ordinary exclusions on the invocation root", () => {
+    const rootA = tempDirs.make("fast-root-a-");
+    const rootB = tempDirs.make("fast-root-b-");
+    const moduleUrl = (file: string) => JSON.stringify(pathToFileURL(path.resolve(file)).href);
+    const result = spawnNodeEvalSync(
+      `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import path from "node:path";
+      import {spawnSync} from "node:child_process";
+      import {resolveConfig} from "vitest/node";
+      const roots=${JSON.stringify([rootA, rootB])};
+      for(const root of roots) assert.equal(spawnSync("git",["init"],{cwd:root}).status,0);
+      const files=["src/agents/proof-pure.test.ts","src/test-utils/temp-home.test.ts","src/utils.test.ts"];
+      for(const [index,file] of files.entries()){
+        const target=path.join(roots[1],file);
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.writeFileSync(target,index===2
+          ? 'import {vi,it} from "vitest"; vi.useFakeTimers(); it("timer",()=>{});'
+          : ${JSON.stringify(pureTest)});
+      }
+      process.chdir(roots[0]);
+      const {createUnitFastVitestConfig:ordinary}=await import(${moduleUrl("test/vitest/vitest.unit-fast.config.ts")});
+      const {createUnitFastIsolatedVitestConfig:isolated}=await import(${moduleUrl("test/vitest/vitest.unit-fast-isolated.config.ts")});
+      const {createUnitFastFakeTimersVitestConfig:timers}=await import(${moduleUrl("test/vitest/vitest.unit-fast-fake-timers.config.ts")});
+      const {createScopedVitestConfig}=await import(${moduleUrl("test/vitest/vitest.scoped-config.ts")});
+      for(const root of [roots[0],roots[1],roots[0]]){
+        const includeFile=path.join(root,"selection.json");
+        fs.writeFileSync(includeFile,JSON.stringify(files));
+        const env={OPENCLAW_VITEST_INCLUDE_FILE:includeFile};
+        for(const [index,create] of [ordinary,isolated,timers].entries()){
+          const {test}=await resolveConfig({config:false,root},create(env,{argv:["node","vitest","run"]}));
+          assert.deepEqual(test.include,root===roots[1]?[files[index]]:[]);
+        }
+        const {test}=await resolveConfig({config:false,root},
+          createScopedVitestConfig(files,{env,argv:["node","vitest","run"]}));
+        assert.deepEqual(files.filter(file=>test.exclude.includes(file)),root===roots[1]?files:[]);
+      }
+      assert.equal(process.cwd(),roots[0]);
+    `,
+      { evalFlag: "-e", imports: ["tsx"] },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("classifies selected sources without truncating full ownership or lifecycle drains", () => {
     const script = `
       import assert from "node:assert/strict";
+      import { resolveConfig } from "vitest/node";
       import childProcess from "node:child_process";
       import fs from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
@@ -98,7 +145,8 @@ describe("unit-fast vitest lane", () => {
       }
       assert.equal(reads.unselected, 0);
       reads.hook = reads.outside = reads.unselected = 0;
-      await import("./test/vitest/vitest.hooks.config.ts?scope-probe=" + Date.now());
+      const { default: hooksConfig } = await import("./test/vitest/vitest.hooks.config.ts?scope-probe=" + Date.now());
+      await resolveConfig({ config: false }, hooksConfig);
       const scoped = { ...reads };
       reads.unselected = 0;
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fast-selection-"));
@@ -115,21 +163,23 @@ describe("unit-fast vitest lane", () => {
           }
           for (const [index, name] of ["unit-fast", "unit-fast-isolated", "unit-fast-fake-timers"].entries()) {
             const { default: config } = await import("./test/vitest/vitest." + name + ".config.ts?io-probe=" + mode);
-            assert.deepEqual(config.test.include, [selectedTests[index]]);
+            const resolved = await resolveConfig({ config: false }, config);
+            assert.deepEqual(resolved.test.include, [selectedTests[index]]);
           }
         }
         const { default: unitConfig, createUnitVitestConfigWithOptions } = await import("./test/vitest/vitest.unit.config.ts?io-probe=" + Date.now());
         const cliUnitConfig = createUnitVitestConfigWithOptions({}, {
           argv: ["node", "vitest", "run", ...selectedTests],
         });
-        for (const { test } of [unitConfig, cliUnitConfig]) {
+        for (const config of [unitConfig, cliUnitConfig]) {
+          const { test } = await resolveConfig({ config: false }, config);
           assert.deepEqual(test.include, selectedTests);
           assert.deepEqual(test.exclude.filter((file) => selectedTests.includes(file)), selectedTests.slice(0, 3));
         }
         assert.deepEqual([gitLsFilesCalls, scoped.hook, scoped.outside, reads.unselected], [0, 1, 0, 0]);
         assert.ok(readdirSyncCalls >= 0 && readdirSyncCalls < 20);
         const fullUnitConfig = createUnitVitestConfigWithOptions({}, { argv: ["node", "vitest", "run"] });
-        assert.ok(fullUnitConfig.test.exclude.includes("src/hooks/frontmatter.test.ts"));
+        assert.ok((await resolveConfig({ config: false }, fullUnitConfig)).test.exclude.includes("src/hooks/frontmatter.test.ts"));
         assert.equal(gitLsFilesCalls, 0);
         delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
         process.argv = ["node", "vitest", "run"];
@@ -140,7 +190,8 @@ describe("unit-fast vitest lane", () => {
           const selectedFile = path.join(directory, "lifecycle-" + index + ".json");
           fs.writeFileSync(selectedFile, JSON.stringify(spec.includePatterns));
           process.env.OPENCLAW_VITEST_INCLUDE_FILE = selectedFile;
-          const { default: { test } } = await import("./" + spec.config + "?lifecycle-probe=" + index);
+          const { default: config } = await import("./" + spec.config + "?lifecycle-probe=" + index);
+          const { test } = await resolveConfig({ config: false }, config);
           const directoryPrefix = path.relative(process.cwd(), test.dir ?? process.cwd());
           const admitted = lifecycleFiles.filter((file) => {
             const relative = path.relative(directoryPrefix || ".", file).replaceAll("\\\\", "/");
@@ -176,6 +227,7 @@ describe("unit-fast vitest lane", () => {
     const result = spawnNodeEvalSync(
       `
         import assert from "node:assert/strict";
+        import { resolveConfig } from "vitest/node";
         import { spawnSync } from "node:child_process";
         import fs from "node:fs";
         import path from "node:path";
@@ -207,17 +259,20 @@ describe("unit-fast vitest lane", () => {
           "test/vitest/vitest.unit-fast-isolated.config.ts": createUnitFastIsolatedVitestConfig,
         };
         try {
-          const runs = specs.map((spec) => {
+          const runs = [];
+          for (const spec of specs) {
             writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
-            return { config: spec.config, include: factories[spec.config](spec.env).test.include };
-          });
+            const resolved = await resolveConfig({ config: false, root: process.cwd() }, factories[spec.config](spec.env));
+            runs.push({ config: spec.config, include: resolved.test.include });
+          }
           assert.deepEqual(paths.getUnitFastTestFiles(), [...otherRoots, e2eMockHelper, harness, mockHelper, pure, quoted, stateful].toSorted());
           assert.deepEqual(paths.getUnitFastIsolatedTestFiles(), [e2eMockHelper, harness, mockHelper, stateful]);
           assert.deepEqual(runs, [
             { config: "test/vitest/vitest.unit-fast.config.ts", include: [pure] },
             { config: "test/vitest/vitest.unit-fast-isolated.config.ts", include: [e2eMockHelper, harness, mockHelper, stateful] },
           ]);
-          assert.deepEqual(createScopedVitestConfig(["src/hooks/**/*.test.ts"], { env: {} }).test.exclude
+          assert.deepEqual((await resolveConfig({ config: false, root: process.cwd() },
+            createScopedVitestConfig(["src/hooks/**/*.test.ts"], { env: {} }))).test.exclude
             .filter((file) => file.startsWith("src/hooks/")), [e2eMockHelper, harness, mockHelper, pure, quoted, stateful]);
           assert.equal(paths.resolveUnitFastTestIncludePattern(ignored), null);
           assert.equal(paths.isUnitFastTestFile(quoted), true);
@@ -284,8 +339,10 @@ describe("unit-fast vitest lane", () => {
 
   it.each([undefined, cli("--config", "test/vitest/vitest.unit-fast.config.ts")])(
     "keeps cache-friendly defaults with CLI arguments %j",
-    (argv) => {
-      const testConfig = createUnitFastVitestConfig({}, { argv }).test!;
+    async (argv) => {
+      const testConfig = (
+        await resolveConfig({ config: false }, createUnitFastVitestConfig({}, { argv }))
+      ).test;
       expect(testConfig).toMatchObject({
         isolate: false,
         runner: undefined,
@@ -298,14 +355,16 @@ describe("unit-fast vitest lane", () => {
     },
   );
 
-  it("keeps excluded stateful files out of directory-scoped CLI runs", () => {
+  it("keeps excluded stateful files out of directory-scoped CLI runs", async () => {
     // Directory filters must not admit stateful siblings into the shared worker.
     const otherLaneFiles = new Set([
       ...paths.getUnitFastTimerTestFiles(),
       ...paths.getUnitFastIsolatedTestFiles(),
     ]);
     for (const dir of ["src/plugins", "src/agents", "src/commands"]) {
-      const testConfig = createUnitFastVitestConfig({}, { argv: cli(dir) }).test!;
+      const testConfig = (
+        await resolveConfig({ config: false }, createUnitFastVitestConfig({}, { argv: cli(dir) }))
+      ).test;
       const include = testConfig.include as string[];
       const expected = unitFastTestFiles.filter(
         (file) => file.startsWith(`${dir}/`) && !otherLaneFiles.has(file),
@@ -316,8 +375,12 @@ describe("unit-fast vitest lane", () => {
 
     expect(paths.isUnitFastTestFile("src/plugins/install-persistence.test.ts")).toBe(false);
 
-    const contractsInclude = createContractsPluginVitestConfig({}, cli("src/plugins")).test!
-      .include;
+    const contractsInclude = (
+      await resolveConfig(
+        { config: false },
+        createContractsPluginVitestConfig({}, cli("src/plugins")),
+      )
+    ).test.include;
     expect(contractsInclude).toEqual(pluginContractPatterns);
   });
 
@@ -331,7 +394,7 @@ describe("unit-fast vitest lane", () => {
     }
   });
 
-  it("routes audited stateful-looking tests through the isolated fast lane", () => {
+  it("routes audited stateful-looking tests through the isolated fast lane", async () => {
     const forcedFileSet = new Set(paths.forcedUnitFastTestFiles);
     const forcedAnalysis = unitFastAnalysis.filter((entry) => forcedFileSet.has(entry.file));
     expect(forcedAnalysis).toHaveLength(paths.forcedUnitFastTestFiles.length);
@@ -350,7 +413,9 @@ describe("unit-fast vitest lane", () => {
         expect(paths.resolveUnitFastIsolatedTestIncludePattern(file)).toBe(file);
       }
     }
-    expect(createUnitFastIsolatedVitestConfig({}).test).toMatchObject({
+    expect(
+      (await resolveConfig({ config: false }, createUnitFastIsolatedVitestConfig({}))).test,
+    ).toMatchObject({
       isolate: true,
       runner: undefined,
       include: unitFastIsolatedTestFiles,
@@ -358,7 +423,7 @@ describe("unit-fast vitest lane", () => {
     });
   });
 
-  it("keeps registry-owning helper consumers exactly once in the isolated fast lane", () => {
+  it("keeps registry-owning helper consumers exactly once in the isolated fast lane", async () => {
     const files = [
       "src/agents/embedded-agent-runner/run/agent-hook-context.test.ts",
       "src/agents/harness/hook-context.test.ts",
@@ -385,8 +450,15 @@ describe("unit-fast vitest lane", () => {
       [{ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }, cli()],
       [{}, cli()],
     ] as const) {
-      const shared = createUnitFastVitestConfig(env, { argv: [...argv] }).test!;
-      const isolated = createUnitFastIsolatedVitestConfig(env, { argv: [...argv] }).test!;
+      const shared = (
+        await resolveConfig({ config: false }, createUnitFastVitestConfig(env, { argv: [...argv] }))
+      ).test;
+      const isolated = (
+        await resolveConfig(
+          { config: false },
+          createUnitFastIsolatedVitestConfig(env, { argv: [...argv] }),
+        )
+      ).test;
       expect(shared.isolate).toBe(false);
       expect(isolated.isolate).toBe(true);
       for (const file of files) {
@@ -396,7 +468,7 @@ describe("unit-fast vitest lane", () => {
     }
   });
 
-  it("routes fake-timer unit-fast tests through the serial fake-timer lane", () => {
+  it("routes fake-timer unit-fast tests through the serial fake-timer lane", async () => {
     const fakeTimerFiles = unitFastAnalysis
       .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
       .map((entry) => entry.file);
@@ -408,7 +480,9 @@ describe("unit-fast vitest lane", () => {
       expect(paths.resolveUnitFastTimerTestIncludePattern(file)).toBe(file);
     }
 
-    const timerConfig = createUnitFastFakeTimersVitestConfig({}).test!;
+    const timerConfig = (
+      await resolveConfig({ config: false }, createUnitFastFakeTimersVitestConfig({}))
+    ).test;
     expect(timerConfig).toMatchObject({
       include: unitFastTimerTestFiles,
       isolate: false,

@@ -1,11 +1,9 @@
 // Vitest unit fast fake timers config wires the unit fast fake timers test shard.
 import { defineConfig } from "vitest/config";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
-  narrowIncludePatternsForCli,
-} from "./vitest.pattern-file.ts";
+  createScopedVitestPatternPlugin,
+  withoutVitestPatternFields,
+} from "./vitest.scoped-patterns.ts";
 import {
   nonIsolatedRunnerPath,
   resolveRepoRootPath,
@@ -20,28 +18,29 @@ export function createUnitFastFakeTimersVitestConfig(
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
   const sharedSequence = (sharedTest as { sequence?: { groupOrder?: number } }).sequence;
-  const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const discoveryPatterns =
-    selectedPatterns ?? narrowIncludePatternsForCli(unitTestIncludePatterns, options.argv);
-  const unitFastTimerTestFiles = getUnitFastTimerTestFiles(discoveryPatterns);
-  const includeFromEnv = intersectIncludePatterns(
-    unitFastTimerTestFiles,
-    selectedPatterns,
-    matchesVitestGlob,
-  );
-  const cliInclude = narrowIncludePatternsForCli(unitFastTimerTestFiles, options.argv);
-
   return defineConfig({
     ...sharedVitestConfig,
+    plugins: [
+      ...sharedVitestConfig.plugins,
+      createScopedVitestPatternPlugin(
+        unitTestIncludePatterns,
+        {
+          env,
+          argv: options.argv,
+          intersectIncludeFile: true,
+          excludeUnitFastTests: false,
+          selectOwnedInclude: getUnitFastTimerTestFiles,
+        },
+        sharedTest.exclude ?? [],
+      ),
+    ],
     test: {
-      ...sharedTest,
+      ...withoutVitestPatternFields(sharedTest),
       name: "unit-fast-fake-timers",
       isolate: false,
       runner: nonIsolatedRunnerPath,
       // Env isolation only (no shared-setup mocks), mirroring unit-fast.
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
-      include: includeFromEnv ?? cliInclude ?? unitFastTimerTestFiles,
-      exclude: sharedTest.exclude ?? [],
       maxWorkers: 1,
       fileParallelism: false,
       sequence: {

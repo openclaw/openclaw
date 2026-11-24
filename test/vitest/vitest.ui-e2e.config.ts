@@ -2,13 +2,12 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig, type TestUserConfig } from "vitest/config";
 import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
-import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
-  narrowIncludePatternsForCli,
-  vitestE2eTestGlob,
-} from "./vitest.pattern-file.ts";
+import { matchesVitestGlob, vitestE2eTestGlob } from "./vitest.pattern-file.ts";
 import { createVitestProjectCachePlugin } from "./vitest.performance-config.ts";
+import {
+  createScopedVitestPatternPlugin,
+  withoutVitestPatternFields,
+} from "./vitest.scoped-patterns.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 import {
@@ -163,6 +162,29 @@ export const uiE2eSerialTestFiles = [
   ]),
 ].toSorted();
 
+export function resolveUiE2ePatternInventory(
+  env: Record<string, string | undefined> = process.env,
+) {
+  const baseTest = sharedVitestConfig.test ?? {};
+  const realGatewayExclude =
+    env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY === "1" ? uiE2eRealGatewayTestFiles : [];
+  const exclude = [
+    ...(baseTest.exclude ?? []).filter((pattern) => pattern !== vitestE2eTestGlob),
+    ...realGatewayExclude,
+    ...(env.OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT === "1"
+      ? uiE2eProductionArtifactTestFiles
+      : []),
+  ];
+  // These raw owner lists survive until each leaf resolves its native dir.
+  const include = env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT
+    ? uiE2eProductionArtifactTestFiles
+    : uiE2eIncludePatterns;
+  const serialInclude = (
+    intersectIncludePatterns(uiE2eSerialTestFiles, include, matchesVitestGlob)?.include ?? []
+  ).toSorted();
+  return { include, exclude, serialInclude };
+}
+
 export function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
   argv: string[] = process.argv,
@@ -178,36 +200,12 @@ export function createUiE2eVitestConfig(
   const baseTest = sharedVitestConfig.test ?? {};
   const maxWorkers = Math.min(2, baseTest.maxWorkers);
   const baseSequence = (baseTest as { sequence?: object }).sequence;
-  const realGatewayExclude =
-    env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY === "1" ? uiE2eRealGatewayTestFiles : [];
-  const exclude = [
-    ...(baseTest.exclude ?? []).filter((pattern) => pattern !== vitestE2eTestGlob),
-    ...realGatewayExclude,
-    ...(env.OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT === "1"
-      ? uiE2eProductionArtifactTestFiles
-      : []),
-  ];
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const selectedInclude =
-    includeFromEnv ??
-    narrowIncludePatternsForCli(uiE2eIncludePatterns, argv) ??
-    uiE2eIncludePatterns;
-  // ui-e2e-production-artifact-contract-v1: older frozen targets keep these tests in ordinary shards.
-  const include = env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT
-    ? (intersectIncludePatterns(
-        uiE2eProductionArtifactTestFiles,
-        selectedInclude,
-        matchesVitestGlob,
-      ) ?? [])
-    : selectedInclude;
-  const serialInclude = (
-    intersectIncludePatterns(uiE2eSerialTestFiles, include, matchesVitestGlob) ?? []
-  ).toSorted();
+  const { include, exclude, serialInclude } = resolveUiE2ePatternInventory(env);
   const chromiumSetup = "test/vitest/vitest.ui-e2e.global-setup.ts";
   // Vitest resolves dependency directories per project even though ProjectConfig
   // narrows that type. Keep the shared cached dependency roots intact.
   const projectTest: TestUserConfig = {
-    ...baseTest,
+    ...withoutVitestPatternFields(baseTest),
     environment: "node",
     // Polls await Chromium renders; all projects retain the loaded-CI budget.
     expect: { poll: { interval: 100, timeout: 15_000 } },
@@ -230,24 +228,79 @@ export function createUiE2eVitestConfig(
     sequence: { ...baseSequence, groupOrder: 1 },
   };
 
+  const sharedPlugins = sharedVitestConfig.plugins.map((plugin) =>
+    plugin.name === "openclaw:vitest-project-cache"
+      ? createVitestProjectCachePlugin(fileURLToPath(import.meta.url))
+      : plugin,
+  );
+  const patternPlugins = (
+    owned: string[],
+    excluded: string[],
+    intersect = true,
+    serial = false,
+  ) => [
+    ...sharedPlugins,
+    createScopedVitestPatternPlugin(
+      owned,
+      {
+        env,
+        argv,
+        intersectIncludeFile: intersect,
+        excludeUnitFastTests: false,
+      },
+      excluded,
+      (patterns) => ({
+        ...(serial ? { include: patterns.scopedInclude.toSorted() } : {}),
+      }),
+    ),
+  ];
+  const standaloneInclude =
+    intersectIncludePatterns(uiE2eStandaloneTestFiles, include, matchesVitestGlob)?.include ?? [];
+  const serialBundledInclude = serialInclude.filter(
+    (file) => !uiE2ePrivateServerTestFiles.includes(file),
+  );
+  const serialStandaloneInclude = serialInclude.filter((file) =>
+    uiE2ePrivateServerTestFiles.includes(file),
+  );
+  const bundledExclude = [...exclude, ...uiE2eSerialTestFiles, ...uiE2eStandaloneTestFiles];
+
   return defineConfig({
     ...base,
     cacheDir: ".artifacts/vite-ui-e2e",
+    plugins: [
+      ...sharedPlugins,
+      createScopedVitestPatternPlugin(
+        include,
+        {
+          env,
+          argv,
+          intersectIncludeFile: Boolean(env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT),
+          excludeUnitFastTests: false,
+        },
+        exclude,
+        (patterns, test) =>
+          test.passWithNoTests !== undefined
+            ? {}
+            : {
+                passWithNoTests:
+                  env.OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT === "1" &&
+                  patterns.scopedInclude.length > 0 &&
+                  patterns.scopedInclude.every((file) =>
+                    uiE2eProductionArtifactTestFiles.includes(file),
+                  ),
+              },
+      ),
+    ],
     test: {
-      ...baseTest,
-      exclude,
+      ...withoutVitestPatternFields(baseTest),
       // Only a selected bundle consumer acquires the invocation's shared preview.
       globalSetup: [],
       // Keep the root inventory visible to config discovery. Vitest runs only
       // the inline projects when `projects` is present.
-      include,
       maxWorkers,
       // A partial plan containing only delegated fixtures legitimately has no
       // ordinary tests; all other empty selections retain Vitest's failure.
-      passWithNoTests:
-        env.OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT === "1" &&
-        include.length > 0 &&
-        include.every((file) => uiE2eProductionArtifactTestFiles.includes(file)),
+      passWithNoTests: undefined,
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
       // Each project already composes the complete shared config and must not inherit it again.
       projects: [
@@ -256,11 +309,14 @@ export function createUiE2eVitestConfig(
           // Each resource owner supplies its complete inventory and setup.
           extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-bundled",
+          plugins: patternPlugins(
+            include,
+            bundledExclude,
+            Boolean(env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT),
+          ),
           test: {
             ...projectTest,
             ...bundledSetup,
-            exclude: [...exclude, ...uiE2eSerialTestFiles, ...uiE2eStandaloneTestFiles],
-            include,
             name: "ui-e2e-bundled",
             sequence: { ...baseSequence, groupOrder: 0 },
           },
@@ -269,11 +325,9 @@ export function createUiE2eVitestConfig(
           ...base,
           extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-standalone",
+          plugins: patternPlugins(standaloneInclude, exclude),
           test: {
             ...projectTest,
-            exclude,
-            include:
-              intersectIncludePatterns(uiE2eStandaloneTestFiles, include, matchesVitestGlob) ?? [],
             name: "ui-e2e-standalone",
             sequence: { ...baseSequence, groupOrder: 0 },
           },
@@ -282,12 +336,11 @@ export function createUiE2eVitestConfig(
           ...base,
           extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial",
+          plugins: patternPlugins(serialBundledInclude, exclude, true, true),
           test: {
             ...projectTest,
             ...bundledSetup,
             ...serialScheduling,
-            exclude,
-            include: serialInclude.filter((file) => !uiE2ePrivateServerTestFiles.includes(file)),
             name: "ui-e2e-serial",
           },
         },
@@ -295,11 +348,10 @@ export function createUiE2eVitestConfig(
           ...base,
           extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial-standalone",
+          plugins: patternPlugins(serialStandaloneInclude, exclude, true, true),
           test: {
             ...projectTest,
             ...serialScheduling,
-            exclude,
-            include: serialInclude.filter((file) => uiE2ePrivateServerTestFiles.includes(file)),
             name: "ui-e2e-serial-standalone",
           },
         },

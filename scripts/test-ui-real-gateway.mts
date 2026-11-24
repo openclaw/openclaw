@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveConfig } from "vitest/node";
 import { createPrebuiltUiE2eVitestConfig } from "../test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -126,16 +127,13 @@ export async function runRealGatewayUiTests(
     }
     return mergeVitestExitCodes(desktopCode, await vitest());
   }
-  const projects = config.test!.projects!;
+  // Leaf patterns are final only after native config hooks apply their constraints.
+  const { test: resolved } = await resolveConfig({ config: false }, config);
   const selected = (names: string[]) =>
     names.filter((name) =>
-      projects.some(
-        (project) =>
-          typeof project === "object" &&
-          project !== null &&
-          "test" in project &&
-          project.test?.name === name &&
-          project.test.include?.some((file) => file !== desktopFile),
+      resolved.resolvedProjects.some(
+        ({ projectConfig }) =>
+          projectConfig.name === name && projectConfig.include.some((file) => file !== desktopFile),
       ),
     );
   const serial = selected(["ui-e2e-serial", "ui-e2e-serial-standalone"]);

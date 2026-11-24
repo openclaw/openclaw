@@ -34,6 +34,193 @@ describe("frozen-target test exclusions", () => {
     expect(() => parseTestExclusions(json, scope)).toThrow();
   });
 
+  it("adds exclusions after deferred owners without changing inline server ownership", async () => {
+    const root = tempDirs.make("frv-deferred-owners-");
+    const write = (file: string, content: string) => {
+      const absolute = path.join(root, file);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, content);
+      return absolute;
+    };
+    const sourceUrl = (file: string) =>
+      JSON.stringify(pathToFileURL(path.join(repoRoot, file)).href);
+    write("package.json", '{"type":"module"}\n');
+    fs.symlinkSync(
+      fs.realpathSync(path.join(repoRoot, "node_modules")),
+      path.join(root, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const pluginExcluded = "src/plugins/first/retry.test.ts";
+    const nativeLoader = "src/plugins/bundled-plugin-metadata.public-surfaces.test.ts";
+    const pluginSibling = "src/plugins/second/retry.test.ts";
+    const extensionExcluded = "extensions/example/retry.test.ts";
+    const extensionSibling = "extensions/example/keep.test.ts";
+    const inherited = [
+      "src/plugins/inherited-blocked.test.ts",
+      "extensions/example/inherited-blocked.test.ts",
+    ];
+    for (const file of [
+      pluginExcluded,
+      nativeLoader,
+      pluginSibling,
+      extensionExcluded,
+      extensionSibling,
+      ...inherited,
+      "src/plugins/registry.runtime-config.test.ts",
+      "src/plugins/loader.test.ts",
+      "src/plugins/first/owner-blocked.test.ts",
+      "src/plugins/second/owner-blocked.test.ts",
+    ])
+      write(file, 'import { vi } from "vitest"; vi.resetModules();\n');
+    write("src/plugins/pure.test.ts", "export {};\n");
+    const includeFile = write(
+      "include.json",
+      JSON.stringify([
+        `${root.replaceAll(path.sep, "/")}/**/*.test.ts`,
+        ...inherited.map((file) => `!${path.join(root, file).replaceAll(path.sep, "/")}`),
+      ]),
+    );
+    const overrideIncludeFile = write(
+      "override-include.json",
+      JSON.stringify([
+        "src/plugins/first/*.test.ts",
+        "src/plugins/second/*.test.ts",
+        "!src/plugins/first/owner-blocked.test.ts",
+      ]),
+    );
+    const prefix = `
+import path from "node:path";
+import { createScopedVitestConfig } from ${sourceUrl("test/vitest/vitest.scoped-config.ts")};
+const root = ${JSON.stringify(root)}, sourceRoot = ${JSON.stringify(repoRoot)};
+const relocate = (config) => ({ ...config, extends: false, root, test: {
+  ...config.test, root, dir: path.resolve(root, path.relative(sourceRoot, config.test.dir ?? sourceRoot)),
+  runner: undefined, setupFiles: [], maxWorkers: 1,
+} });
+`;
+    const configs = [
+      "test/vitest/vitest.owned.config.ts",
+      "test/vitest/vitest.shared.config.ts",
+      "test/vitest/vitest.override.config.ts",
+    ];
+    const originals = [
+      `${prefix}
+import { createPluginsVitestConfig } from ${sourceUrl("test/vitest/vitest.plugins.config.ts")};
+import { createExtensionsVitestConfig } from ${sourceUrl("test/vitest/vitest.extensions.config.ts")};
+const plugins = createPluginsVitestConfig(process.env);
+export default { root, test: { sharedViteServer: true, projects: [
+  ...plugins.test.projects, createExtensionsVitestConfig(process.env),
+].map(relocate) } };
+`,
+      `${prefix}
+const config = relocate(createScopedVitestConfig(["src/plugins/**/*.test.ts"], {
+  dir: "src/plugins", env: process.env, excludeUnitFastTests: false,
+}));
+export default { ...config, test: { ...config.test, sharedViteServer: true, projects: [
+  { plugins: [false, [null, undefined, []]], test: {
+    name: "first", include: ["first/*.test.ts"], exclude: ["first/owner-blocked.test.ts"],
+  } },
+  { test: { name: "second", include: ["second/*.test.ts"], exclude: ["second/owner-blocked.test.ts"] } },
+] } };
+`,
+      `${prefix}
+const config = relocate(createScopedVitestConfig(["src/plugins/**/*.test.ts"], {
+  dir: "src/plugins", env: { ...process.env, OPENCLAW_VITEST_INCLUDE_FILE: ${JSON.stringify(overrideIncludeFile)} },
+  exclude: ["src/plugins/second/retry.test.ts"],
+}));
+export default { ...config, test: { ...config.test, name: "override",
+  exclude: ["second/owner-blocked.test.ts"],
+} };
+`,
+    ];
+    configs.forEach((file, index) => write(file, originals[index]!));
+    const probe = write(
+      "probe.mjs",
+      `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { createVitest } from "vitest/node";
+const root = ${JSON.stringify(root)}, configs = ${JSON.stringify(configs)};
+const originals = ${JSON.stringify(originals)};
+const removed = ${JSON.stringify([pluginExcluded, nativeLoader, extensionExcluded])};
+const scope = process.argv[2];
+const activeRemoved = scope === "plugins" ? removed.slice(0, 2) : scope === "extensions" ? removed.slice(2) : [];
+const rows = [
+  ${JSON.stringify([
+    [pluginExcluded, "plugins"],
+    [nativeLoader, "plugins-native-loader"],
+    [pluginSibling, "plugins"],
+    [extensionExcluded, "extensions"],
+    [extensionSibling, "extensions"],
+    ["src/plugins/first/owner-blocked.test.ts", "plugins"],
+    ["src/plugins/second/owner-blocked.test.ts", "plugins"],
+  ])},
+  ${JSON.stringify([
+    [pluginExcluded, "first"],
+    [pluginSibling, "second"],
+  ])},
+  ${JSON.stringify([
+    [pluginExcluded, "override"],
+    [pluginSibling, "override"],
+  ])},
+];
+for (const [index, config] of configs.entries()) {
+  const runner = await createVitest({ root, config: path.join(root, config), run: true, watch: false, reporters: [] });
+  try {
+    const actual = (await runner.globTestSpecifications()).map(spec =>
+      [path.relative(root, spec.moduleId).split(path.sep).join("/"), spec.project.name]).sort();
+    const expected = rows[index].filter(([file]) => !activeRemoved.includes(file)).sort();
+    assert.deepEqual(actual, expected, config);
+    if (index === 1) {
+      assert.equal(runner.projects.length, 2);
+      for (const project of runner.projects) {
+        assert.equal(project.sharedViteServer, true);
+        assert.equal(project.vite, runner.vite);
+      }
+    } else if (index === 0) {
+      assert.equal(runner.projects.length, 3);
+      assert.equal(new Set(runner.projects.map(project => project.vite)).size, 3);
+      for (const project of runner.projects) {
+        assert.equal(project.sharedViteServer, false);
+        assert.notEqual(project.vite, runner.vite);
+      }
+    }
+  } finally {
+    await runner.close();
+  }
+}
+if (!scope) {
+  const adapter = ${JSON.stringify(path.join(repoRoot, "scripts/frv-test-exclusions.mjs"))};
+  // Plugin and extension paths use separate validation scopes, just like FRV.
+  for (const [scope, paths] of [["plugins", removed.slice(0, 2)], ["extensions", removed.slice(2)]]) {
+    const result = spawnSync(process.execPath, [adapter, "run", "--", process.execPath, process.argv[1], scope], {
+      cwd: root, encoding: "utf8", env: { ...process.env, FRV_TEST_EXCLUDE_SCOPE: scope,
+        FRV_TEST_EXCLUDE_PATHS_JSON: JSON.stringify(paths), FRV_TEST_CONFIGS_JSON: JSON.stringify(configs) },
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    configs.forEach((file, index) => assert.equal(fs.readFileSync(path.join(root, file), "utf8"), originals[index]));
+  }
+}
+console.log("deferred exclusions and server ownership verified");
+`,
+    );
+    const result = await runNodeScript(
+      probe,
+      {
+        ...process.env,
+        NODE_OPTIONS: "",
+        NODE_PATH: "",
+        OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+      },
+      DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(result.stdout).toContain("deferred exclusions and server ownership verified");
+  });
+
   it("excludes exact files from native inline projects and restores candidate configs", async () => {
     const root = tempDirs.make("frv-test-exclusions-");
     const probe = path.join(root, "probe.mjs");

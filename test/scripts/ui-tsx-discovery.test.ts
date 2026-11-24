@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveConfig } from "vitest/node";
 import {
   resolveUiE2ePrTestSelection,
   hasSharedUiE2eInput,
@@ -180,6 +181,23 @@ describe("TSX discovery", () => {
       NonNullable<NonNullable<typeof uiConfig.test>["projects"]>[number],
       { test?: unknown }
     >;
+    const projects = await Promise.all(
+      (uiConfig.test?.projects ?? [])
+        .filter(
+          (project): project is UiProject =>
+            typeof project === "object" && project !== null && "test" in project,
+        )
+        .map(
+          async (project) =>
+            (await resolveConfig({ config: false }, { root: uiConfig.root, ...project })).test,
+        ),
+    );
+    const rootProjects = await Promise.all(
+      [createUiVitestConfig({}), createUiIsolatedVitestConfig({})].map(
+        async (config) => (await resolveConfig({ config: false }, config)).test,
+      ),
+    );
+    const node = (await resolveConfig({ config: false }, uiNodeConfig)).test;
     for (const [file, expected] of [
       ["src/component.test.tsx", "unit"],
       ["src/component.node.test.tsx", "unit-node"],
@@ -187,14 +205,10 @@ describe("TSX discovery", () => {
       ["src/component.browser.test.tsx", "browser"],
       ["../extensions/example/browser/view.test.tsx", "unit"],
     ] as const) {
-      const projects = (uiConfig.test?.projects ?? []).filter(
-        (project): project is UiProject =>
-          typeof project === "object" && project !== null && "test" in project,
-      );
       expect(
         projects
           .filter(
-            ({ test }) =>
+            (test) =>
               filterFilesByPatterns(
                 [file],
                 test?.include ?? [],
@@ -202,15 +216,12 @@ describe("TSX discovery", () => {
                 matchesVitestGlob,
               ).length,
           )
-          .map(({ test }) => test?.name),
+          .map((test) => test.name),
       ).toEqual([expected]);
       if (expected === "unit-node") {
-        expect(
-          filterFilesByPatterns([file], uiNodeConfig.test?.include ?? [], [], matchesVitestGlob),
-        ).toEqual([file]);
+        expect(filterFilesByPatterns([file], node.include, [], matchesVitestGlob)).toEqual([file]);
       }
       const repositoryFile = path.posix.normalize(`ui/${file}`);
-      const rootProjects = [createUiVitestConfig({}).test!, createUiIsolatedVitestConfig({}).test!];
       expect(
         rootProjects
           .filter(
@@ -253,7 +264,9 @@ describe("TSX discovery", () => {
         [`ui/src/**/*.test.${extension}`],
         matchesVitestGlob,
       )!;
-      expect(filterFilesByPatterns(files, selected, [], matchesVitestGlob)).toEqual(
+      expect(
+        filterFilesByPatterns(files, selected.include, selected.exclude, matchesVitestGlob),
+      ).toEqual(
         files
           .slice(0, 2)
           .filter((file) => extension === "{ts,tsx}" || file.endsWith(`.${extension}`))
@@ -315,18 +328,15 @@ describe("TSX discovery", () => {
       ),
     ).toEqual(["ui/src/**/*.test.ts"]);
     expect(
-      intersectIncludePatterns(
-        ["ui/src/**/*.test.ts"],
-        ["ui/src/**/*.test.tsx"],
-        matchesVitestGlob,
-      ),
+      intersectIncludePatterns(["ui/src/**/*.test.ts"], ["ui/src/**/*.test.tsx"], matchesVitestGlob)
+        ?.include,
     ).toEqual([]);
     expect(
       intersectIncludePatterns(
         ["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"],
         ["ui/src/**/*.test.{ts,tsx}"],
         matchesVitestGlob,
-      ),
+      )?.include,
     ).toEqual(["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"]);
   });
 
