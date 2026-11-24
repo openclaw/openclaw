@@ -75,68 +75,70 @@ export async function withRerank(
     },
     async (state) => {
       const requests: Recorded[] = [];
-      await withServer(
-        (request, response) => {
-          const chunks: Buffer[] = [];
-          request.on("data", (chunk: Buffer) => chunks.push(chunk));
-          request.on("end", () => {
-            const body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
-            requests.push({ path: request.url, auth: request.headers.authorization, body });
-            onRequest(requests);
-            const documents = body[field];
-            if (!Array.isArray(documents)) {
-              response.writeHead(422).end();
-              return;
+      try {
+        await withServer(
+          (request, response) => {
+            const chunks: Buffer[] = [];
+            request.on("data", (chunk: Buffer) => chunks.push(chunk));
+            request.on("end", () => {
+              const body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
+              requests.push({ path: request.url, auth: request.headers.authorization, body });
+              onRequest(requests);
+              const documents = body[field];
+              if (!Array.isArray(documents)) {
+                response.writeHead(422).end();
+                return;
+              }
+              const scores = documents.map((_, index) => [0.91, 0.62, 0.08][index] ?? 0);
+              response.setHeader("content-type", "application/json");
+              response.end(
+                JSON.stringify(
+                  field === "texts"
+                    ? scores.map((score, index) => ({ index, score })).toReversed()
+                    : {
+                        results: scores
+                          .map((relevance_score, index) => ({ index, relevance_score }))
+                          .toReversed(),
+                      },
+                ),
+              );
+            });
+          },
+          async (origin) => {
+            const config = rerankConfig(state.root, origin, apiKey);
+            const registry = await activateDecisionRegistry(config, {
+              onlyPluginIds: ["rerank"],
+              pluginSdkResolution: "src",
+              preferBuiltPluginArtifacts: false,
+              cache: false,
+            });
+            try {
+              await using run = await acquireAgentRunPreparedModelRuntime(
+                {
+                  config,
+                  agentId: "main",
+                  agentDir: resolveAgentDir(config, "main"),
+                  workspaceDir: config.agents.defaults.workspace,
+                  loadRuntimePlugins: true,
+                  runtimePluginSelections: [
+                    { provider: "rerank", modelId: "bge-reranker-v2-m3", agentId: "main" },
+                  ],
+                },
+                { catalogMode: "static" },
+              );
+              await use({ config, registry, run, requests });
+            } finally {
+              prepareDecisionProviderReload(registry, new Set(["rerank"]));
+              for (const record of registry.plugins) {
+                await getPluginInstance(record)?.dispose();
+              }
             }
-            const scores = documents.map((_, index) => [0.91, 0.62, 0.08][index] ?? 0);
-            response.setHeader("content-type", "application/json");
-            response.end(
-              JSON.stringify(
-                field === "texts"
-                  ? scores.map((score, index) => ({ index, score })).toReversed()
-                  : {
-                      results: scores
-                        .map((relevance_score, index) => ({ index, relevance_score }))
-                        .toReversed(),
-                    },
-              ),
-            );
-          });
-        },
-        async (origin) => {
-          const config = rerankConfig(state.root, origin, apiKey);
-          const registry = await activateDecisionRegistry(config, {
-            onlyPluginIds: ["rerank"],
-            pluginSdkResolution: "src",
-            preferBuiltPluginArtifacts: false,
-            cache: false,
-          });
-          try {
-            await using run = await acquireAgentRunPreparedModelRuntime(
-              {
-                config,
-                agentId: "main",
-                agentDir: resolveAgentDir(config, "main"),
-                workspaceDir: config.agents.defaults.workspace,
-                loadRuntimePlugins: true,
-                runtimePluginSelections: [
-                  { provider: "rerank", modelId: "bge-reranker-v2-m3", agentId: "main" },
-                ],
-              },
-              { catalogMode: "static" },
-            );
-            await use({ config, registry, run, requests });
-          } finally {
-            prepareDecisionProviderReload(registry, new Set(["rerank"]));
-            for (const record of registry.plugins) {
-              await getPluginInstance(record)?.dispose();
-            }
-          }
-        },
-      ).finally(() => {
-        // Catalog workers still own native capture locks under the fixture root.
-        return resetDecisionTestRuntime();
-      });
+          },
+        );
+      } finally {
+        // Retire native catalog workers before the fixture deletes their capture root.
+        await resetDecisionTestRuntime();
+      }
     },
   );
 }
