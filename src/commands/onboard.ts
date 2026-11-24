@@ -7,7 +7,7 @@
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { createConfigIO } from "./config/config.js";
-import { parseGatewayPortEnvValue, resolveGatewayPort } from "./config/paths.js";
+import { parseGatewayPortEnvValue, resolveGatewayPort } from "./config/gateway-port.js";
 import { readActiveGatewayLockPort } from "./infra/gateway-lock.js";
 import { isMainModule } from "./infra/is-main.js";
 

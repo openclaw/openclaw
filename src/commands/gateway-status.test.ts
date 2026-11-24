@@ -109,6 +109,11 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: (await import("../config/config.js")).resolveGatewayPort,
+}));
+
 vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/bonjour-discovery.js")>()),
   discoverGatewayBeacons: mocks.discoverGatewayBeacons,

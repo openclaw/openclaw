@@ -10,9 +10,9 @@ import {
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
+import { resolveGatewayPort } from "../../config/gateway-port.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
-import { resolveGatewayPort } from "../../config/paths.js";
 import {
   installDurableServiceCli,
   isDisposableEntrypoint,

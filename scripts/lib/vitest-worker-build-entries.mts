@@ -236,6 +236,7 @@ export const preservedModuleBuildSources = [
   "src/commands/doctor-lint.ts",
   "src/commands/doctor-post-upgrade.ts",
   "src/config/config.ts",
+  "src/config/gateway-port.ts",
   "src/config/paths.ts",
   "src/plugins/installed-plugin-index-records.ts",
   "src/plugins/plugin-lifecycle-lease.ts",

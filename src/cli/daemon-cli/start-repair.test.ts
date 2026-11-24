@@ -91,6 +91,11 @@ vi.mock("../../config/paths.js", () => ({
   resolveStateDir: resolveStateDirMock,
 }));
 
+vi.mock("../../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/gateway-port.js")>()),
+  resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
+}));
+
 vi.mock("../../daemon/program-args.js", () => ({
   OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveOpenClawWrapperPath: resolveOpenClawWrapperPathMock,

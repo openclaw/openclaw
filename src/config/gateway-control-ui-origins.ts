@@ -1,5 +1,5 @@
+import { DEFAULT_GATEWAY_PORT } from "./gateway-port.js";
 import { resolveGatewayPublicOrigin } from "./gateway-public-origin.js";
-import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** An authored list overrides the advertised origin, including an empty list. */

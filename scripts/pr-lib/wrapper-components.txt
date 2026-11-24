@@ -735,6 +735,7 @@ src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts
 src/config/official-external-channel-secret-schema.ts
 src/config/patch-replace-paths.ts
+src/config/gateway-port.ts
 src/config/paths.ts
 src/config/plugin-auto-enable.channels.ts
 src/config/plugin-auto-enable.materialize.ts

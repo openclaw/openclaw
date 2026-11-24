@@ -21,7 +21,10 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: probes.wait,
 }));
-vi.mock("../config/paths.js", () => ({ resolveGatewayPort: () => 18789 }));
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: () => 18789,
+}));
 vi.mock("../daemon/service.js", () => ({ resolveGatewayService: () => ({}) }));
 vi.mock("./openclaw-root.js", () => ({ resolveOpenClawPackageRoot: probes.root }));
 vi.mock("./package-json.js", () => ({ readPackageVersion: probes.version }));

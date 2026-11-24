@@ -3,11 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
-import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";

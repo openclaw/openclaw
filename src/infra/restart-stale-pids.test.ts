@@ -86,7 +86,8 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../config/paths.js", () => ({
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
   resolveGatewayPort: () => mockResolveGatewayPort(),
 }));
 

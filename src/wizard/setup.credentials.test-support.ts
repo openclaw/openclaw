@@ -8,6 +8,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
 
+type ResolveProviderOnboardAuthFlags =
+  typeof import("../plugins/provider-auth-choices.js").resolveProviderOnboardAuthFlags;
+
 export function agentConfig(agents: NonNullable<OpenClawConfig["agents"]> = {}): OpenClawConfig {
   return {
     agents: {
@@ -37,6 +40,10 @@ export function createEmptyWizardPrompter() {
   });
 }
 
+export function modelConfig(primary: string): OpenClawConfig {
+  return { agents: { defaults: { model: { primary } }, entries: { main: {} } } };
+}
+
 export function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
   return {
     agents: {
@@ -56,6 +63,20 @@ export function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenCla
         },
       },
     },
+  };
+}
+
+export function providerFlag(
+  optionKey: ReturnType<ResolveProviderOnboardAuthFlags>[number]["optionKey"],
+  authChoice: ReturnType<ResolveProviderOnboardAuthFlags>[number]["authChoice"],
+  cliFlag: string,
+) {
+  return {
+    optionKey,
+    authChoice,
+    cliFlag,
+    cliOption: `${cliFlag} <key>`,
+    description: "Provider credential",
   };
 }
 

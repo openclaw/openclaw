@@ -2,7 +2,7 @@ import path from "node:path";
 import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { formatCliJsonFailure } from "../../cli/failure-output.js";
-import { resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/gateway-port.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { isDefaultStateDir, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

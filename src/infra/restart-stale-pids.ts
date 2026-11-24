@@ -4,7 +4,7 @@ import { formatErrorMessage as formatRawErrorMessage } from "@openclaw/normaliza
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
-import { resolveGatewayPort } from "../config/paths.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-tree.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";

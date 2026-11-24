@@ -10,7 +10,7 @@ import {
 } from "../cli/daemon-cli/restart-health-probe.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
 import type { GatewayRestartWaitOutcome } from "../cli/daemon-cli/restart-health.types.js";
-import { resolveGatewayPort } from "../config/paths.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";

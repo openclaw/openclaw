@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/gateway-port.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../../daemon/service-types.js";

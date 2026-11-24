@@ -1,7 +1,7 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/gateway-port.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";

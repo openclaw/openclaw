@@ -66,6 +66,11 @@ vi.mock("../../config/mutate.js", () => ({
 }));
 vi.mock("../../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/paths.js")>()),
+  resolveGatewayPort: (await import("../../config/gateway-port.js")).resolveGatewayPort,
+}));
+
+vi.mock("../../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/gateway-port.js")>()),
   resolveGatewayPort: resolveGatewayPortMock,
 }));
 vi.mock("../../gateway/auth.js", () => ({

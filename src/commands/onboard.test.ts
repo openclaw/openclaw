@@ -107,6 +107,11 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: () => 18_789,
 }));
 
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: (await import("../config/config.js")).resolveGatewayPort,
+}));
+
 vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
   readConfigSnapshotBeforeEngineSelection: async () => ({

@@ -5,7 +5,7 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
-import { resolveGatewayPort } from "../../config/paths.js";
+import { resolveGatewayPort } from "../../config/gateway-port.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { readPackageVersion } from "../../infra/package-json.js";
