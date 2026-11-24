@@ -59,7 +59,7 @@ export type ChatModelControlsProps = {
   thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
-  onModelSetup?: () => void;
+  onModelSetup?: (provider?: string) => void;
   onProviderSettings?: (provider: string) => void;
   onModelPickerOpen?: () => unknown;
   onModelPickerOpenChange?: (open: boolean) => void;

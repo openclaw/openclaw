@@ -187,7 +187,14 @@ function catalogHostMapper(
           return {
             threadId: session.threadId,
             ...(exportHomeId && exportHomeId === session.sourceHomeId
-              ? { exportPolicy: { origin: "native-local" as const, automatic: true } }
+              ? {
+                  exportPolicy: {
+                    origin: "native-local" as const,
+                    automatic: true,
+                    // Every home can switch between primary and qualified host aliases.
+                    // Its pre-existing publication cannot be identified from this row.
+                  },
+                }
               : host.kind === "node" || home?.appServer.connectionClass === "remote"
                 ? { exportPolicy: { origin: "federated" as const, automatic: false } }
                 : {}),
