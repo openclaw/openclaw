@@ -98,9 +98,10 @@ describe("Beam terminal retry policy", () => {
     );
     try {
       await withServer(handler, async (baseUrl) => {
+        const catalog = createBeamTestCatalog({ sessions: () => activeSessions });
         const runner = createBeamTestRunner({
           endpoint: `${baseUrl}/api/v1/beam/sessions`,
-          listCatalogs: () => [createBeamTestCatalog({ sessions: () => activeSessions })],
+          listCatalogs: () => [catalog],
         });
         for (let offset = 0; offset < BEAM_MAX_SESSIONS; offset += 32) {
           const count = Math.min(32, BEAM_MAX_SESSIONS - offset);
