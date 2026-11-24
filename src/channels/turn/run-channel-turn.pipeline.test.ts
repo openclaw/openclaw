@@ -44,7 +44,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const { emitMessageSent, readRecentUserAssistantTextForSession: readRecent } = channelTurnMocks;
+const { emitMessageSent, readRecentUserAssistantTurnsForSession: readRecent } = channelTurnMocks;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;

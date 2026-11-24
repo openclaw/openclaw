@@ -1,16 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import {
+  readRecentUserAssistantTextForSession,
+  readRecentUserAssistantTurnsForSession,
+} from "../../config/sessions/transcript.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
+const transcriptRead = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../../config/sessions/transcript.js").readRecentUserAssistantTextForSession
+  >(),
+);
+
 // mock-isolation: Supply transcript rows without real session state; the adjacent SQLite suite covers persistence.
-vi.mock("../../config/sessions/transcript.js", () => ({
-  readRecentUserAssistantTextForSession: vi.fn(),
-  readRecentUserAssistantTurnsForSession: vi.fn(),
-}));
+vi.mock("../../config/sessions/transcript.js", () => {
+  // Wrapping the fixture keeps the two readers' call histories separate.
+  const read = (...args: Parameters<typeof transcriptRead>) => transcriptRead(...args);
+  return {
+    readRecentUserAssistantTextForSession: vi.fn(read),
+    readRecentUserAssistantTurnsForSession: vi.fn(read),
+  };
+});
 
 const readRecent = vi.mocked(readRecentUserAssistantTextForSession);
+const readTurns = vi.mocked(readRecentUserAssistantTurnsForSession);
 
 function transcriptPair(question: string, reply: string) {
   return [
@@ -39,7 +53,9 @@ function chatWindow(messages: object[], overrides: Partial<WindowEntry> = {}) {
 
 describe("session transcript inbound context", () => {
   beforeEach(() => {
-    readRecent.mockReset();
+    transcriptRead.mockReset();
+    readRecent.mockClear();
+    readTurns.mockClear();
   });
 
   async function merged(
@@ -58,7 +74,7 @@ describe("session transcript inbound context", () => {
   }
 
   it("does not repeat turns the running session already replays in flat history", async () => {
-    readRecent.mockResolvedValue(transcriptPair("deploy at noon", "remind at 11:50"));
+    transcriptRead.mockResolvedValue(transcriptPair("deploy at noon", "remind at 11:50"));
     const live = [{ messageId: "m2", sender: "Bob", body: "unseen side note", timestamp: 3_000 }];
     for (const SessionTranscriptContext of [
       { historyLimit: 3 },
@@ -77,10 +93,10 @@ describe("session transcript inbound context", () => {
   });
 
   it("restores another session's transcript turns when the record session differs", async () => {
-    readRecent.mockResolvedValue(transcriptPair("deploy at noon", "remind at 11:50"));
+    transcriptRead.mockResolvedValue(transcriptPair("deploy at noon", "remind at 11:50"));
     const ctx = await merged({}, "main", "agent:main:slack:channel:c1:thread:1");
 
-    expect(readRecent.mock.calls[0]?.[0]).toMatchObject({
+    expect(readTurns.mock.calls[0]?.[0]).toMatchObject({
       sessionKey: "agent:main:slack:channel:c1:thread:1",
     });
     expect(ctx.InboundHistory).toEqual([
@@ -90,7 +106,7 @@ describe("session transcript inbound context", () => {
   });
 
   it("renders the configured native window without restoring stale transcript content", async () => {
-    readRecent.mockResolvedValue([{ role: "user", text: "deleted platform message" }]);
+    transcriptRead.mockResolvedValue([{ role: "user", text: "deleted platform message" }]);
     const ctx = await merged({
       ChatType: "channel",
       SessionTranscriptContext: { historyLimit: 50, historyKind: "recent" },
@@ -108,7 +124,7 @@ describe("session transcript inbound context", () => {
   });
 
   it("restores marked Cron delivery context when no live chat window survives", async () => {
-    readRecent.mockImplementation(async (params) =>
+    transcriptRead.mockImplementation(async (params) =>
       params.includeCronDirectDeliveryContext
         ? [{ id: "cron-1", role: "assistant", text: "scheduled payload", timestamp: 2_000 }]
         : [],
@@ -124,7 +140,7 @@ describe("session transcript inbound context", () => {
   });
 
   it("dedupes the canonical turn against the live window and merges chronologically", async () => {
-    readRecent.mockResolvedValue(transcriptPair("cached user turn", "canonical reply"));
+    transcriptRead.mockResolvedValue(transcriptPair("cached user turn", "canonical reply"));
     const ctx = await merged(
       {
         InboundHistory: [
@@ -144,7 +160,7 @@ describe("session transcript inbound context", () => {
   });
 
   it("uses channel projection ids to avoid duplicating rendered assistant replies", async () => {
-    readRecent.mockResolvedValue([
+    transcriptRead.mockResolvedValue([
       { id: "a1", role: "assistant", text: "**same answer**", timestamp: 2_000 },
       { id: "a2", role: "assistant", text: "[[reply_to_current]]Legacy", timestamp: 2_500 },
       { id: "u2", role: "user", text: "follow-up", timestamp: 3_000, sourceChannel: "gateway" },
@@ -182,7 +198,9 @@ describe("session transcript inbound context", () => {
   });
 
   it("keeps a reply target bounded when it consumes the full window", async () => {
-    readRecent.mockResolvedValue([{ id: "a1", role: "assistant", text: "old", timestamp: 1_000 }]);
+    transcriptRead.mockResolvedValue([
+      { id: "a1", role: "assistant", text: "old", timestamp: 1_000 },
+    ]);
     const ctx = await merged(
       {
         SessionTranscriptContext: { chatWindow: true, historyLimit: 1 },
@@ -197,7 +215,7 @@ describe("session transcript inbound context", () => {
   });
 
   it("preserves a provider-owned thread window without repeating replayed turns", async () => {
-    readRecent.mockResolvedValue(transcriptPair("canonical question", "canonical reply"));
+    transcriptRead.mockResolvedValue(transcriptPair("canonical question", "canonical reply"));
     const graphMessages = [
       { message_id: "graph-parent", sender: "Parent", body: "Graph parent" },
       { message_id: "graph-reply", sender: "Teammate", body: "Graph reply" },

@@ -85,7 +85,7 @@ import {
   preparedTarget,
   resetPreparedReplySessionStore,
 } from "./get-reply-run.test-support.js";
-import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
+import { buildSourceConversationContexts } from "./groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -98,7 +98,6 @@ import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 import { bindReplySourceInput } from "./reply-source-binding.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import {
-  createSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
@@ -300,10 +299,16 @@ vi.mock("./get-reply-fast-path.js", () => ({
   shouldUseReplyFastTestRuntime: vi.fn().mockReturnValue(false),
 }));
 
+function conversationModes(automatic = "", message_tool_only = automatic) {
+  return {
+    sourceConversationContextByMode: { automatic, message_tool_only },
+    assessedConversationContextByMode: undefined,
+  };
+}
+
 vi.mock("./groups.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./groups.js")>()),
-  buildSourceConversationContext: vi.fn().mockReturnValue(""),
-  buildGroupIntro: vi.fn().mockReturnValue(""),
+  buildSourceConversationContexts: vi.fn(),
 }));
 
 vi.mock("./inbound-meta.js", async (importOriginal) => ({
@@ -787,8 +792,7 @@ describe("runPreparedReply media-only handling", () => {
     loadSessionEntryMock.mockReset();
     vi.clearAllMocks();
     resetPreparedReplySessionStore();
-    vi.mocked(buildSourceConversationContext).mockReturnValue("");
-    vi.mocked(buildGroupIntro).mockReturnValue("");
+    vi.mocked(buildSourceConversationContexts).mockReturnValue(conversationModes());
     vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     vi.mocked(hasControlCommand).mockReturnValue(false);
@@ -915,8 +919,8 @@ describe("runPreparedReply media-only handling", () => {
 
   it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
     vi.mocked(buildInboundMetaSystemPrompt).mockReturnValueOnce("Inbound metadata.");
-    vi.mocked(buildSourceConversationContext).mockImplementation(
-      ({ sourceReplyDeliveryMode }) => `direct:${sourceReplyDeliveryMode ?? "automatic"}`,
+    vi.mocked(buildSourceConversationContexts).mockReturnValue(
+      conversationModes("direct:automatic", "direct:message_tool_only"),
     );
     await runPrepared({
       opts: {
@@ -955,47 +959,6 @@ describe("runPreparedReply media-only handling", () => {
       extraSystemPromptStatic: staticPrompt,
       sourceReplyDeliveryMode: "message_tool_only",
     });
-  });
-
-  it("replaces only the bound delivery prompt component", () => {
-    const repeatedPrefix = "same guidance\n\nindependent context\n\n";
-    const run = { extraSystemPrompt: `${repeatedPrefix}same guidance\n\nlater context` };
-    const runtime = createSourceReplyDeliveryRuntime({
-      origin: "runtime_default",
-      initialMode: "message_tool_only",
-      projections: [run],
-      promptComponentByMode: {
-        automatic: "automatic guidance",
-        message_tool_only: "same guidance",
-      },
-      promptComponentOffset: repeatedPrefix.length,
-    });
-
-    runtime.applyPreparedMode(run, "automatic");
-    expect(run.extraSystemPrompt).toBe(`${repeatedPrefix}automatic guidance\n\nlater context`);
-
-    const absent = { extraSystemPrompt: "independent context only" };
-    createSourceReplyDeliveryRuntime({
-      origin: "runtime_default",
-      initialMode: "message_tool_only",
-      projections: [absent],
-      promptComponentByMode: {
-        automatic: "automatic guidance",
-        message_tool_only: "missing guidance",
-      },
-      promptComponentOffset: undefined,
-    }).applyPreparedMode(absent, "automatic");
-    expect(absent.extraSystemPrompt).toBe("independent context only");
-
-    const empty = { extraSystemPrompt: "independent context only" };
-    createSourceReplyDeliveryRuntime({
-      origin: "runtime_default",
-      initialMode: "message_tool_only",
-      projections: [empty],
-      promptComponentByMode: { automatic: "", message_tool_only: "" },
-      promptComponentOffset: undefined,
-    }).applyPreparedMode(empty, "automatic");
-    expect(empty.extraSystemPrompt).toBe("independent context only");
   });
 
   it("keeps addressed message-tool delivery hints out of persisted transcript rows", async () => {
@@ -1931,8 +1894,10 @@ describe("runPreparedReply media-only handling", () => {
   ] as const)(
     "uses stored %s/%s facts only for a matching live %s/%s route",
     async (baseChannel, baseTo, liveChannel, liveTo, threadId, usesBaseSession) => {
-      vi.mocked(buildSourceConversationContext).mockImplementation(({ sessionCtx }) =>
-        ["group", sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
+      vi.mocked(buildSourceConversationContexts).mockImplementation(({ sessionCtx }) =>
+        conversationModes(
+          ["group", sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
+        ),
       );
       const baseSessionKey = `agent:main:${baseChannel}:guild-1:${baseTo}`;
       const baseSessionEntry: SessionEntry = {
@@ -1982,10 +1947,14 @@ describe("runPreparedReply media-only handling", () => {
       });
       const expectedGroupChannel = usesBaseSession ? "#ops" : undefined;
       const call = requireRunReplyAgentCall(-1);
-      expect(buildGroupIntro).toHaveBeenCalledWith({
-        activation: usesBaseSession ? "always" : undefined,
-        defaultActivation: "mention",
-      });
+      expect(buildSourceConversationContexts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          group: {
+            activation: usesBaseSession ? "always" : undefined,
+            defaultActivation: "mention",
+          },
+        }),
+      );
       expect(vi.mocked(buildInboundMetaSystemPrompt).mock.calls[0]?.[0]).toMatchObject({
         Provider: liveChannel,
         Surface: liveChannel,
@@ -2004,15 +1973,10 @@ describe("runPreparedReply media-only handling", () => {
   it("keeps CLI binding facts stable across room-event, primary, and cron assembly", async () => {
     const stableMode = "message_tool_only";
     const expectedPrompt = "group:telegram:group:message_tool_only";
-    vi.mocked(buildSourceConversationContext).mockImplementation(
-      ({ sessionCtx, sourceReplyDeliveryMode }) =>
-        [
-          "group",
-          sessionCtx.Provider,
-          sessionCtx.ChatType,
-          sourceReplyDeliveryMode ?? "automatic",
-        ].join(":"),
-    );
+    vi.mocked(buildSourceConversationContexts).mockImplementation(({ sessionCtx }) => {
+      const prefix = ["group", sessionCtx.Provider, sessionCtx.ChatType].join(":");
+      return conversationModes(`${prefix}:automatic`, `${prefix}:message_tool_only`);
+    });
     const cfg = createConfig({ messages: { visibleReplies: "message_tool" } });
     const sessionEntry = createTelegramGroupSession();
     const stableOptions: ReplyRunParams["opts"] = {
@@ -2064,12 +2028,13 @@ describe("runPreparedReply media-only handling", () => {
     async (kind) => {
       const originless = kind === "originless";
       if (originless) {
-        vi.mocked(buildSourceConversationContext).mockReturnValue("direct-context");
+        vi.mocked(buildSourceConversationContexts).mockReturnValue(
+          conversationModes("direct-context"),
+        );
         resolveAgentHarnessDeliveryDefaultsMock.mockClear();
       } else {
-        vi.mocked(buildSourceConversationContext).mockImplementation(
-          ({ sourceReplyDeliveryMode }) =>
-            ["group", sourceReplyDeliveryMode ?? "automatic"].join(":"),
+        vi.mocked(buildSourceConversationContexts).mockReturnValue(
+          conversationModes("group:automatic", "group:message_tool_only"),
         );
       }
       await runPrepared({
@@ -2109,8 +2074,9 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   it("keeps group intro in the session-stable CLI prompt after turn one", async () => {
-    vi.mocked(buildSourceConversationContext).mockReturnValue("group:telegram:group:automatic");
-    vi.mocked(buildGroupIntro).mockReturnValue("intro:mention");
+    vi.mocked(buildSourceConversationContexts).mockReturnValue(
+      conversationModes("group:telegram:group:automatic\n\nintro:mention"),
+    );
     const sessionEntry = createTelegramGroupSession();
     const opts: ReplyRunParams["opts"] = {
       sourceReplyDeliveryMode: "automatic",

@@ -40,6 +40,31 @@ with bounded recent conversation. The selected Decision provider receives that
 secondary evidence; see the [privacy and fallback contract](/concepts/experimental-features#conversational-tool-filtering).
 Explicit `decision_evaluate` remains independent of Labs.
 
+## Group participation
+
+With Decision assistance enabled and a configured `decisionModel`, unmentioned
+messages in always-on groups and channels are assessed before reply
+generation. The Decision Model uses the existing group etiquette and bounded
+recent conversation to decide whether any participation is invited or adds clear
+value, including an emoji reaction alone.
+
+A rejected message is recorded without a primary-model run or interaction.
+After approval, the primary model chooses the response form, content and emoji
+in its usual voice; a reaction alone can suffice. Its turn context omits the
+participation and silence instructions already handled by the Decision Model.
+Existing permissions, delivery and completion rules still apply.
+
+Mentions, commands, media turns, and generic CLI backends keep ordinary behavior.
+Embedded harnesses, including Codex, support participation assessment. With
+Decision assistance off or the Decision Model unavailable, the primary model
+keeps deciding whether to reply. Existing opt-ins also enable this feature after
+upgrade; no additional setting is needed.
+
+Hosted Decision providers receive the current message, reply reference, bounded
+workspace identity and recent model history, including tool calls and results,
+and charge under their normal usage terms. Each evaluation has a maximum 30-second timeout, bounded further by the turn timeout. Cancellation
+ends the turn; changing the opt-in applies to subsequent turns.
+
 ## Choose a provider and model
 
 Configure the provider plugin before selecting its model:

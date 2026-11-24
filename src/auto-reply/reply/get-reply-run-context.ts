@@ -4,6 +4,7 @@ import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-ru
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRequestGitCoauthorPrompt } from "../../agents/git-coauthor-prompt.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import { buildPrAttributionPrompt, preparePrAttribution } from "../../agents/pr-attribution.js";
 import {
@@ -35,6 +36,7 @@ import {
   isTextSlashCommandTurn,
   resolveCommandTurnContext,
 } from "../command-turn-context.js";
+import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import { getRequesterProfile } from "../requester-profile.js";
@@ -50,7 +52,7 @@ import {
   hasReplyTargetContext,
 } from "./get-reply-run-helpers.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
-import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
+import { buildInboundDeliveryGuidance, buildSourceConversationContexts } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { hasInboundMedia } from "./inbound-media.js";
@@ -79,8 +81,6 @@ import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
-const ROOM_EVENT_PARTICIPATION_RULE =
-  "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
@@ -186,6 +186,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
+  const groupParticipation =
+    isGroupChat &&
+    !isSyntheticTurn &&
+    inboundEventKind !== "room_event" &&
+    promptSessionCtx.WasMentioned !== true &&
+    !isExplicitCommandTurnContext(promptSessionCtx, cfg) &&
+    (conversation.activation ?? defaultActivation) === "always"
+      ? {
+          agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
+          replyToText: sessionCtx.ReplyToBody,
+        }
+      : undefined;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -202,23 +214,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const sourceConversationContext = (mode: typeof sourceReplyDeliveryMode) =>
-    buildSourceConversationContext({
-      sourceReplyDeliveryMode: mode,
-      sessionCtx: promptSessionCtx,
-    });
-  const sourceConversationContextByMode = {
-    automatic: sourceConversationContext("automatic"),
-    message_tool_only: sourceConversationContext("message_tool_only"),
-  };
-  // CLI sessions keep their creation-time conversation prompt. Embedded attempts
-  // can instead select the variant owned by their final prepared harness.
-  const sessionStableConversationContext =
-    sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
-  // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
-  const groupIntro = isGroupChat
-    ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
-    : "";
   const terminalReplyExpectation =
     opts?.replyExpectation ??
     resolveSourceReplyExpectation({
@@ -226,6 +221,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       cfg,
       scheduledAutomation: opts?.scheduledAutomation !== undefined,
     });
+  const { sourceConversationContextByMode, assessedConversationContextByMode } =
+    buildSourceConversationContexts({
+      sessionCtx: promptSessionCtx,
+      group: isGroupChat ? { activation: conversation.activation, defaultActivation } : undefined,
+      participationEligible: Boolean(groupParticipation),
+    });
+  // CLI bindings retain their ordinary creation-time prompt; the selected turn
+  // component is projected separately after participation has been assessed.
+  const sessionPromptMode = sessionPromptSourceReplyDeliveryMode ?? "automatic";
+  const sessionStableConversationContext = sourceConversationContextByMode[sessionPromptMode];
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
     if (replyOperationRunState) {
@@ -250,13 +255,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   });
   const staticSystemPromptParts = [
     sessionStableConversationContext,
-    groupIntro,
     groupSystemPrompt,
     execOverridePromptHint,
   ].filter(Boolean);
   const extraSystemPromptParts = [inboundMetaPrompt, ...staticSystemPromptParts].filter(Boolean);
   // Metadata and conversation guidance vary per turn; configured policy and exec hints do not.
-  const turnContextText = [inboundMetaPrompt, sessionStableConversationContext, groupIntro]
+  const turnContextText = [inboundMetaPrompt, sessionStableConversationContext]
     .filter(Boolean)
     .join("\n\n");
   const extraSystemPromptTurnContext = turnContextText
@@ -524,18 +528,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     );
   }
 
-  const deliveryDirective =
-    inboundEventKind === "room_event" ||
-    (inboundEventKind === "user_request" &&
-      sourceReplyDeliveryMode === "message_tool_only" &&
-      promptSessionCtx.SenderIsBot === true &&
-      terminalReplyExpectation === "optional")
-      ? sourceReplyDeliveryMode === "message_tool_only"
-        ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
-        : ROOM_EVENT_PARTICIPATION_RULE
-      : inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only"
-        ? MESSAGE_TOOL_ONLY_DELIVERY_HINT
-        : undefined;
+  const { optionalBotRequest, deliveryDirective } = buildInboundDeliveryGuidance({
+    sessionCtx: promptSessionCtx,
+    sourceReplyDeliveryMode,
+    replyExpectation: terminalReplyExpectation,
+  });
 
   // The current event itself is the user turn body; the context block carries
   // only the marker, the room backlog, and the reply-policy directive so no
@@ -561,14 +558,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     const resumableRoomEventContext = isRoomEvent
       ? buildRoomEventContext(buildResumableRoomContext(normalizedInboundUserContext))
       : undefined;
+    const renderInboundContext = (directive: string | undefined) =>
+      (inboundUserContextPromptJoiner === " "
+        ? [directive, normalizedInboundUserContext]
+        : [normalizedInboundUserContext, directive]
+      )
+        .filter(Boolean)
+        .join("\n\n");
     const currentInboundContextText = isRoomEvent
       ? buildRoomEventContext(normalizedInboundUserContext)
-      : (inboundUserContextPromptJoiner === " "
-          ? [deliveryDirective, normalizedInboundUserContext]
-          : [normalizedInboundUserContext, deliveryDirective]
-        )
-          .filter(Boolean)
-          .join("\n\n");
+      : renderInboundContext(deliveryDirective);
     const resetModelBody = isBareSessionReset
       ? [
           inboundUserContext,
@@ -614,6 +613,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
             ...(activeGoalContext ? { injectedGoalContexts: [activeGoalContext] } : {}),
           }
         : undefined;
+    if (currentInboundContext && groupParticipation && optionalBotRequest) {
+      currentInboundContext.participationAssessed = {
+        text: renderInboundContext(MESSAGE_TOOL_ONLY_DELIVERY_HINT),
+        fragments: fragments.map((fragment) =>
+          fragment.kind === "runtime-instruction" && fragment.text === deliveryDirective
+            ? Object.assign({}, fragment, { text: MESSAGE_TOOL_ONLY_DELIVERY_HINT })
+            : fragment,
+        ),
+      };
+    }
     if (requestGitCredit) {
       currentInboundContext = appendCurrentInboundContext(currentInboundContext, [
         { kind: "runtime-instruction", text: requestGitCredit },
@@ -696,6 +705,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     extraSystemPromptParts,
     extraSystemPromptTurnContext,
     sourceConversationContextByMode,
+    assessedConversationContextByMode,
     sourceConversationContextPromptOffset,
     extraSystemPromptStatic,
     cliSessionBindingFacts,
@@ -713,6 +723,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     buildPromptBodies,
     refreshInboundContextAfterAdmissionWait,
     terminalReplyExpectation,
+    groupParticipation,
   } as const;
 }
 

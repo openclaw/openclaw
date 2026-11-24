@@ -7,11 +7,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import type { DecisionRuntimeV2 } from "../decisions/runtime-types.js";
-import type { DecisionBatchResultV2 } from "../decisions/types-v2.js";
+import { evaluateDecision } from "../decisions/runtime.js";
+import type { DecisionBatchResultV2, DecisionBatchV2 } from "../decisions/types-v2.js";
 import {
   createContext,
   createOperatorClient,
 } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
+import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import {
   assertProviderAuthAuthority,
   getProviderAuthAuthority,
@@ -57,6 +59,7 @@ const nativeModel = { id: "native", name: "Native fixture" };
 type Trace = {
   calls: number;
   context?: DecisionProviderContextV2;
+  batch?: DecisionBatchV2;
   onDispatch?: () => void;
   prepare?: () => Promise<void>;
   exchange?: () => Promise<void>;
@@ -194,7 +197,13 @@ it.each([
               ? "prepareRuntimeAuth(context) { trace.exchangeCalls = (trace.exchangeCalls ?? 0) + 1; return { apiKey: context.apiKey }; },"
               : "") +
           "} ,",
-        'async evaluate(batch, context) { trace.calls++; trace.context=context; trace.onDispatch?.(); await trace.work; trace.beforeRequest?.(context); if (!context.isAdmissible()) return { status: "unavailable", reason: "unsupported-input" }; await trace.fetch?.("https://dispatch.fixture.invalid/v1/decisions", { method: "POST" }); let reads = 0; return { status: "ok", get result() { trace.resultReads = ++reads; if (trace.resultOverride) return trace.resultOverride.value; return { model: context.model.id, answers: { q: reads === 1 ? { type: "boolean", answer: null } : { type: "boolean", probabilityTrue: 0.75 } }, usage: trace.usage }; } }; }',
+        'async evaluate(batch, context) { trace.calls++; trace.context=context; trace.batch=batch; trace.onDispatch?.(); await trace.work; trace.beforeRequest?.(context); if (!context.isAdmissible()) return { status: "unavailable", reason: "unsupported-input" }; await trace.fetch?.("https://dispatch.fixture.invalid/v1/decisions", { method: "POST" }); let reads = 0; return { status: "ok", get result() { trace.resultReads = ++reads; if (trace.resultOverride) return trace.resultOverride.value; return { model: context.model.id, answers: { q: reads === 1 ? ' +
+          JSON.stringify({
+            type: "boolean",
+            answer: null,
+            ...(authScope === "plugin-route-fresh" ? { probabilityTrue: 0.75 } : {}),
+          }) +
+          ' : { type: "boolean", probabilityTrue: 0.75 } }, usage: trace.usage }; } }; }',
         "}); trace.evaluate = api.runtime.decisions.evaluateV2; } };",
       ].join("\n"),
     );
@@ -366,10 +375,19 @@ it.each([
           requestTransportOverrides: "none" as const,
         };
         const original = modelRoutes.resolveProviderModelRoutes;
-        const selected = {
+        const selected: ProviderModelRouteCandidate = {
           ...candidate,
           ...(authScope === "plugin-route-fresh"
-            ? { inference: { chat: false, decision } }
+            ? {
+                inference: {
+                  chat: false,
+                  decision: {
+                    ...decision,
+                    questions: { boolean: { probabilities: "boolean", abstention: true } },
+                    limits: { maxStateAndQuestionTokens: 32000 },
+                  },
+                },
+              }
             : authScope === "plugin-route-cleared"
               ? { inference: { chat: false } }
               : {}),
@@ -621,6 +639,28 @@ it.each([
       await expect(pending).rejects.toThrow("fixture cancelled");
       expect(usageEvents).toHaveLength(2);
       expect(registry.decisionProviders[0]!.host.inspect(cfg).activeRequests).toBe(0);
+      if (authScope === "plugin-route-fresh") {
+        trace.resultOverride = {
+          value: { model: "native", answers: { q: { type: "boolean", probabilityTrue: 0.75 } } },
+        };
+        const batch = { state: "placeholder", questions: { q: { type: "boolean" as const } } };
+        await expect(
+          evaluateDecision(batch, harness.decisionOptions(), async (limits, signal) => {
+            expect(limits).toEqual({ maxStateAndQuestionTokens: 32000 });
+            signal.throwIfAborted();
+            return { evidence: "bounded after route preparation" };
+          }),
+        ).resolves.toMatchObject({ status: "ok" });
+        expect(trace.batch?.state).toEqual({
+          type: "json",
+          value: { evidence: "bounded after route preparation" },
+        });
+        const calls = trace.calls;
+        await expect(
+          evaluateDecision(batch, harness.decisionOptions(), async () => undefined),
+        ).resolves.toEqual(harness.unavailable("unsupported-input"));
+        expect(trace.calls).toBe(calls);
+      }
       await resetPreparedModelRuntimeSnapshotsForTest();
     });
   },

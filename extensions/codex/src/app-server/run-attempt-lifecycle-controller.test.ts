@@ -755,6 +755,33 @@ describe("Codex authored model response boundary", () => {
     expect(h.sourceReplies.map((reply) => reply.text)).toEqual(["reply"]);
   });
 
+  it.each([
+    { name: "exec", type: "custom_tool_call", outputType: "custom_tool_call_output" },
+    { name: "wait", type: "function_call", outputType: "function_call_output" },
+  ])(
+    "waits for the native $name receipt before releasing its delivered nested reply",
+    async ({ name, type, outputType }) => {
+      await using h = createTerminalReleaseHarness();
+      await h.notifyRawItem({ type, call_id: "program", name, input: "", arguments: "{}" });
+      await h.finishResponse();
+      h.controller.recordDynamicToolResult(
+        dynamicToolResult("nested", {
+          success: true,
+          terminate: true,
+          finalSourceReplyDelivered: true,
+        }),
+      );
+      await yieldImmediate();
+      expect(h.cancel).not.toHaveBeenCalled();
+      expect(h.state.completed).toBe(false);
+
+      await h.notifyRawItem({ type: outputType, call_id: "program", output: "settled" });
+      await yieldImmediate();
+      expect(h.state.completed).toBe(true);
+      expect(h.request).toHaveBeenCalledOnce();
+    },
+  );
+
   it("never admits a nested result using its Code Mode outer raw call", async () => {
     const h = createTerminalReleaseHarness();
     await h.notifyRawCall("program", "exec");

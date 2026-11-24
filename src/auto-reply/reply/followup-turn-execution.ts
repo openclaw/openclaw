@@ -27,11 +27,11 @@ import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloa
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-turn-admission.types.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";

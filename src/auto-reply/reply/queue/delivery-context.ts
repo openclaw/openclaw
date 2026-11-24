@@ -259,9 +259,11 @@ export function collectCurrentInboundContext(
   if (items.length <= 1) {
     return contexts[0]?.context;
   }
-  const renderField = (field: "text" | "resumableText") => {
+  const renderField = (field: "text" | "resumableText", assessed = false) => {
     const blocks = contexts.flatMap(({ context, index }) => {
-      const value = context[field];
+      const value = assessed
+        ? (context.participationAssessed?.text ?? context.text)
+        : context[field];
       return value ? [`Queued #${index + 1} context:\n${value}`] : [];
     });
     return blocks.length > 0 ? blocks.join("\n\n") : undefined;
@@ -277,6 +279,18 @@ export function collectCurrentInboundContext(
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
+    ...(contexts.some(({ context }) => context.participationAssessed)
+      ? {
+          participationAssessed: {
+            text: renderField("text", true)!,
+            fragments: contexts.flatMap(({ context, index }) => [
+              { kind: "runtime-instruction" as const, text: `Queued #${index + 1} context:` },
+              ...(context.participationAssessed?.fragments ??
+                context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }]),
+            ]),
+          },
+        }
+      : {}),
     fragments: contexts.flatMap(({ context, index }) => {
       const fragments: RuntimeContextFragment[] = [
         { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
@@ -328,7 +342,7 @@ function collectReplyDisposition(
   };
 }
 
-export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: AbortSignal) {
+export function collectRuntimeMetadata(items: InternalFollowupRun[], abortSignal?: AbortSignal) {
   const currentTurnSource = items.find(
     (item) =>
       item.currentInboundEventKind === "room_event" ||
@@ -343,6 +357,10 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
       ? [item.runObservers.onAgentRunTerminalOutcome]
       : [],
   );
+  const groupParticipation =
+    items.length > 0 && items.every((item) => item.groupParticipation)
+      ? items.at(-1)?.groupParticipation
+      : undefined;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const callbackCustodies = items.flatMap((item) => {
     const custody = item[replyCallbackCustody];
@@ -356,6 +374,7 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
     ).values(),
   ];
   return {
+    groupParticipation,
     sourceTurnId: authoritySource?.sourceTurnId,
     createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
     readAdmissionConfig: authoritySource?.readAdmissionConfig,
@@ -436,6 +455,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
     controllerInput: source.controllerInput,
+    groupParticipation: source.groupParticipation,
     ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,

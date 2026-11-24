@@ -11,12 +11,12 @@ import {
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();

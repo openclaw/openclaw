@@ -7,9 +7,7 @@ import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { logVerbose } from "../../globals.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
@@ -19,7 +17,6 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { ReplyRunLifecycleAdmissionBlockedError } from "../../sessions/session-controller.contracts.js";
-import type { ReplyOperation, ReplyTurnKind } from "../../sessions/session-controller.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import {
   attachSessionControllerInputOperation,
@@ -32,7 +29,6 @@ import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -42,11 +38,11 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   isGoalContinuationCurrent,
   isGoalContinuationPlacementCurrent,
 } from "./goal-continuation.js";
+import { prepareGroupParticipation } from "./group-participation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import { prepareFollowupRunOperatorAuthority } from "./queue/lifecycle.js";
@@ -62,70 +58,13 @@ import {
   prepareReplyCommandOwnerAuthority,
 } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
+import type {
+  AdmittedFollowupTurn,
+  PrepareReplyAgentTurnParams,
+  PreparedReplyAgentTurn,
+} from "./reply-turn-admission.types.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
-import type { TypingController } from "./typing.js";
-
-export type FollowupRunnerParams = {
-  resolveGatewayContext?: GatewayContextResolver;
-  opts?: InternalGetReplyOptions;
-  typing: TypingController;
-  typingMode: TypingMode;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  defaultModel: string;
-  toolProgressDetail?: "explain" | "raw";
-};
-
-type FollowupSessionOwner = {
-  current: () => SessionEntry | undefined;
-  publish(entry: SessionEntry | undefined): void;
-} & ({ kind: "detached" } | { kind: "session"; key: string; storePath?: string });
-
-export type AdmittedFollowupTurn = {
-  readonly runId: string;
-  queued: FollowupRun;
-  operation: ReplyOperation;
-  config: OpenClawConfig;
-  session: FollowupSessionOwner;
-  sessionStore?: Record<string, SessionEntry>;
-  sendPolicy: "allow" | "deny";
-  preflightCompactionApplied: boolean;
-  memoryFlushAttempted?: boolean;
-  preflightFailurePayload?: ReplyPayload;
-  preflightError?: Error;
-  releaseSourceAdmission?: () => Promise<void>;
-};
-
-type PrepareReplyAgentTurnParams<TConfigured> = {
-  queued: FollowupRun;
-  defaults: FollowupRunnerParams;
-  kind?: ReplyTurnKind;
-  resetTriggered?: boolean;
-  routeThreadId?: string | number;
-  providedReplyOperation?: ReplyOperation;
-  rotationEvidence?: ReturnType<typeof createReplyTurnRotationEvidence>;
-  claimSource?: () => Promise<SessionControllerMailboxClaim | undefined>;
-  onOperationOwned?: (operation: ReplyOperation) => boolean | void;
-  configure?: (config: OpenClawConfig) => Promise<TConfigured> | TConfigured;
-  signalRunStart?: () => Promise<void>;
-  trace?: <T>(phase: string, run: () => Promise<T>) => Promise<T>;
-  onCompactionNotice?: (
-    phase: CompactionNoticePhase,
-    text: string | undefined,
-    turn: AdmittedFollowupTurn,
-  ) => Promise<void>;
-};
-
-type PreparedReplyAgentTurn<TConfigured> =
-  | { kind: "admitted"; configured: TConfigured; turn: AdmittedFollowupTurn }
-  | {
-      kind: "skipped";
-      reason: "active-run" | "aborted" | "lifecycle-invalidated" | "goal-inactive";
-      operation?: ReplyOperation;
-    };
+import { readSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 
 /** Claims and prepares immediate and queued turns through one admission and preflight owner. */
 export function prepareReplyAgentTurn<TConfigured>(
@@ -391,7 +330,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         sessionKey: replySessionKey,
         sessionStore: params.defaults.sessionStore,
       });
-      const session: FollowupSessionOwner = {
+      const session: AdmittedFollowupTurn["session"] = {
         ...(replySessionKey
           ? { kind: "session" as const, key: replySessionKey, storePath: params.defaults.storePath }
           : { kind: "detached" as const }),
@@ -523,11 +462,25 @@ export async function prepareReplyAgentTurn<TConfigured>(
       principalAuthority = undefined;
       turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
+      let participation: Awaited<ReturnType<typeof prepareGroupParticipation>> = undefined;
       try {
         // This same once-only preparation also guards runtime admission below.
         // Check before maintenance can invoke a model for the queued request.
         await prepareChildSessionPublication(turn.queued.run);
         await params.signalRunStart?.();
+        participation = await prepareGroupParticipation({
+          run: turn.queued,
+          operation,
+          sessionKey: replySessionKey,
+          storePath: params.defaults.storePath,
+          sessionEntry: activeEntry,
+        });
+        if (participation?.reply === false) {
+          session.publish(participation.sessionEntry);
+          queuedFollowupAdmitted = false;
+          releaseSourceAdmission = undefined;
+          return { kind: "observed", configured, turn } as const;
+        }
         const resolvedVerboseLevel =
           normalizeVerboseLevel(
             turn.queued.run.verboseLevelOverride ??
@@ -635,6 +588,16 @@ export async function prepareReplyAgentTurn<TConfigured>(
         if (text) {
           turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
         }
+      }
+      if (participation?.reply && turn.queued.currentInboundContext?.participationAssessed) {
+        const { participationAssessed, ...context } = turn.queued.currentInboundContext;
+        turn.queued.currentInboundContext = { ...context, ...participationAssessed };
+      }
+      if (participation?.reply && turn.queued.groupParticipation?.promptComponentByMode) {
+        readSourceReplyDeliveryRuntime(turn.queued.run)?.selectPromptComponents(
+          turn.queued.run,
+          turn.queued.groupParticipation.promptComponentByMode,
+        );
       }
       if (
         pendingTerminalCompactionNotice &&

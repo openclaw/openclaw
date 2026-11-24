@@ -13,7 +13,7 @@ import { enqueueFollowupRun, reserveSteerCandidate } from "../../auto-reply/repl
 import { admitFollowupRunLifecycle } from "../../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun, QueueSettings } from "../../auto-reply/reply/queue/types.js";
-import type { AdmittedFollowupTurn } from "../../auto-reply/reply/reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "../../auto-reply/reply/reply-turn-admission.types.js";
 import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {

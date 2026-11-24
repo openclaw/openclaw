@@ -24,14 +24,14 @@ import {
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
-import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { DecisionEvaluateOptionsV2, PrepareDecisionState } from "./execution-types.js";
 import type { PreparedDecisionBillingFacts } from "./host-billing.js";
 import type { DecisionOutcome, DecisionOutcomeV2, UnavailableReason } from "./host-outcomes.js";
 import type { ProviderFailureReason } from "./provider-outcomes.js";
 import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionBatch } from "./types.js";
-import { validateDecisionResult } from "./validation.js";
+import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
 
 type Options = DecisionEvaluateOptionsV2;
 type Batch = DecisionBatch | DecisionBatchV2;
@@ -236,6 +236,7 @@ export class DecisionProviderHost {
     consumerId?: string,
     isAdmissible?: () => boolean,
     onPreparedBilling?: (facts: PreparedDecisionBillingFacts) => void,
+    prepareState?: PrepareDecisionState,
   ): Promise<Outcome> {
     const evaluationStarted = performance.now();
     const facts: DecisionEvaluationFacts = { dispatched: false };
@@ -283,6 +284,7 @@ export class DecisionProviderHost {
       this.pending.set(controller, { consumerId, done });
       let observedInterruption: Outcome | undefined;
       let admissionError: { error: unknown } | undefined;
+      let preparationError: { error: unknown } | undefined;
       const interrupted = (): Outcome | undefined => {
         options.signal.throwIfAborted();
         if (controller.signal.reason instanceof DecisionConsumerClosedError) {
@@ -290,6 +292,9 @@ export class DecisionProviderHost {
         }
         if (admissionError) {
           throw admissionError.error;
+        }
+        if (observedInterruption) {
+          return observedInterruption;
         }
         if (
           this.retired ||
@@ -305,9 +310,6 @@ export class DecisionProviderHost {
           // The host deadline bounds this request; it is not a provider-reported outage.
           // Genuine transport and rate-limit failures are accounted below.
           return this.unavailable("deadline");
-        }
-        if (observedInterruption) {
-          return observedInterruption;
         }
         try {
           if (isAdmissible && !isAdmissible()) {
@@ -374,13 +376,38 @@ export class DecisionProviderHost {
           observedInterruption ??= interrupted();
           return observedInterruption === undefined;
         };
+        const prepare: PrepareDecisionState | undefined =
+          prepareState &&
+          (async (limits, preparationSignal) => {
+            try {
+              const state = await prepareState(limits, preparationSignal);
+              if (state !== undefined && decisionDebugEnabled()) {
+                facts.jsonInputBytes = Buffer.byteLength(JSON.stringify({ ...submitted, state }));
+              }
+              return state;
+            } catch (error) {
+              preparationError = { error };
+              throw error;
+            }
+          });
         try {
           outcome = await instance.runInRegistry(
             registry,
             async () => {
               facts.dispatched = true;
               if (provider.contractVersion === 1) {
-                return provider.evaluate(v1Batch!, {
+                const state = prepare ? await prepare(undefined, signal) : v1Batch!.state;
+                if (state === undefined) {
+                  return { status: "unavailable", reason: "unsupported-input" } as const;
+                }
+                const prepared = prepare ? { ...v1Batch!, state } : v1Batch!;
+                if (prepare && !validateDecisionBatch(prepared)) {
+                  return { status: "unavailable", reason: "unsupported-input" } as const;
+                }
+                if (prepare && !admissible()) {
+                  return { status: "unavailable", reason: "unsupported-input" } as const;
+                }
+                return provider.evaluate(prepared, {
                   model,
                   ...(options.agentId ? { agentId: options.agentId } : {}),
                   signal,
@@ -408,6 +435,7 @@ export class DecisionProviderHost {
                 deadlineMonotonicMs,
                 isAdmissible: admissible,
                 onPreparedBilling,
+                prepareState: prepare,
               });
             },
             // The provider callback's physical settlement is already tracked by
@@ -419,6 +447,9 @@ export class DecisionProviderHost {
           const stopped = interrupted();
           if (stopped) {
             return stopped;
+          }
+          if (preparationError) {
+            throw preparationError.error;
           }
           throw new DecisionContractError();
         }
@@ -485,6 +516,9 @@ export class DecisionProviderHost {
         }
         if (admissionError) {
           throw admissionError.error;
+        }
+        if (preparationError) {
+          throw preparationError.error;
         }
         if (error instanceof DecisionContractError) {
           throw error;

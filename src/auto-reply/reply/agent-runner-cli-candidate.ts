@@ -54,6 +54,7 @@ import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
+import { readSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
@@ -450,6 +451,14 @@ export async function runCliFallbackCandidate(
               : undefined,
           runParams: {
             ...buildFallbackCandidateTurnParams(params),
+            ...readSourceReplyDeliveryRuntime(params.turn.followupRun.run)?.projectSessionPrompt(
+              {
+                extraSystemPrompt: params.turn.followupRun.run.extraSystemPrompt,
+                extraSystemPromptTurnContext:
+                  params.turn.followupRun.run.extraSystemPromptTurnContext,
+              },
+              params.turn.followupRun.run.cliSessionBindingFacts?.sourceReplyDeliveryMode,
+            ),
             ...buildReplyRunStateParams(turn.followupRun.run),
             diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,

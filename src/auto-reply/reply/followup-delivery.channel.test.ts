@@ -13,7 +13,7 @@ import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { createDefaults, createTurn as createBaseTurn } from "./followup-delivery.test-helpers.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 
 const { a2aChannelPlugin } = await loadBundledPluginFacade<{ a2aChannelPlugin: ChannelPlugin }>({
   pluginId: "a2a",

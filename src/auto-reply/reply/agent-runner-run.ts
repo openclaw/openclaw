@@ -554,6 +554,15 @@ export async function runReplyAgent(
       },
     });
     try {
+      if (preparation.kind === "observed") {
+        if (replyOperationRunState) {
+          replyOperationRunState.replyCompletion = resolveReplyCompletion(
+            replyExpectation,
+            "silent",
+          );
+        }
+        return returnWithQueuedFollowupDrain(undefined);
+      }
       // Channel admission rethrows its memoized preflight failure in the execution handler.
       if (turn.preflightError && !isChannelRunAuthorizationError(turn.preflightError)) {
         throw turn.preflightError;

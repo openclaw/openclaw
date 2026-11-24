@@ -1,0 +1,2 @@
+# Native reply, queue, prepared-state, and reaction-only checks cover participation, model limits, persistence, and delivery.
+628

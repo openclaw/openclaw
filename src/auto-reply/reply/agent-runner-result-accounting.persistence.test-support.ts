@@ -21,7 +21,7 @@ import type {
 import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import {
   createMockFollowupRun,

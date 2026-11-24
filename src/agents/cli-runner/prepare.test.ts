@@ -225,9 +225,6 @@ function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConf
   return {};
 }
 
-const SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE =
-  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private.";
-
 function createLoopbackRuntime() {
   return {
     port: 31783,
@@ -2022,7 +2019,6 @@ describe("prepareCliRunContext", () => {
     },
     {
       name: "falls back to stored session metadata",
-      chatType: undefined,
       sessionEntryChatType: "channel" as const,
       expectedChatType: "channel" as const,
     },
@@ -2048,7 +2044,7 @@ describe("prepareCliRunContext", () => {
     expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
       expect.objectContaining({ chatType: testCase.expectedChatType }),
     );
-    expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
+    expect(context.systemPrompt).toContain("a reaction may be enough.");
   });
 
   it("invalidates content drift when the backend cannot receive a resumed system prompt", async () => {

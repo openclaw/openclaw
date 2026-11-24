@@ -2,6 +2,7 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import type { SessionRecentConversationTurn } from "../../config/sessions/transcript-recent-text.js";
 import {
   readRecentUserAssistantTextForSession,
   readRecentUserAssistantTurnsForSession,
@@ -52,13 +53,35 @@ function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
   );
 }
 
-/**
- * A platform-selected recent window keeps its own rows, except rows the model
- * already answered as user turns of this session: the conversation (and a
- * native runtime thread fed by it) holds them, so quoting them again on every
- * later turn only duplicates context. Only completed answers cover the preceding
- * request. Changed platform text and requests with incomplete output stay eligible.
- */
+function answeredRequests(turns: SessionRecentConversationTurn[]): Map<string, string> {
+  // The reader binds completion to raw user turns, including non-text boundaries.
+  // Match only the identified request; older unresolved rows stay eligible.
+  const answered = new Map<string, string>();
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const turn = turns[index]!;
+    if (
+      turn.role === "user" &&
+      turn.hasCompletedAnswer &&
+      turn.messageId &&
+      !answered.has(turn.messageId)
+    ) {
+      answered.set(turn.messageId, turn.text);
+    }
+  }
+  return answered;
+}
+
+function retainUnansweredHistory(history: HistoryEntry[], answered: Map<string, string>) {
+  return history.filter(
+    // Text equality cannot prove that historical attachments are unchanged.
+    (entry) =>
+      !entry.messageId ||
+      Boolean(entry.media?.length) ||
+      answered.get(entry.messageId) !== entry.body.trim(),
+  );
+}
+
+/** Keep changed platform text and requests with incomplete output eligible. */
 async function omitAnsweredRecentHistory(params: {
   agentId: string;
   ctx: FinalizedMsgContext;
@@ -66,10 +89,7 @@ async function omitAnsweredRecentHistory(params: {
   storePath: string;
 }): Promise<void> {
   const history = params.ctx.InboundHistory ?? [];
-  let candidates = 0;
-  for (const entry of history) {
-    candidates += entry.messageId ? 1 : 0;
-  }
+  const candidates = history.filter((entry) => entry.messageId).length;
   if (candidates === 0) {
     return;
   }
@@ -81,30 +101,7 @@ async function omitAnsweredRecentHistory(params: {
     limit: candidates * 2,
     includeMessageToolSourceReplies: true,
   });
-  // A reply proves only the user row right before it; earlier rows in the same gap
-  // (a failed turn, or collected extras) stay, since a duplicate beats lost context.
-  const answered = new Map<string, string>();
-  let replied = false;
-  for (let index = turns.length - 1; index >= 0; index--) {
-    const turn = turns[index]!;
-    if (turn.role === "assistant") {
-      replied ||= turn.isCompletedAnswer === true;
-      continue;
-    }
-    if (replied && turn.messageId && !answered.has(turn.messageId)) {
-      answered.set(turn.messageId, turn.text);
-    }
-    replied = false;
-  }
-  if (answered.size > 0) {
-    params.ctx.InboundHistory = history.filter(
-      // Text equality cannot prove that historical attachments are unchanged.
-      (entry) =>
-        !entry.messageId ||
-        Boolean(entry.media?.length) ||
-        answered.get(entry.messageId) !== entry.body.trim(),
-    );
-  }
+  params.ctx.InboundHistory = retainUnansweredHistory(history, answeredRequests(turns));
 }
 
 /** Merges active canonical transcript turns into the prepared channel history in place. */
@@ -145,15 +142,21 @@ export async function mergeSessionTranscriptContext(params: {
     !options?.chatWindow &&
     (params.ctx.SessionKey ?? params.sessionKey) === params.sessionKey
   ) {
+    await omitAnsweredRecentHistory({ ...params, agentId });
     return;
   }
-  const turns = await readRecentUserAssistantTextForSession({
+  const pendingHistory = windows.length === 0 && options?.chatWindow !== true;
+  const readTurns = pendingHistory
+    ? readRecentUserAssistantTurnsForSession
+    : readRecentUserAssistantTextForSession;
+  const turns: SessionRecentConversationTurn[] = await readTurns({
     agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,
     // A session-generated window must retain delivered close-outs alongside
     // their questions. Native channel windows already own their delivery history.
+    ...(pendingHistory ? { includeMessageToolSourceReplies: true } : {}),
     ...(windows.length === 0 && options?.chatWindow === true
       ? {
           includeCronDirectDeliveryContext: true,
@@ -166,24 +169,33 @@ export async function mergeSessionTranscriptContext(params: {
       : {}),
     ...(options?.minTimestampMs !== undefined ? { minTimestampMs: options.minTimestampMs } : {}),
   });
+  const answered = pendingHistory ? answeredRequests(turns) : new Map<string, string>();
+  if (answered.size > 0) {
+    params.ctx.InboundHistory = retainUnansweredHistory(params.ctx.InboundHistory ?? [], answered);
+  }
   const labels = options?.senderLabels ?? { assistant: "Assistant", user: "User" };
-  const transcript = turns.map((turn) => {
-    const item: TranscriptMessage = {
-      entry: {
-        sender: `${labels[turn.role]}${turn.sourceChannel ? ` (${turn.sourceChannel})` : ""}`,
-        body: turn.text,
-      },
-      role: turn.role,
-    };
-    if (turn.id) {
-      item.transcriptId = turn.id;
-      item.entry.messageId = `session:${turn.id}`;
-    }
-    if (turn.timestamp !== undefined) {
-      item.entry.timestamp = turn.timestamp;
-    }
-    return item;
-  });
+  const transcript = turns
+    .filter(
+      (turn) =>
+        turn.role !== "user" || !turn.messageId || answered.get(turn.messageId) !== turn.text,
+    )
+    .map((turn) => {
+      const item: TranscriptMessage = {
+        entry: {
+          sender: `${labels[turn.role]}${turn.sourceChannel ? ` (${turn.sourceChannel})` : ""}`,
+          body: turn.text,
+        },
+        role: turn.role,
+      };
+      if (turn.id) {
+        item.transcriptId = turn.id;
+        item.entry.messageId = `session:${turn.id}`;
+      }
+      if (turn.timestamp !== undefined) {
+        item.entry.timestamp = turn.timestamp;
+      }
+      return item;
+    });
   if (transcript.length === 0) {
     return;
   }

@@ -23,7 +23,11 @@ import { modelKey } from "../shared/model-key.js";
 import { completeDecisionEvaluation, type DecisionEvaluation } from "./completion.js";
 import { DecisionContractError } from "./contract-error.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
-import type { DecisionEvaluateOptions, DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type {
+  DecisionEvaluateOptions,
+  DecisionEvaluateOptionsV2,
+  PrepareDecisionState,
+} from "./execution-types.js";
 import type { PreparedDecisionBillingFacts } from "./host-billing.js";
 import type { DecisionOutcome, DecisionOutcomeV2 } from "./host-outcomes.js";
 import { validateDecisionBatchV2 } from "./input-validation.js";
@@ -35,12 +39,17 @@ import { validateDecisionBatch } from "./validation.js";
 export async function evaluateDecision(
   batch: DecisionBatch,
   options: DecisionEvaluateOptions,
+  prepareState?: PrepareDecisionState,
 ): Promise<DecisionOutcome> {
   return evaluateDecisionInRegistry(
     batch,
     options,
     getPluginRegistryForContext(),
     getRuntimeConfig(),
+    undefined,
+    undefined,
+    undefined,
+    prepareState,
   );
 }
 
@@ -85,6 +94,7 @@ export function evaluateDecisionOperation(
   consumerId?: string,
   isAdmissible?: () => boolean,
   canDispatch?: () => boolean,
+  prepareState?: PrepareDecisionState,
 ): Promise<DecisionEvaluation<DecisionOutcome>> {
   return evaluateVersion(
     batch,
@@ -95,6 +105,7 @@ export function evaluateDecisionOperation(
     consumerId,
     isAdmissible,
     canDispatch,
+    prepareState,
   ) as Promise<DecisionEvaluation<DecisionOutcome>>; // SAFETY: V1 dispatch validates and returns the paired V1 outcome.
 }
 
@@ -128,6 +139,7 @@ async function evaluateVersion(
   consumerId?: string,
   isAdmissible?: () => boolean,
   canDispatch?: () => boolean,
+  prepareState?: PrepareDecisionState,
 ): Promise<DecisionEvaluation> {
   const options = { ...inputOptions };
   if (
@@ -280,6 +292,7 @@ async function evaluateVersion(
       consumerId,
       admissible,
       onPreparedBilling,
+      prepareState,
     );
     if (!rootCaller) {
       signal.throwIfAborted();

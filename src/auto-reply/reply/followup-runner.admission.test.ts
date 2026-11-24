@@ -18,7 +18,7 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import type { FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
+import type { FollowupRunnerParams } from "./reply-turn-admission.types.js";
 import { createMockTypingController as createTypingController } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({

@@ -85,6 +85,8 @@ export type CurrentInboundPromptContext = {
   text: string;
   /** Producer-owned fragments for model projection; text remains the legacy rendering. */
   fragments?: RuntimeContextFragment[];
+  /** Producer rendering after the group participation decision has been made. */
+  participationAssessed?: { text: string; fragments: RuntimeContextFragment[] };
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
   /** Generated goal blocks owned by inbound-context assembly, never user text. */

@@ -52,8 +52,8 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-turn-admission.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import {
   resolveFollowupReplyExpectation,

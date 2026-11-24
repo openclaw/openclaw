@@ -62,6 +62,7 @@ export function selectBoundedContextStart(
   maxBytes: number,
   tokenBudget: number | undefined,
   measure: (index: number) => { bytes: number; tokens: number },
+  options: { enforceTokenBudget?: boolean } = {},
 ): number {
   let bytes = 2;
   let tokens = 0;
@@ -83,7 +84,10 @@ export function selectBoundedContextStart(
     }
   }
   // Ordinary token pressure still belongs to semantic compaction.
-  if (!exceedsByteBudget) {
+  if (
+    !exceedsByteBudget &&
+    (!options.enforceTokenBudget || tokenBudget === undefined || tokens <= tokenBudget)
+  ) {
     return 0;
   }
   // Pairing uses the complete navigation, including calls outside the measured suffix.
