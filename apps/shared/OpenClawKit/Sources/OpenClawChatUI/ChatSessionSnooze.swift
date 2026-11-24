@@ -25,7 +25,7 @@ public enum OpenClawChatSessionSnooze: Sendable {
             }
         }
 
-        func gatewayDate(at local: Date) -> Date {
+        func gatewayDate(at local: Date = .now) -> Date {
             local.addingTimeInterval(self.offset)
         }
 

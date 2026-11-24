@@ -18,7 +18,8 @@ func sidebarMenuConnection(
 {
     var payload = try #require(JSONSerialization.jsonObject(with: Data(#"""
     {"type":"hello-ok","protocol":3,"server":{},
-     "features":{"methods":["sessions.patch","sessions.assignOwner","users.list","users.self","chat.history"]},
+     "features":{"methods":["sessions.patch","sessions.assignOwner",
+         "users.prefs.get","users.list","users.self","chat.history","sessions.groups.put"]},
      "snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},
      "auth":{"scopes":["operator.admin"]},"policy":{}}
     """#.utf8)) as? [String: Any])
@@ -123,20 +124,77 @@ struct ChatSessionSidebarMenuTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func `Threads keeps historical pins visible but only offers a swipe on a negotiated window`(
-        personalPins: Bool) async throws
+    enum PinAccess: CaseIterable { case legacy, verified, groupWriter, sleeping, awake, missing, unavailable, readOnly,
+                                        reconnected
+    }
+
+    @Test(arguments: PinAccess.allCases)
+    func `Threads offers pin edits only to the current durable preference owner with write access`(
+        access: PinAccess) async throws
     {
         let fixture = try SidebarSnoozeMenuFixture()
         defer { fixture.close() }
-        fixture.model.sessions = [fixture.row]
         let commands = OpenClawChatWindowCommands()
+        var current = true
+        let granted = Data(#"{"status":"ok","entries":{}}"#.utf8)
+        if access == .reconnected {
+            try commands.setSessionMenuConnection(sidebarMenuConnection(
+                current: { current },
+                capabilities: ["personal-session-pins"],
+                request: { request in
+                    guard request.method == "users.prefs.get" else { throw URLError(.unsupportedURL) }
+                    return granted
+                }))
+            let retired = commands.sessionMenuActions
+            await retired.refreshTask?.value
+            #expect(retired.canEditPins)
+            current = false
+            #expect(!retired.canEditPins)
+        }
+        var dropWrites = [OpenClawChatGatewayRequest]()
+        let hasSharedWrite = [.groupWriter, .sleeping, .awake].contains(access)
+        let scope = access == .readOnly ? "operator.read" :
+            (hasSharedWrite ? "operator.write" : "operator.sessions.write")
         try commands.setSessionMenuConnection(sidebarMenuConnection(
-            scopes: ["operator.sessions.write"], capabilities: personalPins ? ["personal-session-pins"] : [])
-        { _ in
-            throw URLError(.unsupportedURL)
+            selfProfileID: "presence-only",
+            scopes: [scope],
+            capabilities: access == .legacy ? [] :
+                ["personal-session-pins"])
+        { request in
+            if request.method == "sessions.patch" {
+                dropWrites.append(request)
+                return Data(#"{"key":"agent:research:work","entry":{"sessionId":"work-id","updatedAt":20}}"#.utf8)
+            }
+            if request.method == "users.self" { return Data(#"{"profile":{"id":"alias","emails":[]}}"#.utf8) }
+            guard request.method == "users.prefs.get",
+                  access != .unavailable else { throw URLError(.unsupportedURL) }
+            return access == .missing || access == .reconnected ? Data(#"{"status":"no_durable_identity"}"#.utf8) :
+                granted
         })
+        #expect(!commands.sessionMenuActions.canEditPins)
         await commands.sessionMenuActions.refreshTask?.value
+        // An empty Pages section is a drop target, not a display of existing pins.
+        fixture.model.sessions = []
+        let pages = ChatSessionSidebar(
+            viewModel: fixture.model,
+            query: .constant(""),
+            groups: .constant([]),
+            previews: .init(),
+            menuActions: commands.sessionMenuActions)
+        #expect(pages.interactionSections().contains { $0.id == "pinned" } == hasSharedWrite)
+        var row = fixture.row
+        if access == .sleeping || access == .awake {
+            row.pinned = false
+            row.pinnedAt = nil
+            // The host clock and Gateway disagree about whether the deadline has passed.
+            let local = Date.now
+            let skew: TimeInterval = access == .sleeping ? -3600 : 3600
+            fixture.model.rosterClock = .init(
+                timestamp: local.addingTimeInterval(skew).timeIntervalSince1970 * 1000,
+                receivedAt: local)
+            row.snoozedUntil = local.addingTimeInterval(skew / 2).timeIntervalSince1970 * 1000
+        }
+        fixture.model.sessions = [row]
         let host = NSHostingController(rootView: ChatSessionsSheet(viewModel: fixture.model)
             .environment(\.openClawChatWindowCommands, commands)
             .defaultAppStorage(fixture.defaults))
@@ -166,11 +224,30 @@ struct ChatSessionSidebarMenuTests {
             menu.update()
             return (row, menu)
         }
-        let (index, menu) = try #require(menus.first { $0.1.item(withTitle: "Unpin") != nil })
-        #expect(menu.item(withTitle: "Unpin")?.isEnabled == personalPins)
+        let pinTitle = row.isPinned ? "Unpin" : "Pin"
+        let (index, menu) = try #require(menus.first { $0.1.item(withTitle: pinTitle) != nil })
+        let canEdit = access == .verified || access == .groupWriter || access == .awake
+        #expect(menu.item(withTitle: pinTitle)?.isEnabled == canEdit)
+        let sidebarMenu = NSHostingMenu(rootView: pages.contextMenu(for: row, isChild: false))
+        sidebarMenu.update()
+        #expect(sidebarMenu.item(withTitle: pinTitle)?.isEnabled == canEdit)
+        if access ==
+            .sleeping { #expect(sidebarMenu.items.first { $0.title.hasPrefix("Wake session · ") }?.isEnabled == true) }
         let leading = table.delegate?.tableView?(table, rowActionsForRow: index, edge: .leading)
-        #expect(leading?.map(\.title) == (personalPins ? ["Unpin"] : []))
-        #expect(menu.item(withTitle: "Archive")?.isEnabled == true)
+        #expect(leading?.map(\.title) == (canEdit ? [pinTitle] : []))
+        if access != .readOnly { #expect(menu.item(withTitle: "Archive")?.isEnabled == true) }
+        if access == .sleeping || access == .awake {
+            let drag = ChatSidebarDrag(
+                scope: pages.batch.scope,
+                key: pages.interactionIdentity(row),
+                sessionID: row.sessionId)
+            #expect(pages.dropInteraction(drag, section: "pinned", after: false) == canEdit)
+            await waitForObservedState { !pages.batch.running }
+            #expect(dropWrites.count == (canEdit ? 1 : 0))
+            #expect(dropWrites.first?.params["pinned"]?.value as? Bool == (canEdit ? true : nil))
+            fixture.model.setSessionPinned(key: row.key, pinned: true, agentID: row.agentId)
+            #expect(fixture.model.sessions.first?.isPinned == canEdit)
+        }
     }
 
     @Test func `appearance reset and involvement address the row incarnation and agent`() async throws {
@@ -336,7 +413,7 @@ struct ChatSessionSidebarMenuTests {
             current = false
             return Data(#"{"profiles":[]}"#.utf8)
         })
-        await #expect(throws: CancellationError.self) {
+        await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
             try await connection.request(.init(method: "sessions.patch", timeoutMs: 15000))
         }
         #expect(calls == 0)

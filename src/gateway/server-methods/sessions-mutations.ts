@@ -140,9 +140,8 @@ function createSessionPatchHandler(
       ) {
         return await patchPersonalSessionPins(options, targets, patch, request.many);
       }
-      const assertCurrent = (boundary?: "session-mutation") => {
+      const assertCurrent = () => {
         requestAuthority.assertCurrent();
-        archive.caller?.assertCurrent(boundary);
         if (!request.many) {
           sessionMutationAuthorization?.assertCurrent();
         }
@@ -176,7 +175,12 @@ function createSessionPatchHandler(
         targets: targets.map((target) => ({
           ...target,
           commitGuard: createCommitGuard(target.key.trim(), () => {
-            assertCurrent("session-mutation");
+            assertCurrent();
+            // Each Archive checks the receipt issuer immediately before its drain starts.
+            // Once started it settles under ordinary Archive guards; Undo never detaches.
+            if (archive.caller?.token) {
+              archive.caller.assertCurrent();
+            }
             if (request.many) {
               sessionMutationAuthorization?.assertTargetCurrent({
                 sessionKey: target.key.trim(),
@@ -194,6 +198,7 @@ function createSessionPatchHandler(
       if (request.many) {
         if (archive.caller) {
           assertCurrent();
+          archive.caller.assertCurrent();
         }
         diagnostics?.scope("response");
         respond(true, projectSessionPatchManyResult(targets, executed.outcomes), undefined);
@@ -213,6 +218,7 @@ function createSessionPatchHandler(
         entries: [{ agentId, sessionKey, entry: outcome.entry }],
       });
       assertCurrent();
+      archive.caller?.assertCurrent();
       const result = projectSessionPatchResult({
         ...prepared,
         cfg: executed.cfg,

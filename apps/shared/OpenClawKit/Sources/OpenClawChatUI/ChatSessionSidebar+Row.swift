@@ -60,7 +60,7 @@ extension ChatSessionSidebar {
             connected: self.viewModel.healthOK,
             mainSessionKey: self.sessionAgentID(session).map { self.viewModel.mainSessionKey(forAgent: $0) } ?? self
                 .viewModel.selectedAgentMainSessionKey,
-            canEditPins: self.menuActions.canEditPins,
+            canEditPins: self.menuActions.canTogglePin(session, at: now),
             pin: {
                 self.viewModel.setSessionPinned(
                     key: session.key,

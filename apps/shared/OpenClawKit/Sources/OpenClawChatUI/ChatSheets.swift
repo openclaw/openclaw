@@ -28,8 +28,17 @@ public struct ChatSessionsSheet: View {
     private var canEditPins: Bool {
         self.windowCommands?.sessionMenuActions.canEditPins == true
     }
+
+    private func canTogglePin(_ session: OpenClawChatSessionEntry) -> Bool {
+        self.windowCommands?.sessionMenuActions.canTogglePin(
+            session,
+            at: self.viewModel.sidebarRosterClock.gatewayDate()) == true
+    }
     #else
     private let canEditPins = true
+    private func canTogglePin(_: OpenClawChatSessionEntry) -> Bool {
+        true
+    }
     #endif
     @State private var searchText = ""
     @State private var scope: SessionScope = .active
@@ -306,7 +315,7 @@ public struct ChatSessionsSheet: View {
             }
         } label: { self.sessionRowContent(session) }
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                if !session.isArchived, self.canEditPins {
+                if !session.isArchived, self.canTogglePin(session) {
                     self.pinButton(session)
                         .tint(OpenClawChatTheme.accent)
                 }
@@ -341,7 +350,7 @@ public struct ChatSessionsSheet: View {
                 }
                 if !session.isArchived {
                     self.pinButton(session)
-                        .disabled(!self.canEditPins)
+                        .disabled(!self.canTogglePin(session))
                 }
                 if ChatSessionSidebarModel.canArchiveSession(
                     session,
@@ -441,6 +450,13 @@ public struct ChatSessionsSheet: View {
         HStack(spacing: 12) {
             Group {
                 Button("Pin") { Task { await self.runBatch(.pin) } }
+                    #if os(macOS)
+                        .disabled(self.displayedSessions
+                            .contains {
+                                self.selectedSessionKeys.contains($0.key) && $0
+                                    .isSnoozed(at: self.viewModel.sidebarRosterClock.gatewayDate())
+                            })
+                    #endif
                 Button("Unpin") { Task { await self.runBatch(.unpin) } }
             }
             .disabled(!self.canEditPins)

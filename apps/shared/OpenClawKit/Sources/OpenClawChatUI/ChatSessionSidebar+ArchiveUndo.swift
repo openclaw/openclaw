@@ -1,7 +1,39 @@
 #if os(macOS)
 import Foundation
+import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 import SwiftUI
+
+enum ChatSidebarRestoreNotice: CaseIterable {
+    case notSent, unconfirmed
+
+    var message: String {
+        switch self {
+        case .notSent: String(localized: "Restore was not sent. Open Threads… → Archived on the original Gateway.")
+        case .unconfirmed: String(
+                localized: "Restore was not confirmed. Check Active and Archived in Threads… on the original Gateway.")
+        }
+    }
+}
+
+struct ChatSidebarArchiveRecovery: Identifiable {
+    let id = UUID()
+    let row: OpenClawChatSessionEntry
+    let connection: OpenClawSessionMenuConnection
+    let message: String
+    let archivedAt: Int
+    let lifecycleRevision: String?
+
+    @MainActor var title: String {
+        ChatSessionSidebarModel.sidebarDisplayName(for: self.row)
+    }
+
+    var targetDescription: String {
+        let key = OpenClawChatSessionKey.agentID(from: self.row.key) == nil
+            ? [self.row.agentId, self.row.key].compactMap(\.self).joined(separator: " · ") : self.row.key
+        return [key, self.row.sessionId].compactMap(\.self).joined(separator: " · ")
+    }
+}
 
 struct ChatSidebarArchiveReceipt {
     let id = UUID()
@@ -116,6 +148,7 @@ extension ChatSessionSidebarBatch {
         requestArchiveUndo: Bool = false,
         pinned: Bool? = nil,
         archiveUndoToken: String? = nil,
+        recovery: ChatSidebarArchiveRecovery? = nil,
         connection: OpenClawSessionMenuConnection,
         owner: OpenClawChatSessionSidebarData?) async -> OpenClawChatSessionPatchReceipt?
     {
@@ -135,6 +168,12 @@ extension ChatSessionSidebarBatch {
         defer { owner?.finishMutation(token, receipt: receipt) }
         do {
             var fields: [String: AnyCodable] = ["archived": .init(archived)]
+            if let recovery {
+                fields["expectedArchivedAt"] = .init(recovery.archivedAt)
+                if let revision = recovery.lifecycleRevision {
+                    fields["expectedLifecycleRevision"] = .init(revision)
+                }
+            }
             if requestArchiveUndo {
                 fields["requestArchiveUndo"] = .init(true)
             }
@@ -157,12 +196,55 @@ extension ChatSessionSidebarBatch {
                 owner?.confirmFields(confirmed, target: row, fields: [.pinned])
             }
             return confirmed
+        } catch OpenClawChatTransportSendError.notDispatched where recovery != nil {
+            self.restoreNotices.insert(.notSent)
+            return nil
         } catch {
+            if recovery != nil, !connection.isCurrent() || !(error is GatewayResponseError) {
+                self.restoreNotices.insert(.unconfirmed)
+                return nil
+            }
             if connection.isCurrent() {
-                errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
+                var message = error.localizedDescription
+                if recovery != nil {
+                    message += " " +
+                        String(
+                            localized: "Refresh Threads… → Archived. If the thread is Active, it was restored.")
+                }
+                errors[OpenClawChatSessionSidebarData.identity(row)] = message
+                if archiveUndoToken != nil, let response = error as? GatewayResponseError,
+                   response.method == "sessions.patch", response.code == "INVALID_REQUEST",
+                   response.detailsReason == "ARCHIVE_UNDO_REQUIRES_RESTORE",
+                   let archivedAt = response.details["archivedAt"]?.value as? Int
+                {
+                    self.archiveRecoveries[Self.archiveIdentity(row)] = .init(
+                        row: row,
+                        connection: connection,
+                        message: error.localizedDescription,
+                        archivedAt: archivedAt,
+                        lifecycleRevision: response.details["lifecycleRevision"]?.stringValue)
+                }
             }
             return nil
         }
+    }
+
+    func restoreArchivedSnapshot(
+        _ displayed: ChatSidebarArchiveRecovery,
+        owner: OpenClawChatSessionSidebarData?) async
+    {
+        let key = Self.archiveIdentity(displayed.row)
+        guard archiveRecoveries[key]?.id == displayed.id else { return }
+        archiveRecoveries.removeValue(forKey: key)
+        guard displayed.connection.isCurrent() else {
+            self.restoreNotices.insert(.notSent)
+            return
+        }
+        let errorKey = OpenClawChatSessionSidebarData.identity(displayed.row)
+        if self.errors[errorKey] == displayed.message { self.errors[errorKey] = nil }
+        // A separate user choice starts ordinary Restore; it never sends a pin or redeems the receipt.
+        _ = await self.patchArchive(
+            displayed.row, archived: false, recovery: displayed, connection: displayed.connection, owner: owner)
     }
 
     func takeArchiveUndo(id: UUID) -> ChatSidebarArchiveReceipt? {
@@ -239,8 +321,45 @@ extension ChatSessionSidebar {
         viewModel.refreshSidebarData()
     }
 
-    var archiveUndoNotice: some View {
+    @ViewBuilder var archiveUndoNotice: some View {
         ChatSidebarArchiveNotice(batch: batch, undo: self.undoSidebarArchive)
+        ForEach(ChatSidebarRestoreNotice.allCases.filter(batch.restoreNotices.contains), id: \.self) { notice in
+            HStack {
+                Text(notice.message)
+                Button(String(localized: "Dismiss"), systemImage: "xmark") { self.batch.restoreNotices.remove(notice) }
+                    .labelStyle(.iconOnly)
+            }.padding(8)
+        }
+        let recoveries = batch.archiveRecoveries.values.sorted { $0.row.key < $1.row.key }
+        if let first = recoveries.first {
+            HStack {
+                if recoveries.count == 1 {
+                    self.restoreSnapshotButton(first)
+                } else {
+                    let byTitle = Dictionary(grouping: recoveries, by: \.title)
+                    Menu(String(localized: "Restore")) {
+                        ForEach(recoveries) { recovery in
+                            self.restoreSnapshotButton(recovery, distinguish: (byTitle[recovery.title]?.count ?? 0) > 1)
+                        }
+                    }
+                }
+                Button(String(localized: "Dismiss"), systemImage: "xmark") {
+                    self.batch.archiveRecoveries.removeAll()
+                }.labelStyle(.iconOnly)
+            }.padding(8)
+        }
+    }
+
+    private func restoreSnapshotButton(_ recovery: ChatSidebarArchiveRecovery, distinguish: Bool = false) -> some View {
+        let title = distinguish ? "\(recovery.title) · \(recovery.targetDescription)" : recovery.title
+        return Button(String(format: String(localized: "Restore “%@”"), title)) {
+            Task { @MainActor in
+                await self.batch.restoreArchivedSnapshot(recovery, owner: self.viewModel.sidebarData)
+                guard recovery.connection.isCurrent() else { return }
+                self.viewModel.refreshSessions(limit: 200)
+                self.viewModel.refreshSidebarData()
+            }
+        }
     }
 
     func undoSidebarArchive(_ displayed: ChatSidebarArchiveReceipt) {

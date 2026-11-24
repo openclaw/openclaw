@@ -17,6 +17,10 @@ extension OpenClawChatViewModel {
         }
     }
 
+    var sidebarRosterClock: OpenClawChatSessionSnooze.RosterClock {
+        self.sidebarData?.queryState?.rosterClock ?? self.rosterClock
+    }
+
     public func enableSidebarData() {
         guard self.sidebarData == nil else { return }
         let owner = OpenClawChatSessionSidebarData()

@@ -207,7 +207,9 @@ struct ChatSessionInspectorSheet: View {
                     Toggle("Pinned", isOn: self.pinnedBinding)
                         .font(OpenClawChatTypography.body)
                         #if os(macOS)
-                        .disabled(self.windowCommands?.sessionMenuActions.canEditPins != true)
+                        .disabled(self.windowCommands?.sessionMenuActions.canTogglePin(
+                            self.displayedSession,
+                            at: self.viewModel.sidebarRosterClock.gatewayDate()) != true)
                         #endif
                     Toggle("Archived", isOn: self.archivedBinding)
                         .font(OpenClawChatTypography.body)

@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   ErrorCodes,
   errorShape,
   type SessionsPatchParams,
@@ -15,11 +11,13 @@ import {
 } from "../../config/sessions/session-archive-undo.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { sha256Base64Url } from "../../infra/crypto-digest.js";
-import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import {
+  isSessionArchiveUndoIssuer,
+  supportsSessionArchiveUndo,
+} from "../session-pin-compatibility.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import type {
   GroupMutationOperation,
@@ -43,7 +41,7 @@ export type ArchiveUndoCaller = {
   profileId: string;
   connId: string;
   token?: string;
-  assertCurrent: (boundary?: "session-mutation") => void;
+  assertCurrent: () => void;
 };
 
 export function admitArchiveUndo(
@@ -72,33 +70,24 @@ export function admitArchiveUndo(
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
   const connId = client?.connId;
-  const isCurrent = (boundary?: "session-mutation") =>
+  const isCurrent = () =>
     Boolean(
       client &&
       connId &&
       client.connId === connId &&
       profileId &&
       client.authenticatedUserProfile?.profileId === profileId &&
-      client.connect.role === "operator" &&
-      !client.internal?.remoteIngressPrincipal &&
-      !client.internal?.operatorRunAuthority &&
-      !isIneligiblePersonalGatewayCaller(client) &&
-      (context.isConnectionActive?.(connId, client) ||
-        // Only the Archive mutation can outlive an ordinary socket close. Each drain
-        // checks the live issuer before cancellation; Undo and delivery never detach.
-        (issue &&
-          boundary === "session-mutation" &&
-          client.connectionSignal?.aborted &&
-          !client.invalidated &&
-          options.hasCurrentClientAuthority?.() === true)),
+      isSessionArchiveUndoIssuer(client) &&
+      !client.invalidated &&
+      !client.connectionSignal?.aborted &&
+      options.hasCurrentClientAuthority?.() !== false &&
+      context.isConnectionActive?.(connId, client),
     );
   if (
     !profileId ||
     !connId ||
-    !client ||
-    !isCurrent() ||
-    !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS) ||
-    resolveDatabaseFamilyEngines(context.getRuntimeConfig()).agent !== "sqlite"
+    !supportsSessionArchiveUndo(client, context.getRuntimeConfig()) ||
+    !isCurrent()
   ) {
     return {
       ok: false,
@@ -114,8 +103,8 @@ export function admitArchiveUndo(
       profileId,
       connId,
       token,
-      assertCurrent: (boundary) => {
-        if (!isCurrent(boundary)) {
+      assertCurrent: () => {
+        if (!isCurrent()) {
           throw new SessionMutationAuthorizationChangedError(
             errorShape(ErrorCodes.FORBIDDEN, "The Archive Undo connection changed."),
           );

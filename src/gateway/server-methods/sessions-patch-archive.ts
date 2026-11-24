@@ -531,6 +531,13 @@ export async function prepareSessionPatchArchiveTransition(params: {
                 errorShape(
                   ErrorCodes.INVALID_REQUEST,
                   "Archive Undo cannot recreate a removed checkout. Use Restore on the archived thread instead.",
+                  {
+                    details: {
+                      reason: "ARCHIVE_UNDO_REQUIRES_RESTORE",
+                      archivedAt: params.entry.archivedAt,
+                      lifecycleRevision: params.entry.lifecycleRevision,
+                    },
+                  },
                 ),
               );
             }

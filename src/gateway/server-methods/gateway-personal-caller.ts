@@ -3,13 +3,16 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean {
+export function isSyntheticGatewayConnection(client: GatewayClient | null): boolean {
   return Boolean(
     client?.internal?.syntheticClient ||
     client?.internal?.agentToolCaller ||
-    client?.internal?.agentRuntimeIdentity ||
-    getGatewayToolCallerIdentity(),
+    client?.internal?.agentRuntimeIdentity,
   );
+}
+
+export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean {
+  return isSyntheticGatewayConnection(client) || Boolean(getGatewayToolCallerIdentity());
 }
 
 /** Creation-only defaults require a direct profiled operator, not a delegated transport. */
