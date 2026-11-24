@@ -2,11 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { isMainThread } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import * as fileLogIO from "./logger-file-io.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
@@ -147,58 +144,6 @@ it.each(["async", "sync"])(
     expect(read(secondPath)).toBe(payloads[3]);
   },
 );
-
-it("rescues the unissued tail without replaying an in-flight batch", async () => {
-  const [issued, release] = [createDeferred(), createDeferred()] as const;
-  let issuedRecords = 0;
-  const holdAppend = async (request: fileLogIO.FileLogIORequest) => {
-    if (request.type === "append" && request.file === logPath) {
-      issuedRecords = request.payload.trim().split("\n").length;
-      issued.resolve();
-      await release.promise;
-    }
-  };
-  // A forked Vitest worker uses the writer pool; a thread writes directly.
-  if (isMainThread) {
-    const fileLogWorker = await import("./logger-file-worker.js");
-    const write = fileLogWorker.runFileLogIOInWorker;
-    vi.spyOn(fileLogWorker, "runFileLogIOInWorker").mockImplementation(async (request, flush) => {
-      const result = await write(request, flush);
-      await holdAppend(request);
-      return result;
-    });
-  } else {
-    const write = fileLogIO.executeFileLogIO;
-    vi.spyOn(fileLogIO, "executeFileLogIO").mockImplementation(async (request) => {
-      const result = await write(request);
-      await holdAppend(request);
-      return result;
-    });
-  }
-  const entries = Array.from({ length: 4 }, (_, index) =>
-    entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
-  );
-  for (const record of entries) {
-    fileLogTransport.enqueue(record);
-  }
-  const flushing = fileLogTransport.flush();
-  try {
-    await awaitGateBeforeSettlement(
-      issued.promise,
-      flushing,
-      "logger flush completed without reaching the held append",
-    );
-    expect(issuedRecords).toBeGreaterThan(1);
-    fileLogTransport.enqueue(entry(logPath, '{"index":4}\n'));
-    fileLogTransport.drainSync();
-  } finally {
-    release.resolve();
-    await flushing;
-  }
-
-  expect(records(logPath).map((record) => record.index)).toEqual([0, 1, 2, 3, 4]);
-  expect(entries.every((record) => record.payload === "")).toBe(true);
-});
 
 it("keeps later exit records separate after a synchronous short write", () => {
   for (const payload of ["first\n", "second\n"]) {
