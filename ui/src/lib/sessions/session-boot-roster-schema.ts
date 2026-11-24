@@ -8,6 +8,7 @@ const actor = json.object({
   id: text,
   label: text,
 });
+export const bootSessionOwnerSchema = json.optional(json.object({ actor }));
 // Routing and the first header need stable row facts, never live activity or permissions.
 const row = json.object({
   key: json.refine(json.text, (key) => !isIncognitoSessionKey(key)),
@@ -41,7 +42,7 @@ const row = json.object({
   thinkingLevel: text,
   model: text,
   modelProvider: text,
-  owner: json.optional(json.object({ actor })),
+  owner: bootSessionOwnerSchema,
 });
 export const bootRosterSchema = json.object({
   agentId: json.nullable(json.text),

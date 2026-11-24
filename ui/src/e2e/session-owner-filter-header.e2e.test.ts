@@ -6,6 +6,7 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
+import { composer } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ownerRoster,
@@ -26,6 +27,97 @@ import {
 const suite = createControlUiE2eSuite({ name: "Control UI toolbar owner filter" });
 
 suite.define(() => {
+  it("scopes personal pins to the chosen owner without moving the open chat or rail shortcut", () =>
+    suite.withPage(
+      { viewport: { width: 1280, height: 800 }, locale: "en-US", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const self = sessionPerson("profile-riley", "Riley");
+        const other = sessionPerson("profile-daniel", "Daniel");
+        const third = sessionPerson("profile-morgan", "Morgan");
+        const ownedRow = (id: string, label: string, actor: typeof self, updatedAt: number) =>
+          createControlUiSessionRow(`agent:main:${id}`, label, updatedAt, { owner: { actor } });
+        const planning = ownedRow("planning", "Release planning", self, 100);
+        const notes = ownedRow("notes", "Story notes", self, 99);
+        const review = ownedRow("review", "Model picker review", other, 98);
+        const followUp = ownedRow("follow-up", "Sidebar follow-up", other, 97);
+        const backlog = ownedRow("backlog", "Review backlog", third, 96);
+        const rows = [planning, notes, review, followUp, backlog];
+        const owners = [self, other, third];
+        const gateway = await installMockGateway(page, {
+          sessionKey: planning.key,
+          sessions: rows,
+          presenceUsers: [{ self: true, id: self.id, name: self.label }],
+          historyMessages: [{ role: "assistant", content: "Ready for release planning." }],
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                { match: { ownerId: other.id }, response: ownerRoster([followUp], owners) },
+                { match: { ownerId: third.id }, response: ownerRoster([backlog], owners) },
+                { response: ownerRoster(rows, owners) },
+              ],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, planning.key));
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const pinned = sidebar.locator('[data-session-section="pinned"]');
+        const pins = pinned.locator(".sidebar-recent-session__name");
+        const rail = sidebar.locator(".sidebar-rail__pins");
+        const railPin = rail.locator(`[data-sidebar-entry="session-rail:${planning.key}"]`);
+        await sidebar.locator(`[data-session-key="${planning.key}"]`).dragTo(rail, {
+          targetPosition: { x: 16, y: 80 },
+        });
+        await expectBrowser(railPin).toBeVisible();
+        for (const row of [notes, planning, review]) {
+          await sidebar
+            .locator(`[data-session-key="${row.key}"] .sidebar-recent-session__link`)
+            .click({ button: "right" });
+          await page.getByRole("menuitem", { name: "Pin session", exact: true }).click();
+        }
+        await expectBrowser(pins).toHaveText([
+          "Story notes",
+          "Release planning",
+          "Model picker review",
+        ]);
+        const draft = "Check this with the release team.";
+        await composer(page).fill(draft);
+        const chatUrl = page.url();
+
+        await chooseSidebarOwner(page, `owner:${other.id}`);
+        await gateway.waitForRequest("sessions.list", { match: { ownerId: other.id } });
+        const followUpLink = sidebar.locator(
+          `[data-session-key="${followUp.key}"] .sidebar-recent-session__name`,
+        );
+        await expectBrowser(followUpLink).toBeVisible();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const surface = page.locator(".shell-nav");
+          const frame = await takeControlUiScreenshotFrame(page, surface, [pinned, followUpLink], {
+            elements: [surface, pinned],
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, "owner-filter.png"), frame.elements[0]!.png);
+          await writeFile(
+            path.join(suite.artifactDir, "owner-filter-pin-bounds.json"),
+            JSON.stringify(frame.elements.map((element) => element.bounds)),
+          );
+        }
+        await expectBrowser(pins).toHaveText(["Model picker review"]);
+        await expectBrowser(railPin).toBeVisible();
+        await expectBrowser(composer(page)).toHaveValue(draft);
+        expect(page.url()).toBe(chatUrl);
+
+        await chooseSidebarOwner(page, `owner:${third.id}`);
+        await expectBrowser(sidebar.locator(`[data-session-key="${backlog.key}"]`)).toBeVisible();
+        await expectBrowser(pinned).toHaveCount(0);
+        await chooseSidebarOwner(page, "all");
+        await expectBrowser(pins).toHaveText([
+          "Story notes",
+          "Release planning",
+          "Model picker review",
+        ]);
+      },
+    ));
+
   it("intersects owner filters and personal pins with the selected agent until Show all", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 800 }, locale: "en-US" },

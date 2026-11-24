@@ -109,6 +109,7 @@ export function snapshotSessions(
         key: row.key,
         label: row.label,
         agentId: row.agentId,
+        owner: row.owner && { actor: row.owner.actor },
         subtitle: row.subtitle,
         icon: row.icon,
         color: row.color,

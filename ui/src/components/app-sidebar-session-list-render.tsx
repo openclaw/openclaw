@@ -171,12 +171,11 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
   const section = createMemo((): RenderableSessionSection | undefined => {
     const host = params.host;
     const zone = host.reconciledSidebarZone();
-    const sessions = host.sessionDataContext?.sessions;
     const now = Date.now();
     const hasSnoozedPins = nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
     const rows = sidebarPinnedSessionRows(
       zone,
-      (key) => sessions?.archiveVisibility(key),
+      host,
       hasSnoozedPins ? readVisibleTime(1_000) : now,
     );
     if (rows.length === 0) {

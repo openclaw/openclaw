@@ -92,7 +92,9 @@ describe("SidebarSessionProjection personal pins", () => {
     };
     const visibility = {
       collapsedSessionSections: new Set<string>(),
+      sessionOwnerFilterId: null,
       sessionDataContext: {
+        gateway: { snapshot: { phase: "stopped" as const, client: null } },
         sessions: {
           archiveVisibility: (key: string) =>
             key === "pending" ? ("pending" as const) : undefined,

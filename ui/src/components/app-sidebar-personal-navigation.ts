@@ -16,7 +16,10 @@ import {
   findSidebarSessionRow,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
-import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
+import {
+  applySidebarSessionOwnerFilter,
+  matchesSidebarSessionOwner,
+} from "./app-sidebar-session-ownership.ts";
 import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
@@ -405,15 +408,29 @@ export function personalSidebarOwnerProjection(
 /** Rendering and selection share visibility for saved personal references. */
 export function sidebarPinnedSessionRows(
   zone: SidebarPinZone,
-  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+  host: {
+    readonly sessionOwnerFilterId: string | null;
+    readonly sidebarSnapshot?: Pick<SidebarSnapshotModel, "footer"> | null;
+    readonly sessionDataContext?: {
+      gateway: Parameters<typeof gatewayPresentationScope>[0];
+      sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
+    };
+  },
   now = Date.now(),
 ): SidebarRecentSession[] {
+  const ownerId = host.sessionOwnerFilterId;
+  const context = host.sessionDataContext;
+  const self =
+    host.sidebarSnapshot?.footer ??
+    (ownerId && context ? gatewayPresentationScope(context.gateway).displayUser : null);
+  const profileId = ownerId === self?.id ? self.id : undefined;
   return zone.entries.flatMap((entry) => {
     const row =
       entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
     return row &&
+      (!ownerId || matchesSidebarSessionOwner(row, ownerId, profileId)) &&
       row.archived !== true &&
-      !archiveVisibility?.(row.key) &&
+      !context?.sessions.archiveVisibility(row.key) &&
       !isSessionSnoozed(row, now)
       ? [row]
       : [];
@@ -423,17 +440,12 @@ export function sidebarPinnedSessionRows(
 export function sidebarVisibleRowsInOrder(
   zone: SidebarPinZone,
   visibleRows: SidebarRecentSession[],
-  host: {
+  host: Parameters<typeof sidebarPinnedSessionRows>[1] & {
     readonly collapsedSessionSections: ReadonlySet<string>;
-    readonly sessionDataContext?: {
-      sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
-    };
   },
 ): SidebarRecentSession[] {
   const pins = host.collapsedSessionSections.has("pinned")
     ? []
-    : sidebarPinnedSessionRows(zone, (key) =>
-        host.sessionDataContext?.sessions.archiveVisibility(key),
-      );
+    : sidebarPinnedSessionRows(zone, host);
   return [...pins, ...visibleRows];
 }

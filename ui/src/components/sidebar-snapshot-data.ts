@@ -2,7 +2,10 @@ import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-prot
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import { SIDEBAR_NAVIGATION_VIEWS } from "../app-navigation.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
-import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
+import {
+  bootRosterSchema,
+  bootSessionOwnerSchema,
+} from "../lib/sessions/session-boot-roster-schema.ts";
 import * as json from "../lib/snapshot-json.ts";
 import { resolveChatSnapshotSessionKey } from "../pages/chat/session-snapshot-key.ts";
 
@@ -59,6 +62,7 @@ const sessionFields = {
   key: sessionKey,
   label: text,
   agentId: optionalText,
+  owner: bootSessionOwnerSchema,
   subtitle: optionalText,
   snapshotSubtitle: json.optional(
     json.object({ subtitle: optionalText, narration: optionalText, toolName: optionalText }),
