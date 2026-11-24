@@ -2,7 +2,10 @@ import type { Model } from "@openclaw/llm-core";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
 import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import type { ProviderContext } from "../provider-types.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  detectOpenAICompletionsCompat,
+  isNativeOpenAIEndpoint,
+} from "./openai-completions-compat.js";
 import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
@@ -34,13 +37,14 @@ function injectToolCallThoughtSignatures(
   context: ProviderContext,
   model: OpenAIModeModel,
 ): void {
-  if (!isGoogleOpenAICompatModel(model)) {
-    return;
-  }
+  // Other compatible endpoints (LiteLLM in front of Gemini) get back only signatures issued on
+  // this route, in LiteLLM's provider_specific_fields; provider adapters may move them.
+  const google = isGoogleOpenAICompatModel(model);
   const sigById = new Map<string, string>();
-  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
-    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-    : undefined;
+  const fallbackSig =
+    google && isGoogleGemini3ThinkingLevelModel(model.id)
+      ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+      : undefined;
   for (const msg of context.messages ?? []) {
     if (msg.role !== "assistant") {
       continue;
@@ -57,7 +61,8 @@ function injectToolCallThoughtSignatures(
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
         const isSameRoute =
           msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
-        if (!isSameRoute && !fallbackSig) {
+        // Encrypted reasoning details (JSON) replay through reasoning_details instead.
+        if ((!isSameRoute && !fallbackSig) || (!google && sig.trimStart().startsWith("{"))) {
           continue;
         }
         sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
@@ -83,7 +88,12 @@ function injectToolCallThoughtSignatures(
       if (!sig) {
         continue;
       }
-      Object.assign(toolCall, { extra_content: { google: { thought_signature: sig } } });
+      Object.assign(
+        toolCall,
+        google
+          ? { extra_content: { google: { thought_signature: sig } } }
+          : { provider_specific_fields: { thought_signature: sig } },
+      );
     }
   }
 }
@@ -158,7 +168,7 @@ export function applyCompletionsReplay(
     compat.thinkingFormat === "deepseek" ||
     compat.thinkingFormat === "zai" ||
     (model.reasoning &&
-      model.provider.trim().toLowerCase() !== "openai" &&
+      !isNativeOpenAIEndpoint(model) &&
       shouldPreserveOpenRouterReasoningReplay(model)) ||
     requiresReasoningContentReplay(model.id);
   for (const message of outgoingMessages) {

@@ -1,12 +1,10 @@
-import { access, writeFile } from "node:fs/promises";
+import fsp, { symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import * as logger from "../../logger.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
 import {
   approvedStreamJob,
@@ -131,46 +129,6 @@ describe("agent stream approval through the automation tool", () => {
       );
     },
   );
-
-  it("diagnoses an approved ordinary exec whose waiting authority changed without executing it", async () => {
-    const warnings = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
-    try {
-      await withStreamApprovalFixture(async ({ tools, manager, takeApproval, decide }) => {
-        const marker = path.join(stateDir, "denied-command-ran");
-        const script = path.join(stateDir, "ordinary-approval.cjs");
-        await writeFile(script, 'require("node:fs").writeFileSync(process.argv[2], "executed");');
-        const waiting = createDeferred();
-        const awaitDecision = manager.awaitDecision.bind(manager);
-        const observedWait = vi.spyOn(manager, "awaitDecision").mockImplementation((id) => {
-          const decision = awaitDecision(id);
-          waiting.resolve();
-          return decision;
-        });
-        try {
-          const operation = tools.invoke("exec", {
-            command: `"${process.execPath}" "${script}" "${marker}"`,
-          });
-          const request = await takeApproval(operation);
-          await waiting.promise;
-          bumpGatewayAccessRevision();
-          await decide(request.id, "allow-once");
-          const result = await operation;
-          expect(result).toMatchObject({ details: { status: "failed" } });
-          expect(JSON.stringify(result)).toContain("approval-request-failed");
-          expect(manager.getLocalSnapshot(request.id)?.decision).toBe("allow-once");
-          await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(warnings).toHaveBeenCalledWith(
-            `exec approval wait failed (id=${request.id}, reason=authority-changed)`,
-          );
-          expect(JSON.stringify(warnings.mock.calls)).not.toContain(marker);
-        } finally {
-          observedWait.mockRestore();
-        }
-      });
-    } finally {
-      warnings.mockRestore();
-    }
-  });
 
   it.each(["allow-once", "deny"] as const)(
     "carries the admitted sandbox through %s without creating a host stream",
@@ -461,6 +419,9 @@ describe("agent stream approval through the automation tool", () => {
             expect(await manager.resolveAutoReview(request.id)).toBe(true);
           } else {
             revokeRun();
+            await vi.waitFor(async () => {
+              expect((await manager.getSnapshot(request.id))?.status).toBe("cancelled");
+            });
             await expect(decide(request.id, "allow-once")).rejects.toThrow();
           }
           if (outcome === "deny" || outcome === "expire" || outcome === "cancel") {
@@ -554,6 +515,100 @@ describe("agent stream approval through the automation tool", () => {
         error: expect.objectContaining({ message: expect.stringMatching(/SYSTEM_RUN_DENIED/) }),
       });
       expect(await read()).toEqual([]);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rechecks a retargeted executable after the approved mutation waits for admission",
+    async () => {
+      const executable = path.join(stateDir, "stream-command");
+      const approved = path.join(stateDir, "stream-approved.sh");
+      const replacement = path.join(stateDir, "stream-replacement.sh");
+      await writeFile(approved, "#!/bin/sh\necho approved\n", { mode: 0o755 });
+      await writeFile(replacement, "#!/bin/sh\necho replacement\n", { mode: 0o755 });
+      await symlink(approved, executable);
+      await withStreamApprovalFixture(async ({ add, read, takeApproval, decide, manager }) => {
+        const entered = createDeferred();
+        const release = createDeferred();
+        const originalAdd = cron.add.bind(cron);
+        using _ = vi.spyOn(cron, "add").mockImplementation(async (input, options) => {
+          if (options?.streamExecApproval) {
+            entered.resolve();
+            await release.promise;
+          }
+          return await originalAdd(input, options);
+        });
+        const job = approvedStreamJob();
+        const create = add({ ...job, schedule: { ...job.schedule, command: [executable] } });
+        const settled = create.then(
+          () => ({ ok: true }),
+          (error: unknown) => ({ ok: false, error }),
+        );
+        try {
+          const request = await takeApproval(create);
+          await decide(request.id, "allow-once");
+          await Promise.race([
+            entered.promise,
+            create.then(() => {
+              throw new Error("Stream saved before delayed admission");
+            }),
+          ]);
+          await unlink(executable);
+          await symlink(replacement, executable);
+          release.resolve();
+          expect(await settled).toMatchObject({
+            ok: false,
+            error: expect.objectContaining({ message: expect.stringMatching(/SYSTEM_RUN_DENIED/) }),
+          });
+          expect(await read()).toEqual([]);
+          expect(manager.getLocalSnapshot(request.id)?.consumedDecision).toBeUndefined();
+        } finally {
+          release.resolve();
+        }
+      });
+    },
+  );
+
+  it("rechecks creator authority after asynchronous physical checks at commit", async () => {
+    const scriptPath = path.join(stateDir, "stream-commit-source.js");
+    await writeFile(scriptPath, 'console.log("approved source");\n');
+    await withStreamApprovalFixture(async ({ add, read, takeApproval, decide, revokeRun }) => {
+      const job = approvedStreamJob();
+      const create = add({
+        ...job,
+        schedule: { ...job.schedule, command: [process.execPath, scriptPath] },
+      });
+      const settled = create.then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ ok: false, error }),
+      );
+      const request = await takeApproval(create);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const readFile = fsp.readFile;
+      let reads = 0;
+      using _ = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+        if (args[0] === scriptPath && ++reads === 2) {
+          entered.resolve();
+          await release.promise;
+        }
+        return await readFile(...args);
+      });
+      try {
+        await decide(request.id, "allow-once");
+        await Promise.race([
+          entered.promise,
+          create.then(() => {
+            throw new Error("Stream saved before commit physical checks");
+          }),
+        ]);
+        revokeRun();
+        release.resolve();
+        expect((await settled).ok).toBe(false);
+        expect(await read()).toEqual([]);
+      } finally {
+        release.resolve();
+      }
     });
   });
 

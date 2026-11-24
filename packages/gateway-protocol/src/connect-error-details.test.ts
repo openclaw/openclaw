@@ -12,8 +12,34 @@ import {
   readConnectErrorRecoveryAdvice as recoveryAdvice,
   readConnectPairingRequiredMessage as readPairingMessage,
   readPairingConnectErrorDetails as readPairingDetails,
+  gatewayOperatorAccessError,
+  readGatewayOperatorAccessClose,
   resolveAuthConnectErrorDetailCode as authCode,
 } from "./connect-error-details.js";
+
+it("keeps the longest access diagnostic within the WebSocket close reason budget", () => {
+  const error = gatewayOperatorAccessError("access-record-inactive");
+  expect(new TextEncoder().encode(error.message).byteLength).toBeLessThanOrEqual(123);
+  expect(readGatewayOperatorAccessClose(4001, error.message)).toMatchObject({
+    message: error.message,
+    retryable: false,
+    details: { code: "OPERATOR_ACCESS_DENIED", accessCause: "access-record-inactive" },
+  });
+  expect(readGatewayOperatorAccessClose(1008, error.message)).toBeNull();
+});
+
+it("keeps uncoded access denial terminal without guessing its cause or stopping unrelated policy recovery", () => {
+  expect(
+    readGatewayOperatorAccessClose(
+      4001,
+      "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.",
+    ),
+  ).toMatchObject({
+    retryable: false,
+    details: { accessCause: "policy-check-failed" },
+  });
+  expect(readGatewayOperatorAccessClose(4001, "gateway auth changed")).toBeNull();
+});
 
 const pairingDetails = { code: "PAIRING_REQUIRED", reason: "scope-upgrade", requestId: "req-123" };
 const protocolDetails = {
@@ -111,6 +137,9 @@ it.each([
     expect(result.remediation).toBeUndefined();
   }
   if (kind === "pairing-required") {
+    // The waiting client is blocked by the same gate, so the hint must name a trusted approver.
+    expect(result.remediation).toContain("Approve this request from the Gateway host");
+    expect(result.remediation).toContain("Control UI (Settings -> Devices)");
     expect(result.remediation).toContain("--url");
     expect(result.remediation).toContain("--token/--password");
   }
@@ -192,11 +221,11 @@ it.each([
       message: "protocol mismatch",
       details: { ...protocolDetails, code: "\tPROTOCOL_MISMATCH\n" },
     },
-    "protocol mismatch: Control UI v5, Gateway v4",
+    "protocol mismatch: Web app v5, Gateway v4",
   ],
   [
     { message: "protocol mismatch", details: { ...protocolDetails, minimumProbeProtocol: 4 } },
-    "protocol mismatch: Control UI v5, Gateway v4, connection check min v4",
+    "protocol mismatch: Web app v5, Gateway v4, connection check min v4",
   ],
 ])("formats structured and padded connect details %j", (input, message) => {
   expect(formatError(input)).toBe(message);

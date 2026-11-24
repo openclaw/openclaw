@@ -12,6 +12,22 @@ import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
 import { isStatePostgres, stateEngineSchema } from "./openclaw-state-db-engine.js";
 
+const postgresSqlReads = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./postgres-schema.generated/agent-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./postgres-schema.generated/agent-runtime.js")>();
+  return {
+    ...actual,
+    agentPostgresRuntime: {
+      get sql() {
+        postgresSqlReads.count++;
+        return actual.agentPostgresRuntime.sql;
+      },
+    },
+  };
+});
+
 vi.mock("../infra/database-engine/postgres-index-ordering.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../infra/database-engine/postgres-index-ordering.js")>();
@@ -23,12 +39,28 @@ vi.mock("../infra/database-engine/postgres-index-ordering.js", async (importOrig
 
 it("does not derive PostgreSQL migrations for SQLite startup and retains the requested plan", () => {
   expect(vi.mocked(postgresIndexOrderingMigration).mock.calls.length).toBe(0);
+  expect(postgresSqlReads.count).toBe(0);
   for (const [index, schema] of [stateEngineSchema, agentEngineSchema].entries()) {
     const migrations = schema.postgresMigrations;
     expect(migrations?.at(-1)?.version).toBe(schema.version);
     expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes((index + 1) * 2);
     expect(schema.postgresMigrations).toBe(migrations);
     expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes((index + 1) * 2);
+  }
+  expect(postgresSqlReads.count).toBe(1);
+});
+
+it("keeps the materialized PostgreSQL schema writable for Doctor rollback", () => {
+  for (const schema of [stateEngineSchema, agentEngineSchema]) {
+    const installed = { ...schema };
+    try {
+      schema.postgresMigrations = [];
+      Object.assign(schema, { postgres: "SELECT 1;" });
+      expect(schema.postgresMigrations).toEqual([]);
+      expect(schema.postgres).toBe("SELECT 1;");
+    } finally {
+      Object.assign(schema, installed);
+    }
   }
 });
 

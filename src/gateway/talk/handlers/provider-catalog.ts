@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../../config/types.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../../realtime-transcription/provider-registry.js";
 import { getVoiceProviderConfig } from "../../../tts/voice-models.js";
+import { resolveTalkFileTranscriptionConfig } from "../file-transcription.js";
 import {
   buildTalkTranscriptionConfig,
   listTalkTranscriptionProviders,
@@ -44,12 +45,11 @@ export async function buildTalkTranscriptionCatalog(
   agentId: string,
   onReadinessError: (error: unknown) => false,
 ) {
-  const transcriptionConfig = await buildTalkTranscriptionConfig(
-    config,
-    undefined,
-    undefined,
-    agentId,
-  );
+  const fileTranscription = resolveTalkFileTranscriptionConfig(config, agentId);
+  const [transcriptionConfig, mediaConfig] = await settleTalkCatalogTasks([
+    buildTalkTranscriptionConfig(config, undefined, undefined, agentId, fileTranscription),
+    fileTranscription,
+  ]);
   const transcriptionSelection = transcriptionConfig.file
     ? { ready: transcriptionConfig.file.ready, activeProvider: transcriptionConfig.file.provider }
     : await resolveCatalogProviderSelection(
@@ -63,7 +63,23 @@ export async function buildTalkTranscriptionCatalog(
           }),
       );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
+  // Voice notes keep using the media-understanding models when Talk does not,
+  // so report their readiness for the picked model's warning.
   return {
+    source: transcriptionConfig.source,
+    ...(!transcriptionConfig.file && mediaConfig
+      ? {
+          mediaProviders: mediaConfig.providers.map(({ id, models, configured }) => ({
+            id,
+            label: id,
+            configured,
+            models,
+            modes: ["transcription"],
+            transports: ["gateway-relay"],
+            brains: ["none"],
+          })),
+        }
+      : {}),
     ready: transcriptionSelection.ready,
     ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
     providers: transcriptionConfig.file

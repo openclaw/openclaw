@@ -3,10 +3,10 @@ import {
   GatewayControlUiIngressError,
   type GatewayIngressPrincipal,
 } from "../plugins/gateway-ingress.types.js";
+import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal-schema.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   onOpenClawIdTunnelPrincipalsChanged,
-  openClawIdRecoveryPrincipalSchema,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
@@ -112,7 +112,7 @@ export async function prepareGatewayIngressPrincipalAdmission(
     signal.throwIfAborted();
     await prepareOpenClawIdTunnelPrincipal(source);
     assertCurrent();
-    return { signal, assertCurrent, release };
+    return { principal: source, signal, assertCurrent, release };
   } catch {
     release();
     throw denied();

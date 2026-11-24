@@ -18,6 +18,8 @@ export type PluginTrust = {
   origin: PluginOrigin | "unknown";
   installSource?: PluginInstallRecord["source"];
   installSpec?: string;
+  /** The loaded install's approved capability review included conversation access. */
+  conversationAccessAccepted?: true;
 };
 
 /** The same recorded explanation is rendered by CLI inspection and the runtime refusal. */

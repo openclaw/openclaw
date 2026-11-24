@@ -1,4 +1,4 @@
-import { createSignal, type Setter } from "solid-js";
+import { createSignal, merge } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageCreator } from "../../../../src/shared/usage-types.js";
@@ -33,32 +33,13 @@ function mountCreators(creator: SessionUsageCreator, onSelect = (_key: string | 
 }
 
 function mountLiveCreators(groups: ReturnType<typeof group>[]) {
-  type Props = Parameters<typeof UsageCreators>[0];
-  let update!: Setter<Props>;
-  const view = mountView(() => {
-    const [props, setProps] = createSignal<Props>({
-      groups,
-      mode: "tokens",
-      selectedKey: null,
-      onSelect: vi.fn(),
-    });
-    update = setProps;
-    return UsageCreators({
-      get groups() {
-        return props().groups;
-      },
-      get mode() {
-        return props().mode;
-      },
-      get selectedKey() {
-        return props().selectedKey;
-      },
-      get onSelect() {
-        return props().onSelect;
-      },
-    });
+  const [props, update] = createSignal<Parameters<typeof UsageCreators>[0]>({
+    groups,
+    mode: "tokens",
+    selectedKey: null,
+    onSelect: vi.fn(),
   });
-  return { ...view, update };
+  return { ...mountView(() => UsageCreators(merge(props))), update };
 }
 
 const rankedCreators = () =>
@@ -195,6 +176,10 @@ it("keeps creator choices and opaque identities through row, picker, and search 
   ]);
   const trigger = container.querySelector<HTMLButtonElement>(".usage-creator-trigger")!;
   const picker = container.querySelector<HTMLElement>(".usage-creator-filter")!;
+  const choices = () =>
+    Array.from(picker.querySelectorAll('[role="menuitemradio"]'), (item) => item.ariaLabel);
+  const choice = (label: string) =>
+    picker.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
   const open = async () => {
     trigger.click();
     await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
@@ -202,14 +187,8 @@ it("keeps creator choices and opaque identities through row, picker, and search 
   expect(trigger.getAttribute("aria-label")).toBe("Filter by session creator");
   expect(trigger.textContent).toContain("Alex Morgan");
   await open();
-  expect(
-    [...picker.querySelectorAll('[role="menuitemradio"]')].map((item) =>
-      item.getAttribute("aria-label"),
-    ),
-  ).toEqual(["Alex Morgan", "Jordan Lee"]);
-  expect(picker.querySelector('[aria-label="Alex Morgan"]')?.getAttribute("aria-checked")).toBe(
-    "true",
-  );
+  expect(choices()).toEqual(["Alex Morgan", "Jordan Lee"]);
+  expect(choice("Alex Morgan").getAttribute("aria-checked")).toBe("true");
   expect(container.textContent).not.toContain("opaque-");
   const row = container.querySelector("tbody tr")!;
   expect(texts(row, "td")).toEqual(["1.2K", "$2.50", "3"]);
@@ -222,9 +201,8 @@ it("keeps creator choices and opaque identities through row, picker, and search 
   flush();
   expect(container.querySelector(".usage-creator-trigger")).toBe(trigger);
   expect(trigger.textContent).toContain("Selected identity");
-  expect(
-    picker.querySelector('[aria-label="Selected identity"]')?.getAttribute("aria-checked"),
-  ).toBe("true");
+  expect(choice("Selected identity").getAttribute("aria-checked")).toBe("true");
+  expect(choices()).toEqual(["Selected identity"]);
   expect(container.textContent).not.toContain(alex.key);
   [...picker.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent?.trim() === "Clear")!
@@ -240,16 +218,31 @@ it("keeps creator choices and opaque identities through row, picker, and search 
   search.value = "Jordan";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  expect(
-    [...picker.querySelectorAll('[role="menuitemradio"]')].map((item) =>
-      item.getAttribute("aria-label"),
-    ),
-  ).toEqual(["Jordan Lee"]);
+  expect(choices()).toEqual(["Jordan Lee"]);
+  onSelect.mockClear();
+  const confirmComposition = (event: KeyboardEvent) => {
+    search.focus();
+    search.dispatchEvent(event);
+    flush();
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(search);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  };
+  const enter = (init: KeyboardEventInit = {}) =>
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+  for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+    confirmComposition(enter(composition));
+  }
+  const end = new CompositionEvent("compositionend", { bubbles: true });
+  search.dispatchEvent(end);
+  confirmComposition(Object.defineProperty(enter(), "timeStamp", { value: end.timeStamp - 1 }));
+  search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(onSelect).toHaveBeenLastCalledWith(jordan.key);
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
   await open();
-  picker.querySelector<HTMLButtonElement>('[aria-label="Alex Morgan"]')!.click();
+  choice("Alex Morgan").click();
   expect(onSelect).toHaveBeenLastCalledWith(null);
 });
 

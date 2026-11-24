@@ -107,6 +107,10 @@ trap 'rm -f "${publish_stderr}"' EXIT
 # GitHub publication uses the pinned publisher's guard, never candidate code.
 # Keep it after tarball inspection and planning, and repeat it for every write.
 if [[ "${GITHUB_ACTIONS:-}" == "true" || -n "${WORKFLOW_SHA:-}" ]]; then
+  if [[ "${publish_tag}" == "extended-stable" && -n "${RELEASE_PUBLISH_RUN_ID:-}" ]]; then
+    PACKAGE_VERSION="${package_version}" \
+      node "${tooling_root}/scripts/openclaw-npm-extended-stable-release.mjs" validate-active-line
+  fi
   EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)" \
     node "${tooling_root}/scripts/npm-preflight-tooling-identity.mjs" --verify-publication-authority
 fi

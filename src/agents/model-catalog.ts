@@ -12,6 +12,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -21,7 +22,7 @@ import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-ca
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
-import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-selection-normalize.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type { AuthStorageData } from "./sessions/index.js";
@@ -295,6 +296,7 @@ export async function buildPreparedModelCatalogSnapshot(
     params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
   );
   const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
+  await prepareProviderModelPolicySurfaces();
   logStage("catalog-deps-ready");
   const entries = params.models;
   const manifestPlan = planEffectiveModelCatalogRows({
@@ -367,7 +369,8 @@ export async function buildPreparedModelCatalogSnapshot(
     ),
   ]);
   // Runtime declarations describe possible models, not account entitlement.
-  // Only live registry or refreshed rows may publish those provider models.
+  // Only live registry or refreshed rows may publish those provider models; the registry
+  // already carries their catalog details (readGeneratedPluginModelCatalogProviders).
   const manifestKeyOf = createModelCatalogIdentityKeyResolver();
   const discoveredKeys = new Set(models.map(manifestKeyOf));
   const discoveredByRoute = new Map(

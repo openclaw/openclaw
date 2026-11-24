@@ -7,10 +7,10 @@ import {
   isIndexedSessionEntry,
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
-import { logWarn } from "../../logger.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import { isOpenClawSubagentCompletionMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
@@ -37,16 +37,18 @@ export {
 /** Hydrated entries own envelopes; writable SDK exposure detaches their shared payloads once. */
 export function prepareSessionManagerEntries(entries: readonly unknown[]) {
   const partitioned = partitionSessionFileEntries(entries);
+  const ownerSealed = isOwnedTranscriptPayload(entries);
   const pendingWritableTranscriptEntries = new Set<object>();
-  const ownEnvelope = <T>(
-    entry: T,
-    shared = Object.isFrozen(entries) || Object.isFrozen(entry),
-  ): T => {
+  // Probe the root once: JavaScriptCore scans every index of an array on each
+  // Object.isFrozen call, so a per-entry probe is quadratic in history length.
+  const entriesFrozen = Object.isFrozen(entries);
+  const ownEnvelope = <T>(entry: T, shared = entriesFrozen || Object.isFrozen(entry)): T => {
     if (!entry || typeof entry !== "object" || !shared) {
       return entry;
     }
     const container: object = Array.isArray(entry) ? entry.slice() : {};
-    const envelope = Object.assign(container, freezeJsonSnapshot(entry));
+    // Hydration's sealed root outlives the generic freezer's rotating memo.
+    const envelope = Object.assign(container, ownerSealed ? entry : freezeJsonSnapshot(entry));
     pendingWritableTranscriptEntries.add(envelope);
     return envelope;
   };
@@ -55,7 +57,7 @@ export function prepareSessionManagerEntries(entries: readonly unknown[]) {
     if (entry) {
       const envelope = ownEnvelope(
         shareSessionSystemPrompt(entry),
-        Object.isFrozen(entries) || Object.isFrozen(entry),
+        entriesFrozen || Object.isFrozen(entry),
       );
       partitioned.fileEntries[fileIndex++] = envelope;
       partitioned.fileEntriesByOriginalIndex[index] = envelope;
@@ -276,8 +278,8 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
   return boundary?.type === "compaction" ? boundary : null;
 }
 
-export function projectSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
-  // Stored snapshots stay shared; mutable SDK edits detach before internal publication.
+/** Data projection only; an exclusive preparation worker does not publish a shared snapshot. */
+export function projectSessionModelContextData(branch: readonly SessionEntry[]): SessionEntry[] {
   const events = [...branch];
   for (let index = 0; index < events.length; index++) {
     const entry = events[index]!;
@@ -288,14 +290,39 @@ export function projectSessionModelContextEntries(branch: readonly SessionEntry[
       }
     }
   }
-  return freezeJsonSnapshot(cloneTranscriptView(events));
+  return events;
 }
 
-/** Reuse immutable text without sharing the freshly hydrated message containers. */
+export function projectSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
+  // Stored snapshots stay shared; mutable SDK edits detach before internal publication.
+  return cloneTranscriptView(projectSessionModelContextData(branch), { freeze: true });
+}
+
+/** Reuse sealed messages or immutable text; writable SDK messages stay detached. */
 export function reuseResidentSessionEntryStrings(
   entries: readonly FileEntry[],
   residentEntries: ReadonlyMap<string, SessionEntry>,
 ): void {
+  // Admitted payloads are JSON. Preserve property order as well as values so reusing
+  // a sealed resident message also preserves the incoming serialized bytes.
+  const samePayload = <T>(left: T, right: unknown): right is T => {
+    if (Object.is(left, right)) {
+      return true;
+    }
+    if (!left || !right || typeof left !== "object" || typeof right !== "object") {
+      return false;
+    }
+    const keys = Object.keys(left);
+    const otherKeys = Object.keys(right);
+    return (
+      Array.isArray(left) === Array.isArray(right) &&
+      keys.length === otherKeys.length &&
+      keys.every(
+        (key, index) =>
+          key === otherKeys[index] && samePayload(Reflect.get(left, key), Reflect.get(right, key)),
+      )
+    );
+  };
   const reuse = (target: object, source: unknown): void => {
     if (target === source || source === null || typeof source !== "object" || isProxy(source)) {
       return;
@@ -318,7 +345,18 @@ export function reuseResidentSessionEntryStrings(
     if (!resident || isProxy(resident) || entry.type !== "message") {
       continue;
     }
-    if (entry.message === Object.getOwnPropertyDescriptor(resident, "message")?.value) {
+    const residentMessage: unknown = Object.getOwnPropertyDescriptor(resident, "message")?.value;
+    if (entry.message === residentMessage) {
+      continue;
+    }
+    if (
+      isOwnedTranscriptPayload(entry.message) &&
+      residentMessage !== null &&
+      typeof residentMessage === "object" &&
+      isOwnedTranscriptPayload(residentMessage) &&
+      samePayload(entry.message, residentMessage)
+    ) {
+      entry.message = residentMessage;
       continue;
     }
     // Fresh reloads own their string replacement; retained immutable payloads already share it.
@@ -410,28 +448,6 @@ export function buildSessionTree(
     );
   }
   return roots;
-}
-
-export function parseSessionEntries(content: string): FileEntry[] {
-  const entries: FileEntry[] = [];
-  let skipped = 0;
-  for (const line of content.trim().split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      entries.push(normalizeLoadedFileEntry(JSON.parse(line) as FileEntry));
-    } catch {
-      skipped += 1;
-    }
-  }
-  if (skipped > 0) {
-    logWarn(
-      `parseJsonlEntries: skipped ${skipped} malformed JSONL line(s) — ` +
-        `${entries.length} valid entries were loaded`,
-    );
-  }
-  return entries;
 }
 
 export function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {

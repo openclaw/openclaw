@@ -1,10 +1,16 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerSessionResourceCleanup } from "../../packages/ai/src/session-resources.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { cliMessageExitEntrypoints } from "./cli-entrypoint.test-support.js";
 import {
   closeCliResources,
   getPendingCliDisposers,
@@ -127,4 +133,45 @@ it("retires provider session resources after a one-shot command", async () => {
     unregister();
     clearTimeout(retainedSocketTimer);
   }
+});
+
+it("closes a cold CLI without initializing a provider runtime", async ({
+  signal,
+  onTestFinished,
+}) => {
+  vi.useRealTimers();
+  const fixture = createFixtureLifetime();
+  onTestFinished(() => fixture.cleanup());
+  await fixture.run(async () => {
+    const home = fixture.createTempDir("openclaw-cli-cold-cleanup-");
+    const script = `
+      import assert from "node:assert/strict";
+      const key = Symbol.for("openclaw.ai.defaultRuntime");
+      assert.equal(globalThis[key], undefined);
+      const { closeCliResources, getPendingCliDisposers, waitForPendingCliDisposers } =
+        await import(${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.cleanup).href)});
+      assert.equal(globalThis[key], undefined);
+      await closeCliResources();
+      await waitForPendingCliDisposers();
+      assert.deepEqual(getPendingCliDisposers(), []);
+      assert.equal(globalThis[key], undefined);
+    `;
+    const result = await fixture.track(
+      runNodeScript(
+        ["--input-type=module", "--eval", script],
+        {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          HOME: home,
+          USERPROFILE: home,
+          OPENCLAW_STATE_DIR: path.join(home, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
+        },
+        20_000,
+        { signal, maxBuffer: 64 * 1024, requireProcessTreeExit: process.platform !== "win32" },
+      ),
+    );
+    expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+    expect(result.stderr).not.toMatch(/CLI cleanup (?:failed|timed out|deferred)/u);
+  });
 });

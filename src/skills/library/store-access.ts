@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -40,26 +41,21 @@ export function captureSkillLibraryAccess(
   });
   const roles = structuredClone(authority.getConfig().gateway?.roles);
   const input: SkillLibraryWorkerAuthority = {
+    roleSubject:
+      authority.getConfig().gateway?.openclawId?.enabled && authority.profileId
+        ? operatorRoleSubject(readResidentUserProfileIdentity(authority.profileId))
+        : { profileId: authority.profileId, openclawIdMember: false },
     profileId: authority.profileId,
     namespace: authority.namespace,
     scopes: [...authority.scopes],
+    ownerDevice: authority.ownerDevice,
     config: { gateway: { roles } },
   };
   const pinned = { path: context.admission.databasePath, env: { ...env, ...context.environment } };
+  // Roles and scopes are admitted once above; only Stop and the database fence end access.
   const assertCurrent = () => {
     context.admission.assertCurrent();
     authority.assertCurrent();
-    if (
-      !isDeepStrictEqual(roles, authority.getConfig().gateway?.roles) ||
-      !isDeepStrictEqual(input.scopes, authority.scopes) ||
-      input.profileId !== authority.profileId ||
-      input.namespace !== authority.namespace
-    ) {
-      throw new SkillLibraryError(
-        "AUTHORITY_EXPIRED",
-        "Skill library authority changed. Refresh and retry.",
-      );
-    }
   };
   return {
     options: pinned,
@@ -104,29 +100,14 @@ export function captureSkillLibraryAccess(
       if (!reply.ok || reply.type !== "skillLibrary.read" || reply.kind !== kind) {
         throw new Error("Unexpected skill library read result");
       }
+      // Profile changes invalidate the cached reply; they do not refuse a started read.
       const profileCurrent = profiles.bind(reply.profileIds);
-      if (!profileCurrent) {
-        throw new SkillLibraryError(
-          "CONFLICT",
-          "Profile authority changed during library access. Retry.",
-        );
-      }
-      const check = () => {
-        assertSource();
-        if (!profileCurrent()) {
-          throw new SkillLibraryError(
-            "AUTHORITY_EXPIRED",
-            "Skill library profile authority changed. Refresh and retry.",
-          );
-        }
-      };
-      check();
-      if (cacheKey !== undefined && !cached) {
+      if (cacheKey !== undefined && !cached && profileCurrent) {
         library.remember(cacheKey, reply, profileCurrent);
       }
       // SAFETY: The typed read registry binds output to kind, checked against K above.
       const value = reply.value as SkillLibraryReadQueries[K]["output"];
-      return { value, assertCurrent: check };
+      return { value, assertCurrent: assertSource };
     },
     async write<K extends keyof SkillLibraryWorkerOperations>(
       type: K,

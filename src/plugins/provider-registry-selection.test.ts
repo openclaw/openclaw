@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeModelRef } from "../agents/model-ref-shared.js";
+import { normalizeModelRef } from "../agents/model-selection-normalize.js";
 import { createPluginRecord } from "./loader-records.js";
 import { PluginInstance } from "./plugin-instance.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";

@@ -39,6 +39,15 @@ with the accepted harness IDs. Models stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
 
+`ProviderAuthContext.nodes` lets a sign-in method reach paired nodes, for example
+to finish a loopback redirect on the device that runs the browser. It offers
+`list` and `invoke` with the same shapes as `api.runtime.nodes`, except that
+`invoke` takes no `scopes` or `sessionKey`. It is present only when sign-in runs
+inside the Gateway (Control UI, chat `/login`, or `openclaw models auth login`
+against a running Gateway). Offline CLI sign-in leaves it undefined, so treat
+node access as optional. Each call goes through Gateway `node.invoke` command policy with the
+sign-in caller's authority.
+
 ## Checklist before you open a provider PR
 
 - **Live listing.** If the vendor has a model-list API, the provider lists the
@@ -54,7 +63,7 @@ Do not write a separate permission store or infer consent from successful login.
   the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
   Use `compat.thinkingLevels` when the offered ladder differs from what the map implies.
 - **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
-  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }` (equivalent to `runtime`).
   Without the manifest half, the Gateway never refreshes the provider and only
   catalog rows appear.
 - **Row IDs match the listing.** Use the ID the vendor's model list returns.

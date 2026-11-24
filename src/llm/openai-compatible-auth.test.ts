@@ -1,6 +1,7 @@
-import type { Context } from "@openclaw/ai";
+import { getAiTransportHost, runWithAiTransportHost, type Context } from "@openclaw/ai";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { afterEach, expect, it, vi } from "vitest";
+import { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -57,9 +58,13 @@ it("sends explicit API keys as bearer auth for generic chat-completions provider
   });
 
   await expect(
-    streamOpenAICompletions(createBaseModel("openai-completions"), context, {
-      apiKey: "sk-third-party",
-    }).result(),
+    runWithAiTransportHost(
+      { ...getAiTransportHost(), buildModelFetch: buildGuardedModelFetch },
+      () =>
+        streamOpenAICompletions(createBaseModel("openai-completions"), context, {
+          apiKey: "sk-third-party",
+        }).result(),
+    ),
   ).resolves.toMatchObject({ stopReason: "error", errorMessage: "Connection error." });
   expect(capturedHeaders?.get("authorization")).toBe("Bearer sk-third-party");
 });

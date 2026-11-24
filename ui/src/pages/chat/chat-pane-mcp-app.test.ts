@@ -14,6 +14,7 @@ import {
   WIDGET_PROMPT_EVENT,
   type McpAppMessageEventDetail,
 } from "../../components/mcp-app-security.ts";
+import { requestMcpAppDisplayMode } from "../../components/mcp-app-sidebar.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { readMcpAppContexts } from "../../lib/mcp-app-context.ts";
 import * as appMessages from "../../lib/mcp-app-new-conversation.ts";
@@ -71,6 +72,7 @@ function fixture() {
     hello: null,
     handleSendChat: vi.fn(async () => {}),
     handleOpenSidebar: vi.fn(),
+    handleCloseSidebar: vi.fn(),
   };
   const owner: ChatPaneMcpAppOwner = {
     context,
@@ -132,6 +134,7 @@ function fixture() {
       const host = Object.assign(makeChatHost({ client, sessionKey, assistantAgentId }), {
         handleSendChat: state.handleSendChat,
         handleOpenSidebar: state.handleOpenSidebar,
+        handleCloseSidebar: state.handleCloseSidebar,
         sidebarContent: state.sidebarContent,
       });
       owner.state = host;
@@ -151,6 +154,28 @@ function fixture() {
     },
   };
 }
+
+it("opens a transcript App's expanded view in this pane's detail sidebar", () => {
+  const f = fixture();
+  const view = document.createElement("mcp-app-view");
+  view.title = "Excalidraw";
+  f.element.append(view);
+  view.sessionKey = f.state.sessionKey;
+  view.surface = "conversation";
+  view.displayMode = "fullscreen";
+  requestMcpAppDisplayMode(view);
+  expect(view.sidebar).toBe(true);
+  expect(f.state.handleOpenSidebar).toHaveBeenCalledWith({
+    kind: "mcp-app-preview",
+    title: "Excalidraw",
+    view,
+    appIdentity: undefined,
+  });
+  f.owner.presented = false;
+  requestMcpAppDisplayMode(view);
+  expect(view.sidebar).toBe(false);
+  expect(f.state.handleOpenSidebar).toHaveBeenCalledTimes(1);
+});
 
 function message(sessionKey: string, target: "active" | "new" = "active") {
   const receipt = createDeferred<boolean>();

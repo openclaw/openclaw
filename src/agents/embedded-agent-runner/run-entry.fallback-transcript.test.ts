@@ -9,11 +9,8 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
-import { bindOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
-import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { FailoverError } from "../failover-error.js";
@@ -54,7 +51,6 @@ describe("run entry durable fallback notices", () => {
       maintenance?: boolean;
       omitSessionKey?: boolean;
       abortSignal?: AbortSignal;
-      writerContext?: boolean;
       unadmittedPrimary?: boolean;
     } = {},
   ) {
@@ -115,26 +111,6 @@ describe("run entry durable fallback notices", () => {
         runCandidate: async (provider, model) => {
           if (!options.unadmittedPrimary || provider !== "openai") {
             await admission.admit("embedded");
-          }
-          if (options.writerContext) {
-            const authority = getAgentRunContext(identity.runId)?.delegatedAuthority;
-            if (!authority) {
-              throw new Error("Missing fixture run authority");
-            }
-            bindAgentRunTerminalWriteContext(authority, {
-              run: (write) =>
-                bindOwnedSessionTranscriptWrites(
-                  {
-                    sessionTarget: {
-                      ...scope,
-                      expectedWriterRunId: identity.runId,
-                      expectedLifecycleRevision: entry.lifecycleRevision,
-                    },
-                    withTranscriptWrite: async (work) => work(),
-                  },
-                  write,
-                )(),
-            });
           }
           candidates.push(`${provider}/${model}`);
           if (provider === "openai") {
@@ -219,28 +195,20 @@ describe("run entry durable fallback notices", () => {
     { activeWriterRunId: "replacement-run" },
     { lifecycleRevision: "replacement-revision" },
   ];
-  it.each(
-    [false, true].flatMap((writerContext) =>
-      replacements.map((replacement) => ({ writerContext, replacement })),
-    ),
-  )(
-    "refuses a notice after $replacement with bound writer=$writerContext",
-    async ({ writerContext, replacement }) => {
-      using f = await fixture({
-        writerContext,
-        onStep: async (step) => {
-          if (step.fallbackStepFinalOutcome === "next_fallback") {
-            await replaceSessionEntry(f.scope, { ...f.entry, ...replacement });
-          }
-        },
-      });
-      await f.run();
-      expect(await loadTranscriptEvents(f.scope)).toEqual([]);
-      expect(await loadTranscriptEvents({ ...f.scope, sessionId: "replacement-session" })).toEqual(
-        [],
-      );
-    },
-  );
+  it.each(replacements)("refuses a notice after %j", async (replacement) => {
+    using f = await fixture({
+      onStep: async (step) => {
+        if (step.fallbackStepFinalOutcome === "next_fallback") {
+          await replaceSessionEntry(f.scope, { ...f.entry, ...replacement });
+        }
+      },
+    });
+    await f.run();
+    expect(await loadTranscriptEvents(f.scope)).toEqual([]);
+    expect(await loadTranscriptEvents({ ...f.scope, sessionId: "replacement-session" })).toEqual(
+      [],
+    );
+  });
 
   it.each(["observer", "commit"] as const)(
     "rechecks cancellation at the %s boundary",

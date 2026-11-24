@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../api/types.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createSidebarAttentionStore } from "../app/sidebar-attention-store.ts";
@@ -41,6 +42,14 @@ export function createStore(
   gateway: ApplicationContext["gateway"],
   connectionBootstrap?: ApplicationContext["connectionBootstrap"],
   selection?: ApplicationContext["agentSelection"],
+  config: Pick<
+    ApplicationContext["config"],
+    "current" | "subscribe"
+  > = createApplicationConfigCapability({ resourceBasePath: "" }),
+  overlays = {
+    snapshot: { approvalQueue: [] },
+    subscribe: () => () => undefined,
+  } as unknown as ApplicationContext["overlays"],
 ) {
   const agentSelection =
     selection ??
@@ -50,15 +59,13 @@ export function createStore(
     } as unknown as ApplicationContext["agentSelection"]);
   return createSidebarAttentionStore({
     gateway,
+    config,
     agentSelection,
     agents: {
       state: { agentsList: null },
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["agents"],
-    overlays: {
-      snapshot: { approvalQueue: [] },
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["overlays"],
+    overlays,
     scopeUpgrade: hiddenScopeUpgradeCapability,
     connectionBootstrap,
   });

@@ -43,6 +43,28 @@ function setup() {
   return { callGateway, tool, execute };
 }
 
+it("offers issue creation without workspace publication, but not in observation-only mode", async () => {
+  const input = { action: "create_issue", title: "Report", body: "Details" };
+  const tool = createGitHubPublishTool({ publicationAvailable: false });
+  expect(Value.Check(tool.parameters, input)).toBe(true);
+  expect(Value.Check(createGitHubPublishTool({ observationOnly: true }).parameters, input)).toBe(
+    false,
+  );
+  const { callGateway } = setup();
+  await withGatewayToolCallerIdentity(caller, () => tool.execute("issue", input));
+  expect(callGateway).toHaveBeenCalledWith("sessions.github.action", {
+    sessionKey: caller.sessionKey,
+    agentId: caller.agentId,
+    ...input,
+  });
+  await expect(
+    withGatewayToolCallerIdentity(caller, () =>
+      tool.execute("issue", { ...input, publishingSessionKey: "other" }),
+    ),
+  ).rejects.toThrow(/only/);
+  expect(callGateway).toHaveBeenCalledTimes(1);
+});
+
 it("does not execute inventory previews even with a current Gateway caller", async () => {
   const { callGateway } = setup();
   const tool = createGitHubPublishTool({ preview: true });
@@ -395,6 +417,33 @@ it.each([undefined, false, true])(
     });
   },
 );
+
+it("retains original receipt observation without offering or invoking authenticated actions", async () => {
+  const { callGateway } = setup();
+  const requestId = "a1111111-1111-4111-8111-111111111111";
+  const receipt = {
+    policy: { read: "admitted", write: "unknown" },
+    custody: { kind: "qualified", source: "worktree" },
+    target: { kind: "unknown", reason: "not-qualified" },
+    request: { kind: "observed", selection: "exact", receipt: { status: "requested", requestId } },
+    remedies: [{ kind: "observe_request", requestId }],
+  };
+  callGateway.mockResolvedValue(receipt);
+  const tool = createGitHubPublishTool({ observationOnly: true });
+  const execute = (args: unknown) =>
+    withGatewayToolCallerIdentity(caller, () => tool.execute("observe", args));
+  const observation = { action: "readiness", requestId };
+  expect(Value.Check(tool.parameters, observation)).toBe(true);
+  expect(Value.Check(tool.parameters, { action: "publish" })).toBe(false);
+  expect(Value.Check(tool.parameters, {})).toBe(false);
+  expect((await execute(observation)).details).toEqual(receipt);
+  expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.github.readiness", {
+    ...caller,
+    requestId,
+  });
+  await expect(execute({ action: "publish" })).rejects.toThrow("Only publication readiness");
+  expect(callGateway).toHaveBeenCalledTimes(1);
+});
 
 it("names placeholder fields instead of blaming the host", async () => {
   const { callGateway, execute } = setup();

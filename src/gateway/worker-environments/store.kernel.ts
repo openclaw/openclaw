@@ -7,6 +7,7 @@ import {
 } from "../../plugins/worker-resource-receipt.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { ensureWorkerEnvironmentNodeEnrollmentSchema } from "../../state/openclaw-state-db-schema-additive.js";
+import { decodeQueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type {
   WorkerEnvironmentIntentInput,
   WorkerEnvironmentRecord,
@@ -55,8 +56,15 @@ export function createWorkerEnvironmentStoreKernel(
   const db = database.db;
   const createIntent = (input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord => {
     const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
+    const provisionSource =
+      input.provisionSource === undefined
+        ? undefined
+        : decodeQueuedOperatorRecoverySource(input.provisionSource);
     const current = findWorkerEnvironment(db, environmentId);
     if (current) {
+      if (!isDeepStrictEqual(current.provisionSource, provisionSource)) {
+        throw new Error(`Worker environment ${environmentId} provisioning source is immutable`);
+      }
       if (!isDeepStrictEqual(current.retention?.policy ?? null, input.retention ?? null)) {
         throw new Error(`Worker environment ${environmentId} retention policy is immutable`);
       }
@@ -93,6 +101,7 @@ export function createWorkerEnvironmentStoreKernel(
             input.provisionOperationId,
             "provision operation id",
           ),
+          provision_source_json: provisionSource === undefined ? null : json(provisionSource),
           lease_id: null,
           resource_receipt_json: null,
           retention_json: input.retention

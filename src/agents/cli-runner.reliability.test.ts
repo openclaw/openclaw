@@ -1070,6 +1070,8 @@ describe("runCliAgent reliability", () => {
         return true;
       });
 
+      // This scenario proves recovery ordering; the recovery owner tests budget expiry.
+      const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now());
       try {
         const context = makeClaudePreparedContext({
           sessionKey: "agent:main:subagent:retry",
@@ -1078,13 +1080,11 @@ describe("runCliAgent reliability", () => {
           openClawHistoryPrompt: CLI_RESEED_PROMPT,
         });
         if (reason === "format") {
-          context.preparedBackend.backend = {
-            ...context.preparedBackend.backend,
+          Object.assign(context.preparedBackend.backend, {
             output: "jsonl",
             input: "stdin",
             jsonlDialect: "claude-stream-json",
-          };
-          context.backendResolved.config = context.preparedBackend.backend;
+          });
         }
         const result = await runPreparedCliAgent(
           withParams(context, {
@@ -1125,6 +1125,7 @@ describe("runCliAgent reliability", () => {
         expect(modelCallEvents[2]?.callId).toBe(modelCallEvents[3]?.callId);
         expect(modelCallEvents[0]?.callId).not.toBe(modelCallEvents[2]?.callId);
       } finally {
+        clock.mockRestore();
         stopDiagnostics();
       }
     },
@@ -1909,7 +1910,7 @@ describe("runCliAgent reliability", () => {
     },
   );
 
-  it("keeps native control operations out of restrictive prompt preparation", async () => {
+  it("keeps hooks and prompt bytes out of native control operations", async () => {
     const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: [{ role: "user", content: "earlier ask" }],
     });
@@ -1955,7 +1956,7 @@ describe("runCliAgent reliability", () => {
         workspaceDir: dir,
         config,
         prompt: "/compact",
-        extraSystemPrompt: "must not attach to a control operation",
+        extraSystemPrompt: "session system prompt",
         finalizePromptForResolvedTools: () => "mutated",
         provider: "control-cli",
         model: "model",
@@ -1974,7 +1975,7 @@ describe("runCliAgent reliability", () => {
       expect(context.params.prompt).toBe("/compact");
       expect(context.params.cliToolAvailability).toBeUndefined();
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
-      expect(context.systemPrompt).toBe("");
+      expect(context.systemPrompt).toContain("session system prompt");
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPlugin.args).toEqual([]);
     } finally {

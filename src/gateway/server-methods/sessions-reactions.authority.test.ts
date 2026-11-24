@@ -1,7 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -102,7 +101,7 @@ it("awaits membership preparation and rejects failed or revoked preparations", (
 it("rechecks current membership, policy, source, and caller after message preparation", () =>
   withReactionState(async () => {
     const readMessage = transcriptReaders.readSessionMessageByIdAsync;
-    for (const change of ["member", "dirty", "profile", "policy", "projection", "run"] as const) {
+    for (const change of ["member", "dirty", "profile", "policy", "projection"] as const) {
       const key = `agent:main:revoke-${change}`;
       const scope = await seedSession(
         { visibility: "read-only", sessionId: `revoke-${change}` },
@@ -110,7 +109,7 @@ it("rechecks current membership, policy, source, and caller after message prepar
       );
       addSessionMember(scope, { identityId: "alice", addedBy: "owner" });
       const messageId = await appendMessage(undefined, scope);
-      let cfg = change === "run" ? {} : roleConfig("view");
+      let cfg = roleConfig("view");
       const requestContext = context(cfg);
       requestContext.getRuntimeConfig = () => cfg;
       const reactor = client("alice");
@@ -120,43 +119,21 @@ it("rechecks current membership, policy, source, and caller after message prepar
       const read = vi
         .spyOn(transcriptReaders, "readSessionMessageByIdAsync")
         .mockImplementationOnce((...args) => gate.hold(readMessage(...args)));
-      let runRevoked = false;
-      if (change === "run") {
-        reactor.internal = {
-          syntheticClient: true,
-          operatorRoleActor: { kind: "operator", profileId: "alice" },
-          operatorRunAuthority: createAdmittedRunOperatorAuthority({
-            profileId: "alice",
-            scopes: ["operator.read", "operator.write"],
-            assertCurrent: () => {
-              if (runRevoked) {
-                throw new Error("reaction run revoked");
-              }
-            },
-          }),
-        };
-      }
-      let invalidateOnCheck = false;
-      const pending = setReaction(messageId, { sessionKey: key }, reactor, requestContext, () => {
-        if (invalidateOnCheck) {
-          invalidateOnCheck = false;
-          const target = projection.sharingTarget({ key, agentId: "main" })!;
-          sessionChanges.emit({ all: true, scope: "stores" });
-          expect(projection.hasMembership(target.storePath, target.storeKey, "alice")).toBe(true);
-          expect(projection.sharingTargetState({ key, agentId: "main" }).status).toBe("pending");
-        }
-        return true;
-      });
+      const pending = setReaction(messageId, { sessionKey: key }, reactor, requestContext);
       try {
         await awaitGateBeforeSettlement(gate.entered, pending, "reaction did not read its message");
         if (change === "member") {
           removeSessionMember(scope, "alice");
         }
-        invalidateOnCheck = change === "dirty";
+        if (change === "dirty") {
+          const target = projection.sharingTarget({ key, agentId: "main" })!;
+          sessionChanges.emit({ all: true, scope: "stores" });
+          expect(projection.hasMembership(target.storePath, target.storeKey, "alice")).toBe(true);
+          expect(projection.sharingTargetState({ key, agentId: "main" }).status).toBe("pending");
+        }
         if (change === "profile") {
           reactor.authenticatedUserProfile!.profileId = "bob";
         }
-        runRevoked = change === "run";
         cfg = change === "policy" ? roleConfig("none") : cfg;
         if (change === "projection") {
           bindSessionRowProjection(requestContext, () => undefined);

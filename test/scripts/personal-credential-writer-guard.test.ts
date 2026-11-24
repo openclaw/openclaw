@@ -313,6 +313,21 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
   }
 });
 
+it.each(["DEL\\u0045TE", "D\\ELETE", "\\nDELETE", "\\tDELETE"])(
+  "inspects a raw write whose verb is spelled next to an escape: %s",
+  (verb) => {
+    // Only the escape locates this nested statement; its raw text holds no DELETE token.
+    expectDenied(
+      {
+        "src/escaped-writer.ts": `export function run(ready: boolean) {
+          if (ready) { db.exec('${verb} FROM auth_profile_store'); }
+        }`,
+      },
+      "raw authority-table write",
+    );
+  },
+);
+
 it.each([
   ["scripts/generate-postgres-schema.mts", "function generatePostgresSchemas() {", "}"],
   ["src/state/postgres-schema.generated/runtime.ts", "export const runtime = { sql:", "};"],
@@ -854,6 +869,11 @@ it("permits the audited telemetry count operation without admitting an unreviewe
 
 it.each([
   [
+    "src/secrets/store/secret-store-clawhub-template.ts",
+    "savePersonalTemplateClawHubToken",
+    "templateClawHub.write",
+  ],
+  [
     "src/agents/auth-profiles/store-update.ts",
     "runPreparedAuthProfileStoreUpdate",
     "authProfiles.update",
@@ -1144,5 +1164,20 @@ it.each([
       "export function connectUserModelAccount",
       "export default function connectUserModelAccount",
     ),
+  );
+});
+
+it("permits repository reopening only through the current publication authority owner", () => {
+  const repository = "src/gateway/github-repository-publication-store.worker.ts";
+  const reject = allowedGraph({
+    [repository]:
+      "export function reopenRepositoryGitHubPublicationInDatabase() { db.updateTable('github_repository_publication_requests'); }",
+    [publicationWorker]:
+      "import { reopenRepositoryGitHubPublicationInDatabase } from '../gateway/github-repository-publication-store.worker.js'; function repositoryMutation() { reopenRepositoryGitHubPublicationInDatabase(); }",
+  });
+  reject(
+    publicationWorker,
+    (original) => original.replace("function repositoryMutation", "function bypass"),
+    "unreviewed GitHub publication writer reference",
   );
 });

@@ -36,11 +36,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const chain = (error: unknown): string[] =>
-  error instanceof Error
-    ? [error.message, ...(error.cause ? chain(error.cause) : [])]
-    : [String(error)];
-
 it.each([
   "benign",
   "member-before",
@@ -48,7 +43,7 @@ it.each([
   "member-after",
   "visibility-after",
 ] as const)(
-  "first post-publication final effect consumes current access: %s",
+  "admitted work finishes after sharing publication; the next start checks current access: %s",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const ctx = createContext();
@@ -144,7 +139,7 @@ it.each([
                 mkdir: async (dir) => {
                   await mkdir(dir, { recursive: true });
                 },
-                readFile,
+                readFile: (file, signal) => readFile(file, { signal }),
                 statFile: (file) => readPersistedFileStat(file, isMissingPathError),
                 writeFile: async (file, content) => {
                   writes++;
@@ -173,61 +168,28 @@ it.each([
             publish();
             await revoke();
           }
-          // No authority/admission assertion may run between revoke and the effect:
-          // it would pre-latch refusal and invalidate this first-effect test.
-          let refusal: unknown;
-          try {
-            await tool.execute("second", { path: "access.txt", content: "second\n" });
-          } catch (error) {
-            refusal = error;
-          }
-          let replayRefusal: unknown;
-          const secondWrites = writes;
-          const secondContents = await readFile(path.join(stateDir, "access.txt"), "utf8");
-          if (change !== "benign") {
-            try {
-              await tool.execute("late-replay", { path: "access.txt", content: "replayed\n" });
-            } catch (error) {
-              replayRefusal = error;
-            }
-          }
-          const contents = await readFile(path.join(stateDir, "access.txt"), "utf8");
-          if (change !== "benign") {
-            expect(() => source.assertCurrent()).toThrow(
-              change.startsWith("member")
-                ? "session is read-only for this connection"
-                : "session is draft for this connection",
-            );
-            expect(secondWrites).toBe(1);
-            expect(secondContents).toBe("first\n");
-          }
-          // Fresh authorization follows the physical effect, replay, and access-specific assertion.
-          // Its independent verdict must not replace those retained-source and physical-write oracles.
-          const fresh = await resolveSessionMutationAuthorizationAsync({
-            client: fixture.client,
-            context: ctx,
-            method: "chat.send",
-            requestParams: { sessionKey: fixture.target.sessionKey, agentId: "main" },
-          });
-          fresh.authorization?.release?.();
-          if (change === "benign") {
-            expect(fresh.error).toBeNull();
-            expect(refusal).toBeUndefined();
-            expect(writes).toBe(2);
-            expect(contents).toBe("second\n");
-            expect(() => source.assertCurrent()).not.toThrow();
-          } else {
-            expect(fresh.error?.message).toMatch(/session is (read-only|draft)/);
-            expect(refusal).toBeDefined();
-            expect(chain(refusal)).toEqual(["agent harness host capability is no longer active"]);
-            expect(replayRefusal).toBeDefined();
-            expect(chain(replayRefusal)).toEqual([
-              "agent harness host capability is no longer active",
-            ]);
-            expect(writes).toBe(1);
-            expect(contents).toBe("first\n");
-          }
+          await tool.execute("second", { path: "access.txt", content: "second\n" });
+          expect(writes).toBe(2);
+          expect(await readFile(path.join(stateDir, "access.txt"), "utf8")).toBe("second\n");
+          expect(() => source.assertCurrent()).not.toThrow();
         });
+        const fresh = await resolveSessionMutationAuthorizationAsync({
+          client: fixture.client,
+          context: ctx,
+          method: "chat.send",
+          requestParams: { sessionKey: fixture.target.sessionKey, agentId: "main" },
+        });
+        fresh.authorization?.release?.();
+        if (change === "benign") {
+          expect(fresh.error).toBeNull();
+        } else {
+          expect(fresh.authorization).toBeUndefined();
+          expect(fresh.error?.message).toContain(
+            change.startsWith("member")
+              ? "session is read-only for this connection"
+              : "session is draft for this connection",
+          );
+        }
       } finally {
         host?.close();
         admission.close();

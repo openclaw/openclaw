@@ -1,2 +1,0 @@
-# Shared prompt bytes across core modes/overrides and distinct native instruction carriers.
-30

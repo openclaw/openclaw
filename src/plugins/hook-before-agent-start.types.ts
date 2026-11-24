@@ -21,6 +21,19 @@ export type PluginHookBeforeModelResolveResult = {
   fallbacksOverride?: string[];
 };
 
+/**
+ * Host-owned session continuity for this turn, as decided by the runtime's session owner.
+ * Reports facts only; it carries no transcript content and grants nothing.
+ */
+export type PluginHookPromptContinuity = {
+  /** `invalidated`: a stored native session binding was discarded for this turn. */
+  state: "fresh" | "resumed" | "invalidated";
+  /** Runtime reason for `invalidated`, e.g. `prompt-tools`, `auth-profile`, `missing-transcript`. */
+  invalidatedReason?: string;
+  /** Prior conversation the host placed in this request: content, an omission notice, or nothing. */
+  history: "included" | "withheld" | "none";
+};
+
 export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Current request before projection. Empty means no textual request; omission is legacy. */
@@ -34,6 +47,8 @@ export type PluginHookBeforePromptBuildEvent = {
    * whose handlers share them in priority order; they never update core history.
    */
   messages: unknown[];
+  /** Authorized phase only, on runtimes that report it. Omitted means unknown. */
+  continuity?: PluginHookPromptContinuity;
 };
 
 export type PluginHookBeforePromptBuildResult = {

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
@@ -75,31 +76,56 @@ function isStandardSystemdLoginProcess(
 
 type ArtifactCustody =
   | { kind: "not-holder" }
-  /** gateway: no artifact evidence, and positively a Gateway process (never an updater). */
-  | { kind: "holder"; paths?: string[]; gateway?: true }
+  /** nonUpdater: no artifact evidence, and positively a process that never runs the updater. */
+  | { kind: "holder"; paths?: string[]; nonUpdater?: true }
   | { kind: "unknown"; reason: string };
 
 // Without an artifact reference, an OpenClaw process can hold a runtime only as
 // the updater that created it, and `update`, its wizard, Doctor's git update,
-// and update workers all run it in-process. Only the Gateway, its spawn broker,
-// and the Windows job anchor that supervises its child never do; the Gateway's
-// process title erases its script path.
+// and update workers all run it in-process. The Gateway, its spawn broker, the
+// directory watch helper, the Windows job anchor that supervises its child, and
+// the node host and its macOS worker never do; their titles erase script paths.
 const gatewayWorkerEntrypoints = [
   runtimeProcessEntrypoints.spawnBroker,
+  runtimeProcessEntrypoints.directoryWatchHost,
   runtimeProcessEntrypoints.serviceChildWindowsJobAnchor,
 ].flatMap((entry) => [
   path.posix.normalize(`src/infra/${entry.sourceWorkerName}.ts`),
   `dist/${entry.distWorkerPath}`,
 ]);
+const nonUpdaterCommands = new Set(["gateway", "node"]);
 
-function isGatewayProcess(
+function readCliCommand(
   argv: readonly string[],
   identity: ReturnType<typeof classifyOpenClawArgv>,
+): string | undefined {
+  return identity.kind === "openclaw" && identity.entryIndex !== undefined
+    ? getRootOptionAwareCommandPath(
+        rewriteUpdateFlagArgv(["node", ...argv.slice(identity.entryIndex)]),
+        1,
+      )[0]
+    : undefined;
+}
+
+function isNonUpdaterProcess(
+  argv: readonly string[],
+  identity: ReturnType<typeof classifyOpenClawArgv>,
+  executable: string | undefined,
 ): boolean {
-  const executable = path
+  const title = path
     .basename((argv[0] ?? "").replaceAll("\\", "/"))
     .replace(/\.(exe|cmd|bat)$/iu, "");
-  if (executable === "openclaw-gateway") {
+  if (title === "openclaw-gateway" || title === "openclaw-node-worker") {
+    return true;
+  }
+  // The macOS app's native executable starts every CLI command as a child process.
+  if (
+    process.platform === "darwin" &&
+    executable &&
+    /\.app\/Contents\/MacOS\/[^/]+$/u.test(executable) &&
+    !isNodeRuntime(executable) &&
+    !isBunRuntime(executable)
+  ) {
     return true;
   }
   if (identity.kind !== "openclaw" || identity.entryIndex === undefined) {
@@ -108,17 +134,67 @@ function isGatewayProcess(
   const entry = (argv[identity.entryIndex] ?? "").replaceAll("\\", "/");
   return (
     gatewayWorkerEntrypoints.some((worker) => entry.endsWith(`/${worker}`)) ||
-    getRootOptionAwareCommandPath(
-      rewriteUpdateFlagArgv(["node", ...argv.slice(identity.entryIndex)]),
-      1,
-    )[0] === "gateway"
+    nonUpdaterCommands.has(readCliCommand(argv, identity) ?? "")
   );
+}
+
+/** Respawn and node-host launchers keep argv; the CLI child they start runs
+ * their command after its title erases its own. A title-erased child of any
+ * other parent, including a titled Gateway that spawns `update`, stays unknown. */
+function readLaunchedCliCommand(
+  argv: readonly string[],
+  parent: { pid: number; command?: ProcessCommand; cwd?: string } | undefined,
+): string | undefined {
+  if (
+    argv[0] !== "openclaw" ||
+    argv.slice(1).some(Boolean) ||
+    !parent?.command ||
+    !("argv" in parent.command)
+  ) {
+    return undefined;
+  }
+  const { argv: parentArgv, serviceMarker, serviceMarkerUnavailable } = parent.command;
+  return readCliCommand(
+    parentArgv,
+    classifyOpenClawArgv(parentArgv, {
+      pid: parent.pid,
+      cwd: parent.cwd ?? "",
+      serviceMarker,
+      serviceMarkerUnavailable,
+      additionalEntrypoints: workerEntrypoints,
+    }),
+  );
+}
+
+/**
+ * Where Node loads a bare preload from: the nearest node_modules above the
+ * process's working directory, followed through links. NODE_PATH is not read.
+ */
+function resolveBarePreload(specifier: string, cwd: string): string | undefined {
+  const name = specifier
+    .split("/")
+    .slice(0, specifier.startsWith("@") ? 2 : 1)
+    .join("/");
+  for (let directory = cwd; ; directory = path.dirname(directory)) {
+    for (const extension of ["", ".js", ".json", ".node"]) {
+      try {
+        return fs.realpathSync(path.join(directory, "node_modules", name + extension));
+      } catch {
+        // Not installed at this level; Node keeps climbing.
+      }
+    }
+    if (path.dirname(directory) === directory) {
+      return undefined;
+    }
+  }
 }
 
 function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
+  parent?: { pid: number; command?: ProcessCommand; cwd?: string },
+  creatorExited = false,
 ): ArtifactCustody {
   if (!command) {
     return { kind: "unknown", reason: "process command is unavailable" };
@@ -154,18 +230,30 @@ function classifyProcessArtifactCustody(
     return unknown ? { kind: "unknown", reason: unknown } : { kind: "holder", paths };
   }
   const identity = classifyOpenClawArgv(argv, options);
-  const gateway = isGatewayProcess(argv, identity);
+  const inspectorUid = process.getuid?.();
+  const opaqueForeignIdentity =
+    process.platform === "linux" &&
+    identity.kind === "unclassified" &&
+    identity.cause === "service-marker" &&
+    command.uid !== undefined &&
+    inspectorUid !== undefined &&
+    command.uid !== inspectorUid;
+  const nonUpdater =
+    creatorExited ||
+    isNonUpdaterProcess(argv, identity, command.executable) ||
+    nonUpdaterCommands.has(readLaunchedCliCommand(argv, parent) ?? "");
   // Artifact evidence, including a resolved alias, keeps an unscoped holder conservative.
   let artifactEvidence = references.length > 0 || paths.length > 0;
   const unscoped = (): Extract<ArtifactCustody, { kind: "holder" }> =>
-    artifactEvidence || !gateway ? { kind: "holder" } : { kind: "holder", gateway: true };
+    artifactEvidence || !nonUpdater ? { kind: "holder" } : { kind: "holder", nonUpdater: true };
   if (identity.kind === "openclaw") {
-    if (!identity.artifactPath) {
+    if (identity.artifactPath) {
+      paths.push(identity.artifactPath);
+      artifactEvidence = true;
+    } else if (!creatorExited) {
       // Preload operands resolve only below; one may still point into a runtime.
       return operands.some(({ module }) => module) ? { kind: "holder" } : unscoped();
     }
-    paths.push(identity.artifactPath);
-    artifactEvidence = true;
   }
   let holder: Extract<ArtifactCustody, { kind: "holder" }> | undefined = paths.length
     ? { kind: "holder", paths }
@@ -185,10 +273,12 @@ function classifyProcessArtifactCustody(
     ) {
       return { kind: "not-holder" };
     }
-    return { kind: "unknown", reason: unknown ?? "working directory is unavailable" };
+    if (!opaqueForeignIdentity) {
+      return { kind: "unknown", reason: unknown ?? "working directory is unavailable" };
+    }
   }
   const pkg =
-    typeof position !== "number" && position.kind !== "not-runtime"
+    cwd && path.isAbsolute(cwd) && typeof position !== "number" && position.kind !== "not-runtime"
       ? readProcessPackageIdentity(cwd, true)
       : undefined;
   if (pkg?.kind === "package" && pkg.name === "openclaw") {
@@ -209,7 +299,17 @@ function classifyProcessArtifactCustody(
           continue;
         }
       } else if (!path.isAbsolute(value) && !value.startsWith("./") && !value.startsWith("../")) {
-        unknown ??= "runtime module package identity is unavailable";
+        const resolved = cwd && path.isAbsolute(cwd) ? resolveBarePreload(value, cwd) : undefined;
+        if (resolved && referencesRetainedArtifact(resolved)) {
+          artifactEvidence = true;
+          holder =
+            !holder || holder.paths
+              ? { kind: "holder", paths: [...(holder?.paths ?? []), resolved] }
+              : holder;
+        } else {
+          // Loaded from outside every runtime, or not loadable from this cwd at all.
+          unknown ??= "runtime module package identity is unavailable";
+        }
         continue;
       }
     } else if (
@@ -232,7 +332,17 @@ function classifyProcessArtifactCustody(
           : unscoped();
     }
   }
-  return unknown ? { kind: "unknown", reason: unknown } : (holder ?? { kind: "not-holder" });
+  // A foreign account's unreadable service marker is not custody evidence.
+  // Still inspect absolute operands above: a preload alias can prove a holder
+  // even when that process's cwd and environment are both inaccessible.
+  if (opaqueForeignIdentity && !artifactEvidence && !holder) {
+    return { kind: "not-holder" };
+  }
+  // With its creator gone, a process holds the runtime only through a path into
+  // it. An unclassified command with a readable cwd and no such path has none.
+  return unknown && !(creatorExited && !artifactEvidence)
+    ? { kind: "unknown", reason: unknown }
+    : (holder ?? { kind: "not-holder" });
 }
 
 export type HandoffReferences = {
@@ -265,7 +375,11 @@ type WindowsCensusRow = ReturnType<typeof readWindowsProcessCensus>[number];
 
 /** Windows hides command lines across accounts like Darwin, whose unreadable foreign
  * argv is likewise not custody evidence; only same-account doubt blocks. */
-function classifyOpaqueWindowsCustody(observation: WindowsCensusRow, pid: number): ArtifactCustody {
+function classifyOpaqueWindowsCustody(
+  observation: WindowsCensusRow,
+  pid: number,
+  creatorExited: boolean,
+): ArtifactCustody {
   const argv = observation.commandLine
     ? parseWindowsNativeCommandLine(observation.commandLine)
     : null;
@@ -274,6 +388,8 @@ function classifyOpaqueWindowsCustody(observation: WindowsCensusRow, pid: number
       { argv, ...(observation.executable ? { executable: observation.executable } : {}) },
       pid,
       observation.cwd,
+      undefined,
+      creatorExited,
     );
   }
   if ([observation.executable, observation.cwd].some((v) => v && referencesRetainedArtifact(v))) {
@@ -345,8 +461,13 @@ function classifyWindowsHandoffAncestry(
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
 export function inspectOtherOpenClawProcesses(
   runtimeDirectory?: string,
+  /** The runtime's recorded creating updater is known to have exited. */
+  options?: { creatorExited: boolean },
 ): { pids: number[]; warnings?: string[] } | { error: string };
-export function inspectOtherOpenClawProcesses(references?: HandoffReferences | string) {
+export function inspectOtherOpenClawProcesses(
+  references?: HandoffReferences | string,
+  options?: { creatorExited: boolean },
+) {
   const handoff = typeof references === "object" ? references : undefined;
   const runtimeDirectory = typeof references === "string" ? references : undefined;
   const warnings: string[] = [];
@@ -426,13 +547,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
           additionalEntrypoints: workerEntrypoints,
         });
         // Only a verified CLI launcher in this inspector's ancestry is exempt.
-        const command =
-          identity.kind === "openclaw" && identity.entryIndex !== undefined
-            ? getRootOptionAwareCommandPath(
-                rewriteUpdateFlagArgv(["node", ...argv.slice(identity.entryIndex)]),
-                1,
-              )[0]
-            : undefined;
+        const command = readCliCommand(argv, identity);
         if (
           command === (handoff ? "update" : "doctor") ||
           // The update CLI's respawn launcher idles with its argv intact; the
@@ -593,10 +708,20 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         continue;
       }
       const observation = nativeByPid.get(pid);
+      const parent = byPid.get(command?.ppid ?? 0);
       const custody =
         observation && !command
-          ? classifyOpaqueWindowsCustody(observation, pid)
-          : classifyProcessArtifactCustody(command, pid, directories.get(pid));
+          ? classifyOpaqueWindowsCustody(observation, pid, options?.creatorExited ?? false)
+          : classifyProcessArtifactCustody(
+              command,
+              pid,
+              directories.get(pid),
+              parent && {
+                ...parent,
+                cwd: directories.get(parent.pid),
+              },
+              options?.creatorExited,
+            );
       if (custody.kind === "not-holder") {
         continue;
       }
@@ -605,7 +730,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         runtimeDirectory &&
         (custody.paths
           ? !custody.paths.some((value) => matches.test(normalize(value)))
-          : custody.gateway)
+          : custody.nonUpdater)
       ) {
         continue;
       }

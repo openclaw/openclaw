@@ -205,6 +205,8 @@ type ScreenshotOptions = {
   type?: "png" | "jpeg";
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Effective launch mode recorded on the owned Chrome process, when known. */
+  headless?: boolean;
 };
 
 async function runScreenshotOperation<T>(
@@ -234,6 +236,26 @@ function screenshotLocator(page: Page, ref?: string, element?: string): Locator 
   return ref ? refLocator(page, ref) : element ? page.locator(element).first() : undefined;
 }
 
+async function renderHiddenTab(page: Page): Promise<() => Promise<void>> {
+  const session = await page
+    .context()
+    .newCDPSession(page)
+    .catch(() => undefined);
+  if (!session) {
+    return async () => {};
+  }
+  session.on("Page.screencastFrame", ({ sessionId }) => {
+    void session.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  await session
+    .send("Page.startScreencast", { format: "jpeg", quality: 1, maxWidth: 1, maxHeight: 1 })
+    .catch(() => {});
+  return async () => {
+    await session.send("Page.stopScreencast").catch(() => {});
+    await session.detach().catch(() => {});
+  };
+}
+
 async function capturePageScreenshot(
   page: Page,
   opts: ScreenshotOptions,
@@ -242,6 +264,12 @@ async function capturePageScreenshot(
   opts.signal?.throwIfAborted();
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
+  }
+  // Background tabs never produce a frame, so the native capture would never settle
+  // and keep this page's transition queue busy. Headless Chrome activates the tab, as
+  // the raw CDP path does; headed Chrome keeps the user's tab (#134400), see below.
+  if (opts.headless !== false) {
+    await page.bringToFront().catch(() => {});
   }
   const type = opts.type ?? "png";
   const emulation = ensurePageState(page).emulation;
@@ -253,6 +281,9 @@ async function capturePageScreenshot(
   // Resolve a fixed handle with a bounded wait: an unbounded Locator screenshot
   // could keep retrying a missing selector after the caller has already timed out.
   const element = await locator?.elementHandle({ timeout: preparation.timeout });
+  // A DevTools screencast makes Chromium render the hidden tab for this capture
+  // without activating it, so the user's visible tab and focus never change.
+  const stopRendering = opts.headless === false ? await renderHiddenTab(page) : undefined;
   try {
     await element?.scrollIntoViewIfNeeded(preparation);
     opts.signal?.throwIfAborted();
@@ -315,7 +346,11 @@ async function capturePageScreenshot(
         });
       }
     } finally {
-      await element?.dispose();
+      try {
+        await element?.dispose();
+      } finally {
+        await stopRendering?.();
+      }
     }
   }
 }

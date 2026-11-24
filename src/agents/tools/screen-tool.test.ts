@@ -30,18 +30,23 @@ describe("screen tool", () => {
     const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
     const sessionKey = "agent:research:dashboard:current-request";
     const tool = createScreenTool({ agentSessionKey: sessionKey, agentId: "research" });
-    await tool.execute("review", { action: "template_review", draftId });
-    expect(calls).toEqual([
-      [
-        "ui.command",
-        {
-          command: { kind: "template-review", draftId },
-          sessionKey,
-          agentId: "research",
-        },
-      ],
-    ]);
-    expect(Value.Check(UiCommandParamsSchema, calls[0]?.[1])).toBe(true);
+    const result = await tool.execute("review", { action: "template_review", draftId });
+    expect(calls).toEqual([]);
+    expect(result.details).toMatchObject({
+      ok: true,
+      pluginInlineView: {
+        pluginId: "openclaw",
+        viewId: "template-review",
+        version: 1,
+        payload: { agentId: "research", sessionKey, draftId },
+      },
+      pluginInlineViewInvocation: {
+        pluginId: "openclaw",
+        toolName: "screen",
+        toolCallId: "review",
+      },
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     expect(tool.description).toContain("does not publish");
   });
 
@@ -74,7 +79,7 @@ describe("screen tool", () => {
     const tool = createScreenTool();
     const result = await tool.execute("contract", { action: "sidebar_show" });
 
-    expect(tool.outputSchema).toBe(UiCommandResultSchema);
+    expect(Value.Check(UiCommandResultSchema, result.details)).toBe(true);
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     expect(
       Value.Check(tool.outputSchema!, {

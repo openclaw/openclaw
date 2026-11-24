@@ -91,6 +91,8 @@ Code pairing is for a direct connection to the Gateway serving the page, not an 
     openclaw pair ABCD-EFGH
     ```
 
+    Copy the command from the page: it targets the Gateway that issued the code. A Gateway running under a named profile puts that profile in the code, for example `openclaw pair work:ABCD-EFGH`, and the command selects the `work` profile by itself. A Gateway started with its own `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` needs the command run with the same setting.
+
     The command prints the browser's user agent, address, page, **Browser ID**, and when it asked, then waits for your answer.
 
   </Step>
@@ -99,7 +101,7 @@ Code pairing is for a direct connection to the Gateway serving the page, not an 
   </Step>
 </Steps>
 
-Approval pairs that browser as an operator device with the Control UI's administrator scopes, the same result as approving it with `openclaw devices approve`. It then appears in `openclaw devices list` and the Devices page, where you can remove it. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the Browser ID in the terminal matches the page in front of you.
+Approval pairs that browser as an operator device with the Control UI's administrator scopes, the same result as approving it with `openclaw devices approve`. It then appears in `openclaw devices list` and the Devices page, where you can remove it. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the code in the terminal matches the page in front of you.
 
 Connection interruptions keep the same request and code while the page shows that it is retrying. Approval can still complete during an interruption; the page checks the recorded result when connectivity returns.
 
@@ -126,6 +128,8 @@ An already paired administrator can create the iOS/Android connection QR without
 </Steps>
 
 Creating a setup code requires `operator.admin`; **Connect a device** is disabled in the sidebar identity menu and settings for sessions without it. Operators with `operator.pairing` can still review and approve eligible operator-device requests from **Devices**. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
+
+A new install listens only on its own computer, so no phone can reach it yet. In that case **Connect a device** shows **Set up secure access** instead of a code: [Tailscale Serve](/gateway/tailscale) is recommended, and the trusted-home-network option explains what `gateway.bind lan` opens and how to undo it. The Dashboard does not change your settings. Apply your chosen option on the Gateway host. After restarting the Gateway, wait for the Dashboard to reconnect, reopen **Connect a device**, and choose **Create setup code**.
 
 ## Runtime config endpoint
 

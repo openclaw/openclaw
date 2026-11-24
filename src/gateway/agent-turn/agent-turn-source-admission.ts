@@ -1,25 +1,40 @@
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   retargetSessionControllerSource,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "../server-methods/gateway-personal-caller.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { authorizeResolvedSessionMutationAsync } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRequestPreflight } from "./agent-request-preflight.js";
 import type { PrepareAgentRunDispatchParams } from "./agent-run-admission-types.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
+
+export function captureAgentTurnRequesterAuthority(params: PrepareAgentRunDispatchParams) {
+  const assertCurrent = captureRequesterCronAuthorityAdmissionAssertion({
+    runId: params.runId,
+    sessionKey: params.resolvedSessionKey,
+    sessionId: params.getAdmittedSessionId(),
+    inputProvenance: params.inputProvenance,
+  });
+  assertCurrent?.();
+  return assertCurrent;
+}
 
 /** Authorize a principal to create or mutate the canonical session an agent turn targets. */
 export async function authorizeAgentTurnSession({
@@ -42,19 +57,27 @@ export async function authorizeAgentTurnSession({
 /** Transfer live session sharing into the retained caller, releasing any failed handoff. */
 export async function retainAgentTurnOperatorRun({
   assertInputCurrent,
+  cfg,
+  sessionEntry,
   resolvedSessionKey,
   activeSessionAgentId,
   getAdmittedSessionId,
   lifecycleStorePath,
+  privateCompletion,
+  inputProvenance,
   ...operator
 }: Parameters<typeof retainGatewayOperatorRun>[0] &
   Pick<
     PrepareAgentRunDispatchParams,
     | "context"
+    | "cfg"
+    | "sessionEntry"
     | "resolvedSessionKey"
     | "activeSessionAgentId"
     | "getAdmittedSessionId"
     | "lifecycleStorePath"
+    | "privateCompletion"
+    | "inputProvenance"
   > & { assertInputCurrent: () => void }) {
   let invocationAuthority: Parameters<typeof retainGatewayOperatorRun>[0]["invocationAuthority"];
   if (
@@ -102,8 +125,60 @@ export async function retainAgentTurnOperatorRun({
   let retained: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
   try {
     assertInputCurrent();
-    retained = await retainGatewayOperatorRun({ ...operator, invocationAuthority });
+    // A returned result starts another turn; only host-held receipts identify peer returns.
+    const returnedResult =
+      privateCompletion ||
+      (inputProvenance?.kind === "inter_session" &&
+        readSessionSendDeliveryAdmission({
+          runId: operator.runId,
+          sessionKey: resolvedSessionKey,
+          sessionId: getAdmittedSessionId(),
+          agentId: activeSessionAgentId,
+        })?.delivery.returnedResult);
+    try {
+      retained = await retainGatewayOperatorRun({
+        ...operator,
+        agentId: activeSessionAgentId,
+        invocationAuthority,
+        abortSession:
+          operator.abortSession ??
+          (resolvedSessionKey
+            ? {
+                cfg,
+                storePath: lifecycleStorePath,
+                entry: sessionEntry,
+                canonicalKey: resolvedSessionKey,
+                agentId: activeSessionAgentId,
+              }
+            : undefined),
+      });
+    } catch (error) {
+      if (
+        returnedResult &&
+        resolvedSessionKey &&
+        lifecycleStorePath &&
+        !isOperatorAuthorityUnavailable(error)
+      ) {
+        await recordGatewaySessionRunFailure({
+          target: {
+            agentId: activeSessionAgentId,
+            sessionKey: resolvedSessionKey,
+            sessionId: getAdmittedSessionId(),
+            storePath: lifecycleStorePath,
+          },
+          runId: operator.runId,
+          error,
+          notice:
+            "withheld: The returned result could not start under your current access. Send a new message to continue.",
+          assertCommitAllowed: assertInputCurrent,
+        });
+      }
+      throw error;
+    }
     return retained;
+  } catch (error) {
+    retained?.release();
+    throw error;
   } finally {
     if (!retained?.authority) {
       invocationAuthority?.release?.();

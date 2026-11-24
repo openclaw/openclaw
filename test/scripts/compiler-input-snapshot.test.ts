@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ARTIFACT_CACHE_VERSION } from "../../scripts/lib/build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
+import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -55,6 +56,62 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
     input.matches(saved, "tsconfig.json", ["fixture-compiler"], Object.keys(saved.outputs));
   return { root, write: put, snapshot, signature, record, matches };
 }
+
+it("reports the first invalid cache boundary without repeating snapshot reads", () => {
+  const f = fixture();
+  f.write("dist/index.d.ts", "export declare const value = 1;\n");
+  const record = f.record(f.snapshot(), ["dist/index.d.ts"]);
+  const reasons = vi.fn();
+  const matches = (snapshot: CompilerInputSnapshot, required = ["dist/index.d.ts"]) =>
+    snapshot.matches(
+      record,
+      "tsconfig.json",
+      ["fixture-compiler"],
+      required,
+      undefined,
+      undefined,
+      reasons,
+    );
+  expect(matches(f.snapshot())).toBe(true);
+  expect(reasons).not.toHaveBeenCalled();
+
+  expect(matches(f.snapshot(), ["dist/missing.d.ts"])).toBe(false);
+  expect(reasons).toHaveBeenLastCalledWith('required output is missing: "dist/missing.d.ts"');
+  f.write("dist/index.d.ts", "export declare const value = 2;\n");
+  const changed = f.snapshot();
+  expect(matches(changed)).toBe(false);
+  expect(reasons).toHaveBeenLastCalledWith('output bytes changed: "dist/index.d.ts"');
+  const reads = vi.spyOn(fs, "readFileSync");
+  try {
+    expect(matches(changed)).toBe(false);
+    expect(reads).not.toHaveBeenCalled();
+  } finally {
+    reads.mockRestore();
+  }
+  expect(reasons).toHaveBeenCalledTimes(3);
+});
+
+it("retains captured bytes while a fresh snapshot rejects an external replacement", () => {
+  const root = fs.realpathSync.native(roots.make("captured-compiler-input-"));
+  const external = path.join(roots.make("external-compiler-input-"), "input.ts");
+  const file = path.join(root, "input.ts");
+  fs.writeFileSync(file, "export const value = 1;\n");
+  fs.writeFileSync(external, "export const value = 2;\n");
+  const snapshot = () => {
+    const boundary = createDeclarationInputBoundary(root);
+    return new CompilerInputSnapshot(boundary.root, {
+      toolchainFiles: [],
+      generatorInputs: [],
+      assertInput: (input) => boundary.assert(input),
+    });
+  };
+  const captured = snapshot();
+  expect(captured.readText("input.ts")).toBe("export const value = 1;\n");
+  fs.unlinkSync(file);
+  fs.symlinkSync(external, file, "file");
+  expect(captured.readText(file)).toBe("export const value = 1;\n");
+  expect(() => snapshot().readText(file)).toThrow("Declaration input escapes checkout");
+});
 
 it.each([
   ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],

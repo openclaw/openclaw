@@ -122,6 +122,7 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("process supervisor", () => {
@@ -152,15 +153,16 @@ describe("process supervisor", () => {
     await run.waitForExtinction!().catch(() => undefined);
     await expectCollected(callerRef);
     await expect(cleanup()).rejects.toBe(failure);
-    await expect(supervisor.shutdown()).rejects.toBe(failure);
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
     expect(failure.code).toBe("ECLEANUP");
     expect(failure.stack).toContain("cleanup identity lost");
   });
 
-  it.each(["child", "pty", "external"] as const)(
+  it.each(["child", "pty", "external", "sandbox-worker", "sandbox-gateway"] as const)(
     "enforces host memory ownership for %s",
     async (mode) => {
       vi.useFakeTimers();
+      vi.stubGlobal("WORKER_DEPLOY_BUILD", mode === "sandbox-worker");
       mockProcessPlatform("linux");
       memoryOwner.setBudget({ memoryBytes: 128 * 1024, swapBytes: 0 });
       const read = readMemory.mockReturnValue(Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
@@ -176,10 +178,11 @@ describe("process supervisor", () => {
         argv: ["fixture"],
         executionIntent: "agent-tool",
         ...(mode === "external" ? { cleanupOwnership: "external" } : {}),
+        ...(mode.startsWith("sandbox-") ? { workerMemoryBoundary: "sandbox" as const } : {}),
       });
       try {
         await vi.advanceTimersByTimeAsync(1000);
-        if (mode === "external") {
+        if (mode === "external" || mode === "sandbox-worker") {
           expect(read).not.toHaveBeenCalled();
           adapter.settle(0);
         } else {
@@ -729,7 +732,9 @@ describe("process supervisor", () => {
     },
   );
 
-  it("retains a cleanup failure for its owner without poisoning a later scope", async () => {
+  it("retains a terminal cleanup failure for its owner without poisoning later shutdown", async () => {
+    const log = await import("./supervisor-log.runtime.js");
+    const warning = vi.spyOn(log, "warnProcessSupervisorFailure").mockImplementation(() => {});
     const { adapter, extinction } = owned();
     const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: "required-all" });
     const run = await spawn({ scopeKey: "scope" });
@@ -742,7 +747,10 @@ describe("process supervisor", () => {
     await expect(
       supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
     ).resolves.toBeUndefined();
-    await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "Earlier cleanup failed: Error: cleanup identity lost",
+    );
     await expect(spawn()).rejects.toThrow("process supervisor is shut down");
   });
 
@@ -821,7 +829,7 @@ describe("process supervisor", () => {
       await expect(
         supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
       ).resolves.toBeUndefined();
-      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      await expect(supervisor.shutdown()).resolves.toBeUndefined();
       await expect(spawn()).rejects.toThrow("process supervisor is shut down");
     },
   );

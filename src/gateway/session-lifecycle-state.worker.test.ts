@@ -85,7 +85,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const f = createSessionCompoundWorkerFixture();
-    const retained = { queuedInputIds: ["accepted-input"], hadBackgroundExec: true as const };
+    const retained = {};
     const cases: Array<{
       name: string;
       key?: string;
@@ -97,7 +97,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
       entry?: Partial<SessionEntry>;
       marker?: SessionEntry["resumeAfterRestart"];
     }> = [
-      { name: "missing", shutdown: true, marker: { queuedInputIds: [] } },
+      { name: "missing", shutdown: true, marker: {} },
       { name: "queued", shutdown: true, entry: { resumeAfterRestart: retained }, marker: retained },
       { name: "reset" },
       { name: "stop", shutdown: true, stopReason: "aborted" },
@@ -108,7 +108,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
         shutdown: true,
         unstarted: true,
         unstartedRunId: "running",
-        marker: { queuedInputIds: [] },
+        marker: {},
       },
       { name: "cron", shutdown: true, key: "agent:main:cron:scheduled" },
       { name: "child", shutdown: true, key: "agent:main:subagent:child" },

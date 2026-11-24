@@ -175,20 +175,20 @@ export function parseBeamUpload(
   const items: BeamTranscriptItem[] = [];
   for (const rawItem of value.items) {
     if (!isRecord(rawItem) || !hasOnlyKeys(rawItem, ITEM_KEYS)) {
-      return { ok: false, error: "each transcript item must be a closed object" };
+      return { ok: false, error: "each chat history item must be a closed object" };
     }
     if (
       rawItem.type !== "userMessage" &&
       rawItem.type !== "agentMessage" &&
       rawItem.type !== "other"
     ) {
-      return { ok: false, error: "transcript item type is invalid" };
+      return { ok: false, error: "chat history item type is invalid" };
     }
     const text = readBoundedString(rawItem.text, BEAM_MAX_ITEM_CHARS);
     if (!text) {
       return {
         ok: false,
-        error: `transcript item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
+        error: `chat history item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
       };
     }
     items.push({ type: rawItem.type, text });

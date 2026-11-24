@@ -564,6 +564,67 @@ it.each([
   }
 });
 
+it.each(["primary", "participant"] as const)(
+  "reports the %s startup phase and cleans owned resources after early driver exit",
+  async (role) => {
+    const root = mocks.createStateRoot();
+    const participantRoot = path.join(root, "participant");
+    fs.mkdirSync(participantRoot);
+    const roots = [root, participantRoot];
+    mocks.createStateRoot.mockImplementation(() => roots.shift() ?? root);
+    mocks.acquireQaCredentialLease.mockResolvedValueOnce(lease(identityCredential));
+    const script = path.join(root, "failed-driver.py");
+    const diagnostic = JSON.stringify({
+      type: "startup",
+      phase: "selected-chat",
+      method: "loadChats",
+      outcome: "timeout",
+    });
+    fs.writeFileSync(
+      script,
+      [
+        "import sys",
+        "print('x' * 5000, file=sys.stderr)",
+        `print(${JSON.stringify(diagnostic)}, file=sys.stderr)`,
+        "print('Timed out waiting for loadChats', file=sys.stderr)",
+        "sys.exit(1)",
+      ].join("\n"),
+    );
+    const actual = await vi.importActual<typeof import("./userbot-driver.runtime.js")>(
+      "./userbot-driver.runtime.js",
+    );
+    let starts = 0;
+    mocks.userbotStart.mockImplementation(async (params) => {
+      starts += 1;
+      if (starts !== (role === "primary" ? 1 : 2)) {
+        return driver(mocks.userbotSend);
+      }
+      return await actual.TelegramUserbotDriver.start({ ...params, userDriverPath: script });
+    });
+    let failure: unknown;
+    try {
+      await createAdapter();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    const message = String(failure);
+    expect(message).toContain(`Telegram userbot (role=${role}) exited before cleanup (1)`);
+    expect(message).toContain('"phase":"selected-chat"');
+    expect(message).toContain('"method":"loadChats","outcome":"timeout"');
+    expect(message).toContain("Timed out waiting for loadChats");
+    expect(message.length).toBeLessThan(4300);
+    expect(mocks.userbotSend).not.toHaveBeenCalled();
+    expect(mocks.userbotClose).toHaveBeenCalledTimes(role === "participant" ? 1 : 0);
+    expectOnce(mocks.proxyClose, mocks.heartbeatStop, mocks.leaseRelease);
+    expect(mocks.proxyClose.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.leaseRelease.mock.invocationCallOrder[0]!,
+    );
+    expect(fs.existsSync(root)).toBe(false);
+    expect(fs.existsSync(participantRoot)).toBe(false);
+  },
+);
+
 it("retains a quarantined lease after stopping the userbot and proxy", async () => {
   mocks.shouldRetainQaGatewayCredentialLease.mockResolvedValueOnce(true);
   const adapter = await createAdapter();

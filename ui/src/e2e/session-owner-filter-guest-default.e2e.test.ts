@@ -14,12 +14,10 @@ import { chooseSidebarOwner, closeSidebarMenu } from "./sidebar-session-menu.tes
 const suite = createControlUiE2eSuite({ name: "Guest sidebar owner default" });
 
 suite.define(() => {
-  it("retires a saved foreign owner before a restricted guest's first personal sidebar request", async () => {
+  it("preserves a saved readable owner for a restricted guest on first load and reload", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const sam = sessionPerson("profile-sam", "Sam");
       const josh = sessionPerson("profile-josh", "Josh");
-      const privacyMessage =
-        "Other people's activity is private. You can still open sessions shared with you.";
       const row = (id: string, label: string, owner: typeof sam, updatedAt: number) => ({
         key: `agent:main:${id}`,
         sessionId: id,
@@ -31,12 +29,12 @@ suite.define(() => {
       const welcome = row("welcome-sam", "Welcome, Sam", sam, 3);
       const team = row("release-tracker", "Release tracker", josh, 2);
       const list = (sessions: (typeof welcome)[]) => ({
-        ...ownerRoster(sessions, [sam]),
+        ...ownerRoster(sessions, [sam, josh]),
         hasMore: false,
         nextOffset: null,
       });
       const storageKey = `openclaw.control.sidebarSessionOwnerFilter.v1:${controlUiBundledGatewayUrl(suite.server.baseUrl)}:${encodeURIComponent(sam.id)}`;
-      // Restore the previous role's choice before the app or its subscriptions mount.
+      // Restore an explicit choice before the app or its subscriptions mount.
       await page.addInitScript(
         ({ key, value }) => {
           if (localStorage.getItem(key) === null) {
@@ -59,15 +57,7 @@ suite.define(() => {
         methodResponses: {
           "sessions.list": {
             cases: [
-              {
-                match: { ownerId: josh.id },
-                response: {
-                  __mockError: {
-                    code: "FORBIDDEN",
-                    message: privacyMessage,
-                  },
-                },
-              },
+              { match: { ownerId: josh.id }, response: list([team]) },
               { match: { involvingMe: true }, response: list([welcome]) },
               { match: { ownerId: sam.id }, response: list([welcome]) },
               { response: list([welcome, team]) },
@@ -78,7 +68,7 @@ suite.define(() => {
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, welcome.key));
       // Connection hydration may discover an unfiltered roster before the sidebar mounts.
-      // The first personal selection must already belong to the current authenticated role.
+      // The first personal selection must preserve the saved readable owner.
       const personalRequests = async () =>
         (
           await gateway.getRequests("sessions.list", { source: "sidebar", rowMode: "sidebar" })
@@ -96,33 +86,28 @@ suite.define(() => {
         "Expected a personal sidebar request",
       );
       const sidebar = page.locator("openclaw-app-sidebar");
-      if ((firstSidebarRequest.params as { ownerId?: string }).ownerId === josh.id) {
-        await expectBrowser(sidebar.locator("[data-sidebar-session-error]")).toContainText(
-          privacyMessage,
-        );
-      }
-      expect(firstSidebarRequest.params).toMatchObject({ involvingMe: true });
-      expect(firstSidebarRequest.params).not.toHaveProperty("ownerId");
+      expect(firstSidebarRequest.params).toMatchObject({ ownerId: josh.id });
+      expect(firstSidebarRequest.params).not.toHaveProperty("involvingMe");
       const owner = page.locator("#sidebar-session-owner-title");
-      await expectBrowser(owner).toHaveAccessibleName("Owners: Involving me");
-      await expectBrowser(sidebar.locator(`[data-session-key="${welcome.key}"]`)).toBeVisible();
+      await expectBrowser(owner).toHaveAccessibleName("Owners: Josh");
+      await expectBrowser(sidebar.locator(`[data-session-key="${team.key}"]`)).toBeVisible();
       await expectBrowser(sidebar.locator("[data-sidebar-session-error]")).toHaveCount(0);
       expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(
-        "involving-me",
+        `owner:${josh.id}`,
       );
       await page.reload();
-      await expectBrowser(owner).toHaveAccessibleName("Owners: Involving me");
-      await gateway.waitForRequest("sessions.list", { match: { involvingMe: true } });
-      await expectBrowser(sidebar.locator(`[data-session-key="${welcome.key}"]`)).toBeVisible();
+      await expectBrowser(owner).toHaveAccessibleName("Owners: Josh");
+      await gateway.waitForRequest("sessions.list", { match: { ownerId: josh.id } });
+      await expectBrowser(sidebar.locator(`[data-session-key="${team.key}"]`)).toBeVisible();
       await expectBrowser(sidebar.locator("[data-sidebar-session-error]")).toHaveCount(0);
 
       await chooseSidebarOwner(page, "all");
       await closeSidebarMenu(page);
-      await expectBrowser(owner).toHaveCount(0);
+      await expectBrowser(owner).toHaveAccessibleName("Owners: All owners");
       await expectBrowser(sidebar.locator(`[data-session-key="${team.key}"]`)).toBeVisible();
       await expectBrowser(sidebar.locator("[data-sidebar-session-error]")).toHaveCount(0);
       await page.reload();
-      await expectBrowser(owner).toHaveCount(0);
+      await expectBrowser(owner).toHaveAccessibleName("Owners: All owners");
       await expectBrowser(sidebar.locator(`[data-session-key="${team.key}"]`)).toBeVisible();
       await expectBrowser(sidebar.locator("[data-sidebar-session-error]")).toHaveCount(0);
       const [savedStorageKey, ...otherKeys] = await page.evaluate(() =>

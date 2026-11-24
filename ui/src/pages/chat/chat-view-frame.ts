@@ -90,6 +90,8 @@ export type ChatProps = Omit<
     onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
     onFooterElementRef?: (element: HTMLElement) => void | (() => void);
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
+    /** Presentation custody, not send authority. */
+    ownsComposer?: boolean;
     transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
@@ -149,6 +151,7 @@ export type ChatProps = Omit<
       resolution: SessionSuggestionResolution,
     ) => void;
     detailsEnabled?: boolean;
+    hideComposerSessionCards?: boolean;
   };
 
 // The view frame refreshes on each pane render and the chat-item cache keys the queue by

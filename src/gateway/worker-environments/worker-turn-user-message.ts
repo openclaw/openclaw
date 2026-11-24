@@ -42,6 +42,8 @@ export async function persistWorkerTurnUserMessage(params: {
   media: Pick<Awaited<ReturnType<typeof prepareWorkerTurnMedia>>, "images" | "imageFactIndexes">;
   assertRunCurrent?: () => void;
   isAuthorized: () => boolean;
+  /** Model-only text for this user row; display content stays the user's own text. */
+  modelPromptProjection?: string;
 }): Promise<string | null> {
   const { turn, manager, transcriptTarget, media } = params;
   const canonical = buildPersistedUserTurnMessage({
@@ -63,12 +65,15 @@ export async function persistWorkerTurnUserMessage(params: {
     __openclaw: {
       ...canonical["__openclaw"],
       mediaImageBlockFactIndexes: media.imageFactIndexes,
+      ...(params.modelPromptProjection === undefined
+        ? {}
+        : { modelPromptProjection: { version: 1, text: params.modelPromptProjection } }),
     },
   };
   const assertCurrent = () => {
     params.assertRunCurrent?.();
     if (!params.isAuthorized()) {
-      throw new Error("Worker turn authority changed before transcript write");
+      throw new Error("Worker turn ended before transcript write. Start a new turn.");
     }
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
@@ -126,6 +131,13 @@ export async function persistWorkerTurnInput(
 ) {
   await persistWorkerTurnRecordedInput(params);
   const recorder = params.turn.userTurnTranscriptRecorder;
+  const projection = params.modelPromptProjection;
+  const capture = recorder?.captureModelPromptProjection;
+  if (capture && projection !== undefined) {
+    await withSessionTranscriptWriteAssertion(params.transcriptTarget, params.assertCurrent, () =>
+      capture(projection, params.assertCurrent),
+    );
+  }
   if (recorder && !params.userMessageAlreadyPersisted) {
     return recorder.getAdmissionReceipt()?.entryId ?? params.baseLeafId;
   }
@@ -277,6 +289,10 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
   const recorder = turn.userTurnTranscriptRecorder;
   const receipt = recorder?.getAdmissionReceipt();
   const admission = receipt ? { ...receipt } : undefined;
+  // Unpersisted input is admitted after the policy gate; persisted input must already be readable.
+  if (recorder?.hasPersisted() && !admission) {
+    throw new Error("Cloud worker turn has no readable canonical user admission");
+  }
   const userMessageAlreadyPersisted =
     admission !== undefined || turn.suppressNextUserMessagePersistence === true;
   // Validate context after reentrant phase callbacks have finished.
@@ -286,14 +302,16 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     provider: modelRef.provider,
     model: modelRef.model,
   });
-  let manager = userMessageAlreadyPersisted
-    ? await SessionManager.openModelContextAsync(transcriptTarget, {
-        admission,
-        signal: turn.abortSignal,
-      })
-    : await withSessionTranscriptHydrationCaller("worker-input", () =>
-        SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal),
-      );
+  // Recorder-owned input writes through the recorder after policy approval, not this view.
+  let manager =
+    recorder || userMessageAlreadyPersisted
+      ? await SessionManager.openModelContextAsync(transcriptTarget, {
+          admission,
+          signal: turn.abortSignal,
+        })
+      : await withSessionTranscriptHydrationCaller("worker-input", () =>
+          SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal),
+        );
   assertCurrent();
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
   // Reuse the fenced read's source watermark. Later writes still face the commit fence.

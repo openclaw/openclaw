@@ -1,0 +1,5 @@
+# openclaw#197320: published-driver schema reply shape (local-schema legacy/modern and
+# released-verifier cases), Workboard-only PostgreSQL snapshot through the rehearsal
+# doctor preflight, and rollback refusal after a Workboard write; red-before/green-after
+# regressions for the stable upgrade path.
+194

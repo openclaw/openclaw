@@ -11,6 +11,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
@@ -23,7 +24,11 @@ import {
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import * as exec from "../../infra/exec-request-context.js";
-import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  enqueueSystemEventWithReceipt,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
@@ -42,7 +47,6 @@ import { createOperationalRunInstanceRef } from "../operational-run-instance.js"
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { clearToolSearchCatalog } from "../tool-search.js";
 import {
-  captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
@@ -70,6 +74,7 @@ afterEach(() => {
 it.for([
   "prepared",
   "published",
+  "published-behind-full-queue",
   "publication-failed",
   "failed",
   "stop",
@@ -79,7 +84,10 @@ it.for([
 ] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
   async (outcome, { signal }) => {
-    const localPublication = outcome === "published" || outcome === "publication-failed";
+    const localPublication =
+      outcome === "published" ||
+      outcome === "published-behind-full-queue" ||
+      outcome === "publication-failed";
     const failedPublication = {
       status: "failed",
       requestId: "local-publication",
@@ -224,7 +232,9 @@ it.for([
           () => config,
         );
         context.resolveGatewayContext = () => context;
+        let resumedContext: string | undefined;
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+          resumedContext = params.currentInboundContext?.text;
           const admission = expectDefined(params.preparedRunAdmission, "resumed guest admission");
           const admittedRunContext = await admission.admit("gateway", params.runId);
           params.onExecutionPhase?.({ phase: "model_call_started" });
@@ -259,7 +269,7 @@ it.for([
         });
         let receipt: ReturnType<typeof events.enqueueSessionEventForHost> | undefined;
         const enqueueReal = events.enqueueSessionEventForHost;
-        let resumedCaller: { identity: unknown; error?: unknown } | undefined;
+        let resumedCallerError: unknown;
         const noticed = createDeferredCore();
         const released = createDeferredCore();
         if (outcome === "interrupted") {
@@ -306,13 +316,12 @@ it.for([
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,
             ).toBeUndefined();
-            // Resume dispatch consults the ambient caller before its own run binds tools; the
-            // yielded turn's retired receipt and aborted signal must not be ambient here.
-            resumedCaller = { identity: getGatewayToolCallerIdentity() };
+            // The continuation may retain admitted policy, but never the yielded
+            // invocation's retired receipt or aborted signal.
             try {
-              captureGatewayToolCallerAssertion()?.();
+              composePreparedOnlySessionSource(getGatewayToolCallerIdentity())?.();
             } catch (error) {
-              resumedCaller.error = error;
+              resumedCallerError = error;
             }
             order.push("resume");
             resumed.resolve(text);
@@ -346,6 +355,14 @@ it.for([
               }),
             };
           });
+        // A long run leaves unpolled exec completions queued for the resumed turn.
+        const passive = outcome === "published-behind-full-queue" ? 20 : 0;
+        for (let index = 0; index < passive; index++) {
+          enqueueSystemEventWithReceipt(`Exec completed (${index})`, {
+            sessionKey,
+            contextKey: `exec:${index}`,
+          });
+        }
         const exercise = async () => {
           const wrapped = withSessionControllerOwner(operation, () =>
             wrapToolWithAbortSignal(
@@ -424,7 +441,7 @@ it.for([
             );
             expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
             expect(enqueue).toHaveBeenCalledOnce();
-            expect(resumedCaller).toEqual({ identity: undefined });
+            expect(resumedCallerError).toBeUndefined();
             if (outcome === "prepared" || localPublication) {
               const settled = await withinTest(
                 expectDefined(receipt, "actual event receipt").settled,
@@ -437,6 +454,11 @@ it.for([
               expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
               expect(forbidden).not.toHaveBeenCalled();
               expect(publish).toHaveBeenCalledOnce();
+              // The resumed internal turn drains passive notices like an ordinary turn.
+              expect(peekSystemEvents(sessionKey)).toEqual([]);
+              if (passive > 0) {
+                expect(resumedContext).toContain(`Exec completed (${passive - 1})`);
+              }
             }
           }
           if (outcome === "interrupted") {
@@ -486,7 +508,7 @@ it.for([
                     {
                       ...scope,
                       operationalRunInstance: createOperationalRunInstanceRef(runId),
-                      receiptAuthority: () => !runAbort.signal.aborted,
+                      receiptAuthority: () => runAbort.signal.throwIfAborted(),
                       approvalSignals: [runAbort.signal],
                     },
                     exercise,

@@ -952,7 +952,7 @@ describe("legacy flat profiles through the canonical auth migration owner", () =
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
     const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
-    const reader = prepareAgentAuthProfileRowsRead({
+    const reader = await prepareAgentAuthProfileRowsRead({
       databasePath,
       agentId: "main",
       env: state.env,

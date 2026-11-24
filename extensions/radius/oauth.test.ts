@@ -84,10 +84,10 @@ it("pairs with fractional polling intervals and slows subsequent polls after slo
 });
 
 it.each([
-  ["access_denied", "denied"],
-  ["expired_token", "expired"],
+  ["access_denied", "The sign-in code was denied."],
+  ["expired_token", "The sign-in code expired before it was approved."],
   ["server_error", "HTTP 400"],
-  [undefined, "expired"],
+  [undefined, "The sign-in code expired before it was approved."],
 ])("terminates on %s without leaking the server description", async (code, message) => {
   device(code ? {} : { expires_in: 2, interval: 5 });
   if (code) {

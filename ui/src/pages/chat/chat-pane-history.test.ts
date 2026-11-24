@@ -515,6 +515,46 @@ it.each(["initial placement", "programmatic reveal"])(
   },
 );
 
+it.each([
+  { readerInput: false, previous: null },
+  { readerInput: true, previous: null },
+  { readerInput: false, previous: 0 },
+  { readerInput: true, previous: 0 },
+])(
+  "loads an unobserved first jump only after reader input ($readerInput, $previous)",
+  async ({ readerInput, previous }) => {
+    const { pane, state, request } = historyPane();
+    state.handleChatScroll = vi.fn();
+    const thread = appendChatThread(pane, {
+      scrollHeight: 6000,
+      clientHeight: 500,
+      scrollTop: 5500,
+    });
+    appendSentinel(thread, pane);
+    installHistoryObserver();
+    if (previous === 0) {
+      thread.scrollTop = 0;
+      const initial = new Event("scroll");
+      Object.defineProperty(initial, "target", { value: thread });
+      pane.handleTranscriptScroll(initial);
+      // End placement can move the root without delivering another native scroll.
+      thread.scrollTop = 5500;
+    }
+    if (readerInput) {
+      pane.handleTranscriptHistoryIntent(new KeyboardEvent("keydown", { key: "Home" }));
+    }
+    expect(request).not.toHaveBeenCalled();
+    thread.scrollTop = 0;
+    const event = new Event("scroll");
+    Object.defineProperty(event, "target", { value: thread });
+    pane.handleTranscriptScroll(event);
+    await vi.waitFor(() =>
+      expect(state.chatMessages.map(nativeHistorySeq)).toEqual(readerInput ? [1, 2, 3, 4] : [3, 4]),
+    );
+    expect(request).toHaveBeenCalledTimes(Number(readerInput));
+  },
+);
+
 it("prefetches older history from upward intent well before the top edge", async () => {
   const { pane, state, request } = historyPane();
   state.handleChatScroll = vi.fn();

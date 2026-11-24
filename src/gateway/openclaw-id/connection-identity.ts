@@ -131,7 +131,7 @@ export function createOpenClawIdConnectionAccess(params: {
         }
         return {
           kind: "member",
-          role: peer.role,
+          role: member?.effectiveRole ?? "unassigned",
           accountId: peer.accountId,
           email: member?.email ?? null,
           displayName: member?.displayName ?? null,

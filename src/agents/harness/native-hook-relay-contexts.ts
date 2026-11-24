@@ -91,8 +91,6 @@ export type RegisterNativeHookRelayParams = {
   requester?: PluginHookToolRequesterContext;
   approvalContext?: NativeHookRelayApprovalContext;
   allowedEvents?: readonly NativeHookRelayEvent[];
-  /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
-  preToolUseLoopDetection?: boolean;
   /** Never prune the all-tool PreToolUse policy relay. Requires runBeforeToolCall. */
   requirePreToolUse?: boolean;
   ttlMs?: number;
@@ -118,7 +116,6 @@ type NativeHookRelayCommandForEventOptions = {
 
 export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
-  preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
 };
 
@@ -164,6 +161,8 @@ export type NativeHookRelayBridgeRegistration = {
   cancelStartup: () => void;
   closing?: Promise<void>;
   remoteEnabled?: boolean;
+  /** Remote tool callbacks already accepted, keyed by event and tool use id. */
+  remoteToolUses: Set<string>;
 };
 
 export type NativeHookRelaySharedState = {

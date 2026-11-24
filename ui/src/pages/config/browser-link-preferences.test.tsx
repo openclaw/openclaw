@@ -29,9 +29,9 @@ describe("Control UI browser link preferences row", () => {
     const { container } = view;
 
     expect(container.querySelector(".settings-row__title")?.textContent?.trim()).toBe(
-      "Open links in Control UI browser",
+      "Open links in the built-in browser",
     );
-    const toggle = view.getByRole("switch", { name: "Open links in Control UI browser" });
+    const toggle = view.getByRole("switch", { name: "Open links in the built-in browser" });
     if (!(toggle instanceof HTMLInputElement)) {
       throw new Error("missing Control UI browser link preference toggle");
     }

@@ -410,6 +410,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolver_id TEXT,
   consumed_at_ms INTEGER,
   consumed_by TEXT,
+  requested_by_profile_id TEXT,
   CHECK (expires_at_ms >= created_at_ms),
   CHECK (updated_at_ms >= created_at_ms),
   CHECK (resolved_at_ms IS NULL OR resolved_at_ms >= created_at_ms),
@@ -679,6 +680,7 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
   updated_at INTEGER,
   attested_at_ms INTEGER,
   attestation_updated_at_ms INTEGER,
+  bootstrap_deferred INTEGER,
   CHECK (version IS NULL OR workspace_path IS NOT NULL)
 ) STRICT;
 
@@ -2017,7 +2019,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   last_error TEXT,
   shared_host INTEGER,
   resource_receipt_json TEXT,
-  retention_json TEXT
+  retention_json TEXT,
+  provision_source_json TEXT
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease

@@ -1,7 +1,11 @@
 // Control UI tests cover plugin mutations serialized behind pending config drafts.
 import { expect, it } from "vitest";
 import type { PluginsInspectResult } from "../lib/plugins/index.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -78,6 +82,12 @@ suite.define(() => {
         mutationAllowed: true,
       });
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "models.list",
+        ],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
@@ -119,7 +129,7 @@ suite.define(() => {
       });
 
       await gateway.deferNext("plugins.setEnabled");
-      await page.getByRole("button", { name: "Enable Workboard", exact: true }).click();
+      await page.getByRole("switch", { name: "Workboard", checked: false, exact: true }).click();
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
       const pendingDraft = await gateway.waitForRequest("config.set");
@@ -141,7 +151,7 @@ suite.define(() => {
         runtime: { operationId: "enable-workboard", generation: 1, pluginIds: ["workboard"] },
       });
 
-      await page.getByRole("button", { name: "Disable Workboard", exact: true }).waitFor();
+      await page.getByRole("switch", { name: "Workboard", checked: true, exact: true }).waitFor();
       expect((await gateway.getRequests("plugins.inspect")).length).toBeGreaterThan(0);
       expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       await expect

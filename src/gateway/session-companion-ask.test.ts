@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
@@ -76,7 +76,8 @@ vi.mock("../agents/sessions/index.js", () => ({
     }),
   },
 }));
-vi.mock("../agents/simple-completion-runtime.js", () => ({
+// mock-isolation: Keep synthetic companion selection independent of installed providers and auth state.
+vi.mock("../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent: resolveSelection,
 }));
 vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext }));
@@ -178,10 +179,9 @@ function queueSeed() {
 }
 
 function operatorFor(cfg: OpenClawConfig, allow: string[], deny?: string[]) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "companion-reader",
     scopes: ["operator.read"],
-    assertCurrent() {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { sourceAgent: "main", allow, ...(deny ? { deny } : {}) },

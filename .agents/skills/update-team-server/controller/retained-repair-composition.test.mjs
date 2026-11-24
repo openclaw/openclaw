@@ -16,6 +16,7 @@ function adopt(f) {
 }
 test("P1 repaired: adopted four-file closure finishes public build, seals/checks, enters canonical lifecycle",t=>{
  const f=ready(t),original=Buffer.from(f.original),a=adopt(f);
+ writeFileSync(join(f.root,"proc",String(f.pid),"cgroup"),"0::/system.slice/openclaw-gateway.service/gateway\n");
  build(f,"begin",f.request);build(f,"origin");const finished=build(f,"finish");assert.equal(finished.phase,"BUILD_COMPLETED");
  const snapshot=JSON.parse(readFileSync(f.prefix+".intent.json"));assert.equal(snapshot.adoption.operation,a.binding.operation);
  for(const action of ["seal","check"]){const result=invoke(f,"retained-repair-preparation",action,snapshot);assert.equal(result.status,0,result.stderr);}
@@ -23,6 +24,7 @@ test("P1 repaired: adopted four-file closure finishes public build, seals/checks
  assert.equal(build(f,"finish").completed.sha256,finished.completed.sha256);
  const begun=transaction(f,"begin",finished.completed);let current=transaction(f,"verify",begun.journal);
  assert.equal(current.record.phase,"REPAIR_EVIDENCE_VERIFIED");current=lifecycle(f,"bind",current,{instance:"fixture-original-instance"});
+ assert.equal(current.record.lifecycle.bound.owner.process.cgroup,"/system.slice/openclaw-gateway.service/gateway");
  const response=lease();current=lifecycle(f,"suspend",current,{response});current=lifecycle(f,"stop-intent",current,{response:status(response),suspensionId:response.suspensionId});
  f.stop();current=lifecycle(f,"stopped",current);current=lifecycle(f,"select-intent",current);current=lifecycle(f,"select",current);
  current=lifecycle(f,"start-intent",current,{verificationSeconds:600});assert.equal(current.record.phase,"REPAIR_START_INTENT");

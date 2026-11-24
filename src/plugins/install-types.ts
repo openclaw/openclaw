@@ -49,6 +49,8 @@ export type InstallPluginResult =
       extensions: string[];
       setup?: PluginManifestSetup;
       artifactInspection?: PluginInstallArtifactInspection;
+      /** Only the native preparation operation returns this non-published outcome. */
+      outcome?: "prepared";
       npmResolution?: NpmSpecResolution;
     }
   | {
@@ -104,6 +106,7 @@ export type PackageInstallCommonParams = InstallSafetyOverrides &
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;
+  prepareOnly?: boolean;
 };
 
 /**

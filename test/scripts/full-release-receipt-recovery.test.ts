@@ -1,194 +1,251 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import * as publicationArtifacts from "../../scripts/full-release-artifacts.mjs";
 import {
   createPublicationAdmission,
-  createPublicationSourceFact,
   validatePublicationAdmissionBinding,
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
-  RECEIPT_RECOVERY_SCHEMA,
-  RECEIPT_RECOVERY_WORKFLOW,
-  receiptRecoverySourceRequest,
+  authenticateReceiptRecovery,
+  receiptRecoveryPolicyRequest,
   revalidateReceiptRecoveryRuns,
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
-import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
-import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
-import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
+import { isRecord } from "../../scripts/lib/record-shared.mjs";
+import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  retainedPublicationArtifactSource,
+} from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
-import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
-import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import {
+  revalidateQualificationAdmissionAuthority,
+  verifyQualificationAdmission,
+} from "../../scripts/release-qualification-admission.mjs";
+import {
+  authenticateFullReleaseValidationEvidence,
+  revalidateCandidateArtifactAuthority,
+} from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import {
+  consumptionOptions,
+  recoveryConsumptionFixture,
+} from "./release-evidence-consumption.test-support.js";
+import { fixture as admissionFixture } from "./release-qualification-admission.test-support.js";
 
-const roles = [
-  "normalCi",
-  "pluginPrereleaseIndependent",
-  "releaseChecksIndependent",
-  "releaseChecksCandidate",
-  "pluginPrereleaseCandidate",
-];
-function fixture() {
-  const old = candidatePublicationFixture();
-  const producer = { runId: "900", runAttempt: 1, fullRef: "refs/heads/main", sha: "c".repeat(40) };
-  const source = createPublicationSourceFact(
-    receiptRecoverySourceRequest(old.admission.receipt, producer),
-    { packages: [], platforms: [] },
-    old.source.projection,
-  );
-  const baselines = JSON.parse(
-    JSON.parse(old.admission.receipt.request.inputs.trusted_workflow_json).laneInputs
-      .qualification_baselines_json,
-  );
-  const recovery = {
-    schema: RECEIPT_RECOVERY_SCHEMA,
-    requestId: "12345678-1234-4123-8123-123456789abc",
-    repository: old.repository,
-    qualificationAdmission: old.admission.descriptor,
-    originalParent: { runId: old.runId, runAttempt: 1 },
-    candidateBinding: fullReleaseCandidateBindingFixture({
-      targetSha: old.q,
-      toolingSha: old.q,
-      releaseProfile: "beta",
-      releaseSoak: false,
-      upgradeSurvivorBaseline: baselines.upgradeBaseline,
-      upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(" "),
-    }),
-    children: Object.fromEntries(
-      roles.map((role, index) => [
-        role,
-        {
-          runId: String(910 + index),
-          runAttempt: 1,
-          workflowRef: old.branch,
-          sourceParentRunId: old.runId,
-          sourceParentAttempt: 1,
-        },
-      ]),
-    ),
-    publicationArtifacts: {
-      ...old.manifest.publicationArtifacts,
-      pluginNpm: { runId: "902", runAttempt: 1 },
-    },
+function fixture(independentQ = false) {
+  const test = recoveryConsumptionFixture(independentQ);
+  return { ...test, old: { ...test.direct, client: test.client } };
+}
+
+const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+function aggregateFixture() {
+  const test = fixture();
+  const originalRead = vi.fn().mockRejectedValue(new Error("original qualification reached"));
+  const downloads = vi.spyOn(test.client, "downloadArtifactArchive");
+  const authenticate = () =>
+    authenticateReceiptRecovery({
+      manifest: test.manifest,
+      run: test.run,
+      client: { ...test.client, getRunAttempt: originalRead },
+      artifact: test.aggregateArtifact,
+      verifier: undefined,
+      expectedRunAttempts: undefined,
+    });
+  return {
+    ...test,
+    steps: expectDefined(test.jobs.get("900"), "aggregate jobs")[0]!.steps,
+    observations: test.manifest.publicationAdmission.observations,
+    observationArtifact: expectDefined(test.metadata.get("444"), "observations"),
+    originalRead,
+    downloads,
+    authenticate,
   };
-  const manifest = {
-    ...old.manifest,
-    runId: producer.runId,
-    workflowSha: producer.sha,
-    workflowFullRef: producer.fullRef,
-    workflowRef: "main",
-    sourceAdmission: source,
-    receiptRecovery: recovery,
-  };
-  return { old, producer, source, recovery, manifest };
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("receipt-backed aggregate recovery", () => {
-  it("passes a ten-minute budget to recovery child verification", async () => {
-    const { old, recovery } = fixture();
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    // Candidate payload validation is separate from the child deadline handoff.
-    vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
-    const verifyChild = vi
-      .spyOn(childReuse, "validateReusableReleaseChild")
-      .mockRejectedValue(new Error("child verification reached"));
+  it("recovers raw failed child receipts using the original admitted Q grant", async () => {
+    const test = recoveryConsumptionFixture(true, { waivedFailure: true });
+    const original = await verifyOriginalReceiptQualification(test.recovery, {
+      client: test.client,
+    });
+    expect(original).toBeDefined();
+    expect(test.runs.get("910")!.conclusion).toBe("failure");
+    const source = test.client.getWorkflowSource;
+    vi.spyOn(test.client, "getWorkflowSource").mockImplementation((sha, path) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
+        : source(sha, path),
+    );
     await expect(
-      verifyOriginalReceiptQualification(recovery, {
-        client: {
-          ...old.client,
-          getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
-        },
-      }),
-    ).rejects.toThrow("child verification reached");
-    expect(verifyChild).toHaveBeenCalledOnce();
-    expect(verifyChild.mock.calls[0]?.[2]?.deadlineMs).toBe(now + 600_000);
+      verifyOriginalReceiptQualification(test.recovery, { client: test.client }),
+    ).rejects.toThrow("Full release child evidence workload does not pass recovery release policy");
   });
 
-  it("gives only recovery Docker payloads the four-minute archive budget", async () => {
-    const { old, recovery } = fixture();
-    vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
-    vi.spyOn(childReuse, "validateReusableReleaseChild").mockImplementation(async (_, request) => {
-      const coverage = expectDefined(
-        old.admission.receipt.coverage.children.find((child) => child.key === request.role),
-        "child coverage",
-      );
-      const selection = {
-        ...request,
-        runId: expectDefined(recovery.children[request.role], "recovery child").runId,
-        runAttempt: 1,
-        workflowRef: old.branch,
-        displayTitle: "fixture",
-        sourceParentRunId: old.runId,
-        sourceParentAttempt: 1,
-        url: "https://github.com/openclaw/openclaw/actions/runs/910",
-        artifact: {
-          id: "1",
-          name: "fixture",
-          digest: "a".repeat(64),
-          expiresAt: "2030-01-01",
-          sizeInBytes: 1,
-        },
-        receiptSha256: "a".repeat(64),
-        inputs: {},
-      };
-      return {
-        selection,
-        run: {},
-        jobs: [],
-        receipt: {
-          jobs: coverage.requiredJobs.map((name) => ({
-            name,
-            status: "completed",
-            conclusion: "success",
-          })),
-        },
-      };
+  it("rechecks a separately admitted ledger against the original failed receipts at publication", async () => {
+    const policySha = "e".repeat(40);
+    const f = recoveryConsumptionFixture(true, { waivedFailure: true, waiverPolicySha: policySha });
+    const { c, q, admission: original } = f.direct;
+    const ledger = "scripts/lib/release-validation-waivers.json";
+    const newPolicy = admissionFixture(false, {
+      selectedRequest: receiptRecoveryPolicyRequest(
+        original.receipt,
+        policySha,
+        "00000000-1234-4123-8123-123456789abc",
+      ),
+      runId: 41,
+      workflowSource: original.sources.get(q + ":.github/workflows/full-release-validation.yml"),
+      policy: JSON.parse(
+        original.sources.get(q + ":scripts/lib/release-qualification-coverage.json")!,
+      ),
+      candidateVersion: original.receipt.baselinePolicy.candidateVersion,
+      baselinePolicySource: original.sources.get(
+        c + ":scripts/lib/upgrade-survivor-scenarios.json",
+      ),
     });
-    const verifyPayloads = vi
-      .spyOn(publicationArtifacts, "verifyRetainedPublicationArtifacts")
-      .mockRejectedValue(new Error("publication verification reached"));
-    const dispatches = old.admission.receipt.coverage.children.map((child, index) => ({
-      id: 10_000 + index,
-      name: child.parentJobName,
-      status: "completed",
-      conclusion: "success",
-      runId: expectDefined(recovery.children[child.key], "recovery child").runId,
-    }));
-    const parentJobs = [...(await old.client.getRunAttemptJobs(old.runId)), ...dispatches];
-    await expect(
-      verifyOriginalReceiptQualification(recovery, {
-        client: {
-          ...old.client,
-          getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
-          getRunAttemptJobs: async () => parentJobs,
-          getJobLog: async (id: number) => {
-            const child = expectDefined(
-              dispatches.find((entry) => entry.id === id),
-              "dispatch job",
-            );
-            return `TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
-          },
-        },
-      }),
-    ).rejects.toThrow("publication verification reached");
-    expect(verifyPayloads).toHaveBeenCalledOnce();
-    expect(verifyPayloads.mock.calls[0]?.[2]).toMatchObject({
-      verifyPayloads: true,
-      dockerArchiveTimeoutMs: 240_000,
+    const newLedger = f.client.getWorkflowSource(policySha, ledger);
+    newPolicy.sources.set(policySha + ":" + ledger, newLedger);
+    const commit = {
+      sha: policySha,
+      parents: [{ sha: q }],
+      commit: { verification: { verified: true } },
+      files: [{ filename: ledger, status: "modified" }],
+    };
+    const client = {
+      ...f.client,
+      getCommit: async () => commit,
+      getRun: (id: string) => (id === "41" ? Promise.resolve(newPolicy.run) : f.client.getRun(id)),
+      verifyQualificationAdmission: (params: Parameters<typeof verifyQualificationAdmission>[0]) =>
+        isRecord(params.descriptor) && params.descriptor.runId === 41
+          ? verifyQualificationAdmission({
+              ...params,
+              runGh: newPolicy.runGh,
+              downloadArchive: newPolicy.archive,
+            })
+          : f.client.verifyQualificationAdmission(params),
+      revalidateQualificationAdmissionAuthority: (
+        params: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
+      ) =>
+        isRecord(params.descriptor) && params.descriptor.runId === 41
+          ? revalidateQualificationAdmissionAuthority({ ...params, runGh: newPolicy.runGh })
+          : f.client.revalidateQualificationAdmissionAuthority(params),
+    };
+    const request = {
+      ...f.recovery,
+      workflowSha: f.producer.sha,
+      policyQualification: { sha: policySha, admission: newPolicy.descriptor },
+    };
+    await expect(verifyOriginalReceiptQualification(f.recovery, { client })).rejects.toThrow(
+      "workload does not pass recovery release policy",
+    );
+    const verified = await verifyOriginalReceiptQualification(request, { client });
+    const waivers = verified.children.flatMap((child) => child.waivers);
+    expect(waivers).toHaveLength(1);
+    expect(verified.children.find((child) => child.role === "normalCi")).toMatchObject({
+      workflowSha: q,
+      conclusion: "failure",
     });
+    Object.assign(f.manifest, {
+      receiptRecovery: request,
+      waivers,
+      retainedPublicationPayloads: verified.publication.payloads,
+    });
+    const authenticate = () =>
+      authenticateReceiptRecovery({
+        manifest: f.manifest,
+        artifact: f.aggregateArtifact,
+        run: f.run,
+        client,
+        verifier: undefined,
+        expectedRunAttempts: undefined,
+      });
+    await expect(authenticate()).resolves.toMatchObject({ valid: true, waivers });
+    // Later publication commands restore this carrier record instead of re-running recovery.
+    const consumed = await authenticateFullReleaseValidationEvidence(
+      { ...consumptionOptions(f.direct), run: f.run, manifest: f.manifest, expectedRunId: "900" },
+      client,
+    );
+    expect(consumed.publicationAuthority.policy?.descriptor).toEqual(newPolicy.descriptor);
+    newPolicy.authority.permission = "read";
+    expect(() =>
+      revalidateCandidateArtifactAuthority(consumed.publicationAuthority, client),
+    ).toThrow("no longer has repository qualification authority");
+    await expect(authenticate()).rejects.toThrow(
+      "no longer has repository qualification authority",
+    );
+    newPolicy.authority.permission = "write";
+    commit.files.push({ filename: "scripts/changed-executable.mjs", status: "modified" });
+    await expect(authenticate()).rejects.toThrow("modifying only the waiver ledger");
   });
+
+  it("rejects a recovery title for a different request", async () => {
+    const test = aggregateFixture();
+    test.run.name = "Receipt Recovery 87654321-1234-4123-8123-123456789abc";
+    await expect(test.authenticate()).rejects.toThrow("aggregate run identity differs");
+    expect(test.originalRead).not.toHaveBeenCalled();
+  });
+
+  it.each(["failed seal", "reordered seal", "changed observations", "valid"] as const)(
+    "authenticates aggregate seal and observation bytes before original qualification: %s",
+    async (fault) => {
+      const test = aggregateFixture();
+      if (fault === "failed seal") {
+        test.steps[2]!.conclusion = "failure";
+      }
+      if (fault === "reordered seal") {
+        test.steps[2]!.number = 1;
+      }
+      if (fault === "changed observations") {
+        // Rebind a real, internally consistent ZIP to different observation content.
+        // The byte comparison, not a transport digest failure, must reject it.
+        const changed = makeStoredZip({
+          "publication-observations.json": JSON.stringify({
+            ...test.observations,
+            pendingAuthority: ["changed"],
+          }),
+        });
+        test.observationArtifact.digest = "sha256:" + digest(changed);
+        test.observationArtifact.size_in_bytes = changed.length;
+        Object.assign(test.manifest.publicationAdmission!.binding.artifact, {
+          digest: test.observationArtifact.digest,
+          sizeInBytes: changed.length,
+        });
+        test.archives.set("444", changed);
+      }
+      await expect(test.authenticate()).rejects.toThrow(
+        {
+          "failed seal": "missing successful Seal receipt-backed aggregate",
+          "reordered seal": "aggregate admission ordering changed",
+          "changed observations": "fresh observation artifact bytes differ",
+          valid: "original qualification reached",
+        }[fault],
+      );
+      expect(test.originalRead).toHaveBeenCalledTimes(fault === "valid" ? 1 : 0);
+      if (fault === "valid") {
+        expect(test.downloads).toHaveBeenCalledWith(
+          expect.objectContaining({
+            expected: expect.objectContaining({ artifactId: 444 }),
+          }),
+        );
+      }
+    },
+  );
 
   it("retains original selection, baselines and Q artifacts under a distinct P admission", () => {
-    const { old, source, recovery, manifest, producer } = fixture();
+    const { old, source, recovery, manifest, producer } = fixture(true);
+    expectDefined(recovery.children.normalCi, "normal CI selection").workflowRef =
+      "release-ci/earlier-normal-ci";
     expect(validateReceiptRecoveryRequest(recovery)).toBe(recovery);
-    expect(source.candidateSha).toBe(old.q);
+    expect(source.candidateSha).toBe(old.c);
     expect(source.workflow).toEqual({ ref: producer.fullRef, sha: producer.sha });
     expect(source.publicationSelection).toEqual(old.source.publicationSelection);
     expect(source.coverage).toEqual(old.source.coverage);
@@ -199,10 +256,12 @@ describe("receipt-backed aggregate recovery", () => {
       repository: old.repository,
       runId: producer.runId,
       runAttempt: 1,
-      sourceSha: old.q,
+      sourceSha: old.c,
       toolingSha: producer.sha,
     };
-    expect(validateFullReleaseNpmPreflight(expected).producer).toEqual(old.npmQualified.producer);
+    expect(validateFullReleaseNpmPreflight(expected).producer).toEqual(
+      recovery.publicationArtifacts.npmPreflight.producer,
+    );
     expect(() =>
       validateFullReleaseNpmPreflight({ ...expected, sourceSha: "d".repeat(40) }),
     ).toThrow();
@@ -266,34 +325,95 @@ describe("receipt-backed aggregate recovery", () => {
     },
   );
 
-  it("rejects historical-plan substitution and incomplete role selection", () => {
-    const { recovery } = fixture();
+  it("rejects historical-plan substitution and incomplete role selection", async () => {
+    const { recovery, client } = fixture();
     expect(() => validateReceiptRecoveryRequest({ ...recovery, executionPlan: {} })).toThrow();
+    const invalid = structuredClone(recovery);
+    invalid.candidateBinding.request.targetSha = "invalid";
+    await expect(verifyOriginalReceiptQualification(invalid, { client })).rejects.toThrow(
+      "original candidate and qualification must identify commits",
+    );
     const missing = structuredClone(recovery);
     delete missing.children.normalCi;
-    expect(() => validateReceiptRecoveryRequest(missing)).toThrow();
+    await expect(verifyOriginalReceiptQualification(missing, { client })).rejects.toThrow(
+      "exactly the admitted child roles",
+    );
   });
 
   it("rechecks every current producer tuple and rejects a superseding attempt", async () => {
-    const { recovery, old } = fixture();
+    const { recovery, old } = fixture(true);
     const calls: string[] = [];
     let attempt = 1;
+    let childSha = old.q;
     const client = {
       getRun: async (id: string) => {
         calls.push(id);
         return {
           id: Number(id),
           run_attempt: attempt,
-          head_sha: old.q,
+          head_sha: id === recovery.children.normalCi?.runId ? childSha : old.q,
           status: "completed",
           conclusion: "success",
         };
       },
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
-    expect(new Set(calls).size).toBe(8);
+    expect(new Set(calls).size).toBe(10);
+    const normalCi = recovery.children.normalCi;
+    if (!normalCi) {
+      throw new Error("fixture is missing the normal CI child");
+    }
+    const waivedRun = normalCi.runId;
+    const failedClient = {
+      getRun: async (id: string) => ({
+        ...(await client.getRun(id)),
+        conclusion: id === waivedRun ? "failure" : "success",
+      }),
+    };
+    await expect(revalidateReceiptRecoveryRuns(recovery, failedClient)).rejects.toThrow(
+      "current attempt changed",
+    );
+    childSha = "d".repeat(40);
+    const verifiedChildren = [{ runId: waivedRun, conclusion: "failure", workflowSha: childSha }];
+    await revalidateReceiptRecoveryRuns(recovery, failedClient, verifiedChildren);
+    await expect(
+      revalidateReceiptRecoveryRuns(recovery, failedClient, [
+        { ...verifiedChildren[0], workflowSha: old.q },
+      ]),
+    ).rejects.toThrow("current attempt changed");
     attempt = 2;
     await expect(revalidateReceiptRecoveryRuns(recovery, client)).rejects.toThrow(
+      "current attempt changed",
+    );
+  });
+
+  it("keeps qualification attempt 1 while pinning a later terminal parent attempt", async () => {
+    const { recovery, old } = fixture();
+    const request = {
+      ...recovery,
+      originalParent: { ...recovery.originalParent, currentRunAttempt: 2 },
+    };
+    validateReceiptRecoveryRequest(request);
+    let currentAttempt = 2;
+    let status = "completed";
+    const client = {
+      getRun: async (id: string) => ({
+        id: Number(id),
+        run_attempt: id === request.originalParent.runId ? currentAttempt : 1,
+        head_sha: old.q,
+        status: id === request.originalParent.runId ? status : "completed",
+        conclusion: id === request.originalParent.runId ? "failure" : "success",
+      }),
+    };
+    await expect(revalidateReceiptRecoveryRuns(request, client)).resolves.toBeUndefined();
+    expect(request.originalParent.runAttempt).toBe(1);
+    currentAttempt = 3;
+    await expect(revalidateReceiptRecoveryRuns(request, client)).rejects.toThrow(
+      "current attempt changed",
+    );
+    currentAttempt = 2;
+    status = "in_progress";
+    await expect(revalidateReceiptRecoveryRuns(request, client)).rejects.toThrow(
       "current attempt changed",
     );
   });
@@ -308,6 +428,7 @@ describe("receipt-backed aggregate recovery", () => {
         .filter((step: { run?: string }) => step.run?.includes("full-release-receipt-recovery.mjs"))
         .map((step: { run: string }) => step.run),
     ).toEqual([
+      "node scripts/full-release-receipt-recovery.mjs request",
       "node scripts/full-release-receipt-recovery.mjs admit",
       "node scripts/full-release-receipt-recovery.mjs seal",
     ]);

@@ -31,7 +31,6 @@ export function readStreamSandboxContext(
     throw new Error("Persistent streams require an admitted Docker sandbox context.");
   }
   context.assertCurrent?.();
-  context.operatorAuthority?.assertCurrent();
   return { ...context, configLabel };
 }
 

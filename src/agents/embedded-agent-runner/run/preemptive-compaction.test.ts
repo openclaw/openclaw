@@ -4,6 +4,7 @@ import type { ToolResultMessage } from "@openclaw/llm-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
@@ -166,6 +167,30 @@ describe("preemptive-compaction", () => {
     });
     expect(decision.estimatedPromptTokens).toBeGreaterThanOrEqual(26_806);
     expect(decision.route).not.toBe("fits");
+  });
+
+  it("routes predicted overflow from already-sent tool results to compaction", () => {
+    const sentOutput = "alpha beta gamma delta epsilon ".repeat(500);
+    const messages = [
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "read previous reports" }] }),
+      ...Array.from({ length: 8 }, () => makeToolResultMessage(sentOutput)),
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "reports received" }] }),
+    ];
+    const decision = resolveProjectedRequestPressure({
+      context: { messages },
+      previousRequest: { requestIndex: 1, messageCount: messages.length, contextTokens: 41_000 },
+      contextTokenBudget: 40_000,
+      reserveTokens: 0,
+    });
+
+    expect(decision).toMatchObject({
+      pressureSource: "provider_context_usage",
+      promptBudgetBeforeReserve: 40_000,
+      route: "compact_only",
+      toolResultReducibleChars: 0,
+    });
+    // The request estimator adds 12 framing tokens to the synthetic usage anchor.
+    expect([decision.estimatedPromptTokens, decision.overflowTokens]).toEqual([41_012, 1_012]);
   });
 
   const verboseHistory =

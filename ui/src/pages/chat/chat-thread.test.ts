@@ -15,6 +15,7 @@ import {
   message as chatMessage,
   messagesOf as messagesIn,
   nativeMessage,
+  openAIMessage,
   pending as pendingInput,
   person as senderProfile,
   queued as queuedSend,
@@ -112,14 +113,6 @@ it("invalidates cached custody notices when workspace sync ownership changes", (
   ]);
   expect(active.filter((item) => item.kind === "notice")).toEqual([]);
 });
-
-function resetMessage(id: string) {
-  return {
-    role: "system",
-    timestamp: 2_000,
-    __openclaw: { kind: "reset", id },
-  };
-}
 
 function canvasToolOutput(viewId: string, title: string, preferredHeight: number): string {
   return JSON.stringify({
@@ -313,31 +306,6 @@ describe("assistant commentary grouping", () => {
       expect(messagesIn(groupsIn(stableItems))).toEqual(expected);
     },
   );
-
-  it("hides durable commentary when the display preference is disabled", () => {
-    const paneId = "commentary-visibility";
-    const messages = [
-      user("do it", 1_000),
-      assistant("Checking the workspace.", 2_000, {
-        openclawStreamFallback: {
-          replacementText: "Checking the workspace.",
-          source: "segment",
-          itemId: "preamble-1",
-        },
-      }),
-      assistant("All done.", 3_000),
-    ];
-
-    const visible = buildItems({ paneId, messages });
-    const hidden = buildItems({ paneId, messages, persistCommentary: false });
-    const restored = buildItems({ paneId, messages });
-
-    expect(visible.filter((item) => item.kind === "group")).toHaveLength(3);
-    expect(hidden.filter((item) => item.kind === "group")).toHaveLength(2);
-    expect(restored.filter((item) => item.kind === "group")).toHaveLength(3);
-    expect(messages).toHaveLength(3);
-    resetChatThreadState(paneId);
-  });
 });
 
 describe("collapseCompletedTurnWork", () => {
@@ -385,7 +353,7 @@ describe("collapseCompletedTurnWork", () => {
     });
     expect(items[boundary ? 0 : 1]).toMatchObject(
       boundary
-        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" }
+        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens (97.3%)" }
         : { compaction: "complete", label: "Context compacted" },
     );
     if (!boundary) {
@@ -404,9 +372,9 @@ describe("collapseCompletedTurnWork", () => {
           [mcpAppCanvasBlock("completed-turn", "visualization")],
           2_000,
         ),
-        assistant("Checking the details.", 2_500),
+        openAIMessage("Checking the details.", 2_500),
         toolResult("call-1", 3_000),
-        assistant("All done.", 4_000),
+        openAIMessage("All done.", 4_000),
       ],
     });
     expectKinds(items, ["group", "work-group", "group", "group"]);
@@ -426,9 +394,9 @@ describe("collapseCompletedTurnWork", () => {
         sessionKey,
         messages: [
           user("do it", 1_000),
-          assistant("Checking…", 2_000),
+          openAIMessage("Checking…", 2_000),
           toolResult("call-1", 3_000),
-          assistant("All done.", 10_000),
+          openAIMessage("All done.", 10_000),
         ],
       }),
     );
@@ -441,14 +409,14 @@ describe("collapseCompletedTurnWork", () => {
   it("does not borrow an unscoped answer across a queued message from a peer", () => {
     const messages = [
       nativeUser("active-run", "do it", 1_000, { senderId: "operator" }),
-      assistant("Checking…", 2_000),
+      openAIMessage("Checking…", 2_000),
       toolResult("call-1", 3_000),
       nativeUser("queued-run", "queued follow-up", 3_500, { senderId: "peer" }),
       nativeUser("steer-run", "continue", 4_000, {
         senderId: "operator",
         steerTargetRunId: "active-run",
       }),
-      assistant("All done.", 5_000),
+      openAIMessage("All done.", 5_000),
     ];
 
     expect(
@@ -478,7 +446,7 @@ describe("collapseCompletedTurnWork", () => {
       messages: [
         user("go", 1_000),
         toolResult("call-1", 2_000),
-        assistant("Done.", 3_000),
+        openAIMessage("Done.", 3_000),
         trailing,
       ],
     });
@@ -493,15 +461,15 @@ describe("collapseCompletedTurnWork", () => {
     const failed = toolResult("failed", 4_000, true);
     const messages = [
       user("go", 1_000),
-      assistant("First result.", 2_000),
+      openAIMessage("First result.", 2_000),
       failed,
-      assistant([signedText("Checking the failure.", "commentary", "checking")], 5_000),
+      openAIMessage([signedText("Checking the failure.", "commentary", "checking")], 5_000),
       toolResult("supplementary", 6_000),
     ];
     const idle = collapsedItems({ messages });
     expect(messagesIn(groupsIn(idle))).toContain(failed);
     const recovered = collapsedItems({
-      messages: [...messages, assistant("Recovered via another route.", 7_000)],
+      messages: [...messages, openAIMessage("Recovered via another route.", 7_000)],
     });
     expect(messagesIn(groupsIn(recovered))).not.toContain(failed);
     expect(messagesIn(requireWorkGroup(recovered[1]).groups)).toContain(failed);
@@ -773,196 +741,6 @@ describe("buildCachedChatItems", () => {
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
     ]);
-  });
-
-  describe("distinct tool invocations", () => {
-    const call = (id: string, name = "exec", runId: string | undefined = "run-a") =>
-      assistant([{ type: "toolCall", id, name, arguments: { command: "echo ready" } }], 10, {
-        runId,
-      });
-    const result = (id: string, text = "ready", runId: string | undefined = "run-a") =>
-      resultMessage(id, "exec", [textBlock(text)], 20, { runId });
-    const snapshot = (id: string, completed = true) =>
-      assistant(
-        [
-          toolCall(undefined, "exec", { command: "echo ready" }),
-          { type: "toolresult", name: "exec", text: completed ? "ready" : "working" },
-        ],
-        10,
-        {
-          runId: "run-a",
-          toolCallId: id,
-          __openclawToolStreamLive: true,
-          __openclawToolStreamResultReceived: completed,
-        },
-      );
-    const cardsFor = (messages: unknown[], toolMessages: unknown[] = []) =>
-      cardsIn(messageGroups({ messages, toolMessages }));
-
-    it("keeps a persisted empty terminal result over a partial snapshot", () => {
-      const partial = snapshot("exec-1", false);
-      expect(cardsFor([partial])[0]).toMatchObject({
-        live: true,
-        completed: false,
-        outputText: "working",
-      });
-      const terminal = result("exec-1", "");
-      const cards = cardsFor([terminal, partial]);
-      expect(cards).toHaveLength(1);
-      expect(cards[0]).toMatchObject({ completed: true, outputText: "" });
-    });
-
-    it.each(["reset", "reused"])(
-      "does not relocate a live invocation across a boundary with %s ownership",
-      (ownership) => {
-        const persisted = call("exec-1");
-        const live = snapshot("exec-1", false);
-        const groups = messageGroups({
-          runId: "run-a",
-          messages: [
-            user("Original request", 1),
-            persisted,
-            ...(ownership === "reset" ? [resetMessage("reset-invocation")] : []),
-            user("Next request", 15),
-            ...(ownership === "reused" ? [call("exec-1")] : []),
-          ],
-          toolMessages: [live],
-        });
-        const cards = cardsIn(groups);
-        expect(cards).toHaveLength(2);
-        expect(cards.filter((card) => card.outputText === "working")).toHaveLength(1);
-      },
-    );
-
-    it("reconciles a multi-call snapshot without losing surrounding content or result metadata", () => {
-      const attachment = { type: "image", data: "fixture-image", mimeType: "image/png" };
-      const history = assistant(
-        [
-          textBlock("Before calls"),
-          toolCall("a", "exec", { command: "first" }),
-          toolCall("b", "exec", { command: "second" }),
-          textBlock("After calls"),
-        ],
-        10,
-        { runId: "run-a", __openclaw: { id: "transcript-call" } },
-      );
-      const terminal = result("a", "failed");
-      terminal.content = [textBlock("failed"), attachment];
-      terminal.details = { exitCode: 7, approvalReviewOutcome: "approved" };
-      terminal.isError = true;
-      const groups = messageGroups({
-        messages: [history, terminal, result("b")],
-        toolMessages: [snapshot("a"), snapshot("b")],
-      });
-      const entries = groups.flatMap((group) => group.messages);
-      const cards = entries.flatMap((entry) => extractToolCards(entry.message));
-      expect(cards).toHaveLength(2);
-      expect(cards.find((card) => card.callId === "a")).toMatchObject({
-        args: { command: "first" },
-        outputText: "failed",
-        isError: true,
-        exitCode: 7,
-        details: { exitCode: 7, approvalReviewOutcome: "approved" },
-        messageId: "transcript-call",
-      });
-      const blocks = entries.flatMap((entry) => requireRecord(entry.message).content as unknown[]);
-      expect(blocks).toContainEqual(attachment);
-      expect(blocks).toContainEqual(textBlock("Before calls"));
-      expect(blocks).toContainEqual(textBlock("After calls"));
-      expect(
-        blocks.findIndex((block) => requireRecord(block).text === "Before calls"),
-      ).toBeLessThan(blocks.findIndex((block) => requireRecord(block).id === "a"));
-      expect(
-        blocks.findIndex((block) => requireRecord(block).text === "After calls"),
-      ).toBeGreaterThan(blocks.findLastIndex((block) => requireRecord(block).id === "b"));
-    });
-
-    it("keeps surrounding text in order when result references split a multi-call message", () => {
-      const groups = messageGroups({
-        messages: [
-          assistant(
-            [
-              textBlock("before"),
-              toolCall("a"),
-              textBlock("between"),
-              toolCall("b"),
-              textBlock("after"),
-            ],
-            10,
-          ),
-          { ...result("a"), messageId: "a-result" },
-          { ...result("b"), __openclaw: { id: "b-result" } },
-        ],
-      });
-      const content = groups.flatMap((group) =>
-        group.messages.flatMap(
-          (entry) => requireRecord(entry.message).content as Record<string, unknown>[],
-        ),
-      );
-      expect(content.map((block) => (block.type === "text" ? block.text : block.id))).toEqual([
-        "before",
-        "a",
-        "a",
-        "between",
-        "b",
-        "b",
-        "after",
-      ]);
-    });
-
-    it("reconciles identified siblings without losing anonymous fallback pairs", () => {
-      const cards = cardsFor(
-        [
-          assistant(
-            [
-              toolCall("a", "exec", { command: "one" }),
-              { type: "toolresult", name: "exec", text: "one done" },
-              toolCall(undefined, "exec", { command: "two" }),
-              { type: "toolresult", name: "exec", text: "two done" },
-            ],
-            10,
-          ),
-        ],
-        [snapshot("a")],
-      );
-      expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
-        ["a", { command: "one" }, "one done"],
-        [undefined, { command: "two" }, "two done"],
-      ]);
-    });
-
-    it("keeps per-call live diffs and conflicting-name outputs independent inside a batch", () => {
-      const live = ["a", "b"].map((id, index) =>
-        Object.assign(snapshot(id, false), {
-          __openclawToolStreamDiffStat: { added: index + 1, removed: 0 },
-        }),
-      );
-      const cards = cardsFor(
-        [
-          assistant(
-            [
-              toolCall("a"),
-              toolCall("b"),
-              toolCall("conflict", "read", { path: "a" }),
-              toolCall("conflict", "exec", { command: "pwd" }),
-            ],
-            10,
-            { runId: "run-a" },
-          ),
-          resultMessage("conflict", "read", "read output", 20, { runId: "run-a" }),
-          result("conflict", "exec output"),
-        ],
-        live,
-      );
-      expect(cards.slice(0, 2).map((card) => card.liveDiffStat)).toEqual([
-        { added: 1, removed: 0 },
-        { added: 2, removed: 0 },
-      ]);
-      expect(cards.slice(2).map((card) => [card.name, card.outputText])).toEqual([
-        ["read", "read output"],
-        ["exec", "exec output"],
-      ]);
-    });
   });
 
   it("keeps more than sixteen parallel calls open by call id", () => {

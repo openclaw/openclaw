@@ -24,6 +24,7 @@ import {
 } from "./lifecycle-hook-helpers.js";
 import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
+// mock-isolation: Tests inspect prepared hook params without reaching the global hook runner.
 vi.mock("./lifecycle-hook-helpers.js", () => ({
   awaitAgentHarnessAgentEndHook: vi.fn(),
   runAgentHarnessAgentEndHook: vi.fn(),

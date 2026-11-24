@@ -94,6 +94,24 @@ function resolveTalkProviderApiKey({
   });
 }
 
+it("propagates cancellation to the credential RPC and skips local fallback", async () => {
+  vi.stubEnv("TALK_API_KEY", "local-test-key");
+  const controller = new AbortController();
+  const reason = new DOMException("interrupted", "AbortError");
+  callGateway.mockImplementationOnce(async ({ signal }: { signal?: AbortSignal }) => {
+    controller.abort(reason);
+    signal?.throwIfAborted();
+    throw new Error("gateway was not cancelled");
+  });
+
+  await expect(
+    resolveTalkProviderApiKey({ signal: controller.signal, mode: "read_only_status" }),
+  ).rejects.toBe(reason);
+  expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ method: "secrets.resolve", signal: controller.signal }),
+  );
+});
+
 function expectGatewayUnavailableLocalFallbackDiagnostics(
   result: Awaited<ReturnType<typeof resolveCommandSecretRefsViaGateway>>,
 ) {

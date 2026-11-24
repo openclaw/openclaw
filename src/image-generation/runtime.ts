@@ -116,26 +116,27 @@ async function runImageGeneration(
           timeoutMs: requestedTimeoutMs,
           providerDefaultTimeoutMs: provider.defaultTimeoutMs,
         });
-        const modelResolutions =
-          provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+        const geometry = provider.capabilities.geometry;
+        const resolutions =
+          geometry?.resolutionsByModel?.[candidate.model] ?? geometry?.resolutions;
         const modeCapabilities = params.inputImages?.length
           ? provider.capabilities.edit
           : provider.capabilities.generate;
-        const inferredResolution =
-          modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
-            ? undefined
-            : params.inferredResolution;
-        const geometry = provider.capabilities.geometry;
+        // An empty resolution list means this model accepts no resolution, like supportsResolution: false.
+        const supportsResolution =
+          modeCapabilities.supportsResolution !== false && resolutions?.length !== 0;
+        const inferredResolution = supportsResolution ? params.inferredResolution : undefined;
         const sanitized = resolveMediaGeometryOverrides({
           size: params.size,
           aspectRatio: params.aspectRatio,
           resolution: params.resolution ?? inferredResolution,
           capabilities: {
             ...modeCapabilities,
+            supportsResolution: modeCapabilities.supportsResolution && supportsResolution,
             sizes: geometry?.sizesByModel?.[candidate.model] ?? geometry?.sizes,
             aspectRatios:
               geometry?.aspectRatiosByModel?.[candidate.model] ?? geometry?.aspectRatios,
-            resolutions: modelResolutions ?? geometry?.resolutions,
+            resolutions,
           },
           fallbackSizes: geometry?.sizes,
         });
@@ -190,6 +191,17 @@ async function runImageGeneration(
           throw new Error(
             `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
           );
+        }
+        if (params.size && sanitized.size && /^\d+x\d+$/.test(sanitized.size)) {
+          const { getImageMetadata } = await import("../media/media-services.js");
+          for (const image of result.images) {
+            // Keep a completed image even when its dimensions cannot be inspected.
+            const dimensions = await getImageMetadata(image.buffer).catch(() => null);
+            if (dimensions && `${dimensions.width}x${dimensions.height}` !== sanitized.size) {
+              ignoredOverrides.push({ key: "size", value: params.size });
+              break;
+            }
+          }
         }
         return {
           images: result.images,

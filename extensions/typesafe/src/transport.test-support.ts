@@ -1,4 +1,3 @@
-import type { IncomingMessage } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -6,36 +5,21 @@ import { vi } from "vitest";
 import plugin from "../index.js";
 import type { EvaluationInput } from "./schema.js";
 
-export function mockFetch(implementation: typeof globalThis.fetch) {
+function mockFetch(implementation: typeof globalThis.fetch) {
   const fetch = vi.fn(implementation);
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }
-export const mockResponse = (body?: BodyInit | null, init?: ResponseInit) =>
+const mockResponse = (body?: BodyInit | null, init?: ResponseInit) =>
   mockFetch(async () => new Response(body, init));
 export const mockJsonResponse = (body: unknown, init?: ResponseInit) =>
   mockResponse(typeof body === "string" ? body : JSON.stringify(body), init);
-export function stubAmbientProxies() {
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
-    vi.stubEnv(key, "http://127.0.0.1:1");
-    vi.stubEnv(key.toLowerCase(), "http://127.0.0.1:1");
-  }
-  vi.stubEnv("NO_PROXY", "");
-  vi.stubEnv("no_proxy", "");
-  vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "false");
-}
-export function collectRequest(request: IncomingMessage, handle: (body: string) => void) {
-  const chunks: Buffer[] = [];
-  request.on("data", (chunk: Buffer) => chunks.push(chunk));
-  request.on("end", () => handle(Buffer.concat(chunks).toString("utf8")));
-}
-
 const choiceAnswer = (
   choice: string,
   probabilities: Record<string, number>,
   confidence: number,
 ) => ({ type: "choice" as const, choice, confidence, probabilities });
-export const scoreAnswer = (
+const scoreAnswer = (
   score: number,
   probabilities: Record<string, number>,
   legend: Record<string, unknown>,

@@ -22,7 +22,6 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   createExternalRequesterSessionEntry,
-  getAgentResultsForChildSession,
   settleYieldedCliTurn,
   type LifecycleData,
   type SessionStoreEntry,
@@ -35,13 +34,11 @@ import {
 import { createRequesterWakeSessionFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const noop = () => {};
 const REQUESTER = "agent:main:main";
 
 let lifecycleHandler: Parameters<typeof onAgentEvent>[0] | undefined;
-let agentCallPlan: Array<"ok" | "throw"> = [];
 let agentCallGates = new Map<string, Promise<void>>();
 let releaseAgentCallGate: (() => void) | undefined;
 let agentCallWaits: ReturnType<typeof createLifecycleAgentCallWaits>;
@@ -49,7 +46,6 @@ let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let transcriptEventsBySessionKey = new Map<string, unknown[]>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 let sessionStorePath: string;
-let requesterActive = false;
 
 const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
   const method = request.method;
@@ -67,10 +63,6 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     const gate = sourceSessionKey ? agentCallGates.get(sourceSessionKey) : undefined;
     if (gate) {
       await gate;
-    }
-    const next = agentCallPlan.shift() ?? "ok";
-    if (next === "throw") {
-      throw new Error("announce delivery failed");
     }
     return {
       result: {
@@ -152,8 +144,6 @@ beforeEach(async () => {
   };
   setRuntimeConfigSnapshot(config);
   loadConfigMock.mockClear().mockReturnValue(config);
-  requesterActive = false;
-  agentCallPlan = [];
   agentCallGates = new Map();
   chatHistoryBySessionKey = new Map();
   transcriptEventsBySessionKey = new Map();
@@ -184,7 +174,7 @@ beforeEach(async () => {
           agentId: requester.agentId,
           incarnation: entry?.sessionId,
         }),
-        isActive: requesterActive,
+        isActive: false,
       };
     },
   });
@@ -226,8 +216,7 @@ afterEach(async () => {
   }
 });
 
-const { flushAsync, waitForRun, waitForDeliveredCleanup, waitForFrozenResultText } =
-  createLifecycleWaits(REQUESTER);
+const { flushAsync, waitForRun, waitForDeliveredCleanup } = createLifecycleWaits(REQUESTER);
 
 const waitForCalls = (count: number) => agentCallWaits.waitForAgentCallCount(count);
 async function advanceAndFlush(ms: number) {
@@ -288,8 +277,6 @@ function endRun(runId: string, text: string, endedAt = Date.now()) {
 
 const findRun = (runId: string) =>
   mod.listSubagentRunsForRequester(REQUESTER).find((run) => run.runId === runId);
-const resultsFor = (sessionKey: string) =>
-  getAgentResultsForChildSession(getAgentCalls(), sessionKey);
 const settleYieldedTurn = (
   requesterTurnRunId: string,
   acceptedSessionSpawns: Parameters<typeof settleYieldedCliTurn>[0]["acceptedSessionSpawns"],
@@ -589,64 +576,6 @@ it.each(["transient-error", "terminal-error"] as const)(
   },
 );
 
-it.each(["corrected same-run final", "silent follow-up"] as const)(
-  "retries frozen output without substituting later traffic: %s",
-  async (mode) => {
-    const corrected = mode === "corrected same-run final";
-    const firstText = corrected
-      ? "Both spawned. Waiting for completion events..."
-      : "All work complete, final summary";
-    const resultText = corrected
-      ? "All 3 subagents complete. Here's the final summary."
-      : firstText;
-    const { runId, childSessionKey } = await prepareRun(
-      corrected ? "refresh" : "refresh-silent",
-      firstText,
-    );
-    agentCallPlan = ["throw", "ok"];
-    const endedAt = Date.now();
-    endRun(runId, firstText, endedAt);
-    await flushAsync();
-    await waitForCalls(1);
-    expect(resultsFor(childSessionKey)).toEqual([firstText]);
-    await agentCallWaits.waitForCleanupHandledFalse(runId);
-    await waitForFrozenResultText(runId, firstText);
-    const before = expectDefined(findRun(runId), "frozen completion before refresh");
-    const firstCapturedAt = before.completion?.capturedAt ?? 0;
-
-    if (corrected) {
-      setAssistantOutput(childSessionKey, resultText, runId);
-      setAssistantOutput(childSessionKey, "Unrelated later turn", "run-refresh-followup-turn");
-    } else {
-      const followupRunId = "run-refresh-silent-followup-turn";
-      setAssistantOutput(childSessionKey, "NO_REPLY", followupRunId);
-      emitLifecycleEvent(
-        followupRunId,
-        { phase: "end", endedAt: endedAt + 200 },
-        { sessionKey: childSessionKey },
-      );
-      await flushAsync();
-      // The legacy refresh briefly polls the silent follow-up.
-      await vi.advanceTimersByTimeAsync(50);
-      expect(findRun(runId)?.completion?.resultText).toBe(resultText);
-    }
-    endRun(runId, resultText, endedAt + 300);
-    await flushAsync();
-    const after = await waitForFrozenResultText(runId, resultText);
-    expect(getSubagentRunRuntimeKey(after)).toBe(getSubagentRunRuntimeKey(before));
-    expect(after).toMatchObject({
-      runId,
-      generation: before.generation,
-      childSessionKey,
-      execution: { status: "terminal" },
-      completion: { resultText, terminalReply: { disposition: "visible", text: resultText } },
-    });
-    expect(after.completion?.capturedAt).toBeGreaterThanOrEqual(firstCapturedAt);
-    await waitForCalls(2);
-    expect(resultsFor(childSessionKey)).toEqual([firstText, resultText]);
-  },
-);
-
 it("caps frozen output at 100KB and retains it after keep cleanup", async () => {
   const { runId } = await prepareRun("capped", "x".repeat(120 * 1024), undefined, false);
 
@@ -736,31 +665,4 @@ it.each([false, true])("settles provider timeout (recovered: %s)", async (recove
     getAgentCalls().filter((request) => request.params?.idempotencyKey?.startsWith("announce:v1:")),
   ).toHaveLength(1);
   expect(getRequesterWakeCalls()).toHaveLength(0);
-});
-
-it("freezes parallel results across late traffic", async () => {
-  const children = [];
-  for (const [suffix, text] of [
-    ["parallel-a", "Final answer A"],
-    ["parallel-b", "Final answer B"],
-  ] as const) {
-    children.push({ ...(await prepareRun(suffix, text)), text });
-  }
-  agentCallPlan = ["throw", "throw", "ok", "ok"];
-  const parallelEndedAt = Date.now();
-  children.forEach(({ runId, text }, index) => endRun(runId, text, parallelEndedAt + index));
-  await flushAsync();
-  await waitForCalls(2);
-  for (const { runId } of children) {
-    await agentCallWaits.waitForCleanupHandledFalse(runId);
-  }
-  for (const { runId, childSessionKey } of children) {
-    setAssistantOutput(childSessionKey, "Late overwrite", `${runId}-late-traffic`);
-  }
-  children.forEach(({ runId, text }, index) => endRun(runId, text, parallelEndedAt + 100 + index));
-  await flushAsync();
-  await waitForCalls(4);
-  for (const { childSessionKey, text } of children) {
-    expect(resultsFor(childSessionKey)).toEqual([text, text]);
-  }
 });

@@ -1,9 +1,10 @@
 /// <reference lib="es2024.arraybuffer" />
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { PluginMetricFamily } from "../api.js";
 import {
   MAX_PROMETHEUS_FAMILY_SERIES,
-  PROMETHEUS_FAMILY_RESERVES,
-  SHARED_PROMETHEUS_SERIES,
+  MAX_PROMETHEUS_SERIES,
+  PROMETHEUS_FAMILY_LIMITS,
   type PrometheusMetricName,
 } from "./prometheus-family-budget.js";
 import {
@@ -25,7 +26,7 @@ type ScalarSample = {
 };
 
 type HistogramSample = {
-  buckets: number[];
+  buckets: readonly number[];
   bucketPrefixes: Buffer[];
   counts: number[];
   count: number;
@@ -70,18 +71,21 @@ const DROPPED_SERIES_COUNTER_NAME = "openclaw_prometheus_series_dropped_total";
 
 const DROPPED_FAMILY_COUNTER_NAME = "openclaw_prometheus_family_series_dropped_total";
 // Exporter stop/start resets counters, but warnings are once per family per process.
-const warnedFamilies = new Set<PrometheusMetricName>();
+const warnedFamilies = new Set<string>();
 
-export function createPrometheusMetricStore(
-  onSeriesDropped?: (name: PrometheusMetricName) => void,
-) {
+const isCoreFamily = (name: string): name is PrometheusMetricName =>
+  Object.hasOwn(PROMETHEUS_FAMILY_LIMITS, name);
+const limitFor = (name: string): number =>
+  isCoreFamily(name) ? PROMETHEUS_FAMILY_LIMITS[name] : MAX_PROMETHEUS_FAMILY_SERIES;
+
+export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => void) {
   const counters = createSeries<ScalarSample>();
   const gauges = createSeries<ScalarSample>();
   const histograms = createSeries<HistogramSample>();
   let droppedSeries = 0;
-  let sharedSeries = 0;
-  const familyCounts = new Map<PrometheusMetricName, number>();
-  const familyDrops = new Map<PrometheusMetricName, number>();
+  let retainedSeries = 0;
+  const familyCounts = new Map<string, number>();
+  const familyDrops = new Map<string, number>();
   const headers = new Map<string, { type: string; help: string; bytes: Buffer }>();
   // Prefix views share only exporter-owned chunks, never unrelated Buffer-pool traffic.
   let prefixBuffer = Buffer.alloc(0);
@@ -104,7 +108,7 @@ export function createPrometheusMetricStore(
   // Scratch for one changed series; cached blocks never share response backing storage.
   let scratch = Buffer.alloc(0);
 
-  const series = <T>(map: MetricSeries<T>, name: PrometheusMetricName, labels: LabelSet) => {
+  const series = <T>(map: MetricSeries<T>, name: string, labels: LabelSet) => {
     let labelCount = 0;
     for (const key in labels) {
       if (Object.hasOwn(labels, key)) {
@@ -131,11 +135,7 @@ export function createPrometheusMetricStore(
       break;
     }
     const count = familyCounts.get(name) ?? 0;
-    const reserve = PROMETHEUS_FAMILY_RESERVES[name];
-    if (
-      count >= Math.max(MAX_PROMETHEUS_FAMILY_SERIES, reserve) ||
-      (count >= reserve && sharedSeries >= SHARED_PROMETHEUS_SERIES)
-    ) {
+    if (count >= limitFor(name) || retainedSeries >= MAX_PROMETHEUS_SERIES) {
       droppedSeries++;
       familyDrops.set(name, (familyDrops.get(name) ?? 0) + 1);
       if (onSeriesDropped && !warnedFamilies.has(name)) {
@@ -145,9 +145,7 @@ export function createPrometheusMetricStore(
       return undefined;
     }
     familyCounts.set(name, count + 1);
-    if (count >= reserve) {
-      sharedSeries++;
-    }
+    retainedSeries++;
     if (!shape) {
       // Each metric can have multiple label shapes (for example GC's optional worker slot).
       shape = {
@@ -177,7 +175,7 @@ export function createPrometheusMetricStore(
 
   const scalar = (
     map: typeof counters,
-    name: PrometheusMetricName,
+    name: string,
     help: string,
     labels: LabelSet,
     value: number | undefined,
@@ -242,16 +240,15 @@ export function createPrometheusMetricStore(
     gauges.samples = gauges.samples.filter((sample) => sample.name !== name);
     const count = familyCounts.get(name) ?? 0;
     const remaining = count - (previousLength - gauges.samples.length);
-    const reserve = PROMETHEUS_FAMILY_RESERVES[name];
-    sharedSeries -= Math.max(0, count - reserve) - Math.max(0, remaining - reserve);
+    retainedSeries -= count - remaining;
     familyCounts.set(name, remaining);
   };
 
   const getHistogram = (
-    name: PrometheusMetricName,
+    name: string,
     help: string,
     labels: LabelSet,
-    buckets = DURATION_BUCKETS_SECONDS,
+    buckets: readonly number[] = DURATION_BUCKETS_SECONDS,
   ) => {
     const node = series(histograms, name, labels);
     if (!node) {
@@ -286,12 +283,12 @@ export function createPrometheusMetricStore(
     getHistogram(name, help, labels);
   };
 
-  const histogram = (
-    name: PrometheusMetricName,
+  const recordHistogram = (
+    name: string,
     help: string,
     labels: LabelSet,
     value: number | undefined,
-    buckets = DURATION_BUCKETS_SECONDS,
+    buckets: readonly number[] = DURATION_BUCKETS_SECONDS,
   ) => {
     if (value === undefined || !Number.isFinite(value)) {
       return;
@@ -310,6 +307,51 @@ export function createPrometheusMetricStore(
         sample.counts[index] = (sample.counts[index] ?? 0) + 1;
         break;
       }
+    }
+  };
+
+  const histogram = (
+    name: PrometheusMetricName,
+    help: string,
+    labels: LabelSet,
+    value: number | undefined,
+    buckets?: readonly number[],
+  ) => recordHistogram(name, help, labels, value, buckets);
+
+  /** Host-admitted plugin family; its name, labels and buckets were validated at registration. */
+  const plugin = (family: PluginMetricFamily, labels: Readonly<LabelSet>, value: number) => {
+    if (family.type === "histogram") {
+      recordHistogram(family.name, family.help, labels, value, family.buckets);
+    } else {
+      scalar(
+        family.type === "counter" ? counters : gauges,
+        family.name,
+        family.help,
+        labels,
+        value,
+        family.type === "counter" ? "add" : "set",
+      );
+    }
+  };
+
+  /** Drop every series and header of retired plugin families and release their budget. */
+  const retire = (names: readonly string[]) => {
+    const retired = new Set(names);
+    const drop = <T extends { name: string }>(map: MetricSeries<T>) => {
+      if (map.samples.some((sample) => retired.has(sample.name))) {
+        map.samples = map.samples.filter((sample) => !retired.has(sample.name));
+      }
+      for (const name of retired) {
+        map.shapes.delete(name);
+      }
+    };
+    drop(counters);
+    drop(gauges);
+    drop(histograms);
+    for (const name of retired) {
+      headers.delete(name);
+      retainedSeries -= familyCounts.get(name) ?? 0;
+      familyCounts.delete(name);
     }
   };
 
@@ -429,7 +471,7 @@ export function createPrometheusMetricStore(
       map.shapes.clear();
     }
     droppedSeries = 0;
-    sharedSeries = 0;
+    retainedSeries = 0;
     familyCounts.clear();
     familyDrops.clear();
     headers.clear();
@@ -438,5 +480,16 @@ export function createPrometheusMetricStore(
     prefixOffset = 0;
   };
 
-  return { counter, counterValue, gauge, clearGauges, histogram, reserveHistogram, reset, render };
+  return {
+    counter,
+    counterValue,
+    gauge,
+    clearGauges,
+    histogram,
+    plugin,
+    reserveHistogram,
+    retire,
+    reset,
+    render,
+  };
 }

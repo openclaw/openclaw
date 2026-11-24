@@ -14,10 +14,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
-import {
-  ensureCanonicalUserProfileForEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -25,7 +22,6 @@ import {
   persistPublicationTestSession,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -209,42 +205,34 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.writes).toEqual([]);
   });
 
-  it.each(["request_review", "edit", "ready", "close"] as const)(
-    "revalidates authority after the PR read for %s",
+  it.each(["request_review", "ready"] as const)(
+    "revalidates the GitHub publisher after the PR read for %s",
     async (action) => {
       const f = await fixture();
-      const actor = action === "close" ? "admin" : "guest";
-      if (action === "edit") {
-        f.state.head.sha = "b".repeat(40);
-      }
-      const args =
-        action === "edit"
-          ? {
-              title: "New title",
-              expectedTitle: f.state.title,
-              expectedHeadCommit: f.state.head.sha,
-            }
-          : {};
-      if (action === "request_review" || action === "ready") {
-        f.onRead(async () => {
-          mocks.matchesIdentity.mockReturnValue(false);
-        });
-        await expect(f.action(actor, action, args)).rejects.toThrow("The GitHub publisher changed");
-        expect(f.writes).toEqual([]);
-        mocks.matchesIdentity.mockReturnValue(true);
-      }
       f.onRead(async () => {
-        if (actor === "admin") {
-          await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-          invalidateOperatorRolePolicy(f.maintainerProfile);
-        } else {
-          await f.revoke();
-        }
+        mocks.matchesIdentity.mockReturnValue(false);
       });
-      await expect(f.action(actor, action, args)).rejects.toThrow("Your operator role changed");
+      await expect(f.action("guest", action, {})).rejects.toThrow("The GitHub publisher changed");
       expect(f.writes).toEqual([]);
+      mocks.matchesIdentity.mockReturnValue(true);
     },
   );
+
+  it("refuses an edit when the lifecycle changes during the awaited PR read", async () => {
+    const f = await fixture();
+    f.onRead(async () => {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SESSION_KEY },
+        {
+          lifecycleRevision: randomUUID(),
+        },
+      );
+    });
+    await expect(
+      f.action("guest", "edit", { title: "Unauthorized edit", expectedTitle: f.state.title }),
+    ).rejects.toThrow(/changed|lifecycle/iu);
+    expect(f.writes).toEqual([]);
+  });
 
   it("reports uncertain re-reviews without retrying the POST", async () => {
     const f = await fixture();

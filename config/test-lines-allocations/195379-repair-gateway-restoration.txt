@@ -1,3 +1,0 @@
-52
-# Active maintenance ownership blocks process respawn and launchd handoff scheduling;
-# failed Doctor restoration reloads the preserved LaunchAgent without adopting a listener.

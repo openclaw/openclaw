@@ -521,6 +521,26 @@ describe("browser device-code pairing", () => {
     }
   });
 
+  it("allows browser-code start, approval and device-token connection with definitions alone", async () => {
+    const original = getRuntimeConfig();
+    await writeConfigFile({
+      ...original,
+      gateway: {
+        ...original.gateway,
+        roles: {
+          definitions: { guest: { sessions: { others: "none" }, agents: [], scopes: [] } },
+        },
+      },
+    });
+    try {
+      const browser = newBrowser();
+      const deviceToken = await approveAndCollect(browser);
+      expect((await connectBrowser(browser, deviceToken)).ok).toBe(true);
+    } finally {
+      await writeConfigFile(original);
+    }
+  });
+
   // Config publication replaces the shared-auth view; finish cases opening shared-secret
   // sockets above before exercising this real runtime configuration change.
   it("refuses identity-less code pairing when roles are enabled, including already-pending approval", async () => {

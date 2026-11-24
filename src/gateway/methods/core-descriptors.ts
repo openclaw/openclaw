@@ -1,5 +1,6 @@
 import {
   CONTROL_PLANE_WRITE,
+  MODEL_CATALOG_READ,
   OBSERVATION,
   OWN_SESSION_WRITE,
   PORTAL_SESSION_WRITE,
@@ -12,7 +13,8 @@ import {
   UNADVERTISED_OBSERVATION,
 } from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
-import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
+import { CORE_GATEWAY_METHOD_SPECS_APPENDED } from "./core-descriptors.appended.js";
+import { cronListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 // This is the canonical core method policy table: every core handler must appear here so
@@ -106,18 +108,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
   // Profile authorization and catalog publication own readiness for this read.
-  [
-    "models.list",
-    "models",
-    "operator.read",
-    "<=2026.7",
-    {
-      ...PROFILE_DEPENDENT,
-      shareKey: modelsListShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
-    },
-  ],
+  ["models.list", "models", "operator.read", "<=2026.7", MODEL_CATALOG_READ],
   ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
   ["models.authLogout", "models-auth-status", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["tools.catalog", "tools-catalog", "operator.read", "<=2026.7"],
@@ -687,6 +678,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["templates.drafts.read", "templates-drafts", "operator.admin", "2026.10"],
   ["templates.drafts.save", "templates-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["templates.drafts.review", "templates-drafts", "operator.admin", "2026.10"],
+  ["templates.drafts.signIn", "templates-drafts", "operator.admin", "2026.11"],
   [
     "templates.drafts.publish",
     "templates-drafts",
@@ -748,8 +740,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
   ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
-  ["openclawId.status", "openclaw-id", "operator.read", "2026.11"],
-  ["openclawId.people", "openclaw-id", "operator.admin", "2026.11"],
-  ["openclawId.authority", "openclaw-id", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
-  ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
+  ...CORE_GATEWAY_METHOD_SPECS_APPENDED,
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -13,6 +13,8 @@ type TimeoutAbortSignalParams = {
   signal?: AbortSignal;
   operation?: string;
   url?: string;
+  /** Read-only callers report the returned timeout without creating file logs. */
+  logTimeout?: boolean;
 };
 
 /**
@@ -70,6 +72,7 @@ function abortDueToTimeout(
   operation?: string,
   url?: string,
   combinedSignal?: AbortSignal,
+  logTimeout = true,
 ) {
   if (combinedSignal?.aborted ?? controller.signal.aborted) {
     return;
@@ -92,14 +95,16 @@ function abortDueToTimeout(
   ]
     .filter((part): part is string => Boolean(part))
     .join(" ");
-  log.warn("fetch timeout reached; aborting operation", {
-    timeoutMs,
-    elapsedMs,
-    ...(eventLoopDelayHint ? { timerDelayMs: delayMs, eventLoopDelayHint } : {}),
-    consoleMessage,
-    ...(operation ? { operation } : {}),
-    ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
-  });
+  if (logTimeout) {
+    log.warn("fetch timeout reached; aborting operation", {
+      timeoutMs,
+      elapsedMs,
+      ...(eventLoopDelayHint ? { timerDelayMs: delayMs, eventLoopDelayHint } : {}),
+      consoleMessage,
+      ...(operation ? { operation } : {}),
+      ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
+    });
+  }
   const error = new Error("request timed out");
   error.name = "TimeoutError";
   controller.abort(error);
@@ -136,6 +141,7 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       params.operation,
       params.url,
       signal,
+      params.logTimeout,
     );
   };
   scheduleTimeout();

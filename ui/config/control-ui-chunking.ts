@@ -31,8 +31,6 @@ const chatPresentationModules = new Set([
   "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-render-model.ts",
   "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
-  "ui/src/pages/chat/components/chat-permission-card.tsx",
-  "ui/src/pages/chat/components/chat-tool-content.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-cards.solid.tsx",
   "ui/src/pages/chat/components/chat-message-activity-operation.tsx",
   "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
@@ -41,7 +39,6 @@ const chatPresentationModules = new Set([
   "ui/src/lib/chat/tool-call-input.ts",
   "src/agents/tool-display-name.ts",
   "ui/src/i18n/locales/en-chat-details.ts",
-  "ui/src/i18n/locales/en-chat-permissions.ts",
   "ui/src/pages/chat/components/chat-details-process-row.tsx",
   "ui/src/pages/chat/components/chat-environment-content.tsx",
 ]);
@@ -95,9 +92,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/solid/registry-category-icon.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
-      // Catalogs already load both; a lazy skill reader must not split their first visit.
+    case "ui/src/pages/plugins/catalog-skeleton.tsx":
+      // Catalogs load these together; shared category icons must not pull in either page.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -155,18 +154,23 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/creator-sign-in.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":
     case "ui/src/i18n/locales/en-agents-home.ts":
-    case "ui/src/pages/labs/labs-feature-state.ts":
-    case "ui/src/pages/labs/templates-lab-feature.ts":
-      // Draft navigation and its Labs gate belong to the optional template flow.
+      // Draft navigation belongs to the optional template flow.
       return "template-draft-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
     case "ui/src/lib/text-diff.ts":
+    case "ui/src/pages/chat/components/chat-message-media.ts":
+    case "ui/src/pages/chat/components/chat-message-deferred.tsx":
+    case "ui/src/pages/chat/components/widget-preview-layout.ts":
+    case "ui/src/lib/chat/youtube-video.ts":
+    case "ui/src/lib/gateway-client-kind.ts":
+    // Activity uses media custody, deferred facades, and client labels, not Chat presentation.
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -205,6 +209,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/checkbox.tsx":
     case "ui/src/lib/session-progress-cards.ts":
     case "ui/src/pages/templates/creator-publication.ts":
+    case "src/shared/plugin-inline-view.ts":
     case "src/agents/core-tool-facts.ts":
     case "src/agents/tools/automations-tool-name.ts":
     case "ui/src/components/terminal/terminal-controller-lifecycle.ts":
@@ -251,12 +256,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
-    case "ui/src/components/solid/tabs.tsx":
-    case "ui/src/lib/tabs.ts":
-    case "ui/src/lib/reactive/shadow-styles.ts":
-    case "ui/src/styles/tabs.css":
-      // Both tab renderers already load the owner, adapter, and generic styles together.
-      return "tabs-runtime";
     case "ui/src/components/solid/hub-page-header.tsx":
     case "ui/src/components/solid/settings-workspace.tsx":
     case "ui/src/components/solid/settings-select.tsx":
@@ -339,6 +338,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-outputs";
     case "ui/src/pages/chat/components/chat-details-people-list.tsx":
       return "chat-details-people-list";
+    // Defer noble initialization inside this chunk without another cold-boot request.
+    case "ui/src/lib/nodes/device-signing.noble.ts":
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
     case "ui/src/pages/chat/chat-live-events.runtime.ts":
@@ -396,6 +397,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-values.ts":
     case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
       // Share interaction-only rows without four separate preload-map entries.
       return "composer-invocation-menus";
@@ -415,10 +417,27 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-session-organization-shared.ts":
       // Settings, New Session, and Chat share this English copy.
       return "chat-english";
+    case "ui/src/i18n/locales/en-session-organization.ts":
+      // Slash commands use shared labels; management copy loads with its own consumers.
+      return "session-management-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
+    case "ui/src/lib/skills-shared.ts":
+    case "ui/src/lib/skills-grouping.ts":
+    case "ui/src/lib/skills/index.ts":
+    case "ui/src/i18n/locales/en-skill-library.ts":
+    case "ui/src/i18n/locales/en-skills-browser.ts":
+    case "ui/src/pages/skills/skill-status.tsx":
+      // Skills and Agents already load this presentation and its shared dependencies together.
+      return "skills-shared";
+    case "ui/src/pages/skills/skills-page.tsx":
+    case "ui/src/pages/skills/view.tsx":
+    case "ui/src/pages/skills/discovery-view.tsx":
+    case "ui/src/pages/skills/skill-page-boundary.tsx":
+      // Lists already load these together; skill detail pages keep their lazy imports.
+      return "skills-page";
     case "src/config/cron-limits.ts":
     case "src/cron/store/delivery-codec.ts":
     case "src/cron/stagger.ts":
@@ -436,8 +455,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/cron/webhook-url.ts":
       // These shared Cron owners already load together in Cron and Agents.
       return "cron-domain";
-    case "ui/src/lib/cron/model-suggestions.ts":
-    case "packages/model-catalog-core/src/configured-model-refs.ts":
     case "ui/src/styles/cron.css":
     case "ui/src/pages/cron/cron-page.tsx":
     case "ui/src/pages/cron/cron-page-state.ts":
@@ -447,18 +464,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/cron/event-source.ts":
     case "ui/src/pages/cron/human-owner.ts":
     case "ui/src/pages/cron/route-model.ts":
-    case "ui/src/pages/cron/run-transcript.tsx":
-    case "ui/src/pages/cron/suggestions.ts":
     case "ui/src/pages/cron/view-props.ts":
     case "ui/src/pages/cron/view-controls.tsx":
     case "ui/src/pages/cron/view-job-status.tsx":
-    case "ui/src/pages/cron/view-jobs-filter.tsx":
-    case "ui/src/pages/cron/view-list.tsx":
     case "ui/src/pages/cron/view-runs.tsx":
     case "ui/src/pages/cron/view.tsx":
     case "src/cron/run-link.ts":
       // These modules already load on first visit; detail/editor views stay lazy.
       return "cron-page";
+    case "packages/gateway-protocol/src/clawhub-trust-error-details.ts":
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
@@ -615,9 +629,6 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
               if (route === "shared") {
-                // Plugin activation validates versions on every route without
-                // evaluating Chat or adding a separate contract request.
-                modules.add("src/shared/plugin-inline-view.ts");
                 // Plugin contributions can initialize after the New Session boot capture.
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.

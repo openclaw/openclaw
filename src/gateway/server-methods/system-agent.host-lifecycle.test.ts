@@ -175,6 +175,7 @@ it.for([
       operationalRunInstance,
       approvalAuthority: authority,
       fullPermission,
+      assertAutoApproveChangesCurrent: fullPermission ? () => {} : undefined,
       gatewayContextResolver: () => liveContext,
       approvalSignals: [controller.signal],
       ...(loss === "worker" ? { workerTurnClaim } : {}),
@@ -217,6 +218,7 @@ it.for([
       expect(systemAgentLane()).toMatchObject({ activeCount, queuedCount: 0 });
     };
     let sameOwnerChat: Promise<RespondCall> | undefined;
+    const completes = loss !== "tool" && loss !== "session";
     try {
       if (!fullPermission) {
         await beforeReply(approvalRequested.promise, "approval publication");
@@ -284,7 +286,7 @@ it.for([
         undefined,
       );
       expect(requestLifecycle).toHaveBeenCalledExactlyOnceWith(action, expect.any(Function));
-      if (loss === "none") {
+      if (completes) {
         await auditStarted.promise;
         expect(acceptStop).toHaveBeenCalledTimes(action === "stop" ? 1 : 0);
         expect(nativeEffect).not.toHaveBeenCalled();
@@ -294,10 +296,9 @@ it.for([
       }
       releaseAudit.resolve();
       await pendingChat;
-      const expectedReply =
-        loss === "none"
-          ? `[openclaw] done: gateway.${action}`
-          : "system-agent approval authority is no longer active";
+      const expectedReply = completes
+        ? `[openclaw] done: gateway.${action}`
+        : "system-agent approval ended";
       expect(requestResponses.calls).toHaveLength(1);
       expect(rootsAtResponse).toEqual([expect.any(Number)]);
       expect(rootsAtResponse[0]).toBeGreaterThan(0);
@@ -318,7 +319,7 @@ it.for([
       expect(appendHistory).toHaveBeenCalledWith(expectedTurn);
       expect(engine.getPendingOperatorProposal()).toBeNull();
       expect(nativeEffect).not.toHaveBeenCalled();
-      if (loss !== "none") {
+      if (!completes) {
         expect(acceptStop).not.toHaveBeenCalled();
         expect(readLastSystemAgentAuditEntry()).toBeUndefined();
         expect(dispose).toHaveBeenCalledOnce();
@@ -332,7 +333,7 @@ it.for([
         if (action === "stop") {
           // The accepted intent survives its caller; run-loop tests own drain/close ordering.
           controller.abort();
-          expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+          expect(releaseAgentRunDelegatedAuthority(authority)).toBe(loss !== "run");
           await expect(host.finishStop()).resolves.toEqual({ outcome: "accepted" });
           expect(nativeEffect).toHaveBeenCalledOnce();
         }

@@ -20,7 +20,7 @@ import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime
 import {
   historyLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
+  sessionStoreLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -146,7 +146,7 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all([historyLane, targetDiscoveryLane].map((lane) => rotateDatabaseWorkers(lane)));
+  await Promise.all([historyLane, sessionStoreLane].map((lane) => rotateDatabaseWorkers(lane)));
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
@@ -272,6 +272,7 @@ it.each(
 );
 
 it("retires idle history workers under critical pressure after active scopes release custody", async () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   useAdmittedHistoryReader();
   const pressure = channel("openclaw.memory.critical");
   const request = input();
@@ -282,14 +283,18 @@ it("retires idle history workers under critical pressure after active scopes rel
   observed.unregister.mockImplementation(unregistered.resolve);
   await withSessionHistoryWorkerDatabase(request.database, async (owner) => {
     expect(await owner.readEntryPresence(request.scope)).toBe(false);
-    pressure.publish(undefined);
+    pressure.publish(true);
     expect(observed.rotate).not.toHaveBeenCalled();
   });
 
   pressure.publish(undefined);
+  expect(observed.rotate).not.toHaveBeenCalled();
+  await request.read();
+  clock.mockReturnValue(500);
+  pressure.publish(true);
   expect(observed.rotate).toHaveBeenCalledTimes(1);
   expect(observed.unregister).not.toHaveBeenCalled();
-  pressure.publish(undefined);
+  pressure.publish(true);
   expect(observed.rotate).toHaveBeenCalledTimes(1);
   retirement.resolve();
   await unregistered.promise;
@@ -299,6 +304,8 @@ it("retires idle history workers under critical pressure after active scopes rel
 it("retains aliases until native cleanup and preserves later read custody", async () => {
   useAdmittedHistoryReader();
   const { database, candidates, read } = input();
+  const unownedPath = "/synthetic/unowned.sqlite";
+  candidates.push({ path: unownedPath, physicalPath: unownedPath });
   const cleanup = deferCleanup();
   observed.run.mockResolvedValue(workerReply(false));
   const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
@@ -321,11 +328,11 @@ it("retains aliases until native cleanup and preserves later read custody", asyn
   await discovery;
   expect(decodeAgentDatabaseReaderRequest(observed.closeResources.mock.calls[0]?.[0])).toEqual({
     kind: "close",
-    candidates: [{ path: database.path }],
+    candidates: [{ path: unownedPath }],
     retainedPaths: [database.path],
     deleted: false,
   });
-  expect(observed.unregister).toHaveBeenCalledTimes(1);
+  expect(observed.unregister).toHaveBeenCalledTimes(2);
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
   await retained.close();

@@ -323,7 +323,7 @@ async function run() {
   const boxEnv = {
     PATH: process.env.PATH,
     HOME: boxRoot,
-    XDG_CONFIG_HOME: path.join(boxRoot, "config"),
+    XDG_STATE_HOME: path.join(boxRoot, "state"),
     XDG_CACHE_HOME: path.join(boxRoot, "cache"),
     ...ready.storageEnvironment,
   };

@@ -2,10 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
+  UI_PREFERENCE_DEFAULTS,
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
   SidebarSessionActivePanels,
   SidebarSessionLayouts,
@@ -29,7 +29,10 @@ function normalizeChoice<T extends string>(
   return (value) => values.find((candidate) => candidate === value) ?? fallback;
 }
 
-export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
+export const normalizeChatSendShortcut = normalizeChoice(
+  CHAT_SEND_SHORTCUTS,
+  UI_PREFERENCE_DEFAULTS.chatSendShortcut,
+);
 
 const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
@@ -162,14 +165,14 @@ export function normalizeTextScale(value: unknown): TextScaleStop {
 }
 
 export const UI_APPEARANCE_DEFAULTS = {
-  theme: "claw",
-  themeMode: "system",
+  theme: UI_PREFERENCE_DEFAULTS.theme,
+  themeMode: UI_PREFERENCE_DEFAULTS.themeMode,
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
   chatShowTaskProgress: true,
   chatCollapseTaskProgress: false,
-  chatSendShortcut: "enter",
+  chatSendShortcut: UI_PREFERENCE_DEFAULTS.chatSendShortcut,
   catalogOpenTarget: "viewer",
   composerHoldToRecord: true,
   lobsterPetVisits: true,
@@ -197,6 +200,8 @@ export type UiSettings = {
   background?: BackgroundPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
+  // Browser-local opt-in; grouped command activity remains the default.
+  chatInlineCommands?: boolean;
   chatPersistCommentary?: boolean;
   // Browser-local composer visibility; saved progress and other placements are unchanged.
   chatShowTaskProgress?: boolean;
@@ -224,7 +229,6 @@ export type UiSettings = {
   sidebarCollapsedAgentIds?: string[];
   sidebarRecentlyCreatedAgentId?: string;
   sidebarEntries: string[]; // Ordered personal navigation references
-  personalSessionGroups?: PersonalSessionGroup[]; // Personal labels and references, not shared groups
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   chatBubbleDisabledSessionKeys?: string[]; // Explicit per-session opt-outs, retained when the lab is off

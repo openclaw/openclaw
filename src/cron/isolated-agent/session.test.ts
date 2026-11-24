@@ -166,6 +166,9 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
     displayName: "My scheduled check",
     category: "Automations",
     icon: "🤖",
+    color: "purple",
+    boardFace: "dashboard" as const,
+    boardPresentation: "expanded" as const,
     modelOverride: "claude-sonnet-4-6",
     providerOverride: "anthropic",
     modelOverrideSource: "user" as const,
@@ -215,15 +218,13 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
   expect(result.previousSessionId).toBe(forceNew ? "old-session" : undefined);
   expect(result.lifecycleRevision).not.toBe("old-revision");
   expectObjectFields(result.sessionEntry, { agentHarnessId: undefined, delivery: undefined });
-  expect(result.sessionEntry).not.toHaveProperty("channel");
-  expect(result.sessionEntry).not.toHaveProperty("origin");
+  const gone = ["channel", "origin", "sessionFile", ...Object.keys(forceNew ? boundContext : {})];
+  for (const field of gone) {
+    expect(result.sessionEntry).not.toHaveProperty(field);
+  }
   if (forceNew) {
     expect(result.sessionEntry.sessionId).not.toBe("old-session");
     expect(result.sessionEntry).toMatchObject(preferences);
-    expect(result.sessionEntry.sessionFile).toBeUndefined();
-    for (const field of Object.keys(boundContext)) {
-      expect(result.sessionEntry).not.toHaveProperty(field);
-    }
   } else {
     expect(result.sessionEntry).toMatchObject({
       sessionId: "old-session",
@@ -232,7 +233,6 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
       compactionCount: 0,
     });
     expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
-    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
     expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
   }
 });

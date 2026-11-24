@@ -1,16 +1,86 @@
 ---
 name: create-template
-description: Turn this agent into a shareable Template for a person to review.
+description: Draft a shareable Template for a person to review, either from this agent or from their description of a new one (a role, plugins, automations). Tell the person you are drafting the Template as you load this skill.
 user-invocable: true
 ---
 
 # Create a Template
 
-Use this skill when the person asks to create a Template from this agent, including ordinary chat requests such as “create a new template from this agent.” No sidebar action or special command is required. Stay in this conversation and use this agent's current workspace and durable instructions as source material. Prepare only a private proposal; the existing Control UI owns exact-archive review, package assembly, and explicit human publication. A request to create a Template is not permission to publish it.
+## While the person waits
 
-Locate this `SKILL.md` and invoke its `scripts/cli.mjs` with an absolute path so commands use the running OpenClaw installation. If this turn has a request-specific `workContext.detail.draftId` from the optional Control UI entry, reuse it. Otherwise run `node <absolute-skill-directory>/scripts/cli.mjs templates draft <absolute-current-agent-workspace> --json` once and capture the returned `draftId` and `path`. Read and edit only that request's `.openclaw/template-drafts/<draftId>.json`. Never search for a latest draft, use a shared pointer, select a different agent, or start another conversation. Independent requests each get a new draft. If initialization has an uncertain result, inspect its recorded output before creating another draft. Keep internal paths and IDs out of your reply.
+[PR #202077](https://github.com/openclaw/openclaw/pull/202077) records the silent creation run that prompted the separate progress messages and single proposal write.
 
-1. **Capture the reusable agent.** Read the current draft JSON. Use this conversation and the agent's durable instructions to identify its coherent reusable role, input, job, output, and authority. Preserve useful behavior and settings; leave out personal context. If the responsibilities do not form one coherent Template, ask which responsibility to share before writing. Complete when the four scope fields describe an agent a new person can use.
-2. **Inventory only relevant material.** Select portable workspace instructions and files that implement that role. Locate this `SKILL.md` and use its `scripts/cli.mjs` for inventory so the CLI matches the running OpenClaw installation; invoke it with an absolute path when outside the skill directory. Run `node scripts/cli.mjs skills list --agent <this agent's id> --json` and `node scripts/cli.mjs plugins list --enabled --json`. Compare the results with tools actually available in this session and capabilities used in the role. Inspect a candidate with `node scripts/cli.mjs plugins inspect <id> --json` for its source and exact version. Declare a skill or plugin only when you can ground it in a current ClawHub package reference and exact version; plugin availability alone is not a requirement. Put package references in `packages`, MCP requirements in `mcpServers`, and useful schedules in `automations`. Their declarations are dependencies, not files copied into the archive. Complete when every included file and declaration has a reason tied to the reusable role.
-3. **Author the proposal.** Follow [the draft format](references/draft-format.md). Rewrite instructions for a new owner. Include input, job, output, and authority in the draft `scope`, and describe the portable behavior in `CLAW.md`. Place only newly authored portable text in `files`, mapping included workspace files by `source` in the manifest. Exclude raw conversations, memories, `USER.md`, credentials, secret values, private URLs, local paths, and personal facts. Never copy the source workspace tree. Complete when the JSON at this turn's draft path is valid and contains no private source material.
-4. **Hand off for review.** After saving the completed proposal, call `screen(action="template_review", draftId="<this request’s draftId>")`. Do not pass another session or agent: review is bound to this conversation and this agent. The existing Control UI review shows the exact built archive; the person can remove optional items and explicitly publish there. Briefly explain what the Template does, what optional files/dependencies it includes, and any capability you could not port. Do not print internal paths or IDs, invent a review link, upload, invoke publication, or claim that dispatch proves the review rendered. If screen/review is unavailable (for example outside an active administrator Control UI or with Templates Lab disabled), retain the private draft and report that precise review blocker without publishing or redirecting to a different conversation. Complete when review is available to the person, or clearly report the review-delivery blocker.
+Stay with this agent in this conversation. A request to create a Template means prepare a private copy for review, not publish it.
+
+The person may ask to share this agent, or describe a new Template to make: a role, the plugins it uses, the automations it runs. Both are drafted here in the same way, with the same inventory command, progress messages, single proposal write and review card. A described Template takes its content from the description instead of from this agent, and step 3 says how. Don't build its package by hand or in another repository. [PR #202773](https://github.com/openclaw/openclaw/pull/202773) records the described request that this skill turned away when it only covered sharing the current agent.
+
+1. **Start in chat.** Say “I'm drafting the Template now. I'll check what goes with it.” Then run one inventory command using this skill's absolute directory:
+
+   `node <absolute-skill-directory>/scripts/inventory.mjs <absolute-current-agent-workspace> --agent <this agent's id> --json`
+
+   Add `--draft <id>` only for the request-specific `workContext.detail.draftId` supplied by the Control UI. Otherwise the command starts a fresh draft. Keep its `draftId` and `draftPath`; never look for the latest draft or reuse another request's. It checks instructions, the avatar, skills, plugins and automations together. Don't run separate lookups for the sake of narration. If a lookup warned, say what you couldn't check rather than treating it as empty. If the command result is uncertain, inspect it before retrying.
+
+   Once the inventory supplies the request-specific `draftId`, call `screen(action="template_review", draftId="<this request's draftId>")` in this conversation. The card can offer browser sign-in while you draft. Do not wait for approval, request a token, or ask for another message. If the card cannot open, keep drafting privately. See the [signed-out review incident and proof](https://github.com/openclaw/openclaw/pull/202013#issuecomment-7019878271).
+
+2. **Send two short updates, at the decisions they describe.** Use `message(action="send", final=false)` in this chat, with no target. Send each as its own call in its own turn, before the file write. Don't send them as one paragraph, batch them with the write, or wait until the card opens. If messaging is unavailable, use ordinary progress text at the same steps.
+   - As you choose skills and plugins, say what you're adding: “I'm adding Calendar Briefs and the Google Calendar plugin for the morning brief.”
+   - As you choose automations, do the same: “I'm adding the weekday brief automation.” If none apply, say so briefly.
+
+   These are examples, not a script. Use only facts from this agent, or from the person's description when the Template is a new one. One or two short sentences per message; no role essay, file names, internal terms, personal details, or inventory counts. The three messages should tell the person something new each time.
+
+3. **Write once.** To share this agent, use the agent's role and working instructions already in context. Only read a missing or truncated instruction if it defines the role. If there's no single coherent role, ask which one to share. Write the [proposal](#proposal-format) directly to `draftPath` with one file write. In a simple Template, a few concrete instructions about how to do the job are enough. Include what makes this agent useful, how it handles uncertainty, and when it hands work back. No word quota. Don't repeat the scope in the body or create another file just to restate the same instructions.
+
+   Write for a new owner. Never copy raw conversations, memories, `USER.md`, private URLs, paths, accounts, credentials or personal facts. Include required skills, plugins and automations even when that takes longer. Use the inventory's exact ClawHub ref and version. For a required workspace skill, read its `SKILL.md`, then re-author it and its supporting text for a new owner. Don't invent dependencies, copy installed plugin trees, or carry an automation just because it's available. When sharing this agent, choose only from the active automations in this inventory. Leave paused automations on the source agent; don't reconstruct them from memory. Rewrite included automations without the original owner's details.
+
+   For a described Template, write the role, scope, instructions and automations from the description. Its automations are new and need not exist on this agent. Leave out this agent's avatar, its automations, and any skill or plugin the person didn't name. For one they did name, use the inventory's ref and version when it has them. The inventory only knows how something was installed here, so a published plugin that was installed from a local file is counted in `notPortable` without a ref. Look that one up with a tool you have, such as `plugins(action="search", query="<name>")`, and declare the package `name` and `latestVersion` it returns. If you can't find an exact published release, say so and leave it out instead of guessing a ref or version.
+
+   A described Template may also need something only its new owner knows, such as a repository or their time zone. That is asked on first run, not now: add a `BOOTSTRAP.md` to `files` that asks for it. Declare an automation that depends on the answers with `enabled: false` and `timezone: UTC`, and have `BOOTSTRAP.md` save the answers, set the owner's time zone on that declared job, and turn it on once they agree, without creating a second job. This first-run setup is only for a described Template. A shared agent's automations keep the schedule and time zone the inventory reports.
+
+4. **Open private review.** After the write succeeds, reuse the card already attached to this draft: it opens review when the draft is ready and sign-in is verified. If no card was attached, call `screen(action="template_review", draftId="<this request's draftId>")` on its own. The review builds and checks the exact archive; no second validation or generic docs lookup is needed. End with the card alone, not a recap or a claim that it rendered. Only the person can publish. If review can't open in the active administrator Control UI, keep the draft and explain the blocker. For revisions, update this draft and open a fresh review; don't upload, print internal paths or IDs, or invent a review link.
+
+## Proposal format
+
+Write one JSON object to `draftPath`:
+
+```json
+{
+  "name": "research-brief",
+  "description": "Turn a question and sources into a cited brief.",
+  "version": "0.1.0",
+  "avatar": "avatars/agent.png",
+  "scope": {
+    "input": "A research question and sources.",
+    "job": "Compare the evidence for each answer.",
+    "output": "A short brief with links and open questions.",
+    "authority": "Read the supplied sources. Ask before contacting anyone."
+  },
+  "manifest": "---\nschemaVersion: 1\nagent:\n  id: research-brief\n---\nStart with primary sources. Link each claim to its evidence. When sources disagree, show where they differ and say what would resolve it. Lead with the answer and put uncertain findings last.\n",
+  "files": []
+}
+```
+
+- `name` is a lowercase unscoped package slug and must equal `agent.id`; `version` is exact semver, `0.1.0` for a first draft. Do not use the current agent's personal name unless it describes the role.
+- `avatar` is the inventory's `avatar` value, copied unchanged, so the Template keeps this agent's picture; omit the field when the inventory has none or the Template is not based on this agent. Review adds the image file and its manifest entries, so do not declare the avatar in the manifest yourself.
+- `scope` has all four fields, each one or two sentences. Review appends them to `CLAW.md`.
+- `manifest` is the complete `CLAW.md` text: YAML frontmatter, then a Markdown body that becomes the new agent's `SOUL.md`. Keep `schemaVersion: 1`. `categories` is an optional top-level frontmatter key beside `agent`: a list of one to three lowercase slugs such as `engineering`, `operations`, `research`, `productivity`, or `personal`.
+- Set `agent.id` to the slug. The card derives a display name from it unless you provide `agent.name`, and uses the top-level `description`. Leave out `tools`, `sandbox`, and `model` unless the person asked for them; a tool profile is rejected without an explicit allowlist of concrete tool names, and the new agent otherwise inherits its host's defaults.
+- Use `files: []` unless the role needs another file. Each workspace file is newly authored text in `files`, mapped in the frontmatter. An entry has exactly two fields, the package-relative path and the full text: `{ "path": "skills/portable-checklist/SKILL.md", "content": "---\nname: portable-checklist\n..." }`. Use `workspace.bootstrapFiles` for startup files such as `AGENTS.md` and `workspace.files` (`source`, `path`) for others. The body already supplies `SOUL.md`; do not map `SOUL.md` separately. A first-run script is a file at the path `BOOTSTRAP.md` with no frontmatter entry at all.
+- Add dependency sections only when needed:
+
+  ```yaml
+  skills:
+    - path: skills/portable-checklist
+    - ref: "@publisher/skill-name"
+      version: 1.2.3
+  plugins:
+    - ref: "@publisher/plugin-name"
+      version: 2.0.0
+  automations:
+    - id: daily-summary
+      name: Daily summary
+      schedule: { cron: "0 9 * * *", timezone: UTC }
+      session: main
+      message: Summarize what changed since yesterday.
+  ```
+
+  A bundled skill at `skills/portable-checklist` needs `skills/portable-checklist/SKILL.md`, with a `name` and `description`, in `files`. MCP requirements go in `mcpServers` with environment values left as `${NAME}` references. Review rejects unsafe paths and credential-like content.

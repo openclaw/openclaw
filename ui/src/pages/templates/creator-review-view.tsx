@@ -1,297 +1,245 @@
-import type { TemplateDraftReviewItem } from "@openclaw/gateway-protocol";
-import {
-  action,
-  createMemo,
-  createOptimistic,
-  Errored,
-  For,
-  Loading,
-  Show,
-  type Accessor,
-} from "solid-js";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
-import "../../components/modal-dialog.tsx";
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
+import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
-import { showToast } from "../../lib/toast.ts";
+import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
 import type { TemplateCreator } from "./creator-publication.ts";
+import { TemplateCreatorSignInCard } from "./creator-sign-in-card.tsx";
+import { TemplateReviewCard } from "./template-review-card.tsx";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
 
-const sections = [
-  ["file", "templatesDraft.workspaceFiles"],
-  ["skill", "templatesDraft.skills"],
-  ["plugin", "templatesDraft.plugins"],
-  ["mcp", "templatesDraft.mcpServers"],
-  ["automation", "templatesDraft.automations"],
-] as const;
+function cardStatus(state: TemplateCreator) {
+  if (state.busy === "publishing") {
+    return "publishing";
+  }
+  if (state.publicationIssue) {
+    if (state.busy === "reviewing") {
+      return "checkingStatus";
+    }
+    return state.publicationIssue === "unconfirmed" ? "unconfirmed" : "notPublished";
+  }
+  if (state.publication) {
+    return state.publication.publicationStatus;
+  }
+  if (state.busy || !state.reviewCurrent) {
+    return !state.busy && state.error ? "draftUnavailable" : "updating";
+  }
+  return "unpublished";
+}
 
-function OptionalSection(props: {
-  flow: TemplateCreator;
-  view: CreatorView;
-  kind: TemplateDraftReviewItem["kind"];
-  title: string;
-  publishing: boolean;
-}) {
-  const items = () =>
-    props.view.read().review?.items.filter((item) => item.kind === props.kind) ?? [];
-  const included = (item: TemplateDraftReviewItem) => {
-    const excluded = props.view.read().choices?.excluded;
-    return excluded ? !excluded.includes(item.id) : item.included;
-  };
+type ReviewProps = { flow: TemplateCreator; view: CreatorView };
+
+export function TemplateCreatorReviewView(props: ReviewProps) {
   return (
-    <Show when={items().length > 0}>
-      <section class="template-creator__section">
-        <h3>
-          {props.title} <span>{items().length}</span>
-        </h3>
-        <For each={items()} keyed={(item) => item.id}>
-          {(item) => (
-            <div class="template-creator__row">
-              <label class="template-creator__row-choice">
-                <Checkbox
-                  checked={included(item())}
-                  disabled={props.publishing}
-                  onChange={(event) => {
-                    const choices = props.view.read().choices;
-                    if (!choices) {
-                      return;
-                    }
-                    const excluded = new Set(choices.excluded);
-                    if (event.currentTarget.checked) {
-                      excluded.delete(item().id);
-                    } else {
-                      excluded.add(item().id);
-                    }
-                    props.flow.updateChoices({ ...choices, excluded: [...excluded] });
-                  }}
-                />
-                <span>{item().label}</span>
-              </label>
-              <details>
-                <summary>{t("templatesDraft.view")}</summary>
-                <pre>{item().detail}</pre>
-              </details>
-            </div>
-          )}
-        </For>
-      </section>
+    <Show when={props.view.read().signIn} fallback={<TemplatePublishCard {...props} />}>
+      {(signIn) => <TemplateCreatorSignInCard state={signIn()} flow={props.flow} />}
     </Show>
   );
 }
 
-function TemplateReviewDialog(props: {
-  flow: TemplateCreator;
-  view: CreatorView;
-  reviewRead: Accessor<null>;
-  reviewReceipt: TemplateCreator["reviewRead"];
-}) {
+function TemplatePublishCard(props: ReviewProps) {
   const state = () => props.view.read();
-  const review = () => state().review!;
-  const choices = () => state().choices;
-  const [publishing, setPublishing] = createOptimistic(false);
-  const busy = () => publishing() || state().busy === "publishing";
-  const presentPublish = action(function* (pending: Promise<void>, retired: Promise<void>) {
-    setPublishing(true);
-    try {
-      // Closing or leaving releases presentation; the owner still records the write outcome.
-      yield Promise.race([pending, retired]);
-    } catch (error) {
-      showToast({ severity: "error", message: formatUiError(error) });
+  const review = () => state().review;
+  const byline = (publisher: string) => t("templatesDraft.byCreator", { creator: "@" + publisher });
+  const status = createMemo(() => cardStatus(state()));
+  // A preview belongs to the exact reviewed archive, never a replacement draft.
+  const readyReview = () => status() === "unpublished" && review();
+  const hint = () => {
+    switch (status()) {
+      case "pending":
+        return state().error ? t("templatesDraft.statusDelayed") : null;
+      case "updating":
+        return t("templatesDraft.updatingHint");
+      case "draftUnavailable":
+        return t("templatesDraft.draftUnavailableHint");
+      case "unconfirmed":
+        return t("templatesDraft.unconfirmedHint");
+      case "checkingStatus":
+        return t("templatesDraft.checkingHint");
+      case "notPublished":
+        return t("templatesDraft.notPublishedHint");
+      default:
+        return null;
     }
-  });
-  async function publish() {
-    const retired = props.flow.presentationLifetime.promise;
-    const pending = props.flow.publish();
-    // Let the owner's synchronous admission land before the action joins the transition.
-    await Promise.resolve();
-    await presentPublish(pending, retired);
-  }
+  };
+  const busyAction = () => {
+    switch (status()) {
+      case "publishing":
+        return t("templatesDraft.publishing");
+      case "updating":
+        return t("templatesDraft.preparing");
+      case "checkingStatus":
+        return t("templatesDraft.checking");
+      default:
+        return null;
+    }
+  };
   return (
-    <openclaw-modal-dialog
-      label={t("templatesDraft.reviewTitle")}
-      style={{ "--openclaw-modal-width": "720px" }}
-      onModal-cancel={(event: Event) => {
-        event.preventDefault();
-        props.flow.close();
-      }}
-    >
-      <div class="exec-approval-card template-creator">
-        <h2>{t("templatesDraft.reviewTitle")}</h2>
-        <p class="template-creator__intro">{t("templatesDraft.intro")}</p>
-        <div class="template-creator__identity">
-          <label>
-            <span>{t("templatesDraft.name")}</span>
-            <input
-              class="settings-input"
-              value={choices()?.displayName ?? ""}
-              onInput={(event) => {
-                const current = choices();
-                if (current) {
-                  props.flow.updateChoices({ ...current, displayName: event.currentTarget.value });
-                }
-              }}
-            />
-          </label>
-          <label>
-            <span>{t("templatesDraft.description")}</span>
-            <textarea
-              class="settings-input"
-              rows={2}
-              value={choices()?.description ?? ""}
-              onInput={(event) => {
-                const current = choices();
-                if (current) {
-                  props.flow.updateChoices({ ...current, description: event.currentTarget.value });
-                }
-              }}
-            />
-          </label>
-        </div>
-        <section class="template-creator__section">
-          <h3>{t("templatesDraft.behavior")}</h3>
-          <details class="template-creator__summary">
-            <summary>{review().scope.job}</summary>
-            <dl>
-              <dt>{t("templatesDraft.input")}</dt>
-              <dd>{review().scope.input}</dd>
-              <dt>{t("templatesDraft.output")}</dt>
-              <dd>{review().scope.output}</dd>
-              <dt>{t("templatesDraft.authority")}</dt>
-              <dd>{review().scope.authority}</dd>
-            </dl>
-          </details>
-        </section>
-        <For each={sections}>
-          {([kind, titleKey]) => (
-            <OptionalSection
-              flow={props.flow}
-              view={props.view}
-              kind={kind}
-              title={t(titleKey)}
-              publishing={busy()}
-            />
-          )}
-        </For>
-        <section class="template-creator__section">
-          <h3>
-            {t("templatesDraft.packageContents")} <span>{review().files.length}</span>
-          </h3>
-          <p>{t("templatesDraft.packageNote")}</p>
-          <Show when={state().reviewCurrent}>
-            <For each={review().files} keyed={(file) => file.path}>
-              {(file) => (
-                <details class="template-creator__archive-file">
-                  <summary>{file().path}</summary>
-                  <pre>{file().content}</pre>
-                </details>
-              )}
-            </For>
-          </Show>
-        </section>
-        <Show when={state().error}>
+    <Show
+      when={review()}
+      fallback={
+        <Show when={!state().busy && state().error}>
           {(error) => (
-            <InlineAlert tone="danger" role="alert">
+            <InlineAlert
+              tone="danger"
+              title={t("templatesDraft.draftUnavailable")}
+              action={
+                <button type="button" class="btn btn--sm" onClick={() => props.flow.retryReview()}>
+                  {t("templatesDraft.tryAgain")}
+                </button>
+              }
+            >
               {error()}
             </InlineAlert>
           )}
         </Show>
-        <Show when={!state().reviewCurrent}>
-          <Loading
-            on={props.reviewReceipt}
-            fallback={
-              <p role="status" class="template-creator__status">
-                {t("templatesDraft.updating")}
-              </p>
-            }
-          >
-            <Errored
-              fallback={
-                <p role="status" class="template-creator__status">
-                  {t("templatesDraft.reviewNeeded")}
-                </p>
-              }
-            >
-              {props.reviewRead()}
-              <p role="status" class="template-creator__status">
-                {t("templatesDraft.reviewNeeded")}
-              </p>
-            </Errored>
-          </Loading>
-        </Show>
-        <openclaw-modal-actions>
-          <Show when={!state().reviewCurrent && state().busy === null}>
-            <button type="button" class="btn" onClick={() => props.flow.retryReview()}>
-              {t("templatesDraft.refreshReview")}
-            </button>
-          </Show>
-          <button
-            type="button"
-            class="btn primary"
-            disabled={busy() || !state().reviewCurrent || state().busy !== null}
-            aria-busy={busy() ? "true" : undefined}
-            onClick={() => void publish()}
-          >
-            <Show when={busy()}>
-              <span class="btn__spinner" aria-hidden="true" />
+      }
+    >
+      <section class="template-publish-card" aria-label={t("templatesDraft.publishTitle")}>
+        <header>
+          <span class="template-art">
+            <TemplateArtwork src={review()?.iconUrl} />
+          </span>
+          <div>
+            <h2>{review()?.displayName ?? t("templatesDraft.draftTitle")}</h2>
+            <Show when={review()?.publisher}>
+              {(publisher) => <p class="muted">{byline(publisher())}</p>}
             </Show>
-            {t(busy() ? "templatesDraft.publishing" : "templatesDraft.publish")}
-          </button>
-        </openclaw-modal-actions>
-      </div>
-    </openclaw-modal-dialog>
-  );
-}
-
-export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: CreatorView }) {
-  const flow = () => props.flow;
-  const view = () => props.view;
-  const reviewReceipt = createMemo(() => view().read().reviewRead);
-  const reviewRead = createMemo(async () => {
-    await reviewReceipt()?.result;
-    return null;
-  });
-  return (
-    <>
-      <Show when={view().read().modalOpen && view().read().review}>
-        <TemplateReviewDialog
-          flow={flow()}
-          view={view()}
-          reviewRead={reviewRead}
-          reviewReceipt={reviewReceipt()}
-        />
-      </Show>
-      <Show
-        when={
-          view().read().hasActiveDraft &&
-          !view().read().modalOpen &&
-          !view().read().publication &&
-          view().read().error
-        }
-      >
-        {(error) => (
-          <div class="template-creator__notice template-creator__notice--error" role="alert">
-            {error()}
-            <button class="btn btn--sm" onClick={() => flow().retryReview()}>
-              {t("templatesDraft.retryReview")}
-            </button>
           </div>
-        )}
-      </Show>
-      <Show
-        when={
-          view().read().review &&
-          !view().read().modalOpen &&
-          !view().read().publication &&
-          !view().read().error
-        }
-      >
-        <button class="template-creator__reopen btn btn--sm" onClick={() => flow().reopen()}>
-          {t("templatesDraft.reopen")}
-        </button>
-      </Show>
-    </>
+          <span class="template-creator__status" data-state={status()} role="status">
+            {t("templatesDraft." + status())}
+          </span>
+        </header>
+        <Show when={review()?.description}>
+          {(description) => <p class="template-summary">{description()}</p>}
+        </Show>
+        <Show when={hint()}>{(message) => <p role="status">{message()}</p>}</Show>
+        <Show when={state().error && status() !== "pending" && !busyAction()}>
+          <InlineAlert tone="danger">{state().error}</InlineAlert>
+        </Show>
+        <footer class="template-actions">
+          <Switch>
+            <Match when={readyReview()} keyed>
+              {(draft) => {
+                const [preview, setPreview] = createSignal(false);
+                const publish = () => {
+                  setPreview(false);
+                  if (props.flow.review?.reviewToken === draft.reviewToken) {
+                    void props.flow.publish();
+                  }
+                };
+                return (
+                  <>
+                    <button
+                      type="button"
+                      class="btn"
+                      aria-haspopup="dialog"
+                      onClick={() => setPreview(true)}
+                    >
+                      {t("templatesDraft.preview")}
+                    </button>
+                    <button type="button" class="btn primary" onClick={publish}>
+                      {t("templatesDraft.publish")}
+                    </button>
+                    <Show when={preview()}>
+                      <ModalDialog
+                        open
+                        label={t("templatesDraft.previewTitle")}
+                        style={{ "--openclaw-modal-width": "620px" }}
+                        onOpenChange={(open) => {
+                          if (!open) {
+                            setPreview(false);
+                          }
+                        }}
+                      >
+                        <div class="template-import-dialog">
+                          <TemplateReviewCard
+                            review={draft}
+                            byline={byline(draft.publisher)}
+                            status={
+                              <span class="template-creator__status">
+                                {t("templatesDraft.unpublished")}
+                              </span>
+                            }
+                            readPackagePreview={(item) => props.flow.readPackagePreview(item)}
+                            footer={
+                              <openclaw-modal-actions>
+                                <button type="button" class="btn" onClick={() => setPreview(false)}>
+                                  {t("common.close")}
+                                </button>
+                                <button type="button" class="btn primary" onClick={publish}>
+                                  {t("templatesDraft.publish")}
+                                </button>
+                              </openclaw-modal-actions>
+                            }
+                          />
+                        </div>
+                      </ModalDialog>
+                    </Show>
+                  </>
+                );
+              }}
+            </Match>
+            <Match when={busyAction()}>
+              {(label) => (
+                <button type="button" class="btn primary" disabled aria-busy="true">
+                  <span class="btn__spinner" aria-hidden="true" />
+                  {label()}
+                </button>
+              )}
+            </Match>
+            <Match when={status() === "pending" && state().publication?.url}>
+              {(url) => (
+                <a
+                  class="btn primary"
+                  href={`${url()}?view=submission`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {t("templatesDraft.viewSubmission")}
+                </a>
+              )}
+            </Match>
+            <Match when={status() === "published" && state().publication?.url} keyed>
+              {(url) => {
+                let copyLabel!: HTMLSpanElement;
+                return (
+                  <button
+                    type="button"
+                    class="btn primary"
+                    onClick={(event) =>
+                      void handleCopyButton(event, url, t("templatesDraft.copyLink"), {
+                        label: copyLabel,
+                      })
+                    }
+                  >
+                    <span ref={(element) => (copyLabel = element)}>
+                      {t("templatesDraft.copyLink")}
+                    </span>
+                  </button>
+                );
+              }}
+            </Match>
+            <Match when={status() === "unconfirmed"}>
+              <button
+                type="button"
+                class="btn primary"
+                onClick={() => void props.flow.checkPublication()}
+              >
+                {t("templatesDraft.checkStatus")}
+              </button>
+            </Match>
+            <Match when={status() === "notPublished" || status() === "draftUnavailable"}>
+              <button type="button" class="btn primary" onClick={() => props.flow.retryReview()}>
+                {t(status() === "draftUnavailable" ? "templatesDraft.tryAgain" : "common.retry")}
+              </button>
+            </Match>
+          </Switch>
+        </footer>
+      </section>
+    </Show>
   );
 }

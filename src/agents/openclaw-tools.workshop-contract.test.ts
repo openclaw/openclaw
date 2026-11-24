@@ -27,10 +27,7 @@ import {
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;
@@ -400,33 +397,6 @@ describe("Workshop through the OpenClaw tool set", () => {
     await expect(fs.stat(path.join(root, ".archive", "deploy"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
-
-  it("T7: captures the invoking source authority before its first await", async () => {
-    await seed();
-    const tool = workshop();
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:contract",
-      receiptAuthority: () => false,
-    };
-    const pending = withGatewayToolCallerIdentity(identity, () => {
-      const write = tool.execute("retired-source", {
-        action: "patch",
-        name: "deploy",
-        old_text: "deployment",
-        new_text: "release",
-      });
-      const caller = getGatewayToolCallerIdentity();
-      if (!caller) {
-        throw new Error("Expected the invoking caller scope");
-      }
-      caller.receiptAuthority = () => true;
-      return write;
-    });
-    await expect(pending).rejects.toThrow("tool invocation authority is no longer active");
-    expect(await fs.readFile(path.join(root, "deploy", "SKILL.md"), "utf8")).toBe(skill("deploy"));
-    expect((await changes()).changes).toEqual([]);
   });
 
   it("L2 L3: retains ten prior trees and serves a feed with pruned-version references", async () => {

@@ -2,9 +2,14 @@ import fs from "node:fs";
 import http, { type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { syntheticPeerAddress } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import {
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -16,6 +21,7 @@ import {
   startOpenClawIdIngressListener,
   type OpenClawIdIngressListener,
 } from "./ingress-listener.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { upstreamHeaders } from "./tunnel-child/headers.js";
 import { setOpenClawIdTunnelPrincipalResolver } from "./tunnel-principal.js";
 
@@ -31,7 +37,13 @@ let dir: string | undefined;
 let started: OpenClawIdIngressListener | undefined;
 let gateway: http.Server | undefined;
 
+beforeEach(() =>
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+  }),
+);
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   setOpenClawIdTunnelPrincipalResolver(undefined);
   await started?.close();
   gateway?.close();
@@ -165,6 +177,17 @@ describe("OpenClaw ID ingress listener", () => {
       expect(fs.statSync(path.dirname(listener.socketPath)).mode & 0o777).toBe(0o700);
     }
     expect(listener.proxyToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    using filesystem = observeMainThreadFs();
+    await listener.close();
+    await expect(fs.promises.stat(listener.socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+    started = await startOpenClawIdIngressListener({
+      socketPath: listener.socketPath,
+      gatewayServer: () => gateway,
+      log: { warn: vi.fn() },
+    });
+    await started.close();
+    started = undefined;
+    expect(filesystem.calls()).toEqual({});
   });
 
   it("marks relayed requests as tunnel traffic with the authenticated peer key, never as loopback", async () => {

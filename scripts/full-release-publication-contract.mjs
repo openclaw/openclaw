@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
-import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
+import {
+  classifyClawHubPublication,
+  isPreparedClawHubTrustedPublisher,
+} from "./lib/clawhub-publication-state.mjs";
 import {
   dispatchEnvelopeFromInputs,
   publicationInputRecord as object,
@@ -23,6 +25,38 @@ export {
   publicationIntentInputs,
   publicationSourceJson,
 } from "./lib/full-release-publication-inputs.mjs";
+
+// Qualification preflight and source admission share the same committed-version policy.
+export function validatePublicationVersionSelection(version, selection) {
+  const parsed = parseReleaseVersion(version);
+  if (!parsed) {
+    throw new Error("invalid publication source version");
+  }
+  if (parsed.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const train = classifyReleaseTrain(parsed);
+  if (train === "unsupported-extended-stable-correction") {
+    throw new Error("unsupported extended-stable correction");
+  }
+  const extended = selection.route === "extended-stable";
+  const allowedTags =
+    train === "stable"
+      ? ["beta", "latest"]
+      : train === "extended-stable"
+        ? ["extended-stable"]
+        : [parsed.channel];
+  if (!allowedTags.includes(selection.npmDistTag) || (train === "extended-stable") !== extended) {
+    throw new Error("publication selection does not match the committed release version");
+  }
+  if (selection.route === "prepared" && !["beta", "stable"].includes(train)) {
+    throw new Error("prepared publication requires a regular beta/stable candidate");
+  }
+  if (selection.windowsNodeTag && train !== "stable") {
+    throw new Error("Windows assets require a stable publication");
+  }
+  return parsed;
+}
 
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT = "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT = "1";
@@ -203,9 +237,21 @@ function validatePublicationSourceFact(value, expected = {}) {
   // Retire with those release lines and their retained publication recovery.
   object(
     value.coverage,
-    [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
+    [
+      ...coverageKeys,
+      "known_flaky_jobs_json",
+      "telegram_waiver",
+      "publication_artifact_source_json",
+    ],
     "source admission coverage",
   );
+  // beta.3 Q seals this empty field; retain its digest without enabling historical artifact reuse.
+  if (
+    Object.hasOwn(value.coverage, "publication_artifact_source_json") &&
+    value.coverage.publication_artifact_source_json !== ""
+  ) {
+    throw new Error("source admission publication_artifact_source_json must be empty");
+  }
   if (Object.hasOwn(value.coverage, "telegram_waiver") && value.coverage.telegram_waiver !== "") {
     throw new Error("source admission telegram_waiver must be empty");
   }
@@ -393,6 +439,11 @@ export function validatePublicationSourceBinding(record, expected = {}) {
       ) {
         throw new Error(`source admission coverage ${key} differs from manifest`);
       }
+    }
+    if ((record.validationInputs.publicationArtifactSourceJson ?? "") !== "") {
+      throw new Error(
+        "source admission coverage publicationArtifactSourceJson differs from manifest",
+      );
     }
     if ((record.validationInputs.coveragePolicy ?? "") !== fact.coverage.coverage_policy) {
       throw new Error("source admission coverage policy differs from manifest");

@@ -259,7 +259,9 @@ export function createVitestWorkerRun(
               if (interrupted) {
                 return;
               }
-              if (fs.existsSync(path.join(directory, "manifest.json"))) {
+              // The generation owner verifies once after every nested borrower joins.
+              // Each admission still verifies; delegated completion cannot publish a cache.
+              if (!parent && fs.existsSync(path.join(directory, "manifest.json"))) {
                 console.error("[vitest-workers] verifying completed generation before cleanup");
                 await verifyVitestWorkerArtifacts(directory, manifest);
               }

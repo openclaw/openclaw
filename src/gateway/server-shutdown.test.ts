@@ -20,6 +20,60 @@ it("omits invalid restart metadata and normalizes the reason", () => {
   });
 });
 
+it.for([
+  { kind: "lifetime", fails: false },
+  { kind: "post-ready", fails: false },
+  { kind: "lifetime", fails: true },
+  { kind: "post-ready", fails: true },
+])(
+  "uses the final sidecar join after $kind cleanup exceeds its grace (fails=$fails)",
+  async ({ kind, fails }) => {
+    vi.useFakeTimers();
+    const release = createDeferredCore();
+    const sidecars = createGatewaySidecarStopOwner();
+    sidecars.publish({ name: "held-sidecar", stop: () => release.promise });
+    const noWork = async () => undefined;
+    const close = vi.fn(noWork);
+    const onError = vi.fn();
+    const closing = runGatewayCloseSteps({
+      owner: {
+        connectionWork: { drain: noWork },
+        stopConnectionDependentSidecars: noWork,
+        stopRegisteredGatewayLifetimeSidecars: kind === "lifetime" ? sidecars.stop : noWork,
+        stopRegisteredPostReadySidecars: kind === "post-ready" ? sidecars.stop : noWork,
+        runClosePrelude: noWork,
+        sealAndJoinRegisteredSidecarStops: sidecars.sealAndJoin,
+      },
+      exitAfterClose: true,
+      close,
+      onError,
+    }).catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("cleanup exceeded 5000ms"));
+      expect(close).not.toHaveBeenCalled();
+      if (fails) {
+        release.reject(new Error("sidecar stop failed"));
+        expect(await closing).toHaveProperty(
+          "message",
+          expect.stringContaining("sidecar stop failed"),
+        );
+        expect(close).not.toHaveBeenCalled();
+        expect(sidecars.snapshot()).toHaveLength(1);
+      } else {
+        release.resolve();
+        expect(await closing).toBeUndefined();
+        expect(close).toHaveBeenCalledOnce();
+        expect(sidecars.snapshot()).toEqual([]);
+      }
+    } finally {
+      release.resolve();
+      await closing;
+      vi.useRealTimers();
+    }
+  },
+);
+
 it.for(["optional", "fatal", "required", "required-close"])(
   "joins required work and preserves fatal close status (%s)",
   async (mode) => {
@@ -44,12 +98,13 @@ it.for(["optional", "fatal", "required", "required-close"])(
       owner: {
         connectionWork: { drain: required && !requiredClose ? sidecars.stop : noWork },
         stopConnectionDependentSidecars: noWork,
-        stopRegisteredGatewayLifetimeSidecars: required ? noWork : sidecars.stop,
+        stopRegisteredGatewayLifetimeSidecars: noWork,
         stopRegisteredPostReadySidecars: noWork,
         runClosePrelude: noWork,
         sealAndJoinRegisteredSidecarStops: noWork,
       },
       exitAfterClose: true,
+      runStopHooks: required ? noWork : sidecars.stop,
       close,
       onError,
     }).catch((error: unknown) => error);

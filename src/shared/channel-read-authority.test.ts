@@ -40,12 +40,12 @@ it("shares nested output across SDK chunks until acceptance, then closes the cal
       innerAssertion!();
       other.captureChannelReadScope()!.registerResource({ key: "created-media", settle });
     });
-    expect(() => innerAssertion!()).toThrow("no longer active");
+    expect(() => innerAssertion!()).toThrow("Channel read ended. Retry the action.");
     expect(settle).not.toHaveBeenCalled();
     expect(() => captureAuthority()!()).not.toThrow();
   });
   expect(settle).toHaveBeenCalledExactlyOnceWith(true);
-  expect(() => outerAssertion!()).toThrow("no longer active");
+  expect(() => outerAssertion!()).toThrow("Channel read ended. Retry the action.");
 });
 
 it.each(["provider", "source signal"])(

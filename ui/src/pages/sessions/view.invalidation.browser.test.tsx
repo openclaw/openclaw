@@ -6,6 +6,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildMultiResult, buildProps } from "./view.test-support.tsx";
 import { SessionsView } from "./view.tsx";
 import "../../styles.css";
+import "../../styles/settings.css";
 
 afterEach(() => {
   cleanupSolid();
@@ -108,6 +109,10 @@ it.each([1280, 390])(
     flush();
     await expect.poll(() => rows().length).toBeLessThan(25);
     expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("101");
+    if (!phone) {
+      const frame = view.container.querySelector<HTMLElement>(".content")!;
+      expect(frame.scrollHeight).toBeLessThanOrEqual(frame.clientHeight);
+    }
     if (phone) {
       expect(view.container.querySelector("thead input")).toBeNull();
       setCurrent((previous) => ({

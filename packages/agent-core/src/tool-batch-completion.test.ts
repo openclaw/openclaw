@@ -11,58 +11,28 @@ describe("tool batch terminal identity", () => {
     terminalToolCallIds: [],
     steeringMessages: [],
     terminate: false,
-    terminateRun: false,
-    intervention: {
-      kind: "critical-tool-loop",
-      toolCallId: "recovery-call",
-      toolName: "read",
-      actionKey: "read:unchanged",
-      detector: "generic_repeat",
-      count: 20,
-      reason: "Reassess the repeated read",
-    },
   };
   const terminal: ExecutedToolCallBatch = {
     messages: [],
     terminalToolCallIds: [],
     steeringMessages: [],
     terminate: true,
-    terminateRun: true,
-    intervention: {
-      kind: "critical-tool-loop",
-      toolCallId: "failed-call",
-      toolName: "probe",
-      actionKey: "probe:failed",
-      detector: "repeated_tool_error",
-      count: 3,
-      reason: "Check the tool error before retrying",
-    },
+    repeatStop: { kind: "stop", toolCallId: "repeat-call", toolName: "probe", count: 20 },
   };
 
-  it.each([false, true])(
-    "retains the terminating intervention when its batch completes first=%s",
-    (terminalFirst) => {
-      const result = combineExecutedToolBatches(
-        {},
-        makeAssistantMessage([]),
-        terminalFirst ? [terminal, recovery] : [recovery, terminal],
-      );
-      expect(result).toMatchObject({
-        terminateRun: true,
-        intervention: {
-          detector: "repeated_tool_error",
-          toolCallId: "failed-call",
-          reason: "Check the tool error before retrying",
-        },
-      });
-    },
-  );
+  it.each([false, true])("keeps the repeat stop when its batch completes first=%s", (first) => {
+    const result = combineExecutedToolBatches(
+      {},
+      makeAssistantMessage([]),
+      first ? [terminal, recovery] : [recovery, terminal],
+    );
+    expect(result).toMatchObject({ repeatStop: { toolCallId: "repeat-call", count: 20 } });
+  });
 
-  it("keeps the recovery intervention when no batch terminates the run", () => {
-    expect(combineExecutedToolBatches({}, makeAssistantMessage([]), [recovery])).toMatchObject({
-      terminateRun: false,
-      intervention: { detector: "generic_repeat" },
-    });
+  it("has no repeat stop when no batch reached the cap", () => {
+    expect(combineExecutedToolBatches({}, makeAssistantMessage([]), [recovery])).not.toHaveProperty(
+      "repeatStop",
+    );
   });
 
   it("keeps input identity until commit without consuming or duplicating queued steering", () => {

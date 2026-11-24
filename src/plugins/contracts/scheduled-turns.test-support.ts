@@ -22,6 +22,7 @@ export function createMockCronService(
       storage: "sqlite" as const,
       sqlitePath: "/tmp/openclaw-test-state/state/openclaw.sqlite",
       jobs: 0,
+      reauthorizationRequired: 0,
       nextWakeAtMs: null,
     })),
     list: vi.fn(async () => []),

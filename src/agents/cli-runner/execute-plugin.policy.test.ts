@@ -192,32 +192,6 @@ describe("plugin-owned CLI native tool policy", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("denies native tools when caller authority expires during policy or before a retained call", async () => {
-    const { context } = await createExecution({ nativeTools: ["WebFetch"] });
-    let callerCurrent = true;
-    context.params.assertCurrent = () => {
-      if (!callerCurrent) {
-        throw new Error("caller revoked");
-      }
-    };
-    const hook = vi.fn(async () => {
-      callerCurrent = false;
-    });
-    installBeforeToolCallHook(hook);
-    await runPlugin(context, async function* (execution) {
-      await expect(
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
-      ).resolves.toMatchObject({ behavior: "deny" });
-      await expect(
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com/retained" }),
-      ).resolves.toMatchObject({ behavior: "deny" });
-      expect(execution.abortSignal?.aborted).toBe(false);
-      yield SUCCESS_RESULT;
-    });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
   it("runs canonical policy before native approval and carries rewritten params plus run context", async () => {
     const hook = vi.fn(async (_event: unknown, _context: unknown) => ({
       params: { url: "https://example.com/rewritten" },
@@ -242,6 +216,7 @@ describe("plugin-owned CLI native tool policy", () => {
       agentAccountId: "bot-1",
       senderId: "user-1",
       senderIsOwner: true,
+      memberRoleIds: ["role-1"],
       currentThreadTs: "thread-1",
     });
     let decision: CliBackendToolPermissionResult | undefined;
@@ -295,6 +270,7 @@ describe("plugin-owned CLI native tool policy", () => {
         accountId: "bot-1",
         senderId: "user-1",
         senderIsOwner: true,
+        roleIds: ["role-1"],
       },
     });
     await vi.waitFor(() =>
@@ -811,7 +787,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
       context.params.abortSignal = operation.abortSignal;
       const ready = createDeferred();
       const finish = createDeferred();
-      let retained: CliBackendExecuteContext | undefined;
       const assess = vi.fn(async () => {
         if (mode === "throw") {
           throw new Error("private provider detail");
@@ -824,7 +799,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
       const run = runPlugin(
         context,
         async function* (execution) {
-          retained = execution;
           if (mode !== "absent") {
             execution.registerTurnStatus?.({ capture: () => ({ isCurrent: () => true, assess }) });
           }
@@ -865,7 +839,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
         finish.resolve();
         await outcome;
         expect(backend.turnStatus).toBeUndefined();
-        expect(() => retained!.registerTurnStatus!({ capture: () => undefined })).toThrow();
       } finally {
         finish.resolve();
         await outcome;
@@ -901,4 +874,28 @@ it("permits admitted schema discovery with exec denied, without enabling executi
     behavior: "deny",
   });
   expect(mockCallGatewayTool).not.toHaveBeenCalled();
+});
+
+it("refuses capability-conferring native tools only on completion turns", async () => {
+  const decide = async (completion: boolean) => {
+    const { context } = await createExecution({ nativeTools: ["Agent", "WebSearch"] });
+    context.backendResolved.projectNativeToolAuthority = (tools) =>
+      tools.includes("WebSearch") ? ["web_search"] : [];
+    if (completion) {
+      context.params.trustedInternalHandoff = {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:main:subagent:child",
+        targetSessionKey: "agent:main:main",
+        targetSessionId: "sdk-session",
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+      };
+    }
+    return [
+      (await decideNativeTool(context, "WebSearch", { query: "news" }))?.behavior,
+      (await decideNativeTool(context, "Agent", { prompt: "tick" }))?.behavior,
+    ];
+  };
+  expect(await decide(false)).toEqual(["allow", "allow"]);
+  expect(await decide(true)).toEqual(["deny", "allow"]);
 });

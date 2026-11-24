@@ -17,6 +17,10 @@ export interface PublicationSelection {
   windowsNodeTag?: string;
   windowsNodeInstallerDigests?: Record<string, string>;
 }
+export function validatePublicationVersionSelection(
+  version: string,
+  selection: PublicationSelection,
+): NonNullable<ReturnType<typeof import("./lib/release-version.mjs").parseReleaseVersion>>;
 export interface PublicationIntent {
   validationPurpose: ValidationPurpose;
   publicationSelection: PublicationSelection | null;

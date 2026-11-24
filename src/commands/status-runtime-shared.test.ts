@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -274,6 +275,27 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
+  it("does not fall back to usage after cancelling credential preparation", async () => {
+    const scope = new AsyncWorkScope();
+    const reason = new DOMException("interrupted", "AbortError");
+    const reportDiagnostics = vi.fn();
+    let processSignal: AbortSignal | undefined;
+    mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(async ({ signal }) => {
+      processSignal = resolveCommandProcessSignal();
+      scope.beginClose(reason);
+      signal?.throwIfAborted();
+      throw new Error("credential request was not cancelled");
+    });
+    const params = { ...usageParams("openclaw"), onSecretDiagnostics: reportDiagnostics };
+    await expect(scope.run(() => resolveStatusUsageSummary(params))).rejects.toBe(reason);
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ signal: scope.signal }),
+    );
+    expect(processSignal?.reason).toBe(reason);
+    expect(reportDiagnostics).not.toHaveBeenCalled();
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
   it("cancels credential subprocess ownership when the usage deadline expires", async () => {
     vi.useFakeTimers();
     try {
@@ -309,15 +331,26 @@ describe("status-runtime-shared", () => {
     expect(mocks.resolveModelAuthLabelAsync).not.toHaveBeenCalled();
   });
 
-  it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
-    mocks.loadProviderUsageSummary
-      .mockResolvedValueOnce(usageSummary(1, [openaiUsage(22)]))
-      .mockResolvedValueOnce(usageSummary(2, [openaiUsage()]));
-
-    await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual(
-      usageSummary(1, [openaiUsage(22)]),
-    );
-  });
+  it.each([undefined, 9])(
+    "merges available Codex windows without replacing existing usage (%s)",
+    async (usedPercent) => {
+      const initial = usedPercent === undefined ? [openaiUsage(22)] : [anthropicUsage()];
+      const expected = usedPercent === undefined ? initial : [...initial, openaiUsage(usedPercent)];
+      mocks.loadProviderUsageSummary
+        .mockResolvedValueOnce(usageSummary(1, initial))
+        .mockResolvedValueOnce(usageSummary(2, [openaiUsage(usedPercent)]));
+      await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual(
+        usageSummary(1, expected),
+      );
+      expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
+        timeoutMs: 3456,
+        providers: ["openai"],
+        auth: [{ provider: "openai", token: "codex-app-server", hookProvider: "codex" }],
+        config: expect.any(Object),
+        agentDir: "/tmp/status-agent",
+      });
+    },
+  );
 
   it.each(["openclaw", "codex"] as const)(
     "does not add synthetic usage for API-backed %s routes",
@@ -361,16 +394,21 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("returns a fallback health error when the gateway is unreachable", async () => {
-    await expect(
-      resolveStatusGatewayHealthSafe({
-        ...gatewayParams(),
-        gatewayReachable: false,
-        gatewayProbeError: "timeout",
-      }),
-    ).resolves.toEqual({ error: "timeout" });
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "does not call an unreachable gateway (snapshot=%s)",
+    async (runtimeSnapshot) => {
+      const params = { ...gatewayParams(), gatewayReachable: false, gatewayProbeError: "timeout" };
+      const result = runtimeSnapshot
+        ? await snapshot({ ...params, suppressHealthErrors: true })
+        : { health: await resolveStatusGatewayHealthSafe(params) };
+      expect(result).toEqual(
+        runtimeSnapshot
+          ? expect.objectContaining({ health: { error: "timeout" }, lastHeartbeat: null })
+          : { health: { error: "timeout" } },
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes gateway call overrides through the safe health path", async () => {
     await resolveStatusGatewayHealthSafe({
@@ -435,11 +473,7 @@ describe("status-runtime-shared", () => {
   it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {
     mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
 
-    await expect(
-      snapshot({
-        suppressHealthErrors: true,
-      }),
-    ).resolves.toMatchObject({
+    await expect(snapshot({ suppressHealthErrors: true })).resolves.toMatchObject({
       health: { error: "Error: gateway health probe timed out" },
       lastHeartbeat: { ok: true },
     });
@@ -466,16 +500,18 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("uses the completed initial probe for deep health", async () => {
-    const result = await snapshot({
-      config: {},
-      sourceConfig: {},
-      gatewayReachable: false,
-      gatewayProbeError: "connection refused",
-      suppressHealthErrors: true,
+  it.each([
+    () => resolveStatusGatewayHealthSafe(gatewayParams()),
+    () => snapshot({ suppressHealthErrors: true }),
+  ])("aborts a pending gateway read without swallowing the interrupt (%#)", async (resolve) => {
+    const scope = new AsyncWorkScope();
+    const reason = new DOMException("interrupted", "AbortError");
+    mocks.callGateway.mockImplementation(({ signal }: { signal?: AbortSignal }) => {
+      const { promise, reject } = Promise.withResolvers<never>();
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      queueMicrotask(() => scope.beginClose(reason));
+      return promise;
     });
-
-    expect(result).toMatchObject({ health: { error: "connection refused" }, lastHeartbeat: null });
-    expect(mocks.callGateway).not.toHaveBeenCalled();
+    await expect(scope.run(() => resolve())).rejects.toBe(reason);
   });
 });

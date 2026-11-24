@@ -136,9 +136,6 @@ export async function runTemplatesValidateCommand(
       root: result.root,
       source: result.template.source,
       manifest: result.template.manifest,
-      ...(result.template.openClawProfile
-        ? { openClawProfile: result.template.openClawProfile }
-        : {}),
       excludedPaths: result.excludedPaths,
       diagnostics: result.diagnostics,
     });
@@ -210,13 +207,13 @@ export async function runTemplatesDevCommand(
       );
     }
     const config = configSnapshot.resolved;
-    const existingMcpServers = config.mcp?.servers ?? {};
+    const existingMcpServers = configSnapshot.authoredConfig?.mcp?.servers ?? {};
     const existingAgentIds = listAgentIds(config);
     plan = await buildTemplateAddPlan({
       manifest: result.manifest,
       templateMarkdownBody: result.templateMarkdownBody,
       packageBootstrap: result.packageBootstrap,
-      openClawProfile: result.openClawProfile,
+      bundledSources: result.snapshot.bundledSources,
       source: {
         ...result.source,
         integrityKind: "artifact",
@@ -226,6 +223,11 @@ export async function runTemplatesDevCommand(
       diagnostics: result.diagnostics,
       context: {
         config,
+        resolvePreferredModel: async (requested) => {
+          const { resolveLocalTemplatePreferredModel } =
+            await import("../templates/preferred-model-runtime.js");
+          return resolveLocalTemplatePreferredModel(requested, config);
+        },
         agentId: opts.agentId,
         ...(opts.workspace ? { workspace: opts.workspace } : {}),
         existingAgentIds,

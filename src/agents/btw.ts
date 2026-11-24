@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import {
-  buildReplyUsageState,
-  recordReplyUsageState,
-} from "../auto-reply/reply/reply-usage-state.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import type { Message, Model } from "../llm/types.js";
+import type { Message } from "../llm/types.js";
 import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
@@ -16,7 +11,6 @@ import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import {
   assertOperatorModelAllowed,
   prepareSystemAgentRunAdmission,
-  resolveAdmittedRunActiveAssertion,
 } from "./admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
@@ -29,7 +23,7 @@ import {
   withBtwPreparedRuntime,
   type RunBtwSideQuestionParams,
 } from "./btw-runtime.js";
-import { runBtwSessionFork, runLightweightBtwStream } from "./btw-stream.js";
+import { recordBtwUsage, runLightweightBtwStream } from "./btw-stream.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
@@ -51,6 +45,7 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "./model-selection-config.js";
 import { preparedModelRuntimeConfigsMatch } from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
@@ -60,7 +55,6 @@ import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
-import { hasBillableUsage, toDiagnosticUsage, type NormalizedUsage } from "./usage.js";
 
 /** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
@@ -112,6 +106,9 @@ export async function runBtwSideQuestion(
     )
       ? { provider: params.provider, model: params.model }
       : resolveSessionModelRef(preparedModelRuntime.config, params.sessionEntry, sessionAgentId);
+    if (!preparedModelRef) {
+      throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+    }
     // BTW policy, model selection, directories, auth, and catalog must come from one generation.
     // A reload may have committed while the command waited for its transcript/session lookup.
     // Rebind every later policy/auth/dispatch read to the generation returned above.
@@ -190,40 +187,6 @@ export async function runBtwSideQuestion(
         });
       }
       return runtimeSelection;
-    };
-    const recordBtwUsage = (runtimeModel: Model, usage?: NormalizedUsage) => {
-      params.onUsage?.(usage);
-      if (params.onUsage) {
-        return;
-      }
-      if (!hasBillableUsage(usage)) {
-        return;
-      }
-      const usageState = buildReplyUsageState({
-        config: params.cfg,
-        agentDir: params.agentDir,
-        agentId: sessionAgentId,
-        sessionId,
-        provider: runtimeModel.provider,
-        model: runtimeModel.id,
-        chatType: params.chatType,
-        usage,
-      });
-      // Delivery hooks use the reply correlation ID, not the side run's authority ID.
-      recordReplyUsageState(params.opts?.runId, usageState);
-      if (isDiagnosticsEnabled(params.cfg)) {
-        emitTrustedDiagnosticEvent({
-          type: "model.usage",
-          sessionKey: params.sessionKey,
-          sessionId,
-          channel: params.messageChannel,
-          agentId: sessionAgentId,
-          provider: runtimeModel.provider,
-          model: runtimeModel.id,
-          usage: toDiagnosticUsage(usage),
-          costUsd: usageState.turnUsd,
-        });
-      }
     };
     type BtwHarnessSideQuestionDispatch =
       | { kind: "handled"; payload: ReplyPayload }
@@ -381,7 +344,14 @@ export async function runBtwSideQuestion(
       );
       const admittedRunContext = await preparedRunAdmission.admit("plugin-harness");
       try {
-        const { model: _sideModel, authorityRunId: _authorityRunId, ...hostAttempt } = params;
+        const {
+          model: _sideModel,
+          authorityRunId: _authorityRunId,
+          sessionFork,
+          ...hostAttempt
+        } = params;
+        // A harness serves a session fork as a side question with every tool call denied.
+        const toolCalls = sessionFork ? ("deny" as const) : undefined;
         const host = createAgentHarnessHostCapabilities({
           attempt: {
             ...hostAttempt,
@@ -399,10 +369,11 @@ export async function runBtwSideQuestion(
           },
           pluginId: resolveAgentHarnessOwnerPluginId(selectedHarness),
           nativeModelPolicySupport: selectedHarness.nativeModelPolicySupport,
-          toolCalls: params.toolCalls,
+          toolCalls,
         });
         const sideParams = {
           ...hostAttempt,
+          ...(toolCalls ? { toolCalls } : {}),
           hostCapabilities: host.capabilities,
           sandbox,
           provider: runtimeModel.provider,
@@ -456,7 +427,17 @@ export async function runBtwSideQuestion(
         } finally {
           host.close();
         }
-        recordBtwUsage(runtimeModel, result.usage);
+        await recordBtwUsage(
+          { params, runtimeModel, agentId: sessionAgentId, sessionId },
+          result.usage,
+        );
+        placement.assertCurrent();
+        params.assertCurrent?.();
+        params.opts?.abortSignal?.throwIfAborted();
+        assertOperatorModelAllowed(params.operatorAuthority, {
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+        });
         return { kind: "handled", payload: { text: result.text } };
       } finally {
         preparedRunAdmission.close();
@@ -475,12 +456,11 @@ export async function runBtwSideQuestion(
       );
     }
 
-    const sessionFork = harness.id === "openclaw" && params.toolCalls === "deny";
     const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionFile);
     const imageLimits = resolveImageSanitizationLimits(params.cfg);
     let messages: Message[] = [];
     const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;
-    if (!sessionFork) {
+    if (!params.sessionFork) {
       if (activeRunSnapshot?.messages?.length) {
         messages = await toSimpleContextMessages({
           messages: activeRunSnapshot.messages,
@@ -502,7 +482,7 @@ export async function runBtwSideQuestion(
       }
     }
     params.opts?.abortSignal?.throwIfAborted();
-    if (!sessionFork && messages.length === 0 && !inFlightPrompt?.trim()) {
+    if (!params.sessionFork && messages.length === 0 && !inFlightPrompt?.trim()) {
       throw new Error("No active session context.");
     }
 
@@ -545,8 +525,9 @@ export async function runBtwSideQuestion(
         ? fallbackRuntime
         : undefined);
     if (cliProvider) {
-      if (params.toolCalls === "deny") {
-        throw new Error(`Session forks are not supported for CLI runtime ${cliProvider}.`);
+      if (params.sessionFork) {
+        // The fork owner runs subscription logins through the CLI backend itself.
+        return await params.sessionFork();
       }
       return runCliBtwSideQuestion({
         cfg: params.cfg,
@@ -595,6 +576,10 @@ export async function runBtwSideQuestion(
       throw new Error(
         `Selected agent harness "${runtimeHarness.id}" does not support /btw side questions.`,
       );
+    }
+    if (params.sessionFork) {
+      // The built-in runtime forks through the one session fork owner, `runSessionFork`.
+      return await params.sessionFork();
     }
 
     const finalizedOpenClawFallback = preparedOpenClawFallback;
@@ -658,40 +643,6 @@ export async function runBtwSideQuestion(
       }
     }
     runtimeModel = applySecretRefHeaderSentinels(runtimeModel, params.cfg);
-    if (params.toolCalls === "deny") {
-      const admission = prepareSystemAgentRunAdmission(
-        params.cfg,
-        params.authorityRunId,
-        sessionAgentId,
-        "btw.session-fork",
-        params.assertCurrent,
-        params.operatorAuthority,
-      );
-      try {
-        const admitted = await admission.admit("plugin-harness");
-        const assertCurrent = resolveAdmittedRunActiveAssertion(admitted, params.opts?.abortSignal);
-        if (!assertCurrent) {
-          throw new Error("Session fork admission is no longer active.");
-        }
-        assertCurrent();
-        const text = await runBtwSessionFork({
-          params: { ...params, agentId: sessionAgentId },
-          modelRegistry,
-          runtimeModel,
-          auth: { mode: apiKeyInfo.mode, authFlow: apiKeyInfo.authFlow },
-          apiKey,
-          resolvedAuthProfileId,
-          sessionId,
-          sessionFile,
-          workspaceDir,
-          assertCurrent,
-        });
-        assertCurrent();
-        return { text };
-      } finally {
-        admission.close();
-      }
-    }
     return runLightweightBtwStream({
       params,
       modelRegistry,
@@ -704,7 +655,7 @@ export async function runBtwSideQuestion(
       imageLimits,
       messages,
       inFlightPrompt,
-      recordBtwUsage,
+      agentId: sessionAgentId,
     });
   });
 }

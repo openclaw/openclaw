@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   buildCodexSyntheticUsageAuth,
   mergeUsageSummaries,
@@ -50,22 +51,28 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     agentDir = resolveAgentDir(params.config, resolvedAgentId);
   }
   const { resolveCommandConfigWithSecrets } = await import("../cli/command-config-resolution.js");
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   // The status budget includes local fallback and joins any exec provider it owns.
-  const prepared = await withCommandProcessScope(() =>
-    awaitWithinDeadline(
-      () =>
-        resolveCommandConfigWithSecrets({
-          config: params.config,
-          commandName: "status --usage",
-          targetIds: new Set(["models.providers.*.apiKey"]),
-          mode: "read_only_status",
-          gatewaySecretResolveTimeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
-          ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
-        }).catch(ignoreNonCleanupCommandError),
-      params.gatewayProbeDeadlineMs,
-      () => performance.now(),
-    ),
+  const prepared = await withCommandProcessScope(
+    () =>
+      awaitWithinDeadline(
+        () =>
+          resolveCommandConfigWithSecrets({
+            config: params.config,
+            commandName: "status --usage",
+            targetIds: new Set(["models.providers.*.apiKey"]),
+            mode: "read_only_status",
+            gatewaySecretResolveTimeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
+            ...(signal ? { signal } : {}),
+            ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
+          }).catch(ignoreNonCleanupCommandError),
+        params.gatewayProbeDeadlineMs,
+        () => performance.now(),
+      ),
+    signal,
   );
+  signal?.throwIfAborted();
   let config = params.config;
   if (prepared === null) {
     params.onSecretDiagnostics?.([
@@ -88,6 +95,9 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     agentId: resolvedAgentId,
     allowPluginNormalization: false,
   });
+  if (!configuredDefault) {
+    return usage;
+  }
   const policy = resolveAgentHarnessPolicy({
     config,
     agentId: resolvedAgentId,

@@ -99,7 +99,7 @@ export async function memoryFixture(
     );
   // Read one record as the owner; extra selects views such as raw or full metadata.
   const current = async (id: string, extra = {}, ctx = tool) =>
-    (await service.record({ id, ...extra }, ctx)).record!;
+    (await service.record_detail({ id, ...extra }, ctx)).record!;
   // Optimistic-concurrency fields for a mutation of the record's current revision.
   const fence = (record: { id: string; revision: number; hash: string }) => ({
     requestId: randomUUID(),

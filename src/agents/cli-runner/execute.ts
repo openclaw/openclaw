@@ -13,6 +13,7 @@ import type { ImageContent } from "../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import {
   fingerprintCliRuntimeArtifact,
   resolveCliRuntimeOwnerFingerprint,
@@ -24,6 +25,7 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
+import { prepareAgentExecScratch } from "../exec-scratch.js";
 import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
@@ -40,7 +42,7 @@ import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { resolveCliChildEnv } from "./execution-env.js";
-import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { readCliStreamRefusalOutput, recordCliStreamRefusalToolEffects } from "./exit-error.js";
 import {
   buildCliArgs,
   isClaudeCliBackendId,
@@ -53,6 +55,11 @@ import {
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
+import {
+  recallNativeSessionSystemPrompt,
+  rememberNativeSessionSystemPrompt,
+} from "./native-session-system-prompt.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import { resolveCliNoOutputTimeoutMs, resolveCliRunTimeoutOverrideMs } from "./reliability.js";
 import { recordCliModelCompleted, recordCliTrajectoryEvent } from "./trajectory.js";
@@ -85,23 +92,8 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
-  // A writer that replays history may put saved history in this prompt: a fresh recovery
-  // prompt, or durable reference context and interrupted inputs on a resumed turn.
-  const carriesSavedHistory = inputContext.cliHistoryWriter?.replaysHistory === true;
-  // Reuse the writer's run authority; each transport checks private history
-  // separately at its disclosure boundary.
-  const context = inputContext.cliHistoryWriter
-    ? {
-        ...inputContext,
-        params: {
-          ...inputContext.params,
-          assertCurrent: inputContext.cliHistoryWriter.assertCurrent,
-        },
-      }
-    : inputContext;
+  const context = inputContext;
   const params = context.params;
-  const assertCurrent = createCliRunCurrentAssertion(params);
-  assertCurrent();
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
   const localProcessEnv = installationTargetEnv(getInstallationTarget());
@@ -121,7 +113,12 @@ export async function executePreparedCliRun(
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
     isNewSession: isNew || resendSystemPromptForSoftResume,
-    systemPrompt: context.systemPrompt,
+    // A control operation resends the exact prompt the session's turns cached.
+    systemPrompt:
+      (params.controlOperation &&
+        resolvedSessionId &&
+        recallNativeSessionSystemPrompt(context.backendResolved.id, resolvedSessionId)) ||
+      context.systemPrompt,
   });
   const shouldSendSystemPrompt =
     systemPromptArg &&
@@ -139,10 +136,14 @@ export async function executePreparedCliRun(
     !params.forkCliSessionOnResume
       ? context.resumeContext
       : undefined;
+  const turnContext = [context.contextEngineSystemPromptAddition, resumeContext]
+    .filter(Boolean)
+    .join("\n\n");
   const basePrompt = usePluginOwnedExecution
     ? attemptPrompt
-    : composeCliPromptContext(attemptPrompt, { prependContext: resumeContext });
+    : composeCliPromptContext(attemptPrompt, { prependContext: turnContext });
   const privatePrependContext = [
+    usePluginOwnedExecution ? context.contextEngineSystemPromptAddition : undefined,
     context.promptContext?.prependContext,
     usePluginOwnedExecution ? resumeContext : undefined,
   ]
@@ -152,7 +153,7 @@ export async function executePreparedCliRun(
     params.controlOperation !== undefined
       ? basePrompt
       : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
-  const promptContext =
+  let promptContext: PreparedCliRunContext["promptContext"] =
     privatePrependContext || context.promptContext?.appendContext
       ? {
           ...(privatePrependContext
@@ -173,6 +174,14 @@ export async function executePreparedCliRun(
             : {}),
         }
       : undefined;
+  // Last text a plugin can screen before the CLI owns it; image paths stay host-owned.
+  if (context.beforeModelRequest) {
+    const request = await context.beforeModelRequest(
+      toCliModelRequestPayload(prompt, promptContext),
+    );
+    prompt = request.prompt;
+    promptContext = readCliPromptContext(request);
+  }
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
@@ -202,11 +211,16 @@ export async function executePreparedCliRun(
         ...(imageTurnEntryId ? { imageTurnKey: hashCliImageTurnEntryId(imageTurnEntryId) } : {}),
       });
   prompt = imagePayload.prompt;
-  const promptInputBackend =
-    params.controlOperation === "compact" && context.backendResolved.manualCompaction
-      ? { ...backend, input: context.backendResolved.manualCompaction.input }
-      : backend;
-  const { argsPrompt, stdin } = resolvePromptInput({ backend: promptInputBackend, prompt });
+  const manualCompaction =
+    params.controlOperation === "compact" ? context.backendResolved.manualCompaction : undefined;
+  const invocationBackend = manualCompaction
+    ? {
+        ...backend,
+        input: manualCompaction.input,
+        systemPromptFileArg: manualCompaction.systemPromptFileArg ?? backend.systemPromptFileArg,
+      }
+    : backend;
+  const { argsPrompt, stdin } = resolvePromptInput({ backend: invocationBackend, prompt });
   const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
@@ -272,14 +286,19 @@ export async function executePreparedCliRun(
     }
   };
   const executeAttempt = async (): Promise<CliOutput> => {
-    assertCurrent();
     await context.preparedBackend.beforeExecution?.();
-    assertCurrent();
     if (!nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt) {
       systemPromptFile = await writeCliSystemPromptFile({
         backend,
         systemPrompt: systemPromptArg,
       });
+    }
+    if (!nodePlacement && shouldSendSystemPrompt && resolvedSessionId && !params.controlOperation) {
+      rememberNativeSessionSystemPrompt(
+        context.backendResolved.id,
+        resolvedSessionId,
+        systemPromptArg,
+      );
     }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
@@ -318,10 +337,16 @@ export async function executePreparedCliRun(
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
       const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend, params, {
-        ...mcpCaptureAttempt.env,
-        ...localProcessEnv,
-      });
+      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(
+        context.preparedBackend,
+        params,
+        { ...mcpCaptureAttempt.env, ...localProcessEnv },
+        !nodePlacement
+          ? await prepareAgentExecScratch(
+              params.sessionEntry?.sessionRoot ?? context.cwd ?? context.workspaceDir,
+            )
+          : undefined,
+      );
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
@@ -337,8 +362,6 @@ export async function executePreparedCliRun(
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
       ];
-      // The history writer's native owner must be the one this final environment selects.
-      context.cliHistoryWriter?.bindExecutionEnv(env, carriesSavedHistory);
 
       let executionCommand = backend.command;
       let executionArgv0: string | undefined;
@@ -425,7 +448,6 @@ export async function executePreparedCliRun(
       }
       // Process supervision can add a scope wait after the CLI queue and backend setup.
       const resolveExecutionArgs = () => {
-        assertCurrent();
         const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
           config: params.config,
           agentId: params.agentId,
@@ -470,7 +492,7 @@ export async function executePreparedCliRun(
         const args = buildCliArgs({
           backend: nodePlacement
             ? { ...backend, systemPromptArg: undefined, systemPromptFileArg: undefined }
-            : backend,
+            : invocationBackend,
           baseArgs: Array.from(executionBaseArgs),
           modelId: context.normalizedModel,
           sessionId: resolvedSessionId,
@@ -504,7 +526,6 @@ export async function executePreparedCliRun(
       }
       runOutput = await executeCliProcess({
         context,
-        assertCurrent,
         backend,
         events,
         toolTracking,
@@ -537,8 +558,6 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
-      // Attest a token the CLI rotated during the run before any of its rows commit.
-      await context.cliHistoryWriter?.settleNativeLogin();
       await toolTracking.finishDeliveryTracking({
         useManagedClaudeLiveSession,
         recordRunError,
@@ -560,14 +579,24 @@ export async function executePreparedCliRun(
       }
     }
     if (runFailed) {
+      const refused = readCliStreamRefusalOutput(runError);
+      if (refused) {
+        const { acceptedSessionSpawns } = toolTracking.withExecutionEvidence(refused);
+        recordCliStreamRefusalToolEffects(runError, {
+          toolSummary: events.getToolSummary(),
+          ...(acceptedSessionSpawns ? { acceptedSessionSpawns } : {}),
+        });
+      }
       throw toolTracking.attachDeliveryEvidence(runError);
     }
     if (!runOutput) {
       throw new Error("CLI run completed without output");
     }
+    const nativeCompaction = events.getNativeCompaction();
     return toolTracking.withExecutionEvidence({
       ...runOutput,
       toolSummary: events.getToolSummary(),
+      ...(nativeCompaction ? { nativeCompaction } : {}),
     });
   };
   try {
@@ -575,7 +604,15 @@ export async function executePreparedCliRun(
       `cli:${queueKey}`,
       () => {
         const runQueuedAttempt = async () => {
-          assertCurrent();
+          params.assertCurrent?.();
+          const assertAdmitted = resolveAdmittedRunActiveAssertion(
+            params.admittedRunContext,
+            params.abortSignal,
+          );
+          if (!assertAdmitted) {
+            throw new Error("CLI run admission is closed");
+          }
+          assertAdmitted();
           if (params.lifecycleGeneration) {
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
           }

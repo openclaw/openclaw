@@ -1,15 +1,13 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Command } from "commander";
-import { create as createTar } from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as cliTestHelpers from "./templates-cli.test-helpers.js";
 
-const enabledTemplatesLabsConfig = {
+const enabledTemplatesConfig = {
   gateway: { controlUi: { experimental: { templates: true } } },
 };
 
@@ -29,9 +27,14 @@ const mocks = vi.hoisted(() => ({
   applyTemplateAddPlanStateless: vi.fn(),
   withOpenClawStateLease: vi.fn(),
   leaseAssertOwned: vi.fn(),
+  localAssertCurrent: vi.fn(),
+  localSignal: new AbortController().signal,
+  createLocalTemplateConversationAdapters: vi.fn(),
   preflightTemplatePackage: vi.fn(),
-  callGatewayFromCli: vi.fn(),
-  sleep: vi.fn(),
+  waitForAgentRuntime: vi.fn(),
+  prepareAgentSession: vi.fn(),
+  onAgentReady: vi.fn(),
+  onSetupEvent: vi.fn(),
 }));
 
 vi.mock("../runtime.js", async (importOriginal) => ({
@@ -74,16 +77,21 @@ vi.mock("../templates/add-stateless.js", async (importOriginal) => ({
 
 // mock-isolation: CLI unit tests bypass live Gateway ownership probes; the owner guard has its own test.
 vi.mock("./local-state-owner.js", () => ({
-  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<void> }) =>
-    await runLocal(),
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent: () => void; signal: AbortSignal }) => Promise<void>;
+  }) => await runLocal({ assertCurrent: mocks.localAssertCurrent, signal: mocks.localSignal }),
 }));
-vi.mock("./gateway-rpc.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCliWithTransport: mocks.callGatewayFromCli,
+// mock-isolation: command wiring uses no live cron store; scheduler behavior is covered by Template Add integration tests.
+vi.mock("../cron/local-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/local-service.js")>()),
+  withLocalCronService: async (_getConfig: unknown, run: (cron: unknown) => Promise<unknown>) =>
+    run({}),
 }));
-vi.mock("../utils/sleep.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../utils/sleep.js")>()),
-  sleep: mocks.sleep,
+// mock-isolation: this command test verifies adapter wiring; normal session/model owners are covered separately.
+vi.mock("./templates-agent-conversation.js", () => ({
+  createLocalTemplateConversationAdapters: mocks.createLocalTemplateConversationAdapters,
 }));
 
 const { registerTemplatesCli } = await import("./templates-cli.js");
@@ -117,39 +125,23 @@ function output() {
 }
 const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line));
 
-function gatewayConfig(agent = "worker", revision = "revision-new", applied = revision) {
-  return {
-    config: { agents: { entries: { [agent]: {} } } },
-    configRevisionHash: revision,
-    appliedConfigHash: applied,
-  };
-}
-
-async function addWithAgentReadiness(beforeWait?: () => void) {
-  const path = await writeManifest({ ...cliTestHelpers.minimalManifest, agent: { id: "worker" } });
-  const apply = mocks.applyTemplateAddPlanStateless.getMockImplementation();
-  if (!apply) {
-    throw new Error("Missing Add fixture implementation");
-  }
-  mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan, options) => {
-    beforeWait?.();
-    await options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId);
-    return apply(plan, options);
-  });
-  return await add(["--json"], path);
-}
-
 describe("templates cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
-    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
+    mocks.loadConfig.mockReset().mockReturnValue(enabledTemplatesConfig);
+    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledTemplatesConfig);
     mocks.listConfiguredMcpServers.mockReset().mockResolvedValue({
       ok: true,
       mcpServers: {},
     });
-    mocks.callGatewayFromCli.mockReset();
-    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    mocks.waitForAgentRuntime.mockReset().mockResolvedValue("applied");
+    mocks.localAssertCurrent.mockReset();
+    mocks.createLocalTemplateConversationAdapters.mockReset().mockReturnValue({
+      prepareAgentSession: mocks.prepareAgentSession,
+      waitForAgentRuntime: mocks.waitForAgentRuntime,
+      onAgentReady: mocks.onAgentReady,
+      onSetupEvent: mocks.onSetupEvent,
+    });
     mocks.preflightTemplatePackage.mockReset().mockResolvedValue({
       ok: false,
       code: "package_install_unavailable",
@@ -171,9 +163,13 @@ describe("templates cli", () => {
     vi.restoreAllMocks();
   });
 
-  it("blocks local Add while Templates Labs is off", async () => {
-    mocks.loadConfig.mockReturnValue({});
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+  it("blocks local Add while Templates is off", async () => {
+    mocks.loadConfig.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
     expect(await add(["--dry-run", "--json"])).toMatchObject({
       ok: false,
       error: { code: "templates_labs_disabled" },
@@ -196,6 +192,10 @@ describe("templates cli", () => {
     });
     expect(existsSync(workspace)).toBe(false);
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    expect(mocks.withOpenClawStateLease).not.toHaveBeenCalled();
+    expect(mocks.createLocalTemplateConversationAdapters).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.listConfiguredMcpServers).toHaveBeenCalledWith({ observe: false });
     mocks.runtime.writeJson.mockClear();
     let extractedRoot = "";
     mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan) => {
@@ -259,6 +259,17 @@ describe("templates cli", () => {
     },
   );
 
+  it("strips terminal controls from invalid registry manifest diagnostics", async () => {
+    const registry = await registryFixture("manifest");
+    await add([], registry.name);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    const message = String(mocks.runtime.error.mock.calls[0]?.[0]);
+    expect(message).toContain("Downloaded Template package manifest is invalid");
+    expect(message).toContain("evil");
+    expect(message).not.toMatch(/[\u202e\u009b]/u);
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+  });
+
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
 
@@ -278,7 +289,7 @@ describe("templates cli", () => {
     const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
     if (agentId) {
       mocks.loadConfig.mockReturnValue({
-        ...enabledTemplatesLabsConfig,
+        ...enabledTemplatesConfig,
         agents: { entries: { "demo-agent": {} } },
       });
     }
@@ -334,6 +345,7 @@ describe("templates cli", () => {
   it("discloses capability escalations in the human dry-run", async () => {
     const path = await writeManifest({
       ...cliTestHelpers.minimalManifest,
+      agent: { ...cliTestHelpers.minimalManifest.agent, tools: { allow: ["read"] } },
       mcpServers: {
         docs: {
           command: "node",
@@ -342,13 +354,6 @@ describe("templates cli", () => {
         },
       },
     });
-    const root = dirname(path);
-    await mkdir(join(root, "profiles"));
-    await writeFile(
-      join(root, "profiles", "openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    allow: [read]\n",
-      "utf8",
-    );
 
     await add(["--dry-run"], path);
 
@@ -374,8 +379,10 @@ describe("templates cli", () => {
     });
   });
 
-  it("does not Add when Labs was switched off after planning", async () => {
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+  it("does not Add when Templates was disabled after planning", async () => {
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
     expect(await add(["--json"])).toMatchObject({
       status: "failed",
       error: { code: "templates_labs_disabled" },
@@ -383,11 +390,13 @@ describe("templates cli", () => {
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
   });
 
-  it("stops Add effects when Labs turns off after apply begins", async () => {
+  it("stops Add effects when Templates is disabled after apply begins", async () => {
     const commitEffect = vi.fn();
     mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (_plan, options) => {
       await Promise.resolve();
-      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+        gateway: { controlUi: { experimental: { templates: false } } },
+      });
       options.assertForwardCurrent?.();
       commitEffect();
     });
@@ -449,114 +458,66 @@ describe("templates cli", () => {
     }
     const [, options] = mocks.applyTemplateAddPlanStateless.mock.calls[0]!;
     options.assertCurrent();
-    expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
+    expect(mocks.leaseAssertOwned).toHaveBeenCalled();
   });
 
-  it.for([false, true])("accepts an applied revision after cached response: %s", async (cached) => {
-    if (cached) {
-      mocks.callGatewayFromCli
-        .mockResolvedValueOnce(gatewayConfig("other", "revision-old"))
-        .mockResolvedValueOnce(gatewayConfig("worker", "revision-new", "revision-old"));
-    }
-    mocks.callGatewayFromCli.mockResolvedValue(gatewayConfig());
-    expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
-    expect(mocks.sleep).toHaveBeenCalledTimes(cached ? 2 : 0);
-    if (cached) {
-      expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
-    }
-  });
-
-  it("reports the last Gateway error after the reload deadline", async () => {
-    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-    await addWithAgentReadiness(() => {
-      let reads = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => (reads++ < 2 ? 0 : 15_000));
-    });
-    expect(output()).toMatchObject({
-      status: "failed",
-      error: {
-        code: "add_failed",
-        message:
-          "Gateway did not apply the Template agent configuration in time: gateway unavailable",
-      },
-    });
-  });
+  it.for(["local", "registry"])(
+    "wires %s Add into the same offline shared installer",
+    async (source) => {
+      await add(["--json"], source === "registry" ? (await registryFixture()).name : undefined);
+      const [, options] = mocks.applyTemplateAddPlanStateless.mock.calls[0]!;
+      expect(mocks.createLocalTemplateConversationAdapters).toHaveBeenCalledExactlyOnceWith({
+        agentId: "demo-agent",
+        assertCurrent: options.assertCurrent,
+        signal: mocks.localSignal,
+        runtime: expect.objectContaining({ log: expect.any(Function) }),
+      });
+      options.assertCurrent();
+      expect(mocks.localAssertCurrent).toHaveBeenCalled();
+      expect(mocks.leaseAssertOwned).toHaveBeenCalled();
+      mocks.localAssertCurrent.mockImplementation(() => {
+        throw new Error("offline custody lost");
+      });
+      expect(() => options.assertCurrent()).toThrow("offline custody lost");
+      expect(options.prepareAgentSession).toBe(mocks.prepareAgentSession);
+      expect(options.waitForAgentRuntime).toBe(mocks.waitForAgentRuntime);
+      expect(options.onAgentReady).toBe(mocks.onAgentReady);
+      expect(options.onSetupEvent).toBe(mocks.onSetupEvent);
+      expect(options.cronGateway).toEqual(
+        expect.objectContaining({
+          add: expect.any(Function),
+          enable: expect.any(Function),
+          writeScratch: expect.any(Function),
+        }),
+      );
+      const [conversationOptions] = mocks.createLocalTemplateConversationAdapters.mock.calls[0]!;
+      conversationOptions.runtime.log("conversation output");
+      options.runtime.log("conversation output");
+      expect(logLines()).not.toContain("conversation output");
+      expect(output()).toMatchObject({ status: "complete" });
+    },
+  );
 });
 
 // Wire fixtures keep the real registry client, trust gate, downloader, extractor,
 // manifest reader, and Add planner; only HTTP responses and the final mutation are controlled.
 async function registryFixture(
-  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency",
+  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency" | "manifest",
 ) {
   const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
   const manifestPath = join(root, "CLAW.md");
   const manifest = JSON.parse((await readFile(manifestPath, "utf8")).split("---")[1]!);
   if (failure !== "dependency") {
-    manifest.packages = [];
+    manifest.skills = [];
+    manifest.plugins = [];
+  }
+  if (failure === "manifest") {
+    manifest["evil\u202ekey\u009b31m"] = true;
   }
   await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
-  const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");
-  await createTar({ gzip: true, file: archive, cwd: dirname(root) }, [root.split("/").at(-1)!]);
-  const bytes = await readFile(archive);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const npmIntegrity = "sha512-" + createHash("sha512").update(bytes).digest("base64");
-  const name = "@acme/demo-agent";
-  const pkg = {
-    name,
-    family: "template",
-    displayName: "Demo",
-    channel: "community",
-    isOfficial: false,
-    updatedAt: 1,
-    latestVersion: failure === "version" ? "latest" : "1.2.3",
-  };
-  const artifact = {
-    kind: "npm-pack",
-    sha256: failure === "digest" ? "0".repeat(64) : sha256,
-    npmIntegrity,
-  };
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const route = decodeURIComponent(url.pathname);
-    if (route.endsWith("/artifact/download")) {
-      return new Response(bytes, { headers: { "X-ClawHub-Artifact-Sha256": sha256 } });
-    }
-    if (route.endsWith("/artifact")) {
-      return Response.json({ package: pkg, version: "1.2.3", artifact });
-    }
-    if (route.endsWith("/security")) {
-      return Response.json({
-        package: pkg,
-        release: {
-          version: "1.2.3",
-          artifactKind: "npm-pack",
-          artifactSha256: artifact.sha256,
-          npmIntegrity,
-        },
-        overview: "Synthetic security review.",
-        securityAuditUrl: "https://clawhub.ai/acme/templates/demo-agent/security-audit",
-        verdict: failure === "trust" ? "suspicious" : "benign",
-        trust: {
-          scanStatus: "clean",
-          moderationState: "approved",
-          blockedFromDownload: false,
-          reasons: [],
-          pending: false,
-          stale: false,
-        },
-      });
-    }
-    if (route === "/api/v1/packages/" + name) {
-      return Response.json({
-        package: {
-          ...pkg,
-          ...(failure === "family" ? { family: "plugin" } : {}),
-          ...(failure === "name" ? { name: "@acme/other" } : {}),
-        },
-        owner: { handle: "acme" },
-      });
-    }
-    throw new Error("Unexpected registry request: " + route);
-  });
-  return { name, integrity: "sha256:" + sha256 };
+  return await cliTestHelpers.mockRegistryPackage(
+    tempDirs,
+    root,
+    failure === "dependency" || failure === "manifest" ? undefined : failure,
+  );
 }

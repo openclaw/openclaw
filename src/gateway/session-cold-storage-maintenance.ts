@@ -1,5 +1,8 @@
 import type { SessionsStorageStatusResult } from "../../packages/gateway-protocol/src/index.js";
-import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
+import {
+  resolveMaintenanceConfigFromInput,
+  resolveSessionColdStorageConfig,
+} from "../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
@@ -18,7 +21,7 @@ const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
 function hasTranscriptMaintenanceWork(config: OpenClawConfig): boolean {
   const maintenance = resolveMaintenanceConfigFromInput(config.session?.maintenance);
   return (
-    config.session?.maintenance?.coldStorage?.enabled === true ||
+    resolveSessionColdStorageConfig(config.session?.maintenance).enabled ||
     (maintenance.mode === "enforce" && maintenance.resetArchiveRetentionMs != null)
   );
 }
@@ -49,7 +52,7 @@ export function startSessionColdStorageMaintenance(params: {
     run: () => {
       const config = params.getRuntimeConfig();
       if (scheduler.signal.aborted || !hasTranscriptMaintenanceWork(config)) {
-        throw new Error("Transcript maintenance is disabled");
+        throw new Error("Chat history maintenance is disabled");
       }
       if (inFlight) {
         return inFlight;
@@ -62,7 +65,7 @@ export function startSessionColdStorageMaintenance(params: {
           isGatewayWorkAdmissionClosed()
         ) {
           throw new Error(
-            "Transcript archival canceled because its runtime configuration changed or the Gateway is stopping",
+            "Chat history archival canceled because its runtime configuration changed or the Gateway is stopping",
           );
         }
       };
@@ -144,7 +147,7 @@ export function requestGatewaySessionColdStorageMaintenance(
 ): void {
   const owner = owners.get(getRuntimeConfig);
   if (!owner) {
-    throw new Error("Transcript maintenance is not running; wait for Gateway startup to finish");
+    throw new Error("Chat history maintenance is not running; wait for Gateway startup to finish");
   }
   // The lifecycle owner records completion/errors and drains this job on shutdown.
   void owner.run().catch(() => {});
