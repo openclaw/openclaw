@@ -118,12 +118,14 @@ export class RealtimeTalkSession {
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
       if (this.localOptions.talkChimes) {
-        const chimes = await import("./chimes.ts").catch(() => undefined);
+        const { TalkChimes: Chimes } = await import("./chimes.ts").catch(() => ({
+          TalkChimes: undefined,
+        }));
         if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
           return;
         }
-        if (chimes) {
-          this.chimes = new chimes.TalkChimes(
+        if (Chimes) {
+          this.chimes = new Chimes(
             this.localOptions.talkChimes,
             Boolean(this.options.voiceChangeId),
           );
