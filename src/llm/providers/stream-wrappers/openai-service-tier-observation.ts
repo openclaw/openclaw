@@ -2,17 +2,18 @@ import { responsesServiceTierObserver } from "@openclaw/ai/internal/openai";
 import type { StreamFn } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelServiceTierObservation } from "../../../agents/prepared-model-runtime-auth.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { supportsOpenAIResponsesFastMode } from "../openai-fast-mode.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
 type TierRecovery = { rejections: number; until: number; remaining: number };
-// Worker calls rebuild their wrapper; the registered run owns the shared lifetime.
-const runRecoveries = new WeakMap<object, Map<string, TierRecovery>>();
+// A rejection describes the account/model route, not one run: later turns and rebuilt worker
+// wrappers share the cooldown instead of paying for the same rejection again.
+const routeRecoveries = new Map<string, TierRecovery>();
+const MAX_ROUTE_RECOVERIES = 256;
 
-/** Account observations remain hints; explicit rejections also cool down this run. */
+/** Account observations remain hints; explicit rejections also cool down the route. */
 export function createOpenAIServiceTierObservationWrapper(
   underlying: StreamFn,
   recordObservation: (
@@ -21,20 +22,19 @@ export function createOpenAIServiceTierObservationWrapper(
   ) => boolean,
   attribution: { runId: string; sessionId: string; accountRoute: string },
 ): StreamFn {
-  const run = getAgentRunContext(attribution.runId);
-  const recoveries = (run && runRecoveries.get(run)) ?? new Map<string, TierRecovery>();
-  if (run) {
-    runRecoveries.set(run, recoveries);
-  }
   return (model, context, options) => {
     if (model.api !== "openai-responses" || !supportsOpenAIResponsesFastMode(model)) {
       return underlying(model, context, options);
     }
     const route = JSON.stringify([attribution.accountRoute, model.id, model.api, model.baseUrl]);
-    let recovery = recoveries.get(route);
+    let recovery = routeRecoveries.get(route);
     if (!recovery) {
+      // Forgotten cooldowns only mean those routes probe Ultrafast again.
+      if (routeRecoveries.size >= MAX_ROUTE_RECOVERIES) {
+        routeRecoveries.clear();
+      }
       recovery = { rejections: 0, until: 0, remaining: 0 };
-      recoveries.set(route, recovery);
+      routeRecoveries.set(route, recovery);
     }
     let rejectedTier: string | undefined;
     const observedOptions = { ...options };
