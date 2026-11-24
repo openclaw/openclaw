@@ -6,7 +6,6 @@ const catalog = {
   chat: {
     composer: {
       menu: {
-        back: "Back",
         fromLibraries: "From your libraries",
         agentWorkspace: "Agent & workspace",
         unavailable: "Unavailable",
@@ -46,21 +45,16 @@ const catalog = {
         scopeSessionHint: "Saved for all sessions, but on only in this one.",
         scopeEverywhereHint: "Saved and on in every session.",
         toolAccess: {
-          label: "Tool access",
           loading: "Loading tools…",
           loadFailed: registerChatComposerEnglish.catalog.chat.composer.menu.toolAccess.loadFailed,
           noTools: "No tools available for this MCP server.",
-          summary: "{enabled} of {total} tools on",
-          summaryOne: "{enabled} of {total} tool on",
         },
-        enabledCount: "{count} on",
         loadingSkills: "Loading skills…",
         skillsLoadFailed: "Couldn’t load skills. Try again.",
         noSkills: "No skills available.",
         noConnectors: "No MCP servers configured.",
         depsMissing: "Missing dependencies",
         skillBlocked: "Not available for this agent",
-        sessionTag: "session",
         offlineBlocked: registerChatComposerEnglish.catalog.chat.composer.menu.offlineBlocked,
         adminBlocked: registerChatComposerEnglish.catalog.chat.composer.menu.adminBlocked,
         savingBlocked: registerChatComposerEnglish.catalog.chat.composer.menu.savingBlocked,

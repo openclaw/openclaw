@@ -529,7 +529,7 @@ it("loads optional English copy at each view boundary while keeping shared label
 
 it("loads optional chat copy with its view while keeping admission errors synchronous", async () => {
   const { en, manager } = await loadI18n({
-    chat: { composer: { menu: { back: "Zurück" } } },
+    chat: { composer: { menu: { tools: "Werkzeuge" } } },
   });
   const permissions = en.chat.permissions;
   const workspaceFiles = en.chat.workspaceFiles;
@@ -561,7 +561,7 @@ it("loads optional chat copy with its view while keeping admission errors synchr
   expect(manager.t("chat.composer.menu.toolAccess.noTools")).toBe(
     "No tools available for this MCP server.",
   );
-  expect(manager.t("chat.composer.menu.back")).toBe("Zurück");
+  expect(manager.t("chat.composer.menu.tools")).toBe("Werkzeuge");
   expect(manager.getLocale()).toBe("de");
   expect(en.chat.permissions).toBe(permissions);
   expect(en.chat.workspaceFiles).toBe(workspaceFiles);

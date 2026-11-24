@@ -38,7 +38,6 @@ const enChatMessageMetadata = {
       originalUnavailable: "The original message is unavailable.",
       replyOriginalUnavailable: "Original message unavailable",
       message: en.chat.messages.message,
-      currentMessage: "current message",
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",

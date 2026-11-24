@@ -29,8 +29,6 @@ const enGitHub = {
     taskBranch: "Task branch: {branch}",
     stateUnavailable: "Status unavailable",
     morePullRequests: "{count} more",
-    pullRequestLabel: "Pull request #{number}, {state}",
-    pullRequestAuthorLabel: "Opened by {login}",
     states: {
       open: "Open",
       draft: "Draft",
@@ -52,11 +50,8 @@ const enGitHub = {
       publishPr: "Publish PR",
       publishing: "Publishing…",
       creating: "Creating…",
-      publicationRequested: "Requested",
       retryPublication: "Retry publication",
       openPublishedPr: "Open PR",
-      cloudPublicationGuidance:
-        "Ask the agent to publish this Cloud workspace after accepting its changes.",
       actions: "Actions for pull request {reference}",
       dismiss: "Dismiss pull request {reference}",
       dismissBranch: "Hide {branch} for this session",
@@ -99,7 +94,6 @@ const enGitHub = {
       couldNotLoad: "Couldn’t load pull request",
       couldNotLoadMany: "Couldn’t load pull requests",
       tryAgain: "Try again.",
-      lastUpdated: "Last updated {time}",
       retry: "Retry",
       empty: "No pull requests yet.",
       rateLimited:
