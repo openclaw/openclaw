@@ -270,14 +270,12 @@ export async function createReaderFixture({ codeRoot, root, port, env = process.
             agentId,
             {
               workspace: path.join(stateDir, "workspaces", agentId),
-              heartbeat: { every: "0m" },
             },
           ]),
         ),
       },
       cron: { enabled: false },
       plugins: { enabled: false },
-      skills: { workshop: { autonomous: { mode: "off" } } },
       update: { checkOnStart: false },
     }),
     { mode: 0o600 },
@@ -311,14 +309,23 @@ export async function createReaderFixture({ codeRoot, root, port, env = process.
         message,
       });
       assert(injected.ok && injected.messageId, "History writer did not commit its message");
+      const history = await gatewayCall(fixture, codeRoot, "chat.history", {
+        agentId,
+        sessionKey: key,
+        limit: 20,
+      });
+      assert.equal(history.sessionId, created.sessionId, "Seed history selected another session");
+      const messages = historyMessages(history);
+      const written = messages.filter((entry) => entry.id === injected.messageId);
+      assert.equal(written.length, 1, "Seed history did not retain the injected identity");
+      assert.equal(written[0].role, "assistant");
+      assert(JSON.stringify(written[0].content).includes(message), "Seed history lost its message");
       fixture.expected.sessions.push({
         agentId,
         key,
         label,
         sessionId: created.sessionId,
-        messages: [
-          { id: injected.messageId, role: "assistant", content: [{ type: "text", text: message }] },
-        ],
+        messages,
       });
     }
     const definition = {
