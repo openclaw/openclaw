@@ -1,4 +1,5 @@
 // Covers script-free npm install args and environment.
+import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -42,6 +43,43 @@ function withWindowsNpmToolchain<T>(dir: string, run: (nodeDir: string) => T): T
 }
 
 describe("safe npm install helpers", () => {
+  it.each(["npm_config_allow_scripts", "NPM_CONFIG_ALLOW_SCRIPTS", "NpM_cOnFiG_aLlOw_ScRiPtS"])(
+    "installs with real npm without lifecycle scripts when inheriting %s",
+    async (key) => {
+      await withTempDir("openclaw-npm-allow-scripts-", async (dir) => {
+        const script = `node -e "require('node:fs').writeFileSync('lifecycle-ran', 'ran')"`;
+        fsSync.writeFileSync(
+          path.join(dir, "package.json"),
+          JSON.stringify({
+            name: "openclaw-install-fixture",
+            version: "1.0.0",
+            scripts: { preinstall: script, install: script, postinstall: script },
+          }),
+        );
+        const result = spawnSync(
+          process.execPath,
+          [
+            path.join(npmPackageRoot, "bin", "npm-cli.js"),
+            ...createSafeNpmInstallArgs({ noAudit: true, noFund: true }),
+          ],
+          {
+            cwd: dir,
+            env: createSafeNpmInstallEnv(
+              { PATH: process.env.PATH, HOME: dir, [key]: "openclaw" },
+              { packageLock: true },
+            ),
+            encoding: "utf8",
+            timeout: 10_000,
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        expect(fsSync.existsSync(path.join(dir, "package-lock.json"))).toBe(true);
+        expect(fsSync.existsSync(path.join(dir, "lifecycle-ran"))).toBe(false);
+      });
+    },
+  );
+
   it("builds script-free npm install args", () => {
     expect(
       createSafeNpmInstallArgs({
