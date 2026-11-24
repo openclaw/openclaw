@@ -5,6 +5,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -193,7 +194,7 @@ export async function releaseOpenClawStateLeaseBestEffort(
   params: Parameters<typeof releaseOpenClawStateLease>[0],
   execute?: () => Promise<void>,
 ): Promise<void> {
-  const deadline = performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
+  const startedAt = performance.now();
   let attempt = 0;
   while (true) {
     try {
@@ -205,7 +206,12 @@ export async function releaseOpenClawStateLeaseBestEffort(
       return;
     } catch (error) {
       const now = performance.now();
-      if (!isSqliteLockError(error) || now >= deadline) {
+      const lockContention = isSqliteLockError(error);
+      // Release should give a competing writer the same time as a normal state write.
+      const deadline =
+        startedAt +
+        (lockContention ? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS : LEASE_CONTENTION_RETRY_TIMEOUT_MS);
+      if ((!lockContention && !isStateDatabaseMaintenanceContention(error)) || now >= deadline) {
         if (execute || isStateDatabaseMaintenanceContention(error)) {
           // Startup can fail before worker cleanup is available. Preserve maintenance
           // refusal so the resource owner retries this exact lease after custody ends.

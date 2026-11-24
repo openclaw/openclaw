@@ -1,4 +1,5 @@
 import { isStateDatabaseMaintenanceContention } from "../infra/gateway-state-owner-record.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -10,16 +11,17 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 const CONTENDED_CLEANUP_RETRY_INITIAL_MS = 250;
 const CONTENDED_CLEANUP_RETRY_MAX_MS = 5_000;
 
-function isMaintenanceContention(error: unknown, depth = 0): boolean {
+function isReleaseContention(error: unknown, depth = 0): boolean {
   if (depth > 8) {
     return false;
   }
   if (error instanceof AggregateError && error.errors.length > 0) {
-    return error.errors.every((entry) => isMaintenanceContention(entry, depth + 1));
+    return error.errors.every((entry) => isReleaseContention(entry, depth + 1));
   }
   return (
     isStateDatabaseMaintenanceContention(error) ||
-    (error instanceof Error && isMaintenanceContention(error.cause, depth + 1))
+    isSqliteLockError(error) ||
+    (error instanceof Error && isReleaseContention(error.cause, depth + 1))
   );
 }
 
@@ -61,7 +63,7 @@ export function createOpenClawStateLeaseCleanup(params: {
         throw error;
       }));
   };
-  // Another process's offline maintenance is brief; an unreleased lease would otherwise
+  // Another process's maintenance or write transaction is brief; an unreleased lease would otherwise
   // block every later acquirer, including this process, until its stored expiry.
   // finish() is idempotent, and release still targets only this owner's lease row.
   const retryContendedCleanup = (error: unknown, retries: number) => {
@@ -69,7 +71,7 @@ export function createOpenClawStateLeaseCleanup(params: {
     if (complete || deadline === undefined || Date.now() >= deadline) {
       return;
     }
-    if (!isMaintenanceContention(error)) {
+    if (!isReleaseContention(error)) {
       return;
     }
     const delayMs = Math.min(
