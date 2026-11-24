@@ -91,12 +91,22 @@ async function retain(
       record.preparation.expiresAtMs <= now() ||
       (generation !== undefined && generation.expiresAtMs <= now());
     const reconstructing = ctx.preserveReconstructing?.(record) === true;
+    // An unavailable demand read proves neither presence nor absence: it cannot retire a
+    // record on demand alone, and no generation was admitted to plan against. Expiry,
+    // disabled capacity and surplus limits stay independent of that observation.
+    const demandAllowsRetention =
+      ctx.demandUnavailable || !isSupersededPresenceReserve(record, ctx.activeDemand);
+    const generationAllowsRetention =
+      ctx.demandUnavailable || generation?.preparation.key === record.preparation.key;
+    const planningAllowsRetention =
+      ctx.demandUnavailable ||
+      !requireRetention ||
+      generation?.retention !== undefined ||
+      generation?.deferred === true;
     const valid =
       !expired &&
       (reconstructing ||
-        (!isSupersededPresenceReserve(record, ctx.activeDemand) &&
-          generation?.preparation.key === record.preparation.key &&
-          (!requireRetention || generation.retention !== undefined || generation.deferred))) &&
+        (demandAllowsRetention && generationAllowsRetention && planningAllowsRetention)) &&
       ((record.preparation.purpose === "build" && record.state !== "ready") ||
         count < limits.target) &&
       totalKept < limits.maxTotal;
@@ -284,6 +294,7 @@ export async function runPreparedPoolPass(
     preparations,
     isAdmitted,
     activeDemand,
+    demandUnavailable: observation.unavailable,
     presenceDeferred,
     preserveReconstructing: presence.captureReconstruction(),
     inventory,
@@ -291,26 +302,19 @@ export async function runPreparedPoolPass(
     reportRefill,
   };
   if (observation.unavailable) {
-    // An unreadable demand observation proves neither presence nor absence. It can
-    // refuse new capacity, but it must never retire the inventory it cannot evaluate.
     options.warn(
-      "Prepared capacity demand is unavailable; retaining prepared inventory until the next maintenance pass",
+      "Prepared capacity demand is unavailable; prepared inventory is retained until the next maintenance pass",
     );
-    await reconcileAll(
-      ctx,
-      new Map(),
-      inventory.filter(
-        (record) =>
-          record.destroyRequestedAtMs !== null && record.preparation?.consumedAtMs === null,
-      ),
-    );
-    return;
   }
   const eligible = pool.admitSources(ctx);
   // Expiry and disabled/surplus capacity need no source or artifact admission.
   // Drain that cleanup first so unrelated GitHub latency cannot hold its owner.
   const initial = await retain(ctx, eligible, new Set<string>(), false);
   await reconcileAll(ctx, eligible, initial.cleanup);
+  if (observation.unavailable) {
+    // Unknown demand refuses new capacity; expiry and requested cleanup already ran above.
+    return;
+  }
   const planned = await planRefill(ctx, eligible);
   const retained = await retain(ctx, planned, initial.cleaned, true);
   await reconcileAll(ctx, planned, retained.cleanup);

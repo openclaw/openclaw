@@ -313,11 +313,34 @@ describe("empty workspace prepared worker reserves", () => {
       expiresAtMs: Number.MAX_SAFE_INTEGER,
     });
 
+    const expiredAtMs = fixture.nowMs + 1;
+    await fixture.ready(
+      await fixture.store.createIntent({
+        environmentId: "expired-standing-reserve",
+        providerId: fixture.provider.id,
+        profileId: "development",
+        provisionOperationId: "expired-standing-operation",
+        profileSnapshot: reserve!.profileSnapshot,
+        preparation: {
+          purpose: "reserve",
+          key: reserve!.preparation!.key,
+          demandAtMs: fixture.nowMs,
+          expiresAtMs: expiredAtMs,
+        },
+      }),
+    );
+    fixture.nowMs = expiredAtMs + 1;
+
     policyUnavailable = true;
     await expect(fixture.schedule(pool)).rejects.toThrow("Image policy could not be evaluated");
     expect(fixture.store.get(reserve!.environmentId)).toMatchObject({
       state: "ready",
       destroyRequestedAtMs: null,
+    });
+    // Expiry stays independent of the demand observation that failed.
+    expect(fixture.store.get("expired-standing-reserve")).toMatchObject({
+      state: "destroyed",
+      destroyRequestedAtMs: expiredAtMs + 1,
     });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("demand is unavailable"));
   });
