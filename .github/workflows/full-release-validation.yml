@@ -2794,15 +2794,16 @@ jobs:
       - name: Require successful source readiness
         env:
           SOURCE_READINESS_RESULT: ${{ needs.plugin_compatibility_readiness.result }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_READINESS_RESULT" == "success" ]] || {
+          [[ "$SOURCE_READINESS_RESULT" == "success" || ( "$RERUN_GROUP" == "build-only" && "$SOURCE_READINESS_RESULT" == "skipped" ) ]] || {
             echo "Release source readiness must succeed, including when reusing evidence." >&2
             exit 1
           }
 
       - name: Require qualified publication artifacts
-        if: inputs.rerun_group == 'all'
+        if: contains(fromJSON('["all","build-only"]'), inputs.rerun_group)
         env:
           NPM_PREPARE_RESULT: ${{ needs.prepare_npm_package.result }}
           NPM_QUALIFY_RESULT: ${{ needs.qualify_npm_package.result }}

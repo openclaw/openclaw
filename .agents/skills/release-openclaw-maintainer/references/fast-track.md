@@ -13,6 +13,8 @@ reviewed by an eligible npm release manager. In the release publish run, choose
 That decision authorizes the exact workflow inputs, including the validation
 exception. `scripts/release-approval-receipt.mjs` verifies the environment approval
 history and binds the exception packet to the publication receipt.
+This replaces the duplicate conversation/approval-URL gate that blocked fast-track
+release use ([#204820](https://github.com/openclaw/openclaw/pull/204820)).
 
 There is no separate fast-track approval service, Firebase record, chat/group
 conversation, issue comment, approval URL, or manually supplied approver/time.

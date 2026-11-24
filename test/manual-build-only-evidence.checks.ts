@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { createClient } from "../scripts/frv.mjs";
 import {
   buildReleaseExecutionPlan,
   buildReleaseStateArtifact,
@@ -25,6 +26,7 @@ import {
 } from "../scripts/npm-preflight-tooling-identity.mjs";
 import {
   requiredChildKeysForRerunGroup,
+  parseReleaseCiSummaryArgs,
   validateReleaseBuildOnlyEvidence,
   validateReleaseRunEvidence,
 } from "../scripts/release-ci-summary.mjs";
@@ -314,4 +316,26 @@ it("admits build-only publication only with an exact exception request while ret
     "not validated release evidence",
   );
   expect(JSON.stringify(f.manifest)).toBe(before);
+});
+
+it("FRV verification returns real preparation evidence and refuses a failed seal without claiming validation", async () => {
+  const f = candidatePublicationFixture({ rerunGroup: "build-only" });
+  const client = createClient(f.repository, {
+    execCommand: async (_command: string, args: string[]) => {
+      const options = parseReleaseCiSummaryArgs(args.slice(1));
+      const verify = options.buildOnlyPreparation
+        ? validateReleaseBuildOnlyEvidence
+        : validateReleaseRunEvidence;
+      return JSON.stringify(await verify({ ...options, ...evidenceOptions(f) }, f.client));
+    },
+  });
+  const result = await client.verify(f.runId, f.plan);
+  expect(JSON.parse(String(result))).toMatchObject({
+    prepared: true,
+    valid: false,
+    publicationAuthorized: false,
+    validation: { mode: "build-only" },
+  });
+  Reflect.deleteProperty(f.manifest.publicationArtifacts, "npmPreflight");
+  await expect(client.verify(f.runId, f.plan)).rejects.toThrow();
 });

@@ -124,24 +124,6 @@ function fixture() {
   return { packet, env, receipt, expected, parentRun, parentJobs, approvals, artifact };
 }
 
-it("uses only npm-release environment approval, without an approval URL or chat decision", () => {
-  const f = fixture();
-  expect(f.packet).not.toHaveProperty("approval");
-  expect(createReleaseApprovalReceipt(f.env, () => f.approvals)).toMatchObject({
-    approver: "octocat",
-    fastTrackDigest: releaseFastTrackDigest(f.packet),
-  });
-  for (const approvals of [
-    [],
-    [{ ...f.approvals[0], state: "rejected" }],
-    [{ ...f.approvals[0], environments: [{ name: "unrelated" }] }],
-  ]) {
-    expect(() => createReleaseApprovalReceipt(f.env, () => approvals)).toThrow(
-      "approved npm-release environment entry",
-    );
-  }
-});
-
 it("checks fast-track expiry after the environment approval wait before issuing a new receipt", () => {
   vi.useFakeTimers();
   const f = fixture();

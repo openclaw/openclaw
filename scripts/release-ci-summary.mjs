@@ -4481,7 +4481,7 @@ function qualificationFacts(evidence) {
   };
 }
 
-function parseReleaseCiSummaryArgs(argv) {
+export function parseReleaseCiSummaryArgs(argv) {
   const stringFlags = {
     "--repo": "repository",
     "--manifest": "manifestPath",
