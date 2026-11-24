@@ -125,7 +125,7 @@ extension ChatSessionSidebar {
                 ProgressView().controlSize(.small)
             }
             if !self.batch.errors.isEmpty {
-                Text(String(localized: "Some thread operations failed. See the affected rows and try again."))
+                Text(String(localized: "Check the affected threads."))
                     .foregroundStyle(OpenClawChatTheme.danger)
             }
             ForEach(Array(Set(self.batch.notices + Array(self.batch.errors.values))).sorted(), id: \.self) {
