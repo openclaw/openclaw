@@ -35,7 +35,12 @@ export function createEmptyRuntimeChunksPlugin(): TsdownPlugin {
         }
         const statements = [];
         for (const statement of this.parse(chunk.code).body) {
-          if (statement.type !== "ImportDeclaration") {
+          if (
+            (statement.type !== "ImportDeclaration" &&
+              statement.type !== "ExportNamedDeclaration" &&
+              statement.type !== "ExportAllDeclaration") ||
+            !statement.source
+          ) {
             continue;
           }
           const dependency = path.posix.join(
@@ -45,7 +50,7 @@ export function createEmptyRuntimeChunksPlugin(): TsdownPlugin {
           if (!empty.has(dependency)) {
             continue;
           }
-          if (statement.specifiers.length !== 0) {
+          if (statement.type !== "ImportDeclaration" || statement.specifiers.length !== 0) {
             removable.delete(dependency);
           } else {
             dependencies.delete(dependency);
@@ -63,10 +68,10 @@ export function createEmptyRuntimeChunksPlugin(): TsdownPlugin {
           if (!removable.has(statement.dependency)) {
             continue;
           }
-          // Keep source-map offsets while removing only the side-effect import.
+          // Preserve UTF-16 columns and every JS line terminator for source maps.
           chunk.code =
             chunk.code.slice(0, statement.start) +
-            chunk.code.slice(statement.start, statement.end).replace(/[^\r\n]/gu, " ") +
+            chunk.code.slice(statement.start, statement.end).replace(/[^\r\n\u2028\u2029]/g, " ") +
             chunk.code.slice(statement.end);
         }
         chunk.imports = chunk.imports.filter((dependency) => !removable.has(dependency));
