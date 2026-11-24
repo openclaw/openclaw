@@ -110,25 +110,15 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
       // removed stage while the Gateway runs the new version; heal it without a command.
       "cli-launcher",
       async () => {
-        const [
-          { resolveOpenClawPackageRootSync },
-          { repairPublishedPnpmLaunchers },
-          { repairLegacyGitReleaseLauncher },
-        ] = await Promise.all([
-          import("../infra/openclaw-root.js"),
-          import("../infra/update-launcher-repair.js"),
-          import("../update/repair-launcher.js"),
-        ]);
+        const [{ resolveOpenClawPackageRootSync }, { repairPublishedPnpmLaunchers }] =
+          await Promise.all([
+            import("../infra/openclaw-root.js"),
+            import("../infra/update-launcher-repair.js"),
+          ]);
         const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
         params.signal.throwIfAborted();
         if (!root) {
           return;
-        }
-        const legacyLauncher = await repairLegacyGitReleaseLauncher({ root });
-        if (legacyLauncher) {
-          params.log.info(
-            `Repaired the legacy release launcher ${legacyLauncher}: status checks no longer count as Gateway starts.`,
-          );
         }
         const { repaired, failed } = await repairPublishedPnpmLaunchers({ root });
         for (const repair of repaired) {

@@ -28,10 +28,6 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createLegacyLauncherFixture,
-  runLegacyLauncher,
-} from "../update/legacy-launcher.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -327,41 +323,6 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       expect(log.warn).not.toHaveBeenCalled();
     },
   );
-
-  it("refreshes an installed legacy launcher without counting diagnostics or disabling rollback", async () => {
-    await withOpenClawTestState({ label: "legacy-release-launcher" }, async () => {
-      const fixture = createLegacyLauncherFixture(process.env.OPENCLAW_STATE_DIR!);
-      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
-      resolveOpenClawPackageRootSync.mockReturnValueOnce(fixture.root);
-      expect(runLegacyLauncher(fixture.launcher, ["gateway", "run"]).status).toBe(0);
-      const trial = fs.readFileSync(fixture.trial, "utf8");
-      const selected = fs.readlinkSync(fixture.slot);
-      const log = createLog();
-      await runGatewayPostReadyStartupMaintenance({
-        getConfig: () => ({}),
-        getPluginRegistry: createEmptyPluginRegistry,
-        databases: [],
-        signal: new AbortController().signal,
-        log,
-      });
-      for (let count = 0; count < 2; count++) {
-        expect(runLegacyLauncher(fixture.launcher, ["gateway", "status"]).status).toBe(0);
-        expect(fs.readFileSync(fixture.trial, "utf8")).toBe(trial);
-        expect(fs.readlinkSync(fixture.slot)).toBe(selected);
-      }
-      // Genuine starts still consume the legacy budget and restore the previous release.
-      expect(runLegacyLauncher(fixture.launcher, ["gateway", "run"]).status).toBe(0);
-      expect(JSON.parse(fs.readFileSync(fixture.trial, "utf8")).attempts).toBe(2);
-      const rollback = runLegacyLauncher(fixture.launcher, ["gateway", "run"]);
-      expect(rollback.status).toBe(0);
-      expect(rollback.stderr).toContain("failed to start twice; switched back");
-      expect(fs.existsSync(fixture.trial)).toBe(false);
-      expect(fs.realpathSync(fixture.slot)).toBe(
-        path.join(fixture.prefix, "releases/previous/openclaw"),
-      );
-      expect(log.warn).not.toHaveBeenCalled();
-    });
-  });
 
   it("does not start maintenance after its Gateway lifetime closes", async () => {
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");

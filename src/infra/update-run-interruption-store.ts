@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import { verifiedLegacyTrialRepair } from "../update/legacy-trial-record.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
@@ -18,6 +19,8 @@ import {
   hasStoredUpdateRecovery,
   readActiveUpdateRun,
   readLatestUpdateRun,
+  readUpdateRunRecord,
+  readUpdateRuns,
 } from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
 import { upsertStep } from "./update-run-step-upsert.js";
@@ -88,13 +91,32 @@ export function persistInterruptedUpdateObservation(
         assertCurrent("commit");
         return { accepted: true, run, ...(updateResult ? { updateResult } : {}) };
       };
-      const current = readLatestUpdateRun(db);
+      const repair = input.legacyRepairRunId
+        ? readUpdateRunRecord(db, input.legacyRepairRunId)
+        : undefined;
+      const current = input.legacyRepairRunId
+        ? readUpdateRunRecord(db, input.expected.runId)
+        : readLatestUpdateRun(db);
       const active = readActiveUpdateRun(db);
       if (
         !current ||
         !isDeepStrictEqual(current, input.expected) ||
-        (active && active.runId !== current.runId) ||
+        (active && active.runId !== current.runId && active.runId !== repair?.runId) ||
         hasStoredUpdateRecovery(db, current.runId)
+      ) {
+        return { accepted: false };
+      }
+      const legacyCandidate = input.legacyRepairRunId
+        ? verifiedLegacyTrialRepair(current, repair, input.verification)
+        : undefined;
+      if (
+        input.legacyRepairRunId &&
+        (!legacyCandidate ||
+          !repair ||
+          hasStoredUpdateRecovery(db, repair.runId) ||
+          readUpdateRuns(db, { active: true, limit: 100 }).some(
+            (run) => run.runId !== repair.runId && run.runId !== current.runId,
+          ))
       ) {
         return { accepted: false };
       }
@@ -106,7 +128,7 @@ export function persistInterruptedUpdateObservation(
       const eligible = completingCleanup
         ? { ...current, steps: current.steps.filter((step) => step !== previous) }
         : current;
-      if (!canSettleInterruptedUpdate(eligible)) {
+      if (!legacyCandidate && !canSettleInterruptedUpdate(eligible)) {
         return { accepted: false };
       }
       const uncertain = input.cleanup === "pending" || input.cleanup === "unknown";
@@ -136,7 +158,7 @@ export function persistInterruptedUpdateObservation(
       if (!verification) {
         return accept(persistRun(db, current, options));
       }
-      const candidate = readInstalledUpdateCandidate(current);
+      const candidate = legacyCandidate ?? readInstalledUpdateCandidate(current);
       if (!candidate) {
         return { accepted: false };
       }
@@ -145,10 +167,16 @@ export function persistInterruptedUpdateObservation(
         current.phase = "verifying";
         current.finishedAtMs = null;
         for (const step of current.steps) {
-          if (step.step === "reconcile:abandoned") {
+          if (
+            step.step === "reconcile:abandoned" ||
+            (legacyCandidate && ["activating", "restarting", "verifying"].includes(step.step))
+          ) {
             step.status = "completed";
           }
         }
+      }
+      if (legacyCandidate) {
+        delete current.origin.nextAction;
       }
       recordUpdateRunVerificationRecord(current, verification);
       upsertStep(current, {
@@ -157,7 +185,10 @@ export function persistInterruptedUpdateObservation(
         endedAtMs: Date.now(),
         detail: `Updater exited before recording completion; installed and serving candidate build ${candidate.buildId} verified.`,
       });
-      finishUpdateRunRecord(current, { status: "succeeded", after: candidate });
+      finishUpdateRunRecord(current, {
+        status: "succeeded",
+        after: { version: candidate.version, buildId: candidate.buildId },
+      });
       const saved = persistRun(db, current, options);
       return accept(saved, claimUpdateResultInTransaction(db, saved));
     },

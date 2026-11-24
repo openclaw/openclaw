@@ -1,5 +1,6 @@
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
 import type { PreparedReadinessChecker } from "./server/readiness.js";
+import { announceGatewayInstallationReady } from "./stale-install.js";
 
 type GatewayReadinessLog = {
   log: { info: (message: string) => void };
@@ -13,6 +14,7 @@ export async function logGatewayReady(
 ): Promise<void> {
   const prepared = await params.getReadiness.prepare();
   if (!params.isClosing?.() && prepared.publish().ready) {
+    await announceGatewayInstallationReady();
     params.log.info(message);
   }
 }
@@ -58,6 +60,7 @@ export function createGatewayReadyAnnouncer(
       prepared.publish().ready
     ) {
       readyAnnounced = true;
+      await announceGatewayInstallationReady();
       params.startupTrace.mark("ready");
       params.log.info("gateway ready");
     }

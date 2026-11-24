@@ -184,7 +184,7 @@ beforeEach(async () => {
   service.readCommand.mockReset().mockResolvedValue(null);
   await fs.writeFile(
     path.join(state, "openclaw.json"),
-    JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
+    JSON.stringify({ gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } } }),
   );
   // Model an installed package, not an unowned dist-like path.
   await fs.writeFile(path.join(home, "package.json"), JSON.stringify({ name: "openclaw" }));

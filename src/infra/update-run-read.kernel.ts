@@ -1,9 +1,12 @@
+import { sql } from "kysely";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB, UpdateRuns } from "../state/openclaw-state-db.generated.js";
+import { jsonExtractText } from "./database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSetEntries,
 } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
@@ -100,6 +103,7 @@ export type UpdateRunListInput = {
   reason?: string;
   excludeReason?: string;
   includeRunId?: string;
+  completedStep?: { step: string; detail: string };
 };
 
 export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) {
@@ -122,6 +126,28 @@ export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) 
   if (excludeReason) {
     query = query.where((eb) =>
       eb.or([eb("reason", "is", null), eb("reason", "!=", excludeReason)]),
+    );
+  }
+  const completedStep = input.completedStep;
+  if (completedStep) {
+    // Match one recorded receipt before limiting rows; unrelated history cannot hide it.
+    query = query.where((eb) =>
+      eb.exists(
+        eb
+          .selectFrom(sqliteStringSetEntries(sql.ref<string>("update_runs.steps_json")).as("step"))
+          .select("step.key")
+          .where((step) =>
+            step.and([
+              step(jsonExtractText(db, step.ref("step.value"), "step"), "=", completedStep.step),
+              step(jsonExtractText(db, step.ref("step.value"), "status"), "=", "completed"),
+              step(
+                jsonExtractText(db, step.ref("step.value"), "detail"),
+                "=",
+                completedStep.detail,
+              ),
+            ]),
+          ),
+      ),
     );
   }
   const runs = executeSqliteQuerySync(

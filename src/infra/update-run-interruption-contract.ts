@@ -6,6 +6,8 @@ export type InterruptedUpdateSettlement = {
   detail: string;
   verification?: UpdateRunRecord["verification"];
   cleanup?: "pending" | "unknown" | "confirmed";
+  /** Exact explicit repair whose persisted maintenance receipts permit legacy completion. */
+  legacyRepairRunId?: string;
 };
 
 export type InterruptedUpdateSettlementResult = {

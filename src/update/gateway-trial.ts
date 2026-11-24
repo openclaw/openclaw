@@ -245,7 +245,12 @@ export async function settleRunFromTrial(
 }
 
 /** Called after the listener is serving, including the old release after a rollback. */
-export async function announceReady(buildId: string | null): Promise<void> {
+export async function announceReady(
+  buildId: string | null,
+  runningRoot: string | null = null,
+): Promise<boolean> {
+  const { settleLegacyTrial } = await import("./legacy-trial.js");
+  const legacySettled = await settleLegacyTrial(runningRoot, buildId);
   const lock = await readUpdateLock();
   // A restarted container can reuse the old Gateway's PID (including PID 1). A lock with this
   // PID taken after this process started is this Gateway's own update in progress, not a leftover.
@@ -254,9 +259,10 @@ export async function announceReady(buildId: string | null): Promise<void> {
     await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
     await releaseUpdateLock();
   }
-  await settleRunFromTrial(await readTrial());
+  const trial = await readTrial();
+  await settleRunFromTrial(trial);
   if (process.env.OPENCLAW_LAUNCHER_IPC !== "1" || !process.send || !process.connected) {
-    return;
+    return legacySettled || trial?.reported === true;
   }
   const { promise, resolve, reject } = Promise.withResolvers<Trial | null>();
   const onMessage = (message: unknown) => {
@@ -279,7 +285,9 @@ export async function announceReady(buildId: string | null): Promise<void> {
         reject(error);
       }
     });
-    await settleRunFromTrial(await promise);
+    const reported = await promise;
+    await settleRunFromTrial(reported);
+    return legacySettled || reported?.reported === true;
   } finally {
     clearTimeout(timer);
     process.off("message", onMessage);

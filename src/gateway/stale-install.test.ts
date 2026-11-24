@@ -11,6 +11,13 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 
 const fixture = vi.hoisted(() => ({ root: "", buildId: "build-before" as string | null }));
+const trial = vi.hoisted(() => ({
+  ready: vi.fn(async (_buildId: string | null, _root: string | null) => true),
+}));
+vi.mock("../update/gateway-trial.js", async (original) => ({
+  ...(await original<typeof import("../update/gateway-trial.js")>()),
+  announceReady: trial.ready,
+}));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRootSync: () => fixture.root,
@@ -69,9 +76,11 @@ beforeEach(async () => {
   resetGatewayWorkAdmission();
   fixture.root = directories.make("openclaw-replaced-install-");
   fixture.buildId = "build-before";
+  trial.ready.mockReset().mockResolvedValue(true);
   await fs.mkdir(path.join(fixture.root, "dist"));
   vi.resetModules();
   owner = await import("./stale-install.js");
+  await import("../update/gateway-trial.js");
 });
 
 afterEach(() => {
@@ -83,6 +92,48 @@ afterEach(() => {
 });
 
 describe("running installation replacement", () => {
+  it("owns readiness settlement until it completes and retries a failed write", async () => {
+    registerReplacement();
+    await writeIdentity("2026.9.4", "build-before");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    trial.ready.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw new Error("history write failed");
+    });
+    let completed = false;
+    const pending = owner.announceGatewayInstallationReady().then(
+      () => {
+        completed = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        completed = true;
+        return error;
+      },
+    );
+    await entered.promise;
+    expect(completed).toBe(false);
+    release.resolve();
+    expect(await pending).toBeUndefined();
+    await owner.checkGatewayInstallationReplacement();
+    expect(trial.ready).toHaveBeenCalledTimes(2);
+    expect(trial.ready).toHaveBeenLastCalledWith("build-before", fixture.root);
+  });
+  it("retries a ready observation that did not settle a trial", async () => {
+    registerReplacement();
+    trial.ready.mockResolvedValueOnce(false);
+    const { logGatewayReady } = await import("./server-startup-readiness.js");
+    const { createPreparedReadinessFixture } = await import("./server/readiness.test-support.js");
+    await logGatewayReady({
+      getReadiness: createPreparedReadinessFixture(),
+      log: { info: vi.fn() },
+    });
+    await owner.checkGatewayInstallationReplacement();
+    await owner.checkGatewayInstallationReplacement();
+    expect(trial.ready).toHaveBeenCalledTimes(2);
+  });
   it("keeps periodic installation observations free of synchronous filesystem calls", async () => {
     const handoff = registerReplacement();
     await writeIdentity("2026.9.4", "build-before");

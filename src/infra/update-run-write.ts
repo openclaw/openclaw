@@ -101,6 +101,8 @@ export function applyUpdateRunStep(
       "warning:post-activation doctor inspections",
       "diagnostic:post-activation doctor inspections",
       "finalize:doctor-lint:post-activation doctor inspections",
+      // A driver can die before the replacement's ready tick records its observation.
+      "finalize:legacy-release-ready",
     ].some((name) => step.step === name || step.step.startsWith(`${name}:`))
   ) {
     upsertStep(record, step);

@@ -5,6 +5,7 @@ import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-a
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { ExitError } from "../../runtime.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
@@ -74,6 +75,11 @@ export async function runGatewayServiceUpdateCommand(
       withGatewayServiceUpdateAuthority(
         fence.assertCurrent,
         async () => {
+          if (action === "install" || action === "restart") {
+            const history = captureOpenClawStateWorkerContext();
+            const { prepareLegacyTrialRun } = await import("../../update/legacy-trial.js");
+            await prepareLegacyTrialRun(grant.runId, root, fence.assertCurrent, history);
+          }
           if (input.originalDefinition !== undefined) {
             if (action !== "install" || typeof input.originalDefinition !== "string") {
               throw new Error("Invalid rebind action.");

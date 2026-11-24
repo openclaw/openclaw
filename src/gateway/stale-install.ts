@@ -23,6 +23,7 @@ import {
 import { acquirePackageReleaseLease } from "../infra/package-release-lease.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getGatewaySuspendAdmissionPhase,
   onGatewaySuspendAdmissionChange,
@@ -77,7 +78,9 @@ type InstallationObserver = {
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
+  ready?: boolean;
   trialSettled?: boolean;
+  trialSettlement?: Promise<void>;
 };
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
@@ -180,17 +183,40 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
   }
 }
 
-/** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
-export function checkGatewayInstallationReplacement(): Promise<void> {
+export async function announceGatewayInstallationReady(): Promise<void> {
   const observer = installationState.observer;
-  // The maintenance owner starts only after the Gateway listener is serving.
-  if (observer && !observer.trialSettled) {
-    observer.trialSettled = true;
-    void import("../update/gateway-trial.js")
-      .then(({ announceReady }) => announceReady(observer.running.buildId))
-      .catch(() => {
-        observer.trialSettled = false;
-      });
+  if (!observer) {
+    return;
+  }
+  observer.ready = true;
+  try {
+    await settleInstallationTrial(observer);
+  } catch (error) {
+    createSubsystemLogger("gateway/update-run").warn(
+      `Update readiness history was not recorded; maintenance will retry: ${coerceErrorMessage(error)}`,
+    );
+  }
+}
+
+function settleInstallationTrial(observer: InstallationObserver): Promise<void> {
+  if (observer.trialSettled) {
+    return Promise.resolve();
+  }
+  observer.trialSettlement ??= import("../update/gateway-trial.js")
+    .then(async ({ announceReady }) => {
+      observer.trialSettled = await announceReady(observer.running.buildId, observer.root);
+    })
+    .finally(() => {
+      observer.trialSettlement = undefined;
+    });
+  return observer.trialSettlement;
+}
+
+/** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
+export async function checkGatewayInstallationReplacement(): Promise<void> {
+  const observer = installationState.observer;
+  if (observer?.ready) {
+    await settleInstallationTrial(observer);
   }
   const root = observer?.installationRoot;
   if (
@@ -200,7 +226,7 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
     observer.replacement ||
     getGatewaySuspendAdmissionPhase() !== "accepting"
   ) {
-    return Promise.resolve();
+    return;
   }
   if (observer.check) {
     return observer.check;

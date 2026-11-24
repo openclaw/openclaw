@@ -199,16 +199,29 @@ found that earlier receipts did not prove what they claimed.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
-Gateway post-ready maintenance and `openclaw update repair` refresh the known
-legacy Git launcher from development build `d44f263`, which incorrectly counted
-`gateway status` as a start. The candidate must contain this repair. It applies
-only to that launcher's exact bytes in the selected, account-owned installation;
-custom launchers, other installations, read-only mode, and resident launchers
-are left unchanged. The repair preserves the legacy trial and genuine-start
-rollback behavior; it does not settle the trial or rewrite update history. This
-is recovery for an observed development install, not a stable-release migration.
-The normal next release update replaces the legacy launcher with the resident
-launcher.
+Git installs that tracked main before the resident launcher can retain an older
+trial record. A ready Gateway ends only the trial matching its selected release
+and loaded build. For an older updater that calls the candidate's admitted native
+install or restart command, the candidate records that exact run's prepared trial;
+readiness records the matching publication, not update success. Explicit
+`openclaw update repair` can correct that run's abandoned outcome only after its
+drivers have exited, Doctor and plugin maintenance complete, and the same build
+is verified serving. Existing recovery custody and substantive failures remain
+with their owners. No database schema or launcher protocol changes.
+
+An old updater can skip that candidate command when it waits for the release
+successor itself. Historical trials without the exact correlation still end on
+readiness, but repair preserves their failed history rather than guessing which
+run installed a matching version. This candidate-side recovery cannot change the
+exit status of the already-running older updater.
+Readiness looks up the exact prepared publication in the history worker, returning
+at most two matching runs to detect ambiguity regardless of unrelated history size.
+Multiple matching runs retain their existing outcomes.
+The verified startup-readiness boundary records this observation without waiting
+for the 30-second maintenance tick. Unsettled observations and failed history
+writes remain eligible for maintenance retry. Native activation pins its history
+namespace inside the admitted executor interval; repair and missing-run commands
+do not create activation receipts or prevent separately authorized service restoration.
 
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older

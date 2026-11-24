@@ -37,10 +37,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
-import {
-  createLegacyLauncherFixture,
-  legacyLauncherSource,
-} from "../../update/legacy-launcher.test-support.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -157,16 +153,6 @@ afterEach(async () => {
 });
 
 describe("update repair ledger recovery", () => {
-  it("refreshes the selected legacy launcher only after repair admission", async () => {
-    const fixture = createLegacyLauncherFixture(process.env.OPENCLAW_STATE_DIR!);
-    mocks.resolveRoot.mockResolvedValue(fixture.root);
-    mocks.ownershipAllowed.mockRejectedValueOnce(new Error("read-only fixture"));
-    await expect(updateRepairCommand({ json: true })).rejects.toThrow("read-only fixture");
-    expect(fs.readFileSync(fixture.launcher, "utf8")).toBe(legacyLauncherSource);
-    await updateRepairCommand({ json: true });
-    expect(fs.readFileSync(fixture.launcher, "utf8")).not.toBe(legacyLauncherSource);
-    expect(fs.readFileSync(fixture.trial, "utf8")).toBe(fixture.record);
-  });
   it("tells operators to stop the live Gateway owner before repair", async () => {
     const run = seedRun();
     mocks.ownershipAllowed.mockRejectedValueOnce(
