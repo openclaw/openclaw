@@ -494,6 +494,7 @@ const comparison = exact ? null : JSON.parse(readFileSync(join(process.env.FAKE_
 const delta = exact ? { policy: "exact-target-full-validation-v1", changedPaths: [] } : classifyReleaseEvidenceComparison(comparison, {
   baseSha: record.root.targetSha, targetSha: request.targetSha,
   version: request.validationInputs?.targetVersion ?? record.validationInputs?.targetVersion,
+  targetCoveragePolicy: request.validationInputs?.coveragePolicy,
   rootManifest: { ...record.manifest, validationInputs: record.validationInputs, runReleaseSoak: String(record.runReleaseSoak) },
   readSourceFile: (sha, path) => client.getSourceFile(sha, path),
 });
@@ -1181,7 +1182,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       repoDir: cloneHead(origin),
       targetSha,
       releaseProfile: "stable",
-      inputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
+      inputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1", coveragePolicy: "npm-stable-v1" },
     });
     expect(result.status, result.stderr).toBe(0);
     expect(parseOutput(result.stdout), result.stderr).toMatchObject({

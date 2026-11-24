@@ -630,6 +630,84 @@ process.stdout.write(JSON.stringify(restored));`,
 });
 
 describe("GitHub API commands", () => {
+  it.each(["valid", "truncated", "wrong digest"])(
+    "verifies a release-sized promotion within the publisher request budget: %s",
+    (fault) => {
+      const directory = tempDirs.make("release-promotion-batch-");
+      const shim = join(directory, "gh");
+      writeFileSync(
+        shim,
+        `#!${process.execPath}\n` +
+          String.raw`
+import { createHash } from "node:crypto";
+const args = process.argv.slice(2);
+const source = (expression) => {
+  const text = JSON.stringify({ name: "openclaw", version: expression.startsWith("a".repeat(40)) ? "2026.11.24-beta.2" : "2026.11.24" });
+  return { text, byteSize: Buffer.byteLength(text), oid: createHash("sha1").update("blob " + Buffer.byteLength(text) + "\0" + text).digest("hex"), isBinary: false, isTruncated: false };
+};
+if (args[1] === "graphql") {
+  const query = args.find((arg) => arg.startsWith("query="));
+  const repository = Object.fromEntries([...query.matchAll(/f(\d+):object\(expression:"([a-z0-9:/.-]+)"\)/gu)].map((match) => {
+    const blob = source(match[2]);
+    if (process.env.BLOB_FAULT === "truncated") blob.isTruncated = true;
+    if (process.env.BLOB_FAULT === "wrong digest") blob.oid = "0".repeat(40);
+    return ["f" + match[1], blob];
+  }));
+  process.stdout.write(JSON.stringify({ data: { repository } }));
+} else {
+  const blob = source("a".repeat(40));
+  process.stdout.write(JSON.stringify({ type: "file", path: "package.json", encoding: "base64", size: blob.byteSize, sha: blob.oid, content: Buffer.from(blob.text).toString("base64") }));
+}
+`,
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import { classifyReleaseEvidenceComparison } from ${JSON.stringify(pathToFileURL(resolve("scripts/full-release-validation-policy.mjs")).href)};
+import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
+import { withGithubRequestBudget } from ${JSON.stringify(pathToFileURL(resolve("scripts/lib/plain-gh.mjs")).href)};
+const client = createReleaseEvidenceClient("openclaw/openclaw");
+withGithubRequestBudget(32, (budget) => {
+  const files = ["package.json", ...Array.from({ length: 188 }, (_, index) => "extensions/plugin-" + index + "/package.json")].map((filename) => ({ filename, status: "modified" }));
+  const result = classifyReleaseEvidenceComparison({ status: "ahead", merge_base_commit: { sha: "a".repeat(40) }, files }, {
+    baseSha: "a".repeat(40), targetSha: "b".repeat(40), version: "2026.11.24", targetCoveragePolicy: "npm-stable-v1",
+    rootManifest: { releaseProfile: "stable", runReleaseSoak: "true", controls: { performanceBlocking: true }, validationInputs: { targetVersion: "2026.11.24-beta.2" } },
+    readSourceFile: (sha, path) => client.getSourceFile(sha, path), readSourceFiles: (requests) => client.getSourceFiles(requests),
+  });
+  process.stdout.write(JSON.stringify({ policy: result.policy, paths: result.changedPaths.length, requests: budget.used }));
+});`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${directory}:${process.env.PATH ?? ""}`,
+            BLOB_FAULT: fault,
+          },
+        },
+      );
+      if (fault === "valid") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({
+          policy: "stable-qualified-beta-final-v1",
+          paths: 189,
+          requests: 13,
+        });
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          fault === "truncated"
+            ? "invalid immutable promotion source blob"
+            : "immutable promotion source blob mismatch",
+        );
+      }
+    },
+  );
+
   it.skipIf(!hasUnzip).each(["summary", "watch", "reuse", "unwaived", "corrupt-policy"])(
     "authenticates Q-only selected-job waivers in the ordinary CLI: %s",
     (scenario) => {
@@ -2063,6 +2141,7 @@ describe("release CI summary child correlation", () => {
 
   it.each([
     "beta profile",
+    "full profile",
     "missing soak",
     "advisory performance",
     "different final",
@@ -2074,7 +2153,8 @@ describe("release CI summary child correlation", () => {
   ])("rejects unsafe beta-to-final evidence reuse: %s", (fault) => {
     const root = manifestFixture();
     Object.assign(root, {
-      releaseProfile: fault === "beta profile" ? "beta" : "stable",
+      releaseProfile:
+        fault === "beta profile" ? "beta" : fault === "full profile" ? "full" : "stable",
       runReleaseSoak: fault === "missing soak" ? "false" : "true",
       controls: { ...root.controls, performanceBlocking: fault !== "advisory performance" },
       validationInputs: { ...root.validationInputs, targetVersion: "2026.11.24-beta.2" },
@@ -2084,7 +2164,11 @@ describe("release CI summary child correlation", () => {
       targetSha: "b".repeat(40),
       changedPaths: ["package.json"],
     });
-    current.validationInputs = { ...root.validationInputs, targetVersion: "2026.11.24" };
+    current.validationInputs = {
+      ...root.validationInputs,
+      targetVersion: "2026.11.24",
+      coveragePolicy: "npm-stable-v1",
+    };
     const files = [{ filename: "package.json", status: "modified" }];
     if (fault === "source change") {
       files.push({ filename: "src/index.ts", status: "modified" });
@@ -2120,8 +2204,11 @@ describe("release CI summary child correlation", () => {
           }),
       ),
     ).toThrow(
-      fault === "beta profile" || fault === "missing soak" || fault === "advisory performance"
-        ? "stable/full qualification, soak and blocking performance"
+      fault === "beta profile" ||
+        fault === "full profile" ||
+        fault === "missing soak" ||
+        fault === "advisory performance"
+        ? "stable qualification, soak and blocking performance"
         : fault === "different final"
           ? "versions differ"
           : fault === "dependency change"

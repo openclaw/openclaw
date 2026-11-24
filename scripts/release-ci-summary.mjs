@@ -1523,6 +1523,7 @@ export function validateEvidenceReuseChain(
   rootManifest,
   compareCommits,
   readSourceFile,
+  readSourceFiles,
 ) {
   const reuse = currentManifest.evidenceReuse;
   if (!reuse) {
@@ -1577,6 +1578,8 @@ export function validateEvidenceReuseChain(
         version,
         readSourceFile,
         rootManifest,
+        targetCoveragePolicy: currentManifest.validationInputs.coveragePolicy,
+        readSourceFiles,
       },
     );
     if (
@@ -1652,6 +1655,7 @@ export function validateRequestedEvidenceReuse(
   },
   compareCommits,
   readSourceFile,
+  readSourceFiles,
 ) {
   if (
     !Array.isArray(expectedChangedPaths) ||
@@ -1692,6 +1696,7 @@ export function validateRequestedEvidenceReuse(
               validationInputs: {
                 ...currentManifest.validationInputs,
                 targetVersion: JSON.parse(readSourceFile(expectedTarget, "package.json")).version,
+                coveragePolicy: "npm-stable-v1",
               },
             }
           : {}),
@@ -1700,6 +1705,7 @@ export function validateRequestedEvidenceReuse(
       rootManifest,
       compareCommits,
       readSourceFile,
+      readSourceFiles,
     );
     return;
   }
@@ -2265,6 +2271,49 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         waiverPolicy,
         getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
+    },
+    getSourceFiles(requests) {
+      const sources = new Map();
+      const [owner, name] = normalizedRepository.split("/");
+      // Bound GraphQL response size and request count for publication recovery:
+      // even 299 changed metadata paths use at most 19 batch requests, not 598.
+      for (let offset = 0; offset < requests.length; offset += 32) {
+        const batch = requests.slice(offset, offset + 32);
+        const fields = batch
+          .map(
+            ({ sha, path }, index) =>
+              `f${index}:object(expression:${JSON.stringify(sha + ":" + path)}){...on Blob{oid byteSize isBinary isTruncated text}}`,
+          )
+          .join(" ");
+        const query = `query{repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}){${fields}}}`;
+        const response = JSON.parse(runReleaseCiGh(["api", "graphql", "-f", "query=" + query]));
+        if (response.errors?.length) {
+          throw new Error("immutable promotion source query failed");
+        }
+        for (const [index, request] of batch.entries()) {
+          const blob = response.data?.repository?.["f" + index];
+          if (
+            typeof blob?.text !== "string" ||
+            blob.isBinary !== false ||
+            blob.isTruncated !== false ||
+            !Number.isSafeInteger(blob.byteSize) ||
+            blob.byteSize < 1 ||
+            blob.byteSize > 1024 * 1024
+          ) {
+            throw new Error("invalid immutable promotion source blob");
+          }
+          const bytes = Buffer.from(blob.text, "utf8");
+          if (
+            bytes.length !== blob.byteSize ||
+            createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex") !==
+              blob.oid
+          ) {
+            throw new Error("immutable promotion source blob mismatch");
+          }
+          sources.set(request.sha + ":" + request.path, blob.text);
+        }
+      }
+      return sources;
     },
     getSourceFile(sha, sourceWorkflowPath) {
       return readImmutableSourceFile(sha, sourceWorkflowPath);
@@ -3440,6 +3489,8 @@ export async function validateReleaseRunEvidence(
       : classifyReleaseEvidenceComparison(comparison, {
           baseSha: manifest.targetSha,
           rootManifest: manifest,
+          targetCoveragePolicy: reuseRequest.validationInputs?.coveragePolicy,
+          readSourceFiles: (requests) => evidenceClient.getSourceFiles(requests),
           targetSha: reuseRequest.targetSha,
           readSourceFile: (sha, path) => evidenceClient.getSourceFile(sha, path),
           version:
@@ -3475,6 +3526,7 @@ export async function validateReleaseRunEvidence(
       requestedReuse,
       (base, head) => evidenceClient.compareCommits(base, head),
       (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
     validatedDirectRequestedReuse = true;
     expectedReuseDescendant =
@@ -3633,6 +3685,7 @@ export async function validateReleaseRunEvidence(
       rootEvidence.manifest,
       (base, head) => evidenceClient.compareCommits(base, head),
       (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
   }
   if (hasRequestedEvidenceReuse(requestedReuse) && !validatedDirectRequestedReuse) {
@@ -3643,6 +3696,7 @@ export async function validateReleaseRunEvidence(
       requestedReuse,
       (base, head) => evidenceClient.compareCommits(base, head),
       (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
   }
 

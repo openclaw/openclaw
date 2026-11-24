@@ -15,6 +15,8 @@ export function classifyReleaseEvidenceComparison(
     baseSha: string;
     targetSha?: string;
     rootManifest?: unknown;
+    targetCoveragePolicy?: string;
+    readSourceFiles?: (requests: Array<{ sha: string; path: string }>) => Map<string, string>;
     version?: unknown;
     readSourceFile?: (sha: string, path: string) => string;
   },

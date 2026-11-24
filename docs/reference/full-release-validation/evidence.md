@@ -49,7 +49,7 @@ artifact limits: fail sealing, never truncate evidence.
 A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
 `2026.11.24` without first publishing an unsuffixed version to the beta selector:
 
-1. Complete a successful `stable` or `full` FRV on the beta candidate, with
+1. Complete a successful `stable` FRV on the beta candidate, with
    `rerun_group=all`, soak enabled, and blocking performance. A `beta` profile
    never qualifies stable, even if its selected jobs passed. The beta may have
    used `reuse_evidence=false` to force fresh qualification.
@@ -59,7 +59,7 @@ A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
    changelog entry, index, and contribution record. Dependencies, product code,
    qualification tooling, and unrelated release notes must remain unchanged.
 3. Admit and run FRV for the final candidate with evidence reuse enabled and the
-   same profile, lane inputs, baselines, and package publication roster. The strict
+   same stable profile with `npm-stable-v1` final coverage, lane inputs, baselines, and package publication roster. The strict
    verifier authenticates both admissions and the complete immutable Git delta
    under `stable-qualified-beta-final-v1`. An incomplete comparison falls back to
    fresh qualification. Beta-version waivers cannot excuse final-version jobs;

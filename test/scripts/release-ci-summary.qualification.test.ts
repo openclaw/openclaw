@@ -395,7 +395,11 @@ describe("candidate-owned publish consumer chain", () => {
                 releaseProfile: root.manifest.releaseProfile,
                 runReleaseSoak: root.manifest.runReleaseSoak,
                 validationInputs: promotion
-                  ? { ...root.manifest.validationInputs, targetVersion: "2099.1.1" }
+                  ? {
+                      ...root.manifest.validationInputs,
+                      targetVersion: "2099.1.1",
+                      coveragePolicy: "npm-stable-v1",
+                    }
                   : root.manifest.validationInputs,
               },
             }),
@@ -568,10 +572,9 @@ describe("candidate-owned publish consumer chain", () => {
     "retained artifacts",
     "changed retained IDs",
     "stable beta promotion",
-    "full beta promotion",
   ])("retains the original admitted Q and child attempts through %s reuse", async (mode) => {
     const promotion = mode.endsWith("beta promotion");
-    const releaseProfile = mode.startsWith("full") ? "full" : "stable";
+    const releaseProfile = "stable";
     const root = candidatePublicationFixture(
       promotion
         ? {

@@ -184,7 +184,15 @@ export function isSplitChangelogEvidenceDelta(paths, version) {
 
 export function classifyReleaseEvidenceComparison(
   comparison,
-  { baseSha, targetSha, version, readSourceFile, rootManifest },
+  {
+    baseSha,
+    targetSha,
+    version,
+    readSourceFile,
+    readSourceFiles,
+    rootManifest,
+    targetCoveragePolicy,
+  },
 ) {
   if (comparison?.files?.some((file) => file.filename === "package.json")) {
     return classifyBetaPromotionComparison(comparison, {
@@ -192,7 +200,9 @@ export function classifyReleaseEvidenceComparison(
       targetSha,
       version,
       readSourceFile,
+      readSourceFiles,
       rootManifest,
+      targetCoveragePolicy,
     });
   }
   const files = Array.isArray(comparison?.files) ? comparison.files : [];

@@ -21,15 +21,28 @@ export function isBetaPromotionPath(path, version) {
 
 export function classifyBetaPromotionComparison(
   comparison,
-  { baseSha, targetSha, version, readSourceFile, rootManifest },
+  {
+    baseSha,
+    targetSha,
+    version,
+    readSourceFile,
+    readSourceFiles,
+    rootManifest,
+    targetCoveragePolicy,
+  },
 ) {
   if (
-    !["stable", "full"].includes(rootManifest?.releaseProfile) ||
+    rootManifest?.releaseProfile !== "stable" ||
     rootManifest.runReleaseSoak !== "true" ||
     rootManifest.controls?.performanceBlocking !== true
   ) {
     throw new Error(
-      "beta-to-final reuse requires stable/full qualification, soak and blocking performance",
+      "beta-to-final reuse requires stable qualification, soak and blocking performance",
+    );
+  }
+  if (targetCoveragePolicy !== "npm-stable-v1") {
+    throw new Error(
+      "beta-to-final reuse requires final npm-stable-v1 coverage and native publication gates",
     );
   }
   const target = parseReleaseVersion(version ?? "");
@@ -73,11 +86,22 @@ export function classifyBetaPromotionComparison(
     ) {
       throw new Error("beta-to-final reuse contains a product change: " + path);
     }
-    if (notes) {
+  }
+  const requests = files
+    .filter((file) => !isReleaseChangelogPath(file.filename, { version }))
+    .flatMap((file) => [baseSha, headSha].map((sha) => ({ sha, path: file.filename })));
+  const sources = readSourceFiles?.(requests);
+  for (const file of files) {
+    const path = file.filename;
+    if (isReleaseChangelogPath(path, { version })) {
       continue;
     }
-    const before = path === "package.json" ? sourcePackage : readSourceFile(baseSha, path);
-    const after = readSourceFile(headSha, path);
+    const before = sources
+      ? sources.get(baseSha + ":" + path)
+      : path === "package.json"
+        ? sourcePackage
+        : readSourceFile(baseSha, path);
+    const after = sources ? sources.get(headSha + ":" + path) : readSourceFile(headSha, path);
     if (path.endsWith("/package.json") || path === "package.json") {
       const expected = JSON.parse(before);
       const actual = JSON.parse(after);
