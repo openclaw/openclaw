@@ -257,20 +257,16 @@ export default {
           reportOwner(node, field);
         }
       },
-      // Destructuring and parameter defaults: `{ senderIsOwner = true } = input`.
+      // Destructuring and parameter defaults: `{ senderIsOwner = true } = input`, with either
+      // the source property or the destination binding named as an owner field.
       AssignmentPattern(node) {
-        const field =
+        const field = [
+          node.left.type === "Identifier" ? node.left.name : undefined,
           node.parent?.type === "Property" && node.parent.value === node && !node.parent.computed
             ? propertyName(node.parent.key)
-            : node.left.type === "Identifier"
-              ? node.left.name
-              : undefined;
-        if (
-          checkOwner &&
-          field &&
-          OWNER_FIELDS.has(field) &&
-          !passesOwnerAlong(node.right, field)
-        ) {
+            : undefined,
+        ].find((name) => name !== undefined && OWNER_FIELDS.has(name));
+        if (checkOwner && field && !passesOwnerAlong(node.right, field)) {
           reportOwner(node, field);
         }
       },
