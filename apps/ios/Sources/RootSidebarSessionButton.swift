@@ -45,7 +45,7 @@ struct RootSidebarSessionButton: View, Equatable {
                 .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: CommandCenterTab.sessionTitle(session))
+                    Text(verbatim: SessionPresentation.title(session))
                         .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(isSelected
                             ? OpenClawSidebarPalette.accent
@@ -71,7 +71,7 @@ struct RootSidebarSessionButton: View, Equatable {
                         .foregroundStyle(OpenClawSidebarPalette.accent)
                         .accessibilityHidden(true)
                 }
-                Text(verbatim: CommandCenterTab.sessionDetail(session))
+                Text(verbatim: SessionPresentation.detail(session))
                     .font(OpenClawType.caption2Medium)
                     .foregroundStyle(OpenClawSidebarPalette.muted)
                     .lineLimit(1)

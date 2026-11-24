@@ -55,8 +55,9 @@ describe("release preparation", () => {
     expect(await fs.readFile(path.join(staging, "openclaw", "dist", "ui-built"), "utf8")).toBe(
       "ready",
     );
+    expect(await fs.readFile(path.join(staging, "openclaw", "ui-builds.txt"), "utf8")).toBe("ui\n");
     expect(await fs.readFile(path.join(staging, "openclaw", "steps.txt"), "utf8")).toBe(
-      "install --frozen-lockfile\nbuild\nui:build\n",
+      "install --frozen-lockfile\nbuild\n",
     );
     expect((await exec("git", ["-C", target.checkout, "status", "--porcelain"])).stdout).toBe("");
     expect(
@@ -94,7 +95,7 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
     expect(result).toMatchObject({ ok: true, version: "2026.11.21", buildId: "fixture-build" });
     expect(await fs.readFile(path.join(staging, "openclaw", "steps.txt"), "utf8")).toBe(
-      "install --frozen-lockfile\nbuild\nui:build\n",
+      "install --frozen-lockfile\nbuild\n",
     );
   });
 

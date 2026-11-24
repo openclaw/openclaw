@@ -32,6 +32,7 @@ import { assertRequestPath } from "./full-release-dispatch-request.mts";
 import {
   artifactJson,
   discoverPublicationArtifacts,
+  one,
   witnessedRun,
 } from "./full-release-publication-artifacts.mjs";
 import { isWaived, readReleaseValidationWaiversAsync } from "./release-validation-waivers.mjs";
@@ -44,10 +45,6 @@ function requireValue(value, message) {
   if (!value) {
     throw new Error("Receipt recovery: " + message);
   }
-}
-function one(values, label) {
-  requireValue(values.length === 1, label + " is missing or ambiguous");
-  return values[0];
 }
 export function parseReceiptRecoveryArgs(args) {
   const options = { command: "recover", repository: REPOSITORY, runId: "", json: false };

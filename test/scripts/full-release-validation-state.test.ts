@@ -34,6 +34,7 @@ import {
   verifyReleaseStateArtifacts,
   updateReleaseTransportEpisode,
 } from "../../scripts/full-release-validation-state.mjs";
+import { sortJsonValueKeys } from "../../scripts/lib/canonical-json.mjs";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import {
   fixtureReceiptClientSource,
@@ -1483,7 +1484,17 @@ describe("release decision policy", () => {
       drain: artifact,
       context: { releaseProfile: "stable", rerunGroup: "all", validationInputs: {} },
     });
-    expect(validateReleaseManifestAdvisoryJobs(manifest)).toEqual(decision.advisoryJobs);
+    const advisoryJobs = validateReleaseManifestAdvisoryJobs(manifest);
+    expect(advisoryJobs).toEqual(decision.advisoryJobs);
+    expect(validateReleaseManifestAdvisoryJobs(sortJsonValueKeys(manifest))).toEqual(
+      decision.advisoryJobs,
+    );
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        ...manifest,
+        advisoryJobs: [{ ...advisoryJobs[0], conclusion: "success" }],
+      }),
+    ).toThrow("advisory jobs differ");
     expect(() => validateReleaseManifestAdvisoryJobs({ ...manifest, advisoryJobs: [] })).toThrow(
       "advisory jobs differ",
     );
