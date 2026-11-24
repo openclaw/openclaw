@@ -1,7 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import "../lib/toast-host.tsx";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
-import { routeIdFromPath } from "../app-route-paths.ts";
 import { registerModalSurface } from "../components/overlay-registry.ts";
 import {
   LazySettingsSaveStatus,
@@ -183,27 +182,12 @@ export function ApplicationShell(props: {
           }
           const anchor = anchorFromNavigationEvent(event);
           if (
-            !anchor?.hasAttribute("data-app-route") ||
-            anchor.target ||
-            anchor.hasAttribute("download")
+            anchor?.hasAttribute("data-app-route") &&
+            !anchor.target &&
+            !anchor.hasAttribute("download") &&
+            props.host.runtime?.navigateAppLink(new URL(anchor.href))
           ) {
-            return;
-          }
-          const { pathname, search, hash, origin, searchParams } = new URL(anchor.href);
-          // Same-document fragments and Gateway handoff URLs belong to the browser.
-          if (
-            origin !== location.origin ||
-            (pathname === location.pathname && search === location.search) ||
-            hash.includes("=") ||
-            ["gatewayUrl", "token", "password"].some((key) => searchParams.has(key))
-          ) {
-            return;
-          }
-          const context = view().context;
-          const route = routeIdFromPath(pathname, context.basePath);
-          if (route) {
             event.preventDefault();
-            context.navigate(route, { pathname, search, hash });
           }
         }}
         onMouseDown={beginNativeWindowDragFromTitlebar}
