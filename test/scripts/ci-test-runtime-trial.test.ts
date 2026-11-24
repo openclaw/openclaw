@@ -51,7 +51,8 @@ const defaults = [
   {
     name: "FRV",
     eventName: "workflow_dispatch",
-    digest: "5805ca6b7145fc4a82576bfaa6eb5435b4aa4bd76b8af0276a471456a2ee0933",
+    // Full Gateway validation no longer schedules candidate mobile jobs.
+    digest: "1e745f5ebb75e37b552b9d8c33a6cc22c7650386b9572ad75e8fccf538eb6c04",
   },
 ] as const;
 

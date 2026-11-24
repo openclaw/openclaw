@@ -109,14 +109,17 @@ it.each([
     "run_checks_windows",
     "run_macos_node",
     "run_macos_swift",
-    "run_ios_build",
-    "run_android_screenshots",
     "run_published_driver_update",
   ]) {
     expect(result.outputs[flag], flag).toBe(String(!deferred));
   }
-  // Keep independent static checks, ordinary UI/browser proof, and Android unit/lint work.
-  for (const flag of ["run_protocol_event_coverage", "run_ui_e2e", "run_android_job"]) {
+  const gatewayOnly = eventName === "workflow_dispatch" && !releaseGate;
+  for (const flag of ["run_ios_build", "run_android_screenshots"]) {
+    expect(result.outputs[flag], flag).toBe(String(!deferred && !gatewayOnly));
+  }
+  expect(result.outputs.run_android_job).toBe(String(!gatewayOnly));
+  // Keep independent static checks and ordinary UI/browser proof.
+  for (const flag of ["run_protocol_event_coverage", "run_ui_e2e"]) {
     expect(result.outputs[flag], flag).toBe("true");
   }
   const rows = (key: string) =>
