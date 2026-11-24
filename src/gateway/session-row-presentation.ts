@@ -654,7 +654,6 @@ export function prepareProjectedSessionPresentation(
       const view = listView(opts, true, personalPins);
       if (
         view.selectedAt !== undefined &&
-        (opts.activeMinutes !== undefined || view.activityExpiresAt !== undefined) &&
         (now < view.selectedAt || now > (view.activityExpiresAt ?? Infinity))
       ) {
         view.selection = undefined;

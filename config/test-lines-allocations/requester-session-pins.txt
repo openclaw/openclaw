@@ -9,4 +9,5 @@
 # +789: one signed Archive occurrence across legacy and personal profiles, SDK/Doctor same-value and replacement writes, retired checkout fences, v43 migration and rollback, and Mac multi-chunk partial receipts; no duplicate synthetic UI transport suites.
 # +6: an exact live transport, not a lookalike or a retained old request sharing the replacement connection ID, owns its Archive Undo.
 # +94: an admitted Archive drain settles on ordinary disconnect; queued work, Stop, changed profile, invalidation and revoked grants remain fenced.
-2224
+# +22: observe filtered count and ordinary first-page rank on a warm cache, rewind across wake, and read at the inclusive deadline.
+2246
