@@ -27,7 +27,7 @@ const DISMISSED_KEY = "openclaw.custodian.setup-dismissed.v1:";
 
 /** Connection-owned first-run setup. The Gateway owns selection and verification. */
 export class CustodianAutoSetup {
-  step: SetupStep = "welcome";
+  step: SetupStep | null = null;
   result: SetupAutoResult | null = null;
   pending = false;
   error: string | null = null;
@@ -131,7 +131,7 @@ export class CustodianAutoSetup {
       this.wizardStepId = null;
       this.synchronizing = false;
       if (ownerChanged) {
-        this.step = "welcome";
+        this.step = null;
         this.result = null;
         this.error = null;
         this.started = false;
@@ -155,21 +155,30 @@ export class CustodianAutoSetup {
       if (this.step === "ai" || this.dismissed) {
         this.step = "ai";
         void this.retry();
-      } else if (isGatewayMethodAdvertised(snapshot, "openclaw.setup.options") === true) {
+      } else {
         const epoch = this.epoch;
-        void client
-          .request<Pick<SystemAgentSetupDetectResult, "setupComplete">>(
-            "openclaw.setup.options",
-            {},
-          )
-          .then(
-            ({ setupComplete }) => {
-              if (setupComplete && epoch === this.epoch && client === this.client) {
-                this.setStep("ai");
-              }
-            },
-            () => undefined,
-          );
+        const showStep = (step: "ai" | "welcome") => {
+          if (
+            epoch === this.epoch &&
+            client === this.client &&
+            (step === "ai" || this.step === null)
+          ) {
+            this.setStep(step);
+          }
+        };
+        if (isGatewayMethodAdvertised(snapshot, "openclaw.setup.options") === true) {
+          void client
+            .request<Pick<SystemAgentSetupDetectResult, "setupComplete">>(
+              "openclaw.setup.options",
+              {},
+            )
+            .then(
+              ({ setupComplete }) => showStep(setupComplete ? "ai" : "welcome"),
+              () => showStep("welcome"),
+            );
+        } else {
+          showStep("welcome");
+        }
       }
     }
   }

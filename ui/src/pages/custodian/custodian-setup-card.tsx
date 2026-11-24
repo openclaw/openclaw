@@ -174,7 +174,7 @@ export function CustodianSetupCard(props: {
           ?.attempts.map(({ label, error }) => `${label}: ${error}`)
           .join("\n")
       : undefined;
-  const stepIndex = () => STEPS.indexOf(setup().step);
+  const stepIndex = () => STEPS.findIndex((step) => step === setup().step);
   const go = (step: SetupStep) => setup().setStep(step);
   function Welcome() {
     return (
@@ -259,7 +259,7 @@ export function CustodianSetupCard(props: {
   }
   return (
     <openclaw-custodian-setup-card>
-      <Show when={setup().supported && !setup().dismissed}>
+      <Show when={setup().supported && !setup().dismissed && setup().step !== null}>
         <section class="custodian-setup" aria-label={t("custodian.autoSetup.title")}>
           <Show when={setup().step === "ai"} fallback={<Welcome />}>
             <div class="row custodian-setup__heading">

@@ -219,6 +219,24 @@ suite.define(() => {
     });
   });
 
+  it("keeps Welcome hidden while checking an already configured Gateway", async () => {
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await install(page, { deferredMethods: ["openclaw.setup.options"] });
+      await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+      await gateway.waitForRequest("openclaw.setup.options");
+      const card = page.locator("openclaw-custodian-setup-card");
+      await card.waitFor({ state: "attached" });
+      const welcome = card.getByRole("heading", { name: "Welcome to OpenClaw" });
+      expect(await welcome.count(), "Welcome rendered before configured status resolved").toBe(0);
+      expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(0);
+
+      await gateway.resolveDeferred("openclaw.setup.options", { setupComplete: true });
+      await card.getByRole("heading", { name: "You’re all set!" }).waitFor();
+      expect(await welcome.count()).toBe(0);
+      expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(1);
+    });
+  });
+
   it.each([false, true])("runs ChatGPT sign-in and refreshes setup (shared=%s)", async (reuse) => {
     await suite.withPage(options, async ({ page }) => {
       await nativeSetup(page);
