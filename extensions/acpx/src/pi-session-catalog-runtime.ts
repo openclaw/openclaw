@@ -113,10 +113,11 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
           });
           return {
             ...page,
-            sessions: page.sessions.map((session) => ({
-              ...session,
-              exportPolicy: { origin: "native-local" as const, automatic: true },
-            })),
+            sessions: page.sessions.map((session) =>
+              Object.assign(session, {
+                exportPolicy: { origin: "native-local" as const, automatic: true },
+              }),
+            ),
           };
         },
         read: async (request) =>
