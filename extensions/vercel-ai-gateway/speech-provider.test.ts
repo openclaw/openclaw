@@ -164,6 +164,36 @@ it("transcodes other formats to Opus for voice notes", async () => {
   });
 });
 
+it.each(["pcm", "pcm_24000", "ulaw_8000"])(
+  "does not request headerless %s audio for voice notes",
+  async (responseFormat) => {
+    respond();
+    await expect(
+      synthesize({ target: "voice-note", providerConfig: { responseFormat } }),
+    ).resolves.toMatchObject({ outputFormat: "opus", voiceCompatible: true });
+    const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "TTS request");
+    expect(request.body).not.toHaveProperty("outputFormat");
+    expect(transcode).toHaveBeenCalledWith(expect.objectContaining({ inputExtension: "mp3" }));
+  },
+);
+
+it("keeps a raw PCM request for non-voice targets without transcoding", async () => {
+  const pcm = Buffer.alloc(480, 1);
+  respond({ audio: pcm.toString("base64") });
+  await expect(
+    synthesize({ target: "audio-file", providerConfig: { responseFormat: "pcm" } }),
+  ).resolves.toEqual({
+    audioBuffer: pcm,
+    outputFormat: "pcm",
+    fileExtension: ".pcm",
+    voiceCompatible: false,
+  });
+  expect(requireFirstPostJsonRecordRequest(postJsonRequestMock, "TTS request").body).toMatchObject({
+    outputFormat: "pcm",
+  });
+  expect(transcode).not.toHaveBeenCalled();
+});
+
 it.each([
   { body: { warnings: [] }, status: 200, error: "malformed base64 audio" },
   { body: { audio: "not base64!" }, status: 200, error: "malformed base64 audio" },

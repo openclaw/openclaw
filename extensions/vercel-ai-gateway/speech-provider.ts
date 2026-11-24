@@ -28,6 +28,12 @@ function readSpeechConfig(raw: SpeechProviderConfig) {
   };
 }
 
+// Headerless sample formats (OpenAI `pcm`, ElevenLabs `pcm_24000`, ...) carry no encoding
+// metadata, so neither MIME sniffing nor the shared ffmpeg transcoder can decode them.
+function isRawPcmFormat(format: string | undefined): boolean {
+  return format !== undefined && /^(?:pcm|raw|s16le|ulaw|alaw)(?:[_-]|$)/.test(format);
+}
+
 // AI Gateway's native speech endpoint, as called by @ai-sdk/gateway's GatewaySpeechModel.
 // The Gateway has no OpenAI-style /v1/audio/speech route.
 export function buildVercelAiGatewaySpeechProvider(
@@ -111,13 +117,19 @@ export function buildVercelAiGatewaySpeechProvider(
           transport: "http",
         });
       const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "audio");
+      // Voice notes need a self-describing container to transcode. Drop a raw PCM request
+      // there so the upstream returns its default container (MP3 for OpenAI) instead.
+      const requestFormat =
+        req.target === "voice-note" && isRawPcmFormat(config.responseFormat)
+          ? undefined
+          : config.responseFormat;
       const payload = await postJsonResponse({
         url: `${baseUrl}/v4/ai/speech-model`,
         headers,
         body: {
           text: req.text,
           ...(voice ? { voice } : {}),
-          ...(config.responseFormat ? { outputFormat: config.responseFormat } : {}),
+          ...(requestFormat ? { outputFormat: requestFormat } : {}),
           ...(config.instructions ? { instructions: config.instructions } : {}),
           ...(speed == null ? {} : { speed }),
           ...(config.language ? { language: config.language } : {}),
@@ -141,7 +153,7 @@ export function buildVercelAiGatewaySpeechProvider(
       const audioBuffer = Buffer.from(audio, "base64");
       // The response carries no media type; sniff it like the AI SDK does.
       const mime = await detectMime({ buffer: audioBuffer });
-      const fileExtension = extensionForMime(mime) ?? `.${config.responseFormat ?? "mp3"}`;
+      const fileExtension = extensionForMime(mime) ?? `.${requestFormat ?? "mp3"}`;
       const voiceCompatible = mime === "audio/ogg" || mime === "audio/opus";
       if (req.target === "voice-note" && !voiceCompatible) {
         // Upstream formats vary by model, so convert instead of requesting a codec it may reject.
