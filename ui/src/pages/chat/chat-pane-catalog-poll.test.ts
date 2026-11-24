@@ -375,13 +375,11 @@ it("retires a restricted transcript when its catalog route is withdrawn", async 
     }
     return original(method, ...args);
   });
-  fixture.pane.applyGatewaySnapshot({
-    ...fixture.context.gateway.snapshot,
-    hello: gatewayHelloForMethods(
-      ["sessions.catalog.route", ...Object.values(methods)],
-      ["operator.sessions.write"],
-    ),
-  });
+  // Give the initial handshake to the mounted pane's connection lifecycle.
+  fixture.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    ["sessions.catalog.route", ...Object.values(methods)],
+    ["operator.sessions.write"],
+  );
   const pane = fixture.mount(buildCatalogSessionKey(key, "main"));
   await vi.waitFor(() => expect(pane.history.catalogMessages).toHaveLength(1));
   available = false;
