@@ -15,6 +15,7 @@ import {
   type SelectionRow as SelectionTarget,
   type SelectionChange,
 } from "./session-row-projection-record.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -27,6 +28,41 @@ type SelectionScope = Omit<
 >;
 const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
+
+// Topology retires scopes; accepted facts advance only their affected partitions.
+const sessionRowSelections = new WeakMap<
+  SessionRowProjection,
+  Map<SelectionScope, Map<boolean, ReturnType<typeof createSessionRowSelection>>>
+>();
+
+export function sessionRowSelectionScopes(projection: SessionRowProjection) {
+  const previous = sessionRowSelections.get(projection);
+  if (previous) {
+    return previous;
+  }
+  const scopes = new Map<
+    SelectionScope,
+    Map<boolean, ReturnType<typeof createSessionRowSelection>>
+  >();
+  sessionRowSelections.set(projection, scopes);
+  projection.onMembershipChange((key) => {
+    for (const variants of scopes.values()) {
+      variants.get(false)?.membershipChanged(key);
+    }
+  });
+  projection.onSelectionChange((change) => {
+    if (change.kind === "reset") {
+      scopes.clear();
+    } else {
+      for (const variants of scopes.values()) {
+        for (const selection of variants.values()) {
+          selection.change(change);
+        }
+      }
+    }
+  });
+  return scopes;
+}
 
 export function createSessionRowSelection(
   cfg: OpenClawConfig,
@@ -49,7 +85,13 @@ export function createSessionRowSelection(
   >();
   // Archive populations own separate revisions; each winner belongs to only one partition.
   let partitions:
-    | Array<{ archived: boolean; revision: object; entries: Map<string, SessionEntryPair> }>
+    | Array<{
+        archived: boolean;
+        revision: object;
+        // Membership publications rotate only invited views of this partition.
+        invitedRevision?: object;
+        entries: Map<string, SessionEntryPair>;
+      }>
     | undefined;
   const partitionFor = (key: string, target: IndexedTarget) => {
     if (!partitions) {
@@ -259,10 +301,12 @@ export function createSessionRowSelection(
     if (previousPartition && previousPartition !== partition) {
       previousPartition.entries.delete(key);
       previousPartition.revision = {};
+      previousPartition.invitedRevision = undefined;
       recordSessionRowPartitionRevision(changeScope);
     }
     if (partition) {
       partition.revision = {};
+      partition.invitedRevision = undefined;
       recordSessionRowPartitionRevision(changeScope);
       partition.entries.set(key, winner!.pair);
     }
@@ -303,6 +347,19 @@ export function createSessionRowSelection(
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row, change.scope);
+    },
+    membershipChanged(key?: string) {
+      if (key === undefined) {
+        partitions?.forEach((part) => {
+          part.invitedRevision = {};
+        });
+      } else {
+        const target = winners.get(key);
+        const part = target && partitionFor(key, target);
+        if (part) {
+          part.invitedRevision = {};
+        }
+      }
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();
