@@ -15,8 +15,10 @@ if (
   throw new Error("schema downgrade barrier requires an exact TCP port and sentinel path");
 }
 
-// oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the actual native Server receiver.
-const nativeListen = Server.prototype.listen;
+const nativeListen = Reflect.get(Server.prototype, "listen");
+if (typeof nativeListen !== "function") {
+  throw new Error("schema downgrade barrier cannot locate the native listen method");
+}
 Server.prototype.listen = function (...args) {
   const value = typeof args[0] === "object" && args[0] !== null ? args[0].port : args[0];
   const requestedPort =

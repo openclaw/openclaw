@@ -165,8 +165,8 @@ async function withGateway(fixture, codeRoot, run) {
 
 function historyMessages(history) {
   return history.messages.map((message) => {
-    // eslint-disable-next-line no-underscore-dangle -- Public Gateway transcript metadata field.
-    const id = message.__openclaw?.id ?? message.id;
+    const { __openclaw: metadata } = message;
+    const id = metadata?.id ?? message.id;
     assert.equal(typeof id, "string", "History message lacks a public stable ID");
     return { id, role: message.role, content: message.content };
   });
