@@ -17,10 +17,7 @@ import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import type { buildBeforeCompactionHookMetrics } from "./compaction-hook-metrics.js";
 import { log } from "./logger.js";
 
-export {
-  buildBeforeCompactionHookMetrics,
-  estimateTokensAfterCompaction,
-} from "./compaction-hook-metrics.js";
+export { estimateTokensAfterCompaction } from "./compaction-hook-metrics.js";
 
 type PostCompactionSession = {
   config?: OpenClawConfig;

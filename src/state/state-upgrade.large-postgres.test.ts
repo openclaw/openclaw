@@ -5,20 +5,28 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
 import * as backup from "../snapshot/database-backup.js";
+import { createTrialPending, resolvePrefix } from "../update/store.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-schema-versions.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { preflightStateUpgrade } from "./state-upgrade-databases.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  vi.restoreAllMocks();
+});
 
 it.each([
-  { gib: 6, selected: "private_agent" },
-  { gib: 7, selected: "original_agent" },
-])("selects protected or in-place PostgreSQL migration at $gib GiB", async ({ gib, selected }) => {
+  { gib: 6, trial: true, canCreate: true },
+  { gib: 7, trial: true, canCreate: true },
+  { gib: 7, trial: false, canCreate: false },
+  { gib: 7, trial: true, canCreate: false },
+])("upgrades $gib GiB (trial: $trial, CREATE: $canCreate)", async ({ gib, trial, canCreate }) => {
   const root = dirs.make("state-upgrade-pg-size-");
   const statePath = path.join(root, "state", "openclaw.sqlite");
   const agentPath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -52,8 +60,8 @@ it.each([
     registeredAgentDatabases: [],
   });
   vi.spyOn(backup, "preflightPostgresUpgrade").mockImplementation(async () => {
-    if (gib === 7) {
-      throw new Error("This role cannot CREATE protected copies");
+    if (!canCreate) {
+      throw new Error("PostgreSQL protected copy requires database CREATE privilege");
     }
   });
   vi.spyOn(backup, "clonePostgresUpgrade").mockImplementation(async (source, anchor) => {
@@ -63,15 +71,35 @@ it.each([
     return { namespace: "private_agent" };
   });
   vi.spyOn(backup, "validatePostgresUpgrade").mockResolvedValue(undefined);
+  const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
+  if (trial && !canCreate) {
+    await expect(preflightStateUpgrade(env, {})).rejects.toThrow(/CREATE privilege/);
+    expect(fs.readFileSync(statePath)).toEqual(original);
+    expect(readBackupEngine(agentPath)).toMatchObject({ namespace: "original_agent" });
+    expect(fs.readdirSync(root).some((name) => name.startsWith(".upgrade-"))).toBe(false);
+    return;
+  }
+  if (trial) {
+    await preflightStateUpgrade(env, {});
+    await createTrialPending(
+      {
+        runId: "synthetic-size-trial",
+        target: root,
+        previous: root,
+        version: "synthetic",
+      },
+      resolvePrefix(env),
+    );
+  }
   const log = { info: vi.fn(), warn: vi.fn() };
   const result = await upgradeStateDirectory({
-    env: { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
+    env,
     log,
     runChain: async ({ stateDir }) => {
       expect(stateDir).not.toBe(root);
       expect(fs.readFileSync(statePath)).toEqual(original);
       expect(readBackupEngine(path.join(stateDir, path.relative(root, agentPath)))).toMatchObject({
-        namespace: selected,
+        namespace: trial ? "private_agent" : "original_agent",
       });
       using state = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
       state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
@@ -79,7 +107,9 @@ it.each([
     },
   });
   expect(result).toMatchObject({ status: "upgraded", mode: "chain", pinned: false });
-  expect(readBackupEngine(agentPath)).toMatchObject({ namespace: selected });
+  expect(readBackupEngine(agentPath)).toMatchObject({
+    namespace: trial ? "private_agent" : "original_agent",
+  });
   using state = new DatabaseSync(statePath, { readOnly: true });
   expect(state.prepare("PRAGMA user_version").get()).toEqual({
     user_version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -92,12 +122,6 @@ it.each([
   const report = state
     .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = 'upgrade.report'")
     .get();
-  const notice =
-    "This PostgreSQL store (7.00 GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: https://docs.openclaw.ai/install/updating#rollback";
-  const warnings = gib === 7 ? [notice] : [];
-  expect(result).toMatchObject({ warnings });
-  expect(JSON.parse(String(report?.payload_json))).toMatchObject({ warnings });
-  if (gib === 7) {
-    expect(log.warn).toHaveBeenCalledWith(notice);
-  }
+  expect(result).toMatchObject({ warnings: [] });
+  expect(JSON.parse(String(report?.payload_json))).toMatchObject({ warnings: [] });
 });

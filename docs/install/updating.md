@@ -148,9 +148,13 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    Gateway reports ready. After two failed starts, a configuration refusal
    (exit 78), or when the trial budget ends, it restores the previous release,
    SQLite migration originals, and PostgreSQL anchors.
-6. The Gateway that serves after the switch records the outcome. Only a Gateway
-   that runs the target build records success. Restored files alone do not prove
-   that the previous Gateway is serving.
+6. Preparation records refusals, already-current results, and failures before
+   activation. It checks for an active trial while holding its preparation lock.
+   After activation of a modern launcher trial, only the Gateway that is ready settles the run
+   from the launcher trial and preparation lock. A published trial takes precedence
+   over an expired lock for the same run. Only a Gateway that runs the target build
+   records success; restored files alone do not prove that the previous Gateway
+   is serving. Startup does not infer a failed update from PID reuse or uptime.
 7. After success is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
@@ -160,29 +164,50 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
-Startup prepares state and agent migration inputs privately, including mixed
-SQLite/PostgreSQL installations, when the PostgreSQL copy estimate is at most
-600 seconds. Preparation reads the total physical size of the namespaces that
-would be cloned while the previous Gateway is serving, counting table storage,
-indexes, and TOAST once, and estimates 90 seconds/GiB. The candidate migrates and
-validates protected copies before writing the durable file-swap plan or publishing
-their anchors. Original protected PostgreSQL schema and rows remain unchanged.
+Early Git source-updater recovery is a compatibility exception. Its separate CLI
+worker never enters Gateway startup. It opens a repair run after the first
+readiness check and finishes rebuilding and cleanup after the second. Neither
+startup can report that repair complete; a failed release may not reach readiness
+at all. This layout shipped only in moving-`main` Git installs from 2026-11-17–19,
+not in any published release. Retire `update-early-release-recovery*.ts` and its
+early-layout check at the first regular stable cut after `v2026.11.8`. Keep an
+already-started recovery's retained code until that recovery finishes.
+
+`discoverDatabases` is the state transaction inventory. Before the old Gateway
+stops, `check-release` refuses a schema-changing update if any registered or
+configured database is outside the private copy and launcher recovery boundary.
+This includes external paths, symlinked or separately mounted stores, paths more
+than four directories deep, and stores below `git-install`, `npm`, `node_modules`,
+`tmp` or `logs`. The refusal names the database and where to move it. Updates
+without a pending schema migration do not add these restrictions.
+
+Release-trial startup migrates and validates private copies before publishing
+their durable file-swap plan or PostgreSQL anchors. Every inventoried SQLite store
+is a required copy, including a current-schema agent store that Doctor may access
+while another store upgrades. PostgreSQL uses a private server-side copy during
+a trial; ordinary starts retain its in-place migration-on-open owner without
+copy-only privileges. Original protected PostgreSQL schema and rows remain
+unchanged. Store size is not an update-admission rule.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
+The startup copy checks readability before budgeting or copying files. It skips
+unreadable optional files (such as old config backups or macOS `._*` metadata)
+and subdirectories (such as an ext4 volume's `lost+found`) with a warning, without
+changing their contents or permissions. An unreadable state root, other filesystem
+errors, or an uncopied required database still stops the upgrade. Unreadable
+required database files, including their WAL and rollback journals, are refused
+before copying; an optional SQLite family is skipped together rather than copied
+without its unreadable journal.
 
-An estimate above 600 seconds selects the existing in-place PostgreSQL migration
-path, not a size refusal. Copy-only `CREATE` and grant-copy prerequisites do not
-apply to this selection. Existing SQLite-state private-copy protection is retained
-when agent stores use PostgreSQL. Update output and the saved update report show:
+A failed private preparation uses the existing configuration refusal (exit 78).
+There is no portable-export or in-place trial fallback; restore missing copy
+privileges or namespace ownership before retrying.
 
-> This PostgreSQL store (X GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: <https://docs.openclaw.ai/install/updating#rollback>
-
-For stores selected for protection, a preparation failure uses the existing
-configuration refusal (exit 78), with the obstruction in its diagnostics. There is
-no portable-export fallback; missing copy privileges must be repaired.
-`--no-restart` delays copying and migration until the next actual Gateway start;
-a same-schema release does not need a PostgreSQL copy.
+A trial started by an older preparer repeats admission before migration. A refused
+trial exits 78 and the launcher restores the previous release. Ordinary non-trial
+starts, including manual package upgrades, keep their existing migration-on-open
+behavior: a store's size alone never prevents that Gateway from starting.
 
 Each protected PostgreSQL schema-changing update changes the affected store's
 namespace name and lengthens the restart. Plan for the original and private server
@@ -191,6 +216,15 @@ and anchor generations together. Pruning may drop only update-created or
 verified-owned namespaces; a failed drop retains the recovery pair and reports
 a warning without failing a serving release. These recovery copies are not an
 off-server backup.
+
+### Uncovered database paths
+
+An uncovered-path refusal leaves the old Gateway serving. Before moving a SQLite
+database, create and verify a full backup, stop the Gateway, then move its complete
+database family into the named recovery layout and update its registration and
+agent-directory configuration. Do not move an open database or separate its WAL
+from its main file. Restart the old Gateway and verify readiness before retrying
+the update.
 
 Before a startup migration replaces a SQLite database, the swap owner drains its
 readers and retires the retained admission descriptors for both the live database
@@ -229,6 +263,15 @@ A change to `src/update/`, the `src/daemon` service stage functions,
 update runs, recorded with these rules. A missing run is written as "unproven"
 and blocks a stable release. The rules come from the 2026-11-23 audit, which
 found that earlier receipts did not prove what they claimed.
+
+The `release-update-survivor` CI lane covers the Linux npm/container cell on
+PRs that touch update, state, update CLI, or launcher owners. It installs the
+PR-head build, builds a distinct successor from the same source with a
+disposable schema migration, then runs `openclaw update`. The healthy case
+checks the serving version, committed trial, schema, and seeded row counts
+and contents. Crash-after-migration enforcement is being added with the
+store-custody fix; it is not claimed by this lane yet. The fixture changes
+scratch source only, without changing the shipped schema or other platform cells.
 
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
@@ -415,6 +458,18 @@ files. Chain failure retains the generic rebuild and pins the previous files;
 invalid upgraded config still refuses publication. No live file is replaced or
 removed unless the upgrade copied it. If Doctor creates a template over an
 uncopied workspace file, startup leaves the original alone and reports a warning.
+
+The private copy also retains the root config’s referenced `$include` files, including
+siblings of an external config root and files inside an excluded workspace. It does
+not copy the rest of that workspace. Include files stay separate, and invalid
+includes still prevent publication. If a protected release trial needs to rewrite
+an include outside the launcher’s recovery paths, run `openclaw doctor --fix`
+first. This includes external includes, deeply nested workspace files, and files
+below excluded recovery directories such as `tmp` or `logs`. Ordinary first-start
+upgrades publish changed includes with the existing backed-up file swap. Changed
+config files and their Doctor backups are staged beside their destinations before
+the swap plan is published, including when an included file is on a separately
+mounted workspace and the root config is inside the state directory.
 
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on

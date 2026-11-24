@@ -235,7 +235,8 @@ export function createBeamTestCatalog(
 
 // Existing network/retry cases exercise delivery against a deterministic cleaner fixture.
 // Native child failures, redaction, raw-byte validation and bounds have separate contract tests.
-const cleanBeamTestCandidate: typeof cleaner.cleanBeamCandidate = async (candidate) => {
+const cleanBeamTestCandidate: typeof cleaner.cleanBeamCandidate = async (input) => {
+  const candidate = JSON.parse(input) as cleaner.BeamCleanCandidate;
   const items = candidate.items.map(({ type, text }) => ({ type, text }));
   const packet = {
     version: 2 as const,

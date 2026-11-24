@@ -38,6 +38,7 @@ import {
   applicationRouteLocation,
   createInitialApplicationLocationResolver,
   isResolvedDefaultLanding,
+  navigateApplicationLink,
   normalizeInitialApplicationLocation,
   resolveBootstrapModelCatalogTarget,
   resolveInitialApplicationLocation,
@@ -91,11 +92,6 @@ import { seedUserPreferences } from "./user-prefs-cache.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 export type { ApplicationRuntime } from "./application-runtime.ts";
-
-type PendingRouterStartNavigation = {
-  location: RouteLocation;
-  mode: "push" | "replace";
-};
 
 export function bootstrapApplication(
   initial = prepareApplicationStartup(),
@@ -366,7 +362,8 @@ export function bootstrapApplication(
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
-  let pendingRouterStartNavigation: PendingRouterStartNavigation | null = null;
+  let pendingRouterStartNavigation: { location: RouteLocation; mode: "push" | "replace" } | null =
+    null;
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null
       ? {
@@ -547,6 +544,7 @@ export function bootstrapApplication(
     context,
     router,
     documentMode,
+    navigateAppLink: (url) => navigateApplicationLink(context, url),
     get readOnlyConfig() {
       return isDocumentGateway() ? config.current.readOnlyConfig : undefined;
     },

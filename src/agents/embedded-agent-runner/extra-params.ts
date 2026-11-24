@@ -1,4 +1,5 @@
 import {
+  isOpenAIResponsesApi,
   canonicalizeMaxTokensParam,
   resolveMaxTokensParam,
   detectOpenAICompletionsCompat,
@@ -64,12 +65,6 @@ function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
 }
 
 const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat", "stop"]);
-const GPT_PARALLEL_TOOL_CALLS_APIS = new Set([
-  "openai-completions",
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-]);
 
 export function resolveExtraParams(params: {
   cfg: OpenClawConfig | undefined;
@@ -425,7 +420,7 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (model, context, options) => {
-    if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
+    if (!isOpenAIResponsesApi(model.api) && model.api !== "openai-completions") {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {

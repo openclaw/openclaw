@@ -35,7 +35,7 @@ manual qualification can run all three majors. See the
 | CLI and interactive setup/onboard                 | Supported                               | Includes one-shot commands and Doctor; PostgreSQL `onboard --reset` deliberately refuses.                                                                                                                                      |
 | Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                                                            |
 | Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                                                           |
-| Update admission, forward migrations and recovery | Supported                               | Release trials protect stores estimated to copy within ten minutes; larger stores retain in-place migration with an explicit backup warning. Legacy capture/restore has separate generation checks.                            |
+| Update admission, forward migrations and recovery | Supported                               | Release trials use protected server-side copies, with no size refusal or in-place trial fallback. Legacy capture/restore has separate generation checks.                                                                       |
 | Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. See [evidence and service/turn limits](#published-stable-upgrade-qualification).                                    |
 | Published stable 2026.11.5 PostgreSQL upgrade     | Linux CI coverage                       | Linux CI upgrades both PostgreSQL 17 stores then checks that the candidate foreground Gateway can read the original session and transcript. See [the qualification scope and limits](#published-stable-upgrade-qualification). |
 | Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                                                        |
@@ -64,6 +64,10 @@ Anchors, client credentials, daemon runtime pins, quarantine, managed-update and
 package-activation journals remain **local by design**, not missing PostgreSQL
 families. There are no other configurable families. Device caches, external
 read-only sources and file artifacts also remain outside engine selection.
+
+Protected-copy prerequisites, including database `CREATE`, apply to release trials.
+An ordinary start after a manual package upgrade keeps the existing in-place
+migration-on-open path and does not acquire copy-only privilege requirements.
 
 ## Server-major qualification
 
@@ -1046,10 +1050,9 @@ matching server store's version without migrating it. An older server schema can
 therefore reach the stopped-writer migration phase; a newer schema or mismatched
 anchor identity still refuses the update.
 
-While the previous Gateway still serves, preparation totals physical storage for
-the PostgreSQL namespaces that would be cloned, including indexes and TOAST once.
-At the measured estimate of 90 seconds/GiB, a total of at most 600 seconds
-(about 6.67 GiB) selects a **private server-side copy**:
+Preparation checks the PostgreSQL copy prerequisites while the previous Gateway
+serves. A schema-changing update uses a **private server-side copy**, without a
+size-based admission rule:
 
 1. After the previous Gateway and other writers stop, the candidate copies each
    affected PostgreSQL store into a fresh private namespace. Required SQLite
@@ -1074,14 +1077,9 @@ through the existing configuration-refusal exit (78) and names the obstruction.
 Restore missing copy privileges or namespace ownership before retrying; see
 [runtime role requirements](#provision-a-database-and-runtime-role).
 
-An estimate above 600 seconds does **not** block the update. It keeps the existing
-in-place PostgreSQL migration path, without automatic data rollback. The size
-decision runs before copy-only privilege checks, so this path gains no new copy
-prerequisite. Mixed SQLite-state/PostgreSQL-agent layouts retain private SQLite
-state protection. Update output and the saved update report show the measured
-size in this notice:
-
-> This PostgreSQL store (X GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: <https://docs.openclaw.ai/install/updating#rollback>
+Store size does not refuse the release update and never selects an in-place
+trial path. An ordinary non-trial Gateway start still uses its normal migration
+owner.
 
 The copy preserves and verifies schema, table, column, and sequence grants,
 including grant options and schema-specific default privileges. Existing reader,
@@ -1097,8 +1095,8 @@ Allow space for at least the original and private server copies, plus indexes,
 WAL, temporary work, and any retained generations. There is no portable local
 row export on this release path. The existing release-trial deadline still
 bounds copy, migration, and startup together; the maintenance statement limits
-below do not extend it. The size estimate selects the mode; it is not a completion
-guarantee or an update size limit.
+below do not extend it. The estimate is an admission bound, not a completion
+guarantee.
 
 Namespace retention follows the paired anchor generations. Keep the active,
 immediate-prior, and pinned or recovery generations. Pruning drops only

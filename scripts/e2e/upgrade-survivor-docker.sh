@@ -581,12 +581,17 @@ if [ "$SCENARIO" = "release-update" ]; then
   docker_e2e_package_mount_args "$PACKAGE_TGZ"
   mkdir -p "$ARTIFACT_DIR"
   chmod a+rwx "$ARTIFACT_DIR"
+  UPGRADE_SCENARIO_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-fixtures.XXXXXX")"
+  node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
+    "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+  mkdir -p "$ARTIFACT_DIR/healthy"
   docker_e2e_run_with_harness \
     --init \
     --user root \
     -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
-    -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+    -v "$ARTIFACT_DIR/healthy:/tmp/openclaw-upgrade-survivor-artifacts" \
+    -v "$UPGRADE_SCENARIO_STAGE:/tmp/openclaw-release-fixtures:ro" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     "$IMAGE_NAME" \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \

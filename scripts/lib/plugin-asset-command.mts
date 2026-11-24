@@ -19,7 +19,8 @@ export async function runPluginAssetCommand(params: {
       cwd: params.cwd,
       env,
       shell: true,
-      stdio: "inherit",
+      // Packagers report their artifact on stdout; hook output is progress.
+      stdio: ["inherit", 2, "inherit"],
       timeoutMs: PLUGIN_ASSET_HOOK_TIMEOUT_MS,
       requireProcessTreeExit: process.platform !== "win32",
     });
