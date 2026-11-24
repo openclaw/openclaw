@@ -11,6 +11,7 @@ import type { StartDeps } from "./update-early-release-recovery-start.js";
 import * as recovery from "./update-early-release-recovery.js";
 import type { FinishFacts, RunCommand, RunnerDeps } from "./update-early-release-recovery.js";
 import { getUpdateRunStatusAsync } from "./update-run-reader.js";
+import { createUpdateRunAsync, finishUpdateRunAsync } from "./update-run-write.async.js";
 
 type RecoveryOutcome = Parameters<RunnerDeps["record"]>[0];
 
@@ -415,8 +416,11 @@ posix("finishes the run the runner holds and removes what the early layout left"
   );
   // The real store: the runner takes the update lock; the worker's `<plan> finish <facts>`
   // arguments carry its run to the finishing step, which settles it.
+  // The update the Gateway started, which the early updater recorded as failed.
+  const api = await createUpdateRunAsync({ trigger: "api" });
+  await finishUpdateRunAsync(api.runId, { status: "failed", reason: "check-failed" });
   const deps = recovery.defaultRunnerDeps();
-  const runId = (await deps.hold(fx.plan)) ?? "";
+  const runId = (await deps.hold({ ...fx.plan, plannedAt: Date.now() })) ?? "";
   const argv = [JSON.stringify(fx.plan), "finish", JSON.stringify({ runId, downtimeMs: 21_000 })];
   const { plan, finish } = recovery.readEarlyGitReleaseRecoveryArgs(argv);
   vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -426,7 +430,7 @@ posix("finishes the run the runner holds and removes what the early layout left"
   expect(fs.readdirSync(path.join(fx.plan.prefix, "releases"))).toEqual(["now"]);
   const { activeRun, lastRun } = await getUpdateRunStatusAsync();
   expect(activeRun).toBeUndefined();
-  expect(lastRun).toMatchObject({ runId, status: "succeeded", downtimeMs: 21_000 });
+  expect(lastRun).toMatchObject({ runId, trigger: "api", status: "succeeded", downtimeMs: 21_000 });
   const detail = lastRun?.steps.find((step) => step.step === "early-release-recovery")?.detail;
   expect(detail).toContain("Removed the old-format trial, the old release link, releases/git-old");
   expect(detail).toContain(`kept at ${copy}`);

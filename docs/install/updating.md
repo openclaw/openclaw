@@ -2247,7 +2247,7 @@ itself, in a transient user unit that outlives the updater:
 
 It takes about 5 to 10 minutes. The Gateway restarts twice and serves in between: the first
 restart lasts as long as the database migration, the second a few seconds. Until the rebuild
-finishes, the checkout's `openclaw` command refuses the migrated data, so follow the recovery
+finishes, the checkout's `openclaw` command may fail or refuse the migrated data, so follow the recovery
 with `systemctl --user status openclaw-update-recovery` or
 `journalctl --user -u openclaw-update-recovery`; the journal prints every failure with its next
 step, and `openclaw update status` shows the outcome once the checkout is rebuilt. A paired node

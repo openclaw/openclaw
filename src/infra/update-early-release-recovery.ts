@@ -10,6 +10,7 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readSchemaVersions, type SchemaVersions } from "./update-candidate-check-early-release.js";
+import { holdUpdateLock, recordOutcome } from "./update-early-release-recovery-record.js";
 
 /**
  * Automatic recovery for Git checkouts whose installed updater has the early release layout
@@ -21,11 +22,12 @@ import { readSchemaVersions, type SchemaVersions } from "./update-candidate-chec
  * which current updates continue from.
  *
  * Linux with a systemd user service only; other platforms keep the printed rebuild.
- * Remove with `update-candidate-check-early-release.ts`.
+ * Remove with `update-candidate-check-early-release.ts` and `update-early-release-recovery-record.ts`.
  */
 
 export const EARLY_RELEASE_RECOVERY_FLAG = "--early-release-recovery";
 const DRIVER_EXIT_TIMEOUT_MS = 30 * 60_000;
+/** Each rebuild command's limit. */
 const COMMAND_TIMEOUT_MS = 60 * 60_000;
 /** A boot migration of a large agent database runs before the Gateway reports ready. */
 const READY_TIMEOUT_MS = 20 * 60_000;
@@ -98,10 +100,12 @@ export const commandTail = (result: CommandResult) =>
 function parseSystemdSpanMs(text: string): number | null {
   const units: Record<string, number> = { us: 1e-3, ms: 1, s: 1e3, min: 6e4, h: 36e5, d: 864e5 };
   let total = 0;
-  const rest = text.trim().replace(/(\d+(?:\.\d+)?)(min|ms|us|h|d|s)\b\s*/gu, (_, n, unit) => {
-    total += Number(n) * units[unit as string]!;
-    return "";
-  });
+  const rest = text
+    .trim()
+    .replace(/(\d+(?:\.\d+)?)(min|ms|us|h|d|s)\b\s*/gu, (_, n: string, unit: string) => {
+      total += Number(n) * (units[unit] ?? Number.NaN);
+      return "";
+    });
   return text.trim() && !rest ? total : null;
 }
 
@@ -171,7 +175,7 @@ export type RunnerDeps = {
 
 /** `downtimeMs` is left out when a restart of the runner lost the first switch's timing. */
 export type FinishFacts = { downtimeMs?: number; runId?: string };
-type RecoveryOutcome = {
+export type RecoveryOutcome = {
   plan: RecoveryPlan;
   runId?: string;
   status: "succeeded" | "failed";
@@ -607,79 +611,6 @@ export async function finishEarlyGitReleaseRecovery(
       ? { nextAction: "restart the node runner that runs from this checkout" }
       : {}),
   });
-}
-
-async function recordOutcome(outcome: RecoveryOutcome) {
-  const [{ finishUpdateRunAsync, recordUpdateRunStepAsync }, store] = await Promise.all([
-    import("./update-run-write.async.js"),
-    import("../update/store.js"),
-  ]);
-  // Without a held run, take the lock as `hold` does: that settles an interrupted runner's run.
-  const runId = outcome.runId ?? (await openHeldRun(outcome.plan)).runId;
-  try {
-    await recordUpdateRunStepAsync(runId, {
-      step: "early-release-recovery",
-      status: outcome.status === "succeeded" ? "completed" : "failed",
-      endedAtMs: Date.now(),
-      detail: outcome.detail,
-    });
-    await finishUpdateRunAsync(runId, {
-      status: outcome.status,
-      reason: outcome.reason,
-      ...(outcome.nextAction ? { nextAction: outcome.nextAction } : {}),
-      ...(outcome.status === "succeeded"
-        ? { after: { version: VERSION, sha: outcome.plan.target } }
-        : {}),
-      ...(outcome.downtimeMs === undefined ? {} : { downtimeMs: outcome.downtimeMs }),
-    });
-  } finally {
-    // Held by this runner, or by the runner that started this finishing step.
-    const holder = (await store.readUpdateLock())?.pid;
-    if (holder === process.pid || holder === process.ppid) {
-      await store.releaseUpdateLock();
-    }
-  }
-}
-
-async function openRun(plan: RecoveryPlan): Promise<string> {
-  const { createUpdateRunAsync } = await import("./update-run-write.async.js");
-  const target = { kind: "git" as const, version: VERSION, sha: plan.target };
-  const run = await createUpdateRunAsync({
-    trigger: "cli",
-    target,
-    before: { version: plan.fromVersion },
-  });
-  return run.runId;
-}
-
-/** A new run for this recovery, holding the release updater's lock unless another update does. */
-async function openHeldRun(plan: RecoveryPlan) {
-  const [{ finishUpdateRunAsync }, store] = await Promise.all([
-    import("./update-run-write.async.js"),
-    import("../update/store.js"),
-  ]);
-  const runId = await openRun(plan);
-  const lock = await store.acquireUpdateLock({
-    runId,
-    pid: process.pid,
-    deadlineMs: COMMAND_TIMEOUT_MS * 3,
-  });
-  if (lock.acquired && lock.previous) {
-    // An interrupted runner's run; the Gateway would otherwise settle it at its next start.
-    await finishUpdateRunAsync(lock.previous.runId, { status: "failed", reason: "interrupted" });
-  }
-  return { runId, acquired: lock.acquired };
-}
-
-/** The release updater's lock, held by this runner's update run until its outcome is recorded. */
-async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
-  const { runId, acquired } = await openHeldRun(plan);
-  if (!acquired) {
-    const { finishUpdateRunAsync } = await import("./update-run-write.async.js");
-    await finishUpdateRunAsync(runId, { status: "skipped", reason: "update-running" });
-    return null;
-  }
-  return runId;
 }
 
 /** The finishing step's arguments to `update-migrated-finalize.worker`. */

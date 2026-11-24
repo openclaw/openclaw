@@ -86,7 +86,7 @@ it("refuses a schema change for the early release updater and names the rebuild"
   );
   expect(rebuild).not.toMatch(/[\s~]\//u);
 
-  // Started: failures go to the journal, because the checkout's CLI refuses migrated data.
+  // Started: failures go to the journal, because the checkout's CLI fails until it is rebuilt.
   const target = "0123456789abcdef0123456789abcdef01234567";
   const started = { started: true, unit: "openclaw-update-recovery", target } as const;
   const automatic = formatEarlyGitReleaseRefusal(change, started);
