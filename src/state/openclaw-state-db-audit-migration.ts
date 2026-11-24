@@ -158,10 +158,9 @@ export function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
       "canonical shared-state catalog",
     )
       .tables.filter((table) => CANONICAL_AUDIT_TABLES.some(({ name }) => name === table.name))
-      .map((table) => ({
-        ...table,
-        indexes: table.indexes.filter((index) => index.unique === 1),
-      })),
+      .map((table) =>
+        Object.assign({}, table, { indexes: table.indexes.filter((index) => index.unique === 1) }),
+      ),
     views: [],
   };
   if (

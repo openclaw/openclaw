@@ -157,10 +157,12 @@ export function assertPostgresCatalog(
   expected: readonly PostgresCatalogFact[],
   options?: { allowAdditive?: boolean },
 ): void {
-  if (options?.allowAdditive) {
-    actual = projectCompatiblePostgresCatalog(actual, expected);
-  }
-  if (!isDeepStrictEqual(actual.map(canonical).toSorted(), expected.map(canonical).toSorted())) {
+  const comparable = options?.allowAdditive
+    ? projectCompatiblePostgresCatalog(actual, expected)
+    : actual;
+  if (
+    !isDeepStrictEqual(comparable.map(canonical).toSorted(), expected.map(canonical).toSorted())
+  ) {
     throw new Error(
       "PostgreSQL catalog differs from its generated contract; use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.",
     );
