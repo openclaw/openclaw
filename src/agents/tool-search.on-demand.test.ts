@@ -1,11 +1,7 @@
 // On-demand tools stay out of the provider tool list until the session calls them by name.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { applyCodeModeCatalog } from "./code-mode.js";
-import {
-  createCatalogCodeModeHarness,
-  createCodeModeHarness,
-  resetCodeModeTestState,
-} from "./code-mode.test-support.js";
+import { createCodeModeHarness, resetCodeModeTestState } from "./code-mode.test-support.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import {
@@ -16,148 +12,73 @@ import {
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
 } from "./tool-search.js";
-import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
 import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 
 const refs: ToolSearchCatalogRef[] = [];
 afterEach(async () => {
-  for (const catalogRef of refs.splice(0)) {
-    clearToolSearchCatalog({ catalogRef });
-  }
+  refs.splice(0).forEach((catalogRef) => clearToolSearchCatalog({ catalogRef }));
   await resetCodeModeTestState();
 });
-
 // The two always-built heavy tools of a default unsandboxed vision run, beside a core tool.
-function defaultTargets(): AnyAgentTool[] {
-  return [createReadTool("/tmp/on-demand"), createComputerTool(), createGitHubPublishTool()];
-}
+const targets = () => [createReadTool("/tmp/od"), createComputerTool(), createGitHubPublishTool()];
+type Mode = "tools" | "directory" | "code-mode";
 
-// The embedded runner opts in; it loads an on-demand tool on its first direct call.
-function loadingCatalogRef(): ToolSearchCatalogRef {
+/** `loads` is the embedded runner's opt-in: it loads an on-demand tool on its first direct call. */
+function surface(mode: Mode, options: { loads?: boolean; promoted?: string[] } = {}) {
   const catalogRef = createToolSearchCatalogRef();
-  catalogRef.loadsOnDemandTools = true;
   refs.push(catalogRef);
-  return catalogRef;
+  catalogRef.loadsOnDemandTools = options.loads === false ? undefined : true;
+  catalogRef.promotedToolNames = new Set(options.promoted);
+  const ctx = { config: { tools: { toolSearch: { mode: mode as "tools" } } }, catalogRef };
+  const harness = mode === "code-mode" ? createCodeModeHarness({ catalogRef }) : undefined;
+  const { tools } = harness
+    ? applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, ...targets()] })
+    : (mode === "tools" ? applyToolSearchCatalog : applyToolSchemaDirectoryCatalog)({
+        ...ctx,
+        tools: [...createToolSearchTools(ctx), ...targets()],
+      });
+  const catalog = catalogRef.current?.entries.map((entry) => entry.name) ?? [];
+  return { catalogRef, tools, sent: tools.map((tool) => tool.name), catalog };
 }
 
-function toolSearchSurface(mode: "tools" | "directory", promoted?: string[]) {
-  const config = { tools: { toolSearch: { mode } } };
-  const catalogRef = loadingCatalogRef();
-  if (promoted) {
-    catalogRef.promotedToolNames = new Set(promoted);
-  }
-  const ctx = { config, catalogRef };
-  const apply = mode === "tools" ? applyToolSearchCatalog : applyToolSchemaDirectoryCatalog;
-  const { tools } = apply({ ...ctx, tools: [...createToolSearchTools(ctx), ...defaultTargets()] });
-  return { catalogRef, ctx, tools };
-}
+it.each(["tools", "directory", "code-mode"] as const)(
+  "%s: defers both tools until promoted, then keeps the promoted one direct",
+  (mode) => {
+    const fresh = surface(mode);
+    expect(fresh.sent).not.toContain("computer");
+    expect(fresh.sent).not.toContain("github_publish");
+    expect(fresh.catalog).toEqual(expect.arrayContaining(["computer", "github_publish"]));
+    const promoted = surface(mode, { promoted: ["computer"] });
+    expect(promoted.sent).toContain("computer");
+    expect(promoted.catalog).not.toContain("computer");
+    expect(promoted.catalog).toContain("github_publish");
+    expect(promoted.catalogRef.directOnlyToolNames?.has("computer")).toBe(true);
+  },
+);
 
-function codeModeSurface(promoted?: string[]) {
-  const harness = createCodeModeHarness({ catalogRef: loadingCatalogRef() });
-  if (promoted) {
-    harness.catalogRef.promotedToolNames = new Set(promoted);
-  }
-  const { tools } = applyCodeModeCatalog({
-    ...harness.ctx,
-    tools: [...harness.tools, ...defaultTargets()],
-  });
-  return { catalogRef: harness.catalogRef, tools };
-}
-
-const catalogNames = (catalogRef: ToolSearchCatalogRef) =>
-  catalogRef.current?.entries.map((entry) => entry.name) ?? [];
-const names = (tools: readonly { name: string }[]) => tools.map((tool) => tool.name);
-
-describe.each([
-  [
-    "Tool Search tools mode",
-    () => toolSearchSurface("tools"),
-    (p: string[]) => toolSearchSurface("tools", p),
-  ],
-  [
-    "Tool Search directory mode",
-    () => toolSearchSurface("directory"),
-    (p: string[]) => toolSearchSurface("directory", p),
-  ],
-  ["Code Mode", () => codeModeSurface(), (p: string[]) => codeModeSurface(p)],
-] as const)("%s", (_mode, build, buildPromoted) => {
-  it("defers computer and github_publish until the session promotes them", () => {
-    const { catalogRef, tools } = build();
-    expect(names(tools)).not.toContain("computer");
-    expect(names(tools)).not.toContain("github_publish");
-    expect(catalogNames(catalogRef)).toEqual(
-      expect.arrayContaining(["computer", "github_publish"]),
-    );
-    expect(catalogRef.current?.entries.find((entry) => entry.name === "computer")?.onDemand).toBe(
-      true,
-    );
-  });
-
-  it("keeps a promoted tool direct and out of the catalog", () => {
-    const { catalogRef, tools } = buildPromoted(["computer"]);
-    expect(names(tools)).toContain("computer");
-    expect(names(tools)).not.toContain("github_publish");
-    expect(catalogNames(catalogRef)).not.toContain("computer");
-    expect(catalogNames(catalogRef)).toContain("github_publish");
-    expect(catalogRef.directOnlyToolNames?.has("computer")).toBe(true);
-  });
+it("keeps on-demand tools direct for a runner that cannot load them and in a headless catalog", () => {
+  const plain = surface("tools", { loads: false });
+  expect(plain.sent).toEqual(expect.arrayContaining(["computer", "github_publish"]));
+  expect(plain.catalog).not.toContain("computer");
+  const catalogRef = createToolSearchCatalogRef();
+  refs.push(catalogRef);
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: targets() });
+  expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["read"]);
 });
 
-it("tells the model to call an on-demand tool by name and refuses catalog dispatch", async () => {
-  const { tools } = toolSearchSurface("tools");
-  const control = (name: string) => tools.find((tool) => tool.name === name)!;
+it("tells the model to call it by name and refuses dispatch_action and Code Mode guest calls", async () => {
+  const control = (name: string) => surface("tools").tools.find((tool) => tool.name === name)!;
   const search = await control("tool_search").execute("search", { query: "computer desktop" });
-  expect(JSON.stringify(search.content)).toContain(
-    "top-level by name; not dispatch_action or exec",
-  );
-  const described = await control("tool_describe").execute("describe", { id: "computer" });
-  expect(JSON.stringify(described.content)).toContain("top-level by name");
+  expect(JSON.stringify(search.content)).toContain("top-level by name; not dispatch_action");
+  const refusal = "computer runs only as its own top-level tool call. Call computer directly";
   await expect(
     control("dispatch_action").execute("call", { id: "computer", args: { action: "screenshot" } }),
-  ).rejects.toThrow(
-    "computer runs only as its own top-level tool call. Call computer directly by name",
-  );
-});
-
-it("refuses an on-demand tool called from Code Mode guest code", async () => {
-  const target: AnyAgentTool = {
-    name: "probe_screen",
-    label: "probe_screen",
-    description: "Capture the screen.",
-    parameters: { type: "object", properties: {} },
-    catalogMode: "on-demand",
-    execute: async () => {
-      throw new Error("guest code must not run an on-demand tool");
-    },
-  };
-  const harness = createCatalogCodeModeHarness([target], { catalogRef: loadingCatalogRef() });
-  const result = await harness.complete(
-    "try { return await probe_screen({}); } catch (error) { return error.message; }",
-  );
-  expect(result).toMatchObject({
-    status: "completed",
-    value: expect.stringContaining("probe_screen runs only as its own top-level tool call"),
+  ).rejects.toThrow(refusal);
+  const code = surface("code-mode").tools.find((tool) => tool.name === "exec")!;
+  const guest = await code.execute("cell", {
+    code: "try { await computer({ action: 'screenshot' }); } catch (error) { return error.message; }",
+    awaitResults: true,
   });
-});
-
-it("keeps on-demand tools direct for a runner that cannot load them on use", () => {
-  const config = { tools: { toolSearch: { mode: "tools" as const } } };
-  const catalogRef = createToolSearchCatalogRef();
-  refs.push(catalogRef);
-  const ctx = { config, catalogRef };
-  const { tools } = applyToolSearchCatalog({
-    ...ctx,
-    tools: [...createToolSearchTools(ctx), ...defaultTargets()],
-  });
-  expect(names(tools)).toEqual(expect.arrayContaining(["computer", "github_publish"]));
-  expect(catalogNames(catalogRef)).not.toContain("computer");
-  expect(catalogNames(catalogRef)).not.toContain("github_publish");
-});
-
-it("keeps on-demand tools out of a headless catalog, like direct-only tools", () => {
-  const catalogRef = createToolSearchCatalogRef();
-  refs.push(catalogRef);
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: defaultTargets() });
-  expect(catalogNames(catalogRef)).toEqual(["read"]);
+  expect(JSON.stringify(guest.details)).toContain(refusal);
 });

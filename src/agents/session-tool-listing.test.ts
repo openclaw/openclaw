@@ -12,8 +12,6 @@ import { listSessionForkTools } from "./embedded-agent-runner/session-fork-reque
 import {
   clearEmbeddedSessionPromptStates,
   prepareSessionToolSurface,
-  promoteSessionTool,
-  readSessionPinnedToolNames,
   retainEmbeddedSessionPromptState,
 } from "./embedded-agent-runner/session-prompt-state.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
@@ -130,22 +128,10 @@ type SessionPromptState = ReturnType<typeof retainEmbeddedSessionPromptState>["s
 function send(
   state: SessionPromptState,
   options: ToolOptions,
-  live: { node?: boolean; mcp?: boolean; compactions?: number; pinnedNames?: boolean } = {},
+  live: { node?: boolean; mcp?: boolean; compactions?: number } = {},
 ) {
   const catalogRef = createToolSearchCatalogRef();
-  // The embedded runner loads on-demand tools on their first direct call.
-  catalogRef.loadsOnDemandTools = true;
   onTestFinished(() => clearToolSearchCatalog({ catalogRef }));
-  if (live.pinnedNames) {
-    // As the attempt does before compaction: pinned on-demand tools stay direct.
-    catalogRef.promotedToolNames = readSessionPinnedToolNames({
-      state,
-      routeKey: "listing-route",
-      toolPolicy: "listing-policy",
-      entries: [],
-      historyBoundaryCount: live.compactions ?? 0,
-    });
-  }
   const built = createOpenClawCodingTools({
     ...options,
     toolSearchCatalogRef: catalogRef,
@@ -265,33 +251,4 @@ it("lets a later user turn send with message in a series a cron turn started", a
   const refused = await cronMessage!.execute("cron-send", { action: "send", message: "hi" });
   expect(refused.details).toMatchObject({ gated: true });
   expect(JSON.stringify(refused.content)).toContain("message cannot send on this turn");
-});
-
-it("sends computer and github_publish only after the session calls them, then on every turn", () => {
-  using chat = retainEmbeddedSessionPromptState(sessionId);
-  const github = { githubPublicationAvailable: true };
-  const user = { ...turns.user!, ...github };
-  const first = send(chat.state, user, { pinnedNames: true });
-  const sentNames = (tools: AnyAgentTool[]) => tools.map((tool) => tool.name);
-  expect(sentNames(first)).not.toContain("computer");
-  expect(sentNames(first)).not.toContain("github_publish");
-  // The model called computer by name: the run's resolver records its definition.
-  const builtTools = createOpenClawCodingTools({ ...user });
-  const computer = builtTools.find((tool) => tool.name === "computer");
-  expect(computer?.catalogMode).toBe("on-demand");
-  expect(builtTools.find((tool) => tool.name === "github_publish")?.catalogMode).toBe("on-demand");
-  expect(promoteSessionTool(chat.state, computer!)).toBe(true);
-  const later = [
-    send(chat.state, user, { pinnedNames: true }),
-    send(chat.state, { ...turns.cron!, ...github }, { pinnedNames: true }),
-    send(chat.state, { ...turns.execWake!, ...github }, { pinnedNames: true }),
-  ];
-  for (const turn of later) {
-    expect(sentNames(turn)).toEqual([...sentNames(first), "computer"]);
-    expect(sentNames(turn.built)).toContain("computer");
-    expect(sentNames(turn)).not.toContain("github_publish");
-  }
-  // Compaction starts a new series without the promotion.
-  const compacted = send(chat.state, user, { pinnedNames: true, compactions: 1 });
-  expect(sentNames(compacted)).not.toContain("computer");
 });

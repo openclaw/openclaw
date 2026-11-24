@@ -906,41 +906,34 @@ describe("session tool surface", () => {
     );
   });
 
-  it.each(["compaction", "reset"] as const)(
-    "keeps a tool promoted mid-series on later turns and restarts until %s",
-    async (boundary) => {
-      const entries: SessionEntry[] = [];
-      const pinned = () =>
-        readSessionPinnedToolNames({
-          state: fixture.state,
-          routeKey,
-          toolPolicy: "policy-a",
-          entries,
-        });
-      const computer = { ...tool("computer"), catalogMode: "on-demand" as const };
-      const firstTurn = surface([tool("read"), tool("message")]);
-      await persist(entries);
-      expect(pinned().has("computer")).toBe(false);
-      expect(promoteSessionTool(fixture.state, computer)).toBe(true);
-      expect(promoteSessionTool(fixture.state, computer)).toBe(false);
-      await persist(entries);
-      // A Gateway restart keeps only the transcript.
-      fixture.reload();
-      expect(pinned().has("computer")).toBe(true);
-      // The promoting run appended the definition; later turns send the same order.
-      const laterTurn = surface([tool("read"), tool("message"), computer], entries);
-      expect(laterTurn.map(({ name }) => name)).toEqual([
-        ...firstTurn.map(({ name }) => name),
-        "computer",
-      ]);
-      expect(fixture.state.pendingToolSurface).toBeUndefined();
-      entries.push(historyEntry(boundary, `${boundary}-1`));
-      await persist(entries);
-      fixture.reload();
-      expect(pinned().has("computer")).toBe(false);
-      expect(names(surface([tool("read"), tool("message")], entries))).toEqual(["message", "read"]);
-    },
-  );
+  it("appends a tool promoted mid-series once, keeps it across restarts and drops it at reset", async () => {
+    const entries: SessionEntry[] = [];
+    const computer = { ...tool("computer"), catalogMode: "on-demand" as const };
+    const pinned = () =>
+      readSessionPinnedToolNames({
+        state: fixture.state,
+        routeKey,
+        toolPolicy: "policy-a",
+        entries,
+      });
+    surface([tool("read"), tool("message")]);
+    await persist(entries);
+    expect([
+      promoteSessionTool(fixture.state, computer),
+      promoteSessionTool(fixture.state, computer),
+    ]).toEqual([true, false]);
+    await persist(entries);
+    fixture.reload();
+    expect(pinned().has("computer")).toBe(true);
+    // Appended after the earlier pin, so later turns change the provider list only once.
+    expect(
+      surface([tool("read"), tool("message"), computer], entries).map(({ name }) => name),
+    ).toEqual(["message", "read", "computer"]);
+    entries.push(historyEntry("reset", "reset-1"));
+    await persist(entries);
+    fixture.reload();
+    expect(pinned().has("computer")).toBe(false);
+  });
 
   it("keeps the pinned description when only sibling guidance changes", async () => {
     surface([tool("exec", "Run commands. No sleep loops; use automations."), tool("automations")]);

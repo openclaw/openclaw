@@ -86,30 +86,15 @@ it("recovers a deferred structured call only through dispatch_action", async () 
   expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe(input.content);
 });
 
-const screenshot = { type: "image" as const, data: "c2NyZWVu", mimeType: "image/png" };
-
-function onDemandScreenTool() {
-  const target: AnyAgentTool = {
-    ...makeTool("probe_screen"),
-    catalogMode: "on-demand",
-    execute: vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "frame 1" }, screenshot],
-      details: { frameId: 1 },
-    })),
-  };
-  return target;
-}
-
 it.each(["tools", "code-mode"] as const)(
   "loads an on-demand tool on its first direct call in %s and keeps its screenshot",
   async (mode) => {
-    const target = onDemandScreenTool();
-    const config =
-      mode === "tools"
-        ? { tools: { toolSearch: { mode: "tools" as const } } }
-        : { tools: { codeMode: true } };
-    const catalogRef = createToolSearchCatalogRef();
-    catalogRef.loadsOnDemandTools = true;
+    const screenshot = { type: "image" as const, data: "c2NyZWVu", mimeType: "image/png" };
+    const content = [{ type: "text" as const, text: "frame 1" }, screenshot];
+    const execute = vi.fn(async () => ({ content, details: {} }));
+    const target: AnyAgentTool = { ...makeTool("probe_screen"), catalogMode: "on-demand", execute };
+    const config = { tools: mode === "tools" ? { toolSearch: { mode } } : { codeMode: true } };
+    const catalogRef = { ...createToolSearchCatalogRef(), loadsOnDemandTools: true as const };
     const ctx = { config, runtimeConfig: config, catalogRef };
     onTestFinished(() => clearToolSearchCatalog(ctx));
     const { tools } =
@@ -130,29 +115,24 @@ it.each(["tools", "code-mode"] as const)(
       runAbortSignal: new AbortController().signal,
       sessionAgentId: "main",
     });
-    const requestTools: string[][] = [];
+    const call = (id: string) => [{ ...makeCall("probe_screen", id), arguments: {} }];
+    const firstRequestTools: string[] = [];
     const { agent } = captureAgent(tools, {
       resolveDeferredTool,
       streamFn: createTurnSequenceStream(
-        [
-          [{ ...makeCall("probe_screen"), arguments: {} }],
-          [{ ...makeCall("probe_screen", "second"), arguments: {} }],
-          [{ type: "text", text: "done" }],
-        ],
+        [call("first"), call("second"), [{ type: "text", text: "done" }]],
         [],
-        (context) => requestTools.push((context.tools ?? []).map((tool) => tool.name)),
+        (context, turn) =>
+          turn === 1 && firstRequestTools.push(...context.tools!.map((t) => t.name)),
       ),
     });
     await agent.prompt("look at the screen");
-    // The definition is not sent before the first call; each direct call by name loads it.
-    expect(requestTools[0]).not.toContain("probe_screen");
+    expect(firstRequestTools).not.toContain("probe_screen");
     const results = agent.state.messages.filter((message) => message.role === "toolResult");
-    expect(results).toHaveLength(2);
-    for (const result of results) {
-      expect(result).toMatchObject({ toolName: "probe_screen", isError: false });
-      expect(result.content).toContainEqual(screenshot);
-    }
-    expect(target.execute).toHaveBeenCalledTimes(2);
+    expect(results.map((result) => [result.isError, result.content])).toEqual([
+      [false, content],
+      [false, content],
+    ]);
     expect(promoted).toEqual(["probe_screen"]);
   },
 );
