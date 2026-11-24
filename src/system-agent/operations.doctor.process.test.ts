@@ -1,3 +1,5 @@
+import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -22,6 +24,7 @@ import {
   type SpawnResult,
 } from "../process/exec-result.js";
 import * as processRunner from "../process/exec-runner.js";
+import * as commandSpawn from "../process/exec-spawn.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -118,6 +121,18 @@ process.stdout.write("ready:" + process.pid + "\\n");`,
         returned.resolve(result);
         return result;
       });
+    let child: ChildProcess | undefined;
+    let closed: Promise<unknown> | undefined;
+    const spawn = commandSpawn.spawnCommandWithInvocation;
+    const spawned = vi
+      .spyOn(commandSpawn, "spawnCommandWithInvocation")
+      .mockImplementation((...args) => {
+        const result = spawn(...args);
+        child = result.child.nodeChildProcess;
+        closed = once(child, "close");
+        void closed.catch(() => {});
+        return result;
+      });
     const { runtime } = createSystemAgentTestRuntime();
     const scope = new AsyncWorkScope();
     const abort = new AbortController();
@@ -174,18 +189,16 @@ process.stdout.write("ready:" + process.pid + "\\n");`,
     } finally {
       birth.resolve();
       abort.abort();
-      if (pid) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // The recorded cleanup owner already reaped this exact child.
-        }
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
       }
       await outcome;
+      await closed?.catch(() => {});
       if (raw) {
         await readCommandProcessCleanup(raw)?.catch(() => {});
       }
       await drains?.catch(() => {});
+      spawned.mockRestore();
       runner.mockRestore();
       identity.mockRestore();
       doctor.mockRestore();
@@ -223,17 +236,23 @@ it.for(["uncertain", "rejected", "missing"] as const)(
     const finished = vi.fn();
     const scopeDrained = vi.fn();
     const exitDrained = vi.fn();
+    let doctorOutcome: Promise<unknown> | undefined;
     const work = scope
-      .run(() => withCommandProcessScope(() => runDoctorProcess(runtime), abort.signal))
+      .run(() =>
+        withCommandProcessScope(async () => {
+          const doctor = runDoctorProcess(runtime);
+          doctorOutcome = doctor.catch((error: unknown) => error);
+          await doctor;
+        }, abort.signal),
+      )
       .finally(finished);
     const outcome = work.catch((error: unknown) => error);
-    let drains: Promise<unknown> | undefined;
+    const drains = Promise.allSettled([
+      scope.drain().finally(scopeDrained),
+      waitForSignalExitBarriers().finally(exitDrained),
+    ]);
     try {
       await withinTest(entered.promise, signal);
-      drains = Promise.allSettled([
-        scope.drain().finally(scopeDrained),
-        waitForSignalExitBarriers().finally(exitDrained),
-      ]);
       if (ending !== "missing") {
         await nextEventLoopTurn();
         expect(finished).not.toHaveBeenCalled();
@@ -245,12 +264,19 @@ it.for(["uncertain", "rejected", "missing"] as const)(
       } else {
         cleanup.resolve("uncertain");
       }
-      const error = await withinTest(outcome, signal);
-      expect(hasCommandProcessCleanupError(error)).toBe(true);
-      if (ending === "rejected") {
-        expect(collectNestedErrorCandidates(error)).toContain(failure);
+      const scopeError = await withinTest(outcome, signal);
+      const [, exitResult] = await withinTest(drains, signal);
+      expect(exitResult.status).toBe("rejected");
+      const errors = [await doctorOutcome, scopeError];
+      if (exitResult.status === "rejected") {
+        errors.push(exitResult.reason);
       }
-      await withinTest(drains, signal);
+      for (const error of errors) {
+        expect(hasCommandProcessCleanupError(error)).toBe(true);
+        if (ending === "rejected") {
+          expect(collectNestedErrorCandidates(error)).toContain(failure);
+        }
+      }
       expect(scopeDrained).toHaveBeenCalledOnce();
       expect(exitDrained).toHaveBeenCalledOnce();
       expect(scope.hasPendingWork).toBe(false);
