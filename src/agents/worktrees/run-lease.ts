@@ -17,7 +17,11 @@ import {
 } from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
-import { claimWorktreeRemovalRow, releaseWorktreeRunLeaseRow } from "./registry.js";
+import {
+  claimWorktreeRemovalRow,
+  recordRegistryWorktreeActivity,
+  releaseWorktreeRunLeaseRow,
+} from "./registry.js";
 import { setWorktreeRunEndCleanupFailure, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   admitWorktreeRunLeaseRowAsync,
@@ -91,6 +95,7 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
       }
       const options = { beforeRun: () => context.admission.assertCurrent() };
       await assertManagedWorktreeRemovalComplete(record, options);
+      await recordRegistryWorktreeActivity(context.environment, record, options.beforeRun);
       await lockWorktreeForProcess(record, options);
       held.gitLocked = true;
     } catch (error) {
@@ -127,6 +132,7 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
     try {
       const record = await readRegistryWorktree(cleanup.context, cleanup.id);
       if (record) {
+        await recordRegistryWorktreeActivity(cleanup.context.environment, record);
         await unlockWorktree(record);
       }
     } catch (error) {

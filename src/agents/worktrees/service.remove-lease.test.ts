@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -147,14 +147,19 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
   it("skips idle garbage collection for a worktree with a live run lease", async () => {
     const created = await createSessionWorktree();
     now += IDLE_GC_MS + 1;
-    const lease = await acquireWorktreeRunLease(created.id, { env });
-
-    const skipped = await service.gc();
-    expect(skipped.removed).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-
-    await lease.release();
-    const collected = await service.gc();
-    expect(collected.removed).toContain(created.id);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const lease = await acquireWorktreeRunLease(created.id, { env });
+      expect((await service.gc()).removed).toEqual([]);
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      now += 10 * 60_000;
+      await lease.release();
+      expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(now);
+      expect((await service.gc()).removed).not.toContain(created.id);
+      now += IDLE_GC_MS + 1;
+      expect((await service.gc()).removed).toContain(created.id);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
