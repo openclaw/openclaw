@@ -20,7 +20,7 @@ import type { ChatRef } from "./chat-ref.js";
  * Who produced the result, saved as data. Consumption does not read it yet; a later slice
  * intersects it with current policy without a migration.
  */
-export type OwedOriginFacts = Readonly<{
+type OwedOriginFacts = Readonly<{
   requester?: SessionEventRequesterOwner["requester"];
   commandOwner?: CommandOwnerRequester;
   operatorProfileId?: string;

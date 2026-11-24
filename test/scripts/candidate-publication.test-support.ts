@@ -235,17 +235,7 @@ export function candidatePublicationFixture(
     qualificationInputs: inputs,
     trustedWorkflow: tooling,
   };
-  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields, {
-    releaseProfile: profile,
-    targetVersion: version,
-    coveragePolicy: source.coverage.coverage_policy || undefined,
-  });
-  plan.children = plan.children.filter((child) => child.selected);
   const qualificationBaselines = JSON.parse(laneInputs.qualification_baselines_json);
-  Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
-    upgradeBaseline: qualificationBaselines.upgradeBaseline,
-    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
-  });
   const candidate = fullReleaseCandidateManifestFixture({
     targetSha: c,
     toolingSha: q,
@@ -267,8 +257,14 @@ export function candidatePublicationFixture(
       runAttempt: "1",
     },
   });
-  plan.candidate = candidateBinding;
-  plan.candidateRequest = candidate.request;
+  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields, {
+    releaseProfile: profile,
+    targetVersion: version,
+    coveragePolicy: source.coverage.coverage_policy || undefined,
+    candidate: candidateBinding,
+    candidateRequest: candidate.request,
+  });
+  plan.children = plan.children.filter((child) => child.selected);
   const qualificationSources = new Map<string, string>();
   const qualificationSource = (path: string) => {
     const bytes = admission.sources.get(q + ":" + path) ?? readFileSync(path, "utf8");
