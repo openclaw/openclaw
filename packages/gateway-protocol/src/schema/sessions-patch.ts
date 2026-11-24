@@ -127,13 +127,6 @@ const SessionOrganizationExpectations = {
 export const SessionsPatchParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
-  /** Insert a new personal pin relative to an already saved sidebar pin, in one guarded write. */
-  pinPlacement: Type.Optional(
-    closedObject({
-      relativeTo: NonEmptyString,
-      side: Type.Union([Type.Literal("before"), Type.Literal("after")]),
-    }),
-  ),
   /** Reject the mutation if the session was reset or replaced before it commits. */
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),

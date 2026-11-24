@@ -184,7 +184,6 @@ const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set(
   "expectedLifecycleRevision",
   "expectedPermissionMode",
   "expectedMarkedUnreadAt",
-  "pinPlacement",
   "expectedSidebarRoot",
   "expectedCategory",
   "expectedArchived",

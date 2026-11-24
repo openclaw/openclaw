@@ -157,6 +157,43 @@ it.each(["routed", "direct"] as const)(
     }),
 );
 
+it.each(["read", "write"] as const)(
+  "a target archived during preference %s does not block its sibling",
+  (stage) =>
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const f = await fixture();
+      const archive = () => upsertSessionEntryCore(scope(invited), { archivedAt: Date.now() });
+      const read = preferences.getCanonicalUserPreferences;
+      const write = preferences.setCanonicalUserPreferences;
+      using intercept =
+        stage === "read"
+          ? vi
+              .spyOn(preferences, "getCanonicalUserPreferences")
+              .mockImplementationOnce(async (...args) => {
+                const result = await read(...args);
+                await archive();
+                return result;
+              })
+          : vi
+              .spyOn(preferences, "setCanonicalUserPreferences")
+              .mockImplementationOnce(async (...args) => {
+                await archive();
+                return write(...args);
+              });
+      const result = await f.patch("sessions.patchMany", {
+        targets: [{ key: invited }, { key: own }],
+        patch: { pinned: true },
+      });
+      expect(result).toMatchObject({
+        outcomes: [
+          { key: invited, ok: false, error: { code: "INVALID_REQUEST" } },
+          { key: own, ok: true },
+        ],
+      });
+      expect(await f.layout()).toEqual(["route:usage", `session:${own}`]);
+    }),
+);
+
 it.each(["Stop", "requester change", "snooze", "replacement"] as const)(
   "%s before preference write still prevents an admitted pin",
   (change) =>
