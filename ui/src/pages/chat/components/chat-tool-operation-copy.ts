@@ -10,6 +10,7 @@ registerEnglishCatalog(registerChatToolOperationsEnglish);
 const catalog = registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["local_image", "image"],
   ["discussion", "messageSquare"],
   ["facetime_call", "audioLines"],
   ["feishu_app_scopes", "fileText"],
@@ -130,7 +131,9 @@ export function catalogToolLabel(
       ? `status_${args.status}`
       : name === "browser" && action === "act"
         ? browserOperation(args)
-        : action?.replaceAll(".", "_");
+        : name === "local_image" && args?.task === "ocr"
+          ? "task_ocr"
+          : action?.replaceAll(".", "_");
   const operation = key && Object.hasOwn(labels, key) ? key : "default";
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
