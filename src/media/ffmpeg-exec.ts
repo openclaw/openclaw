@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import type { CommandStdinFile } from "../process/command-stdin-file.js";
 import { runExec, type RunExecOptions } from "../process/exec.js";
 import {
   MEDIA_FFMPEG_MAX_BUFFER_BYTES,
@@ -9,11 +8,10 @@ import {
 } from "./ffmpeg-limits.js";
 
 /** Process limits and optional stdin payload for ffmpeg/ffprobe helper calls. */
-type MediaExecOptions = {
+type MediaExecOptions = Pick<RunExecOptions, "stdinFile" | "stdinFileDescriptor"> & {
   timeoutMs?: number;
   maxBufferBytes?: number;
   input?: Buffer | string;
-  stdinFile?: CommandStdinFile;
 };
 
 function resolveExecOptions(
@@ -22,7 +20,8 @@ function resolveExecOptions(
 ): RunExecOptions {
   return {
     input: options?.input,
-    ...(options?.stdinFile ? { stdinFile: options.stdinFile } : {}),
+    stdinFile: options?.stdinFile,
+    stdinFileDescriptor: options?.stdinFileDescriptor,
     logOutput: false,
     maxBuffer: options?.maxBufferBytes ?? MEDIA_FFMPEG_MAX_BUFFER_BYTES,
     timeoutMs: options?.timeoutMs ?? defaultTimeoutMs,

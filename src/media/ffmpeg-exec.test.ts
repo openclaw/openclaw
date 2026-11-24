@@ -15,11 +15,12 @@ vi.mock("../infra/resolve-system-bin.js", () => ({
 
 let parseFfprobeCodecAndSampleRate: typeof import("./ffmpeg-exec.js").parseFfprobeCodecAndSampleRate;
 let resolveFfmpegBin: typeof import("./ffmpeg-exec.js").resolveFfmpegBin;
+let runFfmpeg: typeof import("./ffmpeg-exec.js").runFfmpeg;
 let runFfprobe: typeof import("./ffmpeg-exec.js").runFfprobe;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe } =
+  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfmpeg, runFfprobe } =
     await import("./ffmpeg-exec.js"));
 });
 
@@ -92,4 +93,18 @@ describe("resolveFfmpegBin", () => {
     expect(resolveFfmpegBin()).toBe("/usr/bin/ffmpeg");
     expect(resolveSystemBinMock).toHaveBeenCalledWith("ffmpeg", { trust: "standard" });
   });
+});
+
+it.each(["ffmpeg", "ffprobe"] as const)("forwards numeric stdin to %s", async (bin) => {
+  const binary = `/usr/bin/${bin}`;
+  resolveSystemBinMock.mockReturnValue(binary);
+  runExecMock.mockResolvedValue({ stdout: "ok", stderr: "" });
+
+  const run = bin === "ffmpeg" ? runFfmpeg : runFfprobe;
+  await expect(run(["pipe:0"], { stdinFileDescriptor: 17 })).resolves.toBe("ok");
+  expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+    binary,
+    ["pipe:0"],
+    expect.objectContaining({ stdinFileDescriptor: 17 }),
+  );
 });
