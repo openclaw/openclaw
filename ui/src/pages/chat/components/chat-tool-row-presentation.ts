@@ -162,7 +162,8 @@ export function resolveToolOperationLabel(
       result.sentBeforeError === true &&
       (result.status === "timeout" || result.status === "error")
     ) {
-      action = result.status === "timeout" ? "replyTimedOut" : "replyFailed";
+      // A generic error can also mean that Gateway admission is still pending.
+      action = result.status === "timeout" ? "replyTimedOut" : "unconfirmed";
     } else if (outcome === "succeeded") {
       action = "unconfirmed";
       if (result.status === "ok" || result.status === "no_reply") {

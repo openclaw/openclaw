@@ -198,9 +198,13 @@ it.each([
     {
       name: "sessions_send",
       isError: true,
-      outputText: JSON.stringify({ status: "error", error: "agent error", sentBeforeError: true }),
+      outputText: JSON.stringify({
+        status: "error",
+        error: "Gateway admission is still pending; inspect this run before retrying.",
+        sentBeforeError: true,
+      }),
     },
-    "Sent · reply failed",
+    "Delivery unconfirmed",
   ],
   [{ name: "sessions_send", isError: true, details: { status: "timeout" } }, "Send message"],
   [

@@ -83,8 +83,6 @@ const enChatToolLabels = {
         sentNamed: "Sent message to {name}",
         replyTimedOut: "Sent · reply timed out",
         replyTimedOutNamed: "Sent to {name} · reply timed out",
-        replyFailed: "Sent · reply failed",
-        replyFailedNamed: "Sent to {name} · reply failed",
         unconfirmed: "Delivery unconfirmed",
         unconfirmedNamed: "Delivery unconfirmed · {name}",
         accepted: "Message accepted",
