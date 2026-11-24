@@ -28,20 +28,78 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
+it("replays the same partial input even if a sibling finishes during backoff", async () => {
+  vi.useFakeTimers();
+  const batchRunIds = ["early", "late"];
+  const wake = {
+    status: "pending" as const,
+    attemptCount: 0,
+    requesterYieldBatch: true as const,
+    rearmGeneration: 1,
+    batchRunIds,
+  };
+  const early = makeSettledChild({
+    runId: "early",
+    delivery: { status: "pending" },
+    requesterSettleWake: { ...wake },
+  });
+  const late = makeSettledChild({
+    runId: "late",
+    execution: { status: "running", startedAt: Date.now() },
+    requesterSettleWake: { ...wake },
+  });
+  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([early, late]);
+  deliverSpy.mockRejectedValueOnce(new Error("transport outcome unknown"));
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: early }))).toBe(
+    false,
+  );
+  expect(early.requesterSettleWake).toMatchObject({
+    status: "dispatching",
+    attemptCount: 1,
+    replayCount: 1,
+    partitionRunIds: ["early"],
+  });
+  expect(late.requesterSettleWake).toEqual(wake);
+  late.execution = { status: "terminal", endedAt: Date.now() };
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: late }))).toBe(
+    false,
+  );
+  expect(deliverSpy).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(30_001);
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: early }))).toBe(
+    true,
+  );
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: late }))).toBe(
+    true,
+  );
+  const offered = deliverSpy.mock.calls.map(([call]) => [
+    call.directIdempotencyKey,
+    call.triggerMessage,
+    call.settleWakeSourceSessionKeys,
+  ]);
+  expect(offered[0]).toEqual(offered[1]);
+  expect(offered[2]?.[0]).not.toBe(offered[0]?.[0]);
+  expect(offered[2]?.[2]).toEqual([late.childSessionKey]);
+});
+
 it.each([
   "older batch",
   "cross-agent descendant",
+  "running member",
   "paused member",
-  "message wait",
-  "admitted message wait",
+  "message-wait member",
   "undelivered pending cleanup",
+  "settled pending cleanup",
+  "admitted message wait",
 ] as const)("waits only for owned work: %s", async (scenario) => {
   vi.useFakeTimers();
   const now = Date.now();
+  const cleanup =
+    scenario === "undelivered pending cleanup" || scenario === "settled pending cleanup";
   const admitted = scenario === "admitted message wait";
-  const messageWait = scenario === "message wait" || admitted;
+  const messageWait = scenario === "message-wait member" || admitted;
   const paused = scenario === "paused member" || messageWait;
-  const sameBatch = paused || scenario === "undelivered pending cleanup";
+  const sameBatch = scenario === "running member" || paused || cleanup;
   const crossAgent = scenario === "cross-agent descendant";
   const short = makeSettledChild({
     runId: "short",
@@ -49,6 +107,7 @@ it.each([
     ...(crossAgent ? { childSessionKey: "agent:research:subagent:short" } : {}),
     createdAt: now - 100,
     endedAt: now,
+    ...(sameBatch && !cleanup ? { delivery: { status: "pending" } } : {}),
     requesterSettleWake: {
       status: "pending",
       attemptCount: admitted ? 1 : 0,
@@ -64,14 +123,14 @@ it.each([
     createdAt: now - 200,
     requesterSessionKey: crossAgent ? short.childSessionKey : REQUESTER,
     execution:
-      paused || scenario === "undelivered pending cleanup"
+      paused || cleanup
         ? { status: "terminal", startedAt: now - 200, endedAt: now }
         : { status: "running", startedAt: now - 200 },
+    ...(paused ? { pauseReason: "sessions_yield" as const } : {}),
+    ...(messageWait ? { waitingForRequesterMessage: true as const } : {}),
     ...(scenario === "undelivered pending cleanup"
       ? { delivery: { status: "pending" as const } }
       : {}),
-    ...(paused ? { pauseReason: "sessions_yield" as const } : {}),
-    ...(messageWait ? { waitingForRequesterMessage: true as const } : {}),
     requesterSettleWake: {
       status: "pending",
       attemptCount: admitted ? 1 : 0,
@@ -102,23 +161,23 @@ it.each([
       params.rootRunIds,
     ),
   }));
-  const early = scenario === "older batch" || (messageWait && !admitted);
+  const partial = scenario === "running member" || (paused && !admitted);
+  const early = scenario === "older batch" || scenario === "settled pending cleanup" || partial;
   expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }))).toBe(
     early,
   );
   expect(deliverSpy).toHaveBeenCalledTimes(early ? 1 : 0);
-  if (admitted) {
-    expect(short.requesterSettleWake?.attemptCount).toBe(1);
-    expect(long.requesterSettleWake?.attemptCount).toBe(1);
-  } else if (messageWait) {
-    expect(deliverSpy.mock.calls[0]?.[0]?.settleWakeSourceSessionKeys).toEqual([
-      short.childSessionKey,
-    ]);
-    expect(deliverSpy.mock.calls[0]?.[0]?.triggerMessage).toContain("paused awaiting a message");
+  if (partial) {
+    expect(deliverSpy.mock.calls[0]?.[0]).toMatchObject({
+      triggerMessage: expect.stringContaining("These are partial results"),
+    });
+    if (messageWait) {
+      expect(deliverSpy.mock.calls[0]?.[0]?.triggerMessage).toContain("paused awaiting a message");
+    }
+    expect(short.requesterSettleWake).toBeUndefined();
     expect(long.requesterSettleWake).toMatchObject({
-      status: "pending",
       attemptCount: 0,
-      rearmGeneration: 1,
+      batchRunIds: ["short", "long"],
     });
   }
   if (crossAgent) {
@@ -130,6 +189,12 @@ it.each([
     expect(deliverSpy).not.toHaveBeenCalled();
   }
   long.execution = { status: "terminal", startedAt: now - 200, endedAt: now + 1 };
+  if (scenario === "settled pending cleanup") {
+    expect(short.requesterSettleWake).toBeUndefined();
+    expect(long.requesterSettleWake).toBeUndefined();
+    expect(long.cleanupCompletedAt).toBeUndefined();
+    return;
+  }
   long.pauseReason = undefined;
   long.waitingForRequesterMessage = undefined;
   long.cleanupCompletedAt = now + 1;
@@ -152,9 +217,5 @@ it.each([
     expect(deliverSpy.mock.calls[0]?.[0]?.settleWakeSourceSessionKeys).toEqual(
       expect.arrayContaining([short.childSessionKey, long.childSessionKey]),
     );
-  } else if (messageWait) {
-    expect(deliverSpy.mock.calls[1]?.[0]?.settleWakeSourceSessionKeys).toEqual([
-      long.childSessionKey,
-    ]);
   }
 });

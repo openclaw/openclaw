@@ -43,6 +43,7 @@ type RequesterCronAuthority = {
       runs: ReadonlyMap<string, SubagentRunRecord>;
       batch: readonly SubagentRunRecord[];
       rearmGeneration?: number;
+      frozenRunIds?: readonly string[];
     }
   | {
       kind: "followup";
@@ -166,12 +167,12 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   ) {
     return false;
   }
-  const batchRunIds = authority.batch.map((entry) => entry.runId).toSorted();
   return batch.every(
     (entry) =>
       state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
       (authority.rearmGeneration === undefined ||
-        isRequesterYieldCohortMember(entry, batchRunIds, authority.rearmGeneration)),
+        (authority.frozenRunIds !== undefined &&
+          isRequesterYieldCohortMember(entry, authority.frozenRunIds, authority.rearmGeneration))),
   );
 }
 
@@ -336,6 +337,7 @@ export function promoteRequesterCronAuthority(params: {
     return;
   }
   authority.rearmGeneration = params.rearmGeneration;
+  authority.frozenRunIds = params.batch.map((entry) => entry.runId).toSorted();
   if (!isCurrent(authority)) {
     discard(authority);
   }
@@ -359,6 +361,9 @@ export function replaceRequesterCronAuthorityEntry(params: {
     authority.batch = authority.batch.map((entry) =>
       isSameSubagentRunOwner(entry, params.previous) ? params.next : entry,
     );
+    authority.frozenRunIds = authority.frozenRunIds
+      ?.map((id) => (id === params.previous.runId ? params.next.runId : id))
+      .toSorted();
   } else if (authority.binding) {
     authority.binding.entry = params.next;
     state.followupEntries.add(getSubagentRunRuntimeKey(params.next));
@@ -395,6 +400,7 @@ export function revokeRequesterCronAuthority(sessionKey: string): void {
 export function revokeRequesterCronAuthorityBatch(
   batch: readonly SubagentRunRecord[],
   rearmGeneration: number | undefined,
+  partial = false,
 ): void {
   if (rearmGeneration === undefined) {
     return;
@@ -410,6 +416,15 @@ export function revokeRequesterCronAuthorityBatch(
       ) {
         continue;
       }
+      if (partial && !authority.runScopeBound) {
+        authority.batch = authority.batch.filter(
+          (member) => !isSameSubagentRunOwner(entry, member),
+        );
+        state.byEntry.delete(getSubagentRunRuntimeKey(entry));
+        if (authority.batch.length > 0) {
+          continue;
+        }
+      }
       discard(authority);
     }
   }
@@ -423,14 +438,6 @@ type RequesterCronAuthorityDispatch = {
   pause?: { entry: SubagentRunRecord; scope?: CronCreatorAuthorityCapability; released?: true };
 };
 const activeDispatch = new AsyncLocalStorage<RequesterCronAuthorityDispatch>();
-
-/** Earlier partial wakes cannot take a continuation's exact-batch management custody. */
-export function hasRetainedRequesterCronCohort(batch: readonly SubagentRunRecord[]): boolean {
-  return batch.some((entry) => {
-    const authority = state.byEntry.get(getSubagentRunRuntimeKey(entry));
-    return authority?.kind === "yield" && isCurrent(authority);
-  });
-}
 
 export async function withRequesterCronAuthority<T>(
   params: {

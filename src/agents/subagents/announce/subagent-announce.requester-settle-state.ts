@@ -7,6 +7,7 @@ import type {
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 export function isRequesterSettleSetupRefusal(error: unknown): boolean {
@@ -47,6 +48,42 @@ export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
   signal?: AbortSignal;
   isSourceCurrent: () => boolean;
 };
+
+/** Only a durably completed final partition consumes the original yield attachment. */
+export function createRequesterSettleBatchCompletion(params: {
+  completeBatch: RequesterSettleWakeParams["completeBatch"];
+  requesterAgentId?: string;
+  requesterSessionKey: string;
+  pause: boolean;
+  isPartial: () => boolean;
+  claim: () => boolean;
+}) {
+  return async (
+    batch: readonly SubagentRunRecord[],
+    state: RequesterSettleWakeBatchState,
+    delivery?: SubagentAnnounceDeliveryResult,
+    requesterSessionId?: string,
+  ) => {
+    if (!params.claim()) {
+      return;
+    }
+    await params.completeBatch(batch, state.rearmGeneration, delivery, () => {
+      if (!params.isPartial()) {
+        finalizeRequesterFinalAttachment({
+          requesterAgentId: params.requesterAgentId,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterSessionId,
+          batchRunIds: state.batchRunIds ?? batch.map((entry) => entry.runId).toSorted(),
+          rearmGeneration: state.rearmGeneration,
+          requesterYieldBatch: state.requesterYieldBatch,
+          pause: params.pause,
+          delivered: delivery?.delivered,
+          finalAssistantVisibleText: delivery?.finalAssistantVisibleText,
+        });
+      }
+    });
+  };
+}
 
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
 const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;

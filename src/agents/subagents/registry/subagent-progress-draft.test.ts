@@ -82,31 +82,33 @@ async function endRun(runId: string, data: Record<string, unknown> = {}) {
   await fixture.settle();
 }
 
-/** Each requester wake turn answers with the next reply; `onWake` runs inside that turn. */
+/** Only final wakes consume final replies; early results keep the same draft attached. */
 function answerWakes(
   draft: TestDraft,
   replies: readonly string[],
   onWake?: (params: DispatchParams) => Promise<void>,
 ) {
   const wakes: Array<{ runId: string; retiredBefore: number }> = [];
+  const partialWakes: typeof wakes = [];
   const dispatch: Dispatch = async <T>(...args: Parameters<Dispatch>): Promise<T> => {
     const [, params, options] = args;
-    wakes.push({
+    const partial = String(params?.message).includes("These are partial results");
+    (partial ? partialWakes : wakes).push({
       runId: String(params?.idempotencyKey),
       retiredBefore: draft.retire.mock.calls.length,
     });
     options?.onExecutionStarted?.();
-    if (wakes.length === 1) {
+    if (wakes.length + partialWakes.length === 1) {
       await onWake?.(params);
     }
     return {
       status: "ok",
       inputProcessingCompleted: true,
-      result: { payloads: [{ text: replies[wakes.length - 1] }], meta: {} },
+      result: { payloads: [{ text: partial ? "NO_REPLY" : replies[wakes.length - 1] }], meta: {} },
     } as T;
   };
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  return wakes;
+  return { wakes, partialWakes };
 }
 
 type TestDraft = { push: Mock; retire: Mock };
@@ -126,15 +128,17 @@ it.each([
     const spawns = await yieldCohort("parent-turn", ["a", "b"]);
     const draft = newDraft();
     expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    const wakes = answerWakes(draft, replies);
+    const { wakes, partialWakes } = answerWakes(draft, replies);
 
     await endRun("a");
     expect(wakes).toEqual([]);
+    expect(partialWakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
     expect(draft.retire).not.toHaveBeenCalled();
 
-    await endRun("b");
+    // Install the fake clock before the final dispatch can schedule a real retry timer.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
+      await endRun("b");
       // A yielded requester owes a visible answer, so silence retries the same wake.
       for (const retryDelayMs of [30_000, 120_000].slice(0, replies.length - 1)) {
         expect(draft.retire).not.toHaveBeenCalled();
@@ -242,7 +246,7 @@ it("follows a child's resumed execution and retires after the replacement settle
   const spawns = await yieldCohort("parent-turn", ["a", "b"]);
   const draft = newDraft();
   expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-  const wakes = answerWakes(draft, ["The delegated work is done."]);
+  const { wakes, partialWakes } = answerWakes(draft, ["The delegated work is done."]);
 
   // The child yields to its own children and is resumed as a new execution of the same task.
   await endRun("a", { yielded: true, terminalReply: undefined });
@@ -274,7 +278,9 @@ it("follows a child's resumed execution and retires after the replacement settle
 
   await endRun("a-resumed");
   await endRun("b");
+  expect(partialWakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
   expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
+  expect(wakes[0]!.runId).not.toBe(partialWakes[0]!.runId);
   expect(draft.retire).toHaveBeenCalledOnce();
   expectNoChildResultPushed(draft);
 });
@@ -283,7 +289,7 @@ it("keeps the card for the resumed requester's re-yield cohort until that cohort
   const spawns = await yieldCohort("parent-turn", ["a", "b"]);
   const draft = newDraft();
   expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-  const wakes = answerWakes(
+  const { wakes, partialWakes } = answerWakes(
     draft,
     ["Waiting for the follow-up checks.", "Everything is verified."],
     async (params) => {
@@ -294,6 +300,7 @@ it("keeps the card for the resumed requester's re-yield cohort until that cohort
   await endRun("a");
   await endRun("b");
   expect(wakes).toHaveLength(1);
+  expect(partialWakes).toHaveLength(1);
   expect(draft.retire).not.toHaveBeenCalled();
   for (const itemId of ["c", "d"]) {
     expect(draft.push).toHaveBeenCalledWith(
@@ -304,6 +311,7 @@ it("keeps the card for the resumed requester's re-yield cohort until that cohort
   await endRun("c");
   await endRun("d");
   expect(wakes).toHaveLength(2);
+  expect(partialWakes).toHaveLength(2);
   expect(wakes[1]).toEqual({ runId: expect.any(String), retiredBefore: 0 });
   expect(wakes[1]!.runId).not.toBe(wakes[0]!.runId);
   expect(draft.retire).toHaveBeenCalledOnce();

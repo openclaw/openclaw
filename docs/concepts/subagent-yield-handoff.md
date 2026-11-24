@@ -74,6 +74,12 @@ from older pending children: it must not promise another wake for the results
 already being processed. Unrelated pending batches and newly spawned work keep
 their existing completion ownership.
 
+A frozen cohort can deliver ready results before its remaining members finish.
+Each early wake reserves only its own results, including on retry. Members still
+running or waiting for a message retain their completion custody. The requester
+can process an early wake silently or yield again if it needs the remaining
+results; the last wake owns any required final reply.
+
 Settlement dispatch uses `subagent_settle` input provenance. Individual
 announcements and the older descendant-wake path retain `subagent_announce`:
 the latter already owns its run replacement after dispatch and must not trigger

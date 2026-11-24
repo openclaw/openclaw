@@ -357,6 +357,13 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                     .toSorted(),
                 }
               : {}),
+            ...(wake.partitionRunIds
+              ? {
+                  partitionRunIds: wake.partitionRunIds
+                    .map((id) => (id === previousRunId ? nextRunId : id))
+                    .toSorted(),
+                }
+              : {}),
           });
           const next: SubagentRunRecord = normalizeSubagentRunState({
             ...source,

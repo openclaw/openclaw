@@ -31,10 +31,7 @@ import {
 } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { withRequesterCronAuthority } from "../requester-cron-authority.js";
-import {
-  finalizeRequesterFinalAttachment,
-  transferRequesterFinalAttachment,
-} from "../requester-final-attachment.js";
+import { transferRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import { isPermanentAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
@@ -46,7 +43,6 @@ import {
   captureRequesterSessionEntryCurrent,
   hasUsableSessionEntry,
 } from "./subagent-announce-delivery.runtime.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   readChildCompletionFindings,
@@ -62,6 +58,7 @@ import {
   readSharedBatchState,
   needsRequesterSettleFindings,
   createRequesterSettleBatchClaim,
+  createRequesterSettleBatchCompletion,
   createRequesterSettleBatchDeferral,
   captureRequesterRunOwner,
   resolveRequesterSettlePolicy,
@@ -118,35 +115,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId, requesterStorePath });
   let partial = false;
   let batchClaim: ReturnType<typeof createRequesterSettleBatchClaim> = undefined;
-  const completeBatch = async (
-    batch: readonly SubagentRunRecord[],
-    state: RequesterSettleWakeBatchState,
-    delivery?: SubagentAnnounceDeliveryResult,
-    requesterSessionId?: string,
-  ): Promise<void> => {
-    if (batchClaim?.claim() === false) {
-      return;
-    }
-    await params.completeBatch(batch, state.rearmGeneration, delivery, () => {
-      if (partial) {
-        return;
-      }
-      finalizeRequesterFinalAttachment({
-        requesterAgentId,
-        requesterSessionKey,
-        requesterSessionId,
-        batchRunIds:
-          state.requesterYieldBatch && state.batchRunIds
-            ? state.batchRunIds
-            : batch.map((entry) => entry.runId).toSorted(),
-        rearmGeneration: state.rearmGeneration,
-        requesterYieldBatch: state.requesterYieldBatch,
-        pause,
-        delivered: delivery?.delivered,
-        finalAssistantVisibleText: delivery?.finalAssistantVisibleText,
-      });
-    });
-  };
+  const completeBatch = createRequesterSettleBatchCompletion({
+    completeBatch: params.completeBatch,
+    requesterAgentId,
+    requesterSessionKey,
+    pause,
+    isPartial: () => partial,
+    claim: () => batchClaim?.claim() !== false,
+  });
   if (isCronSessionKey(requesterSessionKey)) {
     await completeBatch([params.settledEntry], initialState);
     return false;
@@ -312,7 +288,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (await retireReplacedStore()) {
       return false;
     }
-    const followup = pauseNotice ? undefined : getFollowupForCohort(settledBatch);
+    const followup = pauseNotice || partial ? undefined : getFollowupForCohort(settledBatch);
     const getRequesterRun = () =>
       followup
         ? undefined
@@ -382,9 +358,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (
       !pauseNotice &&
       (requiredSettled.length === 0 ||
-        (requiredSettled.length < 2 &&
-          !requiredSettled.some(needsRequesterSettleFindings) &&
-          !requesterYieldedAfterDelivery) ||
+        (!requiredSettled.some(needsRequesterSettleFindings) &&
+          (partial || (requiredSettled.length < 2 && !requesterYieldedAfterDelivery))) ||
         (!requesterYieldedAfterDelivery &&
           interruptedContinuations.length === 0 &&
           !hasRequesterCompletionCohort(currentSettledEntry) &&
@@ -483,7 +458,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       parentOnly,
       yieldedFinalDeliverable: admissionMarker.yieldedFinalDeliverable,
       descendantsUnsettled,
-      hasMessageWait: selectedWave.hasMessageWait,
+      partial,
       children: completionRows,
       recoveryChildren: recoveryRows,
       preserveModelRouteNotice:
@@ -607,7 +582,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
               requesterSessionId: requesterIdentity.sessionId,
               requesterAgentId,
               batch: settledBatch,
-              rearmGeneration: state.requesterYieldBatch ? state.rearmGeneration : undefined,
+              rearmGeneration:
+                state.requesterYieldBatch && !partial ? state.rearmGeneration : undefined,
               runId: directIdempotencyKey,
               isCurrent: isSourceSessionEffectsAllowed,
             },

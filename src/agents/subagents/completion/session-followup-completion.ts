@@ -283,6 +283,21 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
       this.taking = false;
     }
   }
+  settlePartition(entries: readonly SubagentRunRecord[], generation: number | undefined): void {
+    const cohort = this.cohort;
+    if (!cohort || cohort.generation !== generation) {
+      return;
+    }
+    // A committed early wake releases only its own entries. The later successor
+    // must still match the complete remaining cohort, not an arbitrary subset.
+    this.cohort = {
+      ...cohort,
+      entries: cohort.entries.filter(
+        (entry) => !entries.some((settled) => isSameSubagentRunOwner(entry, settled)),
+      ),
+    };
+  }
+
   replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     const cohorts = [this.cohort, this.execution.admittedCohort].filter(
       (cohort): cohort is Cohort =>

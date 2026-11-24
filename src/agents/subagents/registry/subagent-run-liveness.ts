@@ -83,6 +83,15 @@ export function isEndedSubagentMessageWait(entry: SubagentRunRecord): boolean {
   );
 }
 
+/** An ended pause holds a continuation, not a result to offer the requester. */
+export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
+    hasSubagentRunEnded(entry)
+  );
+}
+
 export function isStaleUnendedSubagentRun(
   entry: SubagentRunLivenessRecord,
   now = Date.now(),

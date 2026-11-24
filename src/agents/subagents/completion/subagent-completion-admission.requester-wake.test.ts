@@ -763,6 +763,57 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
+  it("settles only its persisted partition after reopen, then settles the remaining owner", async () => {
+    const offered = records();
+    const sibling = records();
+    sibling.subagent.runId = "partition-sibling";
+    sibling.subagent.childSessionKey = "agent:main:subagent:partition-sibling";
+    const batchRunIds = [offered.subagent.runId, sibling.subagent.runId].toSorted();
+    for (const input of [offered, sibling]) {
+      armRequesterWake(input, batchRunIds);
+      persistOwner(input);
+    }
+    const published = (runId: string) => subagentRuns.get(runId)!;
+    const commit = (
+      entry: SubagentRunRecord,
+      operation: Parameters<typeof mutateRequesterCompletionBatch>[0]["operation"],
+    ) =>
+      mutateRequesterCompletionBatch({
+        entries: [entry],
+        operation,
+        assertCurrent: () => {},
+        databaseOptions: { database },
+      });
+    const outcome = { kind: "settle", outcome: { delivered: true, path: "direct" } } as const;
+    database = await reopenCompletionFixtureOwners();
+    await expect(commit(published(offered.subagent.runId), outcome)).rejects.toThrow(
+      "completion owner changed",
+    );
+    const current = published(offered.subagent.runId);
+    const before = structuredClone(published(sibling.subagent.runId));
+    await commit(current, {
+      kind: "transition",
+      state: {
+        ...current.requesterSettleWake!,
+        status: "dispatching",
+        attemptCount: 1,
+        partitionRunIds: [current.runId],
+      },
+    });
+    database = await reopenCompletionFixtureOwners();
+    expect(published(current.runId).requesterSettleWake).toMatchObject({
+      partitionRunIds: [current.runId],
+      attemptCount: 1,
+    });
+    await commit(published(current.runId), outcome);
+    database = await reopenCompletionFixtureOwners();
+    expect(published(current.runId).requesterSettleWake).toBeUndefined();
+    expect(published(sibling.subagent.runId)).toEqual(before);
+    await commit(published(sibling.subagent.runId), outcome);
+    database = await reopenCompletionFixtureOwners();
+    expect(published(sibling.subagent.runId).requesterSettleWake).toBeUndefined();
+  });
+
   it.each([false, true])(
     "settles a pause notice across reopen (store replaced=%s)",
     async (storeReplaced) => {

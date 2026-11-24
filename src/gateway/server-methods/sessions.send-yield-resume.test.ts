@@ -84,7 +84,7 @@ async function createInitialYieldFixture(label: string) {
   };
 }
 
-it("resumes a yielded child through sessions.send and wakes its original parent after the same batch settles", async () => {
+it("delivers a ready result while a sibling is paused, then resumes that sibling through sessions.send", async () => {
   vi.useFakeTimers();
   const { runSubagentAnnounceFlow } = await vi.importActual<
     typeof import("../../agents/subagents/announce/subagent-announce.js")
@@ -124,7 +124,12 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const dispatch = vi.spyOn(delivery, "dispatch").mockImplementation(async () => {
     return {
       status: "ok",
-      result: { payloads: [{ text: "Both results received; parent continues." }], meta: {} },
+      result: {
+        payloads: [
+          { text: dispatch.mock.calls.length === 1 ? "NO_REPLY" : "Both results received." },
+        ],
+        meta: {},
+      },
     };
   });
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: delivery.dispatch });
@@ -268,14 +273,14 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   };
   await complete(siblingRunId, siblingSessionKey, "Sibling result is ready.");
   expectCompletedRun(siblingRunId, "Sibling result is ready.");
-  const pausedCohort = expectSharedRequesterCohort(
-    [previousRunId, siblingRunId],
-    [previousRunId, siblingRunId],
-  );
-  expect(pausedCohort.map((wake) => wake?.nextAttemptAt)).toEqual([undefined, undefined]);
-  expect(pausedCohort.map((wake) => wake?.status)).toEqual(["pending", "pending"]);
+  const pausedCohort = expectSharedRequesterCohort([previousRunId], [previousRunId, siblingRunId]);
+  expect(pausedCohort.map((wake) => wake?.nextAttemptAt)).toEqual([undefined]);
+  expect(pausedCohort.map((wake) => wake?.status)).toEqual(["pending"]);
   expect(pausedCohort[0]?.pauseNotice).toBeUndefined();
-  expect(dispatch).not.toHaveBeenCalled();
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(dispatch.mock.calls[0]?.[1]?.message).toContain("Sibling result is ready.");
+  expect(dispatch.mock.calls[0]?.[1]?.message).toContain("These are partial results");
+  expect(subagentRuns.get(siblingRunId)?.requesterSettleWake).toBeUndefined();
 
   const followup = "Read the completed tool outputs and finish the existing task.";
   chatSend.mockImplementation(async ({ respond }) => {
@@ -305,13 +310,11 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const resumed = expectDefined(subagentRuns.get(nextRunId), "resumed child");
   expect(resumed).toMatchObject({ task: followup, taskRunId: previousRunId, requesterSessionKey });
   expect(resumed.pauseReason).toBeUndefined();
-  for (const runId of [nextRunId, siblingRunId]) {
-    expect(subagentRuns.get(runId)?.requesterSettleWake).toMatchObject({
-      batchRunIds: [nextRunId, siblingRunId].toSorted(),
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-    });
-  }
+  expect(subagentRuns.get(nextRunId)?.requesterSettleWake).toMatchObject({
+    batchRunIds: [nextRunId, siblingRunId].toSorted(),
+    requesterYieldBatch: true,
+    rearmGeneration: 1,
+  });
 
   chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: nextRunId, status: "started" }, undefined, { cached: true });
@@ -321,13 +324,13 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
 
   await complete(nextRunId, childSessionKey, "Recovered child consumed its tool results.");
   expectCompletedRun(nextRunId, "Recovered child consumed its tool results.");
-  expect(dispatch).toHaveBeenCalledTimes(1);
-  expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  expect(dispatch.mock.calls[1]?.[1]).toMatchObject({
     sessionKey: requesterSessionKey,
     inputProvenance: { sourceTool: "subagent_settle" },
     message: expect.stringContaining("Recovered child consumed its tool results."),
   });
-  expect(dispatch.mock.calls[0]?.[1]?.message).toContain("Sibling result is ready.");
+  expect(dispatch.mock.calls[1]?.[1]?.message).not.toContain("Sibling result is ready.");
   for (const runId of [nextRunId, siblingRunId]) {
     expect(subagentRuns.get(runId)?.requesterSettleWake).toBeUndefined();
   }

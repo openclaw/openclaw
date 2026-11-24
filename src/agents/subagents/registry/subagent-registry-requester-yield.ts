@@ -31,7 +31,11 @@ import {
   isSameSubagentRunOwner,
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  hasSubagentRunEnded,
+  isRequesterSettleMemberReady,
+  isRetainedUnendedSubagentRun,
+} from "./subagent-run-liveness.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
 /** Accepted steering keeps the child's execution and transfers only its requester-turn claim. */
@@ -630,13 +634,18 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           params.schedule(entry.runId, entry, "completion");
         }
       }
-      // Active children keep the frozen batch; their normal completion owner schedules it.
+      // Ready results can wake now; active members' completion owners schedule the rest.
+      if (rearmGeneration !== undefined) {
+        const ready = entries.find(isRequesterSettleMemberReady);
+        if (ready) {
+          params.schedule(ready.runId, ready, "settle");
+        }
+        return;
+      }
       if (!entries.every((entry) => typeof entry.execution.endedAt === "number")) {
         return;
       }
-      if (rearmGeneration !== undefined) {
-        params.schedule(entries[0]!.runId, entries[0]!, "settle");
-      } else if (!params.requesterYielded) {
+      if (!params.requesterYielded) {
         // A terminal child cannot wake while its requester still owns the turn.
         // Once a normal parent response settles, resume its original per-child delivery.
         for (const entry of entries) {

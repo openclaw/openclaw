@@ -6,6 +6,49 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
+import { isRequesterSettleMemberReady } from "./subagent-run-liveness.js";
+
+/** Select at most one offered set, scoped to the exact surviving requester cohort. */
+export function selectFrozenRequesterSettlePartition(
+  source: SubagentRunRecord,
+  get: (runId: string) => SubagentRunRecord | undefined,
+  selectAuthority: (entries: SubagentRunRecord[], anchor: SubagentRunRecord) => SubagentRunRecord[],
+) {
+  const wake = source.requesterSettleWake;
+  if (!wake?.batchRunIds?.includes(source.runId)) {
+    return undefined;
+  }
+  const cohort = wake.batchRunIds
+    .map(get)
+    .filter(
+      (entry): entry is SubagentRunRecord =>
+        hasSameRequesterWakeCohort(entry, wake) &&
+        entry.requesterSessionKey === source.requesterSessionKey &&
+        entry.requesterAgentId === source.requesterAgentId &&
+        entry.requesterStorePath === source.requesterStorePath &&
+        isDeepStrictEqual(entry.requesterSettleWake?.batchRunIds, wake.batchRunIds),
+    );
+  if (!wake.partitionRunIds && cohort.some((entry) => entry.requesterSettleWake?.partitionRunIds)) {
+    return { ready: [], pending: cohort };
+  }
+  const ready = wake.partitionRunIds
+    ? cohort.filter((entry) => hasSameRequesterWakePartition(entry, wake))
+    : wake.attemptCount > 0
+      ? cohort
+      : selectAuthority(
+          cohort.filter((entry) => (entry.requesterSettleWake?.attemptCount ?? 0) === 0),
+          source,
+        ).filter(isRequesterSettleMemberReady);
+  if (
+    !ready.every(isRequesterSettleMemberReady) ||
+    !ready.some((entry) => isSameSubagentRunOwner(entry, source))
+  ) {
+    // Never repartition an already admitted legacy wake or an offered input.
+    return { ready: [], pending: cohort };
+  }
+  const readyIds = new Set(ready.map((entry) => entry.runId));
+  return { ready, pending: cohort.filter((entry) => !readyIds.has(entry.runId)) };
+}
 
 export function buildRequesterSettleWakeIdentity(params: {
   requesterSessionKey: string;

@@ -57,7 +57,7 @@ export function registerYieldedRequesterBatchCase(options: {
   throwBoundFailures: (failures: unknown[]) => void;
 }) {
   it.for(["system", "guest", "cancel-and-replace"] as const)(
-    "continues a yielded nested parent once through its accepted child batch (%s)",
+    "continues a yielded nested parent through all accepted child results (%s)",
     async (actor, { signal }) => {
       const registry = await import("../registry/subagent-registry.js");
       const { loadSubagentRegistryFromSqlite } =
@@ -77,6 +77,7 @@ export function registerYieldedRequesterBatchCase(options: {
       const delivery = await import("../announce/subagent-announce-delivery.js");
       const deliver = delivery.deliverSubagentAnnouncement;
       const delivered = createDeferred<Awaited<ReturnType<typeof deliver>>>();
+      const deliveredPartial = createDeferred<Awaited<ReturnType<typeof deliver>>>();
       const deliveryObserver = vi
         .spyOn(delivery, "deliverSubagentAnnouncement")
         .mockImplementation(async (params) => {
@@ -85,7 +86,10 @@ export function registerYieldedRequesterBatchCase(options: {
             params.sourceTool === "subagent_settle" &&
             params.requesterSessionKey === bound.parentSessionKey
           ) {
-            delivered.resolve(result);
+            const receipt = params.triggerMessage.includes("These are partial results")
+              ? deliveredPartial
+              : delivered;
+            receipt.resolve(result);
           }
           return result;
         });
@@ -97,6 +101,7 @@ export function registerYieldedRequesterBatchCase(options: {
       const parentStarted = createDeferred();
       const parentCalls: Array<{
         runId: string;
+        sessionKey: string;
         childSessionKey: string | undefined;
         hasAuthority: boolean;
         prompt: string;
@@ -137,11 +142,15 @@ export function registerYieldedRequesterBatchCase(options: {
           const current = subagentRuns.get(params.runId);
           parentCalls.push({
             runId: params.runId,
+            sessionKey: params.sessionKey,
             childSessionKey: current?.childSessionKey,
             hasAuthority: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
             prompt: params.prompt,
           });
           parentStarted.resolve();
+          if (params.prompt.includes("These are partial results")) {
+            return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+          }
           return {
             payloads: [{ text: "Nested parent is complete." }],
             meta: {
@@ -276,6 +285,17 @@ export function registerYieldedRequesterBatchCase(options: {
         bound.admission.close();
         bound.parent.cleanup();
         guest?.source.closeRequest();
+        const cancelledFirst = actor === "cancel-and-replace";
+        if (cancelledFirst) {
+          // A stopped child is a ready result, not a reason to delay the sibling's final.
+          const receipt = await withinTest(deliveredPartial.promise, signal);
+          expect(receipt).toMatchObject({ delivered: true });
+          // The still-blocked sibling intentionally holds a Gateway root here.
+          expect(parentCalls).toHaveLength(1);
+          expect(parentCalls[0]?.prompt).toContain("status: cancelled");
+          expect(parentCalls[0]?.prompt).not.toContain("Nested child result.");
+          expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeDefined();
+        }
         childResult.resolve({
           payloads: [{ text: "Nested child result." }],
           meta: {
@@ -289,16 +309,22 @@ export function registerYieldedRequesterBatchCase(options: {
           bound,
           bound.parentRunId,
           parentStarted.promise,
-          childStarts.length + 1,
+          childStarts.length + (cancelledFirst ? 2 : 1),
         );
         await settleSubagentRegistryPersistenceWork();
         expect(admissionFailures).toEqual([]);
-        expect(parentCalls).toHaveLength(1);
-        expect(parentCalls[0]).toMatchObject({
-          childSessionKey: bound.parentSessionKey,
-          hasAuthority: true,
-        });
-        expect(parentCalls[0]?.prompt).toContain("Nested child result.");
+        expect(parentCalls).toHaveLength(cancelledFirst ? 2 : 1);
+        for (const call of parentCalls) {
+          expect(call).toMatchObject({ sessionKey: bound.parentSessionKey, hasAuthority: true });
+        }
+        // One wake adopts the paused run. After an early partition answers silently
+        // without yielding again, a later partition can wake the same session directly.
+        expect(parentCalls.flatMap((call) => call.childSessionKey ?? [])).toEqual([
+          bound.parentSessionKey,
+        ]);
+        expect(new Set(parentCalls.map((call) => call.runId)).size).toBe(parentCalls.length);
+        expect(parentCalls.at(-1)?.prompt).toContain("Nested child result.");
+        expect(parentCalls.at(-1)?.prompt).not.toContain("status: cancelled");
         const durable = loadSubagentRegistryFromSqlite().get(childRunId);
         expect(durable?.delivery?.status).toBe("delivered");
         expect(durable?.requesterSettleWake).toBeUndefined();

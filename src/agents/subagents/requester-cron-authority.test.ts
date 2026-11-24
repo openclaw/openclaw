@@ -304,6 +304,21 @@ function consume(
 }
 
 describe("requester cron authority lifetime", () => {
+  it("reserves management authority for the last partition of a yielded cohort", async () => {
+    const batch = await capture("partitioned", 2);
+    await dispatch([batch[0]!], async () => {
+      expect(consume([batch[0]!])).toBeUndefined();
+    });
+    await updateBatch(batch, ([ready]) => {
+      ready!.requesterSettleWake = undefined;
+    });
+    revokeRequesterCronAuthorityBatch([batch[0]!], 1, true);
+    await dispatch([batch[1]!], async () => {
+      expect(consume([batch[1]!])?.managementEntitlement?.source).toBe("control-ui-admin");
+      expect(consume([batch[1]!])).toBeUndefined();
+    });
+  });
+
   it.each(["completion", "scope ended", "reset"] as const)(
     "retains the full cohort's authority across a scoped child pause until %s",
     async (outcome) => {

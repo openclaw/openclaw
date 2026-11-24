@@ -16,6 +16,7 @@ import {
   deferRequesterSettleWakePreparation,
   readSharedBatchState,
 } from "../announce/subagent-announce.requester-settle-state.js";
+import { getFollowupForCohort } from "../completion/session-followup-completion.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
@@ -52,14 +53,18 @@ import {
   buildRequesterSettleWakeIdentity,
   captureRequesterSettleRunIdentity,
   hasSameRequesterWakeCohort,
-  hasSameRequesterWakePartition,
+  selectFrozenRequesterSettlePartition,
 } from "./subagent-requester-settle-identity.js";
 import {
   currentSubagentRunOrObserved,
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded, isEndedSubagentMessageWait } from "./subagent-run-liveness.js";
+import {
+  hasSubagentRunEnded,
+  isEndedSubagentMessageWait,
+  isRequesterSettleMemberReady,
+} from "./subagent-run-liveness.js";
 
 async function prepareParentDeliveryFailureReport(
   context: SubagentLifecycleWakeContext,
@@ -211,7 +216,12 @@ function releaseRequesterSettleWakeBatch(
   const params = context.options;
   const entries = observedEntries.map((entry) => currentSubagentRunOrObserved(params.runs, entry));
   const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
-  revokeRequesterCronAuthorityBatch(entries, rearmGeneration);
+  const partition = observedEntries[0]?.requesterSettleWake;
+  const partial = partition?.partitionRunIds !== undefined;
+  if (partial) {
+    getFollowupForCohort(observedEntries)?.settlePartition(observedEntries, rearmGeneration);
+  }
+  revokeRequesterCronAuthorityBatch(entries, rearmGeneration, partial);
   const retiredEntries: SubagentRunRecord[] = [];
   for (const entry of entries) {
     const { runId } = entry;
@@ -244,6 +254,16 @@ function releaseRequesterSettleWakeBatch(
   }
   for (const [runId, entry] of params.runs) {
     if (entry.requesterSettleWake && requesterSessionKeys.has(entry.requesterSessionKey)) {
+      const key = getSubagentRunRuntimeKey(entry);
+      if (
+        partition?.partitionRunIds &&
+        hasSameRequesterWakeCohort(entry, partition) &&
+        isDeepStrictEqual(entry.requesterSettleWake.batchRunIds, partition.batchRunIds) &&
+        isRequesterSettleMemberReady(entry) &&
+        context.scheduledRequesterSettleWakeRuns.has(key)
+      ) {
+        context.pendingRequesterSettleWakeRearms.add(key);
+      }
       scheduleRequesterSettleWake(context, runId, entry, stateContext);
     }
   }
@@ -485,23 +505,22 @@ export function scheduleRequesterSettleWake(
     scheduleRequesterSettleWakeRetry(context, runId, entry, stateContext);
     return;
   }
-  let admittedBatch = (
-    pauseNotice ? [runId] : (admittedWake?.partitionRunIds ?? admittedWake?.batchRunIds ?? [runId])
-  ).flatMap((id) => {
-    const member = params.runs.get(id);
-    return member &&
-      (pauseNotice ||
-        (admittedWake?.attemptCount ?? 0) > 0 ||
-        !isEndedSubagentMessageWait(member)) &&
-      (!admittedWake || hasSameRequesterWakePartition(member, admittedWake))
-      ? [member]
-      : [];
-  });
-  if (!admittedWake?.partitionRunIds && (admittedWake?.attemptCount ?? 0) === 0) {
-    admittedBatch = subagentRuns
-      .selectCompletionAuthorityBatch(admittedBatch, entry)
-      .filter((member) => (member.requesterSettleWake?.attemptCount ?? 0) === 0);
+  const partition = pauseNotice
+    ? undefined
+    : selectFrozenRequesterSettlePartition(
+        entry,
+        (id) => params.runs.get(id),
+        (entries, anchor) => subagentRuns.selectCompletionAuthorityBatch(entries, anchor),
+      );
+  if (
+    !pendingAtAdmission &&
+    isRequesterSettleMemberReady(entry) &&
+    partition &&
+    !partition.ready.includes(entry)
+  ) {
+    return;
   }
+  let admittedBatch = partition?.ready.length ? partition.ready : [entry];
   context.scheduledRequesterSettleWakeRuns.add(runtimeKey);
   runWithoutOwnedSessionTranscriptWrites(() => {
     void context
@@ -662,9 +681,11 @@ export function scheduleRequesterSettleWake(
             }
             // Deferred preparation is not a delivery attempt. Keep the same cohort,
             // replay identity, and counters; the existing durable timer retries it.
-            const retryState = retryPreparation
-              ? deferRequesterSettleWakePreparation(readSharedBatchState(admittedBatch))
-              : undefined;
+            const retryState =
+              retryPreparation ||
+              (Boolean(partition?.pending.length) && !currentWake.partitionRunIds)
+                ? deferRequesterSettleWakePreparation(readSharedBatchState(admittedBatch))
+                : undefined;
             try {
               await commitRequesterWake(
                 context,

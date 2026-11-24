@@ -271,6 +271,10 @@ async function runSubagentAnnounceFlowBound(
     });
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
+    // A nested requester can finish a partial wake while the original cohort still
+    // owns a sibling's result. Skipping its ordinary announce is not delivery.
+    const postCompletionAnnounceOutcome = (): SubagentAnnounceFlowOutcome =>
+      params.isCompletionOwnedByRequesterYield?.() ? "intentional_non_delivery" : "delivered";
 
     let childCompletionFindings: string | undefined;
     let childCompletionRows: Parameters<typeof readChildCompletionFindings>[0] | undefined;
@@ -287,7 +291,7 @@ async function runSubagentAnnounceFlowBound(
           targetRequesterAgentId,
         ))
       ) {
-        return "delivered";
+        return postCompletionAnnounceOutcome();
       }
 
       const childSessionCurrent = await prepareChildSessionEffects();
@@ -507,7 +511,7 @@ async function runSubagentAnnounceFlowBound(
             targetRequesterAgentId,
           ))
         ) {
-          return "delivered";
+          return postCompletionAnnounceOutcome();
         }
         const parentSessionEntry = await loadSessionEntryByKey(targetRequesterSessionKey);
         const parentSessionAlive = hasUsableSessionEntry(parentSessionEntry);

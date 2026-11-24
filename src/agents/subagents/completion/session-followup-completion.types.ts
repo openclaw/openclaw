@@ -58,5 +58,6 @@ export interface FollowupCompletionOwner {
   ): Promise<FollowupSettlement>;
   take(timeoutMs?: number): Promise<FollowupReply | undefined>;
   replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void;
+  settlePartition(entries: readonly SubagentRunRecord[], generation: number | undefined): void;
   close(error?: unknown): void;
 }

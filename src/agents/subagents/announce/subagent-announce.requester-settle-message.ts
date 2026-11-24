@@ -21,7 +21,7 @@ export function buildRequesterSettleWakeMessage(params: {
   yieldedFinalDeliverable?: boolean;
   /** The descendant wait was spent while a descendant result was still undelivered. */
   descendantsUnsettled?: boolean;
-  hasMessageWait?: boolean;
+  partial?: boolean;
   children: readonly SubagentRunRecord[];
   recoveryChildren: readonly SubagentRunRecord[];
   preserveModelRouteNotice: boolean;
@@ -62,9 +62,10 @@ export function buildRequesterSettleWakeMessage(params: {
       : routeNotices;
   const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   return [
-    ...(params.hasMessageWait
+    ...(params.partial
       ? [
-          "[Subagent Context] These results are ready. Other children are paused awaiting a message and may report later. If their results are needed, send them the continuation they are waiting for before yielding again.",
+          "[Subagent Context] These are partial results, not a batch-final wake. Use the ready results now, or call sessions_yield if you still need outstanding results. Do not report the batch finished.",
+          "[Subagent Context] A child paused awaiting a message must first be resumed with sessions_send.",
         ]
       : [
           params.descendantsUnsettled

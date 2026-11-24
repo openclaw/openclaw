@@ -144,6 +144,7 @@ describe("followup retained session authorization", () => {
       settle: unexpected,
       take: unexpected,
       replaceCohortEntry: unexpected,
+      settlePartition: unexpected,
       close,
     };
     const callGateway = vi.fn(async () => {

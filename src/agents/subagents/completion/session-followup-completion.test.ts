@@ -84,6 +84,23 @@ const final = {
 };
 
 describe("session followup completion", () => {
+  it("allows only the last durably retained partition to supply the followup reply", async () => {
+    const f = fixture();
+    const ready = child();
+    const pending = { ...child(), runId: "D", childSessionKey: "D-session" };
+    f.owner.promoteYield("first", [ready, pending], 1);
+    await settleExecution(f.owner, "first", { status: "ok", yielded: true });
+    expect(() => f.owner.successor([pending], "final", () => {})).toThrow("cohort");
+    f.owner.settlePartition([ready], 1);
+    expect(() => f.owner.successor([ready], "early", () => {})).toThrow("cohort");
+    const successor = f.owner.successor([pending], "final", () => {});
+    await f.owner.prepareSuccessor(successor);
+    f.owner.adopt(successor);
+    f.owner.markAccepted("final");
+    await settleExecution(f.owner, "final", final);
+    await expect(f.owner.take()).resolves.toEqual(final);
+  });
+
   it.each(["replacement", "cleared wake", "cleared adopted wake"] as const)(
     "retains only the canonical committed cohort after publication: %s",
     async (publication) => {
