@@ -22,7 +22,7 @@ function waiverEvidenceRunId(value) {
       : undefined;
 }
 
-export function releaseWaiverEvidenceMatches(evidence, runId, runAttempt) {
+function releaseWaiverEvidenceMatches(evidence, runId, runAttempt) {
   const id = waiverEvidenceRunId(evidence?.runId);
   return (
     id !== undefined &&

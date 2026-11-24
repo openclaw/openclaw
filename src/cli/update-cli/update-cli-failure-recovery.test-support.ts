@@ -45,7 +45,7 @@ export const recoveryObservationStep = (cwd = process.cwd()) => ({
     ),
   ],
 });
-export const recoveryCleanupStep = () => ({
+const recoveryCleanupStep = () => ({
   name: "recovery-artifact-cleanup",
   command: "openclaw update cleanup",
   cwd: "",

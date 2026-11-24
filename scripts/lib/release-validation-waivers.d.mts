@@ -74,11 +74,6 @@ export function evaluateReleaseChildPolicy(input: {
 }): ReleaseChildPolicy;
 export const RELEASE_VALIDATION_WAIVERS_PATH: string;
 export function parseReleaseValidationWaivers(source: string): ReleaseValidationWaiver[];
-export function releaseWaiverEvidenceMatches(
-  evidence: ReleaseValidationWaiver["evidence"],
-  runId: string | undefined,
-  runAttempt: number | undefined,
-): boolean;
 export function decodeReleaseValidationSource(payload: unknown, sourcePath: string): string;
 export function readReleaseValidationWaivers(
   readSource: (path: string) => string,
