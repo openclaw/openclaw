@@ -4,6 +4,7 @@ import { getEnvironmentData, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readAgentDatabaseSchemaVersion } from "../../state/openclaw-agent-db-schema-read.js";
+import { requireStatePostgresPhysicalFacts } from "../../state/openclaw-state-db-schema-version.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import {
   beginPostgresReadOnlyTransaction,
@@ -25,15 +26,17 @@ const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
-  { held: false, stage: "begin" },
-  { held: false, stage: "read" },
-  { held: true, stage: "begin" },
-  { held: true, stage: "read" },
-  { held: false, stage: "begin-failure" },
-  { held: true, stage: "begin-failure" },
+  { store: "agent", held: false, stage: "begin" },
+  { store: "agent", held: false, stage: "read" },
+  { store: "agent", held: true, stage: "begin" },
+  { store: "agent", held: true, stage: "read" },
+  { store: "agent", held: false, stage: "begin-failure" },
+  { store: "agent", held: true, stage: "begin-failure" },
+  { store: "state", held: false, stage: "begin" },
+  { store: "state", held: false, stage: "read" },
 ])(
-  "keeps admitted agent schema during concurrent publication (held=$held, stage=$stage)",
-  ({ held, stage }) => {
+  "retains only agent schema during concurrent publication (store=$store, held=$held, stage=$stage)",
+  ({ store, held, stage }) => {
     const filename = path.join(tempDirs.make("pg-snapshot-admission-"), "anchor.sqlite");
     using anchor = openNodeSqliteDatabase(filename);
     using peer = openNodeSqliteDatabase(filename);
@@ -91,7 +94,7 @@ it.each([
         db,
         namespace: "agent",
         storeId: "agent",
-        store: "agent",
+        store,
         version: 7,
       });
     admit();
@@ -102,9 +105,19 @@ it.each([
       if (stage === "read") {
         publishSqliteDatabaseSchemaChange(peer);
       }
-      expect(readAgentDatabaseSchemaVersion(db)).toBe(7);
+      if (store === "agent") {
+        expect(readAgentDatabaseSchemaVersion(db)).toBe(7);
+        db.runTransaction(
+          () => expect(readAgentDatabaseSchemaVersion(db)).toBe(7),
+          undefined,
+          true,
+        );
+      } else {
+        expect(() => requireStatePostgresPhysicalFacts(db)).toThrow(
+          "Missing PostgreSQL physical schema admission",
+        );
+      }
       expect(getSqliteReadOperationRevision(db)).toBeUndefined();
-      db.runTransaction(() => expect(readAgentDatabaseSchemaVersion(db)).toBe(7), undefined, true);
     };
     const run = () => {
       if (held) {

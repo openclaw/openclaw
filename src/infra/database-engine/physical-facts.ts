@@ -31,7 +31,8 @@ const recovery =
 export function getPostgresPhysicalFacts(db: EngineConnection, options?: { refresh?: boolean }) {
   if (isPostgresSqlConnection(db) && db.isTransaction && !options?.refresh) {
     const snapshot = postgresReadSnapshots.get(db);
-    if (snapshot) {
+    // Shared-state readers retain their live admission, deadline, and cancellation checks.
+    if (snapshot?.schema.store === "agent") {
       return db.isOpen && db.anchor.isOpen ? snapshot.schema : undefined;
     }
   }
