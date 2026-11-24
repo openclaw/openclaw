@@ -9,10 +9,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
+  PluginServiceExportCatalog,
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, assert, vi } from "vitest";
@@ -150,13 +150,12 @@ export function createBeamTestCatalog(
     onRead?: (threadId: string, sourceHomeId?: string, agentId?: string) => unknown;
     processHomeFallbackAllowed?: boolean;
   } = {},
-): sessionCatalogRuntime.ActiveSessionCatalog {
+): PluginServiceExportCatalog {
   const id = params.id ?? "claude";
   return {
-    pluginId: id,
     id,
-    label: id,
     processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
+    assertCurrent: () => {},
     list: async () => {
       await params.onList?.();
       const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
@@ -206,15 +205,15 @@ export function createBeamTestCatalog(
 }
 
 type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
-  listCatalogs?: () => sessionCatalogRuntime.ActiveSessionCatalog[];
+  listCatalogs?: () => PluginServiceExportCatalog[];
 };
 export function createBeamTestRunner({
   endpoint,
   listCatalogs = () => [createBeamTestCatalog()],
   ...options
 }: Partial<RunnerOptions> & { endpoint?: string } = {}) {
-  vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockImplementation(listCatalogs);
   return createBeamMirrorRunner({
+    catalogExports: { listCatalogs },
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,

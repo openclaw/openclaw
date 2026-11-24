@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import beamPlugin from "../../extensions/beam/index.js";
+import { getRuntimeConfig } from "../../src/config/io.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   createGatewaySchedulerClock,
@@ -14,6 +15,7 @@ import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { createRuntimeTestRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../../src/plugins/runtime.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { createPluginServiceCatalogExports } from "../../src/plugins/service-catalog-exports.js";
 import type { SessionCatalogProvider } from "../../src/plugins/session-catalog.js";
 import { activateSecretsRuntimeSnapshot } from "../../src/secrets/runtime.js";
 import { setupSecretsRuntimeSnapshotTestHooks } from "../../src/secrets/runtime.test-support.js";
@@ -59,14 +61,30 @@ async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvi
   const api = builder.createApi(record, { config });
   beamPlugin.register(api);
   if (catalog) {
-    api.registerSessionCatalog(catalog);
+    const producer = createPluginRecord({
+      id: "native-catalog-fixture",
+      source: "fixture",
+      configSchema: true,
+      origin: "bundled",
+      enabled: true,
+    });
+    builder.createApi(producer, { config }).registerSessionCatalog(catalog);
   }
   setActivePluginRegistry(builder.registry);
   const service = builder.registry.services.find(({ id }) => id === "beam-mirror")?.service;
   assert(service?.apiVersion === 2, "Beam did not register its mirror service");
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
-  await service.start({ config, stateDir: "/unused", scheduler, logger });
+  assert(service.catalogExports, "Beam did not request catalog export access");
+  const catalogExports = createPluginServiceCatalogExports({
+    pluginId: record.id,
+    configPath: service.catalogExports.allowlistPath,
+    registry: builder.registry,
+    signal: scheduler.signal,
+    assertActive: () => scheduler.signal.throwIfAborted(),
+    getConfig: getRuntimeConfig,
+  });
+  await service.start({ config, stateDir: "/unused", scheduler, logger, catalogExports });
   return { clock, scheduler, logger };
 }
 
@@ -129,6 +147,7 @@ it.skipIf(process.platform === "win32")(
       id: "claude",
       label: "Synthetic catalog",
       supportsProcessHomeIsolation: true,
+      automaticExportHosts: () => ["gateway:local"],
       async list() {
         const session = {
           threadId: "t1",
