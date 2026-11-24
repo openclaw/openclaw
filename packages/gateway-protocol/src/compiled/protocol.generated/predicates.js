@@ -858,7 +858,7 @@ var External = [
     /(^removed$)/u,
     /(^profileId$)/u,
     /(^links$)/u,
-    /(^profileId$|^displayName$)/u,
+    /(^profileId$|^displayName$|^onlyIfUnset$)/u,
     /(^profileId$|^role$)/u,
     /(^profileId$|^mime$|^avatarBase64$)/u,
     /(^profile$|^avatarRevision$)/u,
@@ -5940,7 +5940,8 @@ var External = [
       (unique_456, unique_457) => External[235].test(unique_456) || check_2(value[unique_456]),
     ) &&
     check_22(value.profileId) &&
-    check_752(value.displayName),
+    check_752(value.displayName) &&
+    (value.onlyIfUnset === void 0 || !("onlyIfUnset" in value) || check_181(value.onlyIfUnset)),
   check_795 = (value) => check_750(value),
   check_796 = (value) => check_797(value),
   check_797 = (value) =>
