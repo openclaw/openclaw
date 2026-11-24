@@ -1554,25 +1554,24 @@
   }
 }
 
-/* The three independent voice/send targets need their own row when
-   an embedded composer cannot fit them beside the model and effort targets. */
+/* Reserve the action row before voice capabilities arrive. */
 @container chat-composer (max-width: 360px) {
-  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) {
+  .agent-chat__composer-footer {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-start;
     column-gap: var(--chat-composer-chip-gap);
   }
 
-  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) .agent-chat__composer-trail {
+  .agent-chat__composer-trail {
     display: contents;
   }
 
-  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) .agent-chat__composer-context {
+  .agent-chat__composer-context {
     margin-inline-start: auto;
   }
 
-  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) .agent-chat__composer-actions {
+  .agent-chat__composer-actions {
     flex-basis: 100%;
     justify-content: flex-end;
   }
