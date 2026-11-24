@@ -147,6 +147,12 @@
   padding-inline: 0;
 }
 
+/* A linked row's mark reaches past the text, so its edge bar stays clear of the title. */
+.channels-detail .settings-row[data-settings-arrival] {
+  margin-inline: calc(-1 * var(--space-3));
+  padding-inline: var(--space-3);
+}
+
 .channels-detail .settings-kv {
   padding: var(--space-2) 0;
 }
