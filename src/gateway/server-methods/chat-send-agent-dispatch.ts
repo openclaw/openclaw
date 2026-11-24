@@ -587,6 +587,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           ) {
             await finalizeChatSendDispatchedReplies({
               ...replyFinalization,
+              commandText: params.request.p.message,
               foldCommandBlocks: isInternalTextSlashCommandTurn || replyDispatchRun !== undefined,
               persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
               suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
