@@ -389,6 +389,16 @@ async function main() {
   const { waitForSessionTranscriptIndexReconcilesInStateDir } =
     await import("../src/config/sessions/session-transcript-reconcile.js");
   const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");
+  // Each measurement still starts a fresh process, but its source transforms can
+  // be reused. Keep tsx away from the shared host cache and retire this cache
+  // with the synthetic state; the tooling preload disables shared caching.
+  const workerEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    TMPDIR: stateDir,
+    TMP: stateDir,
+    TEMP: stateDir,
+  };
+  delete workerEnv.TSX_DISABLE_CACHE;
   const results: unknown[] = [];
   try {
     for (const name of selected) {
@@ -419,7 +429,7 @@ async function main() {
             "--samples",
             String(samples),
           ],
-          { env: process.env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+          { env: workerEnv, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
         );
         if (child.status !== 0) {
           throw new Error(child.stderr || child.stdout || String(child.error));
@@ -435,7 +445,7 @@ async function main() {
       platform: `${process.platform}-${process.arch}`,
       cpus: os.cpus()[0]?.model,
       methodology:
-        "Fresh-process first read excludes runtime config preparation and module import and includes database open; this is not whole-process startup time. OS caches are not flushed. Warm elapsed and CPU totals sum only measured reads; reads per second uses measured elapsed time. Warm samples exclude setup and tracing. Heap deltas are uncollected observations, not allocation totals. Trace counts rows delivered to JS, not rows scanned inside SQLite.",
+        "Fresh-process first read excludes runtime config preparation and module import and includes database open; this is not whole-process startup time. OS caches are not flushed. Source workers may reuse an invocation-private TypeScript transform cache. Warm elapsed and CPU totals sum only measured reads; reads per second uses measured elapsed time. Warm samples exclude setup and tracing. Heap deltas are uncollected observations, not allocation totals. Trace counts rows delivered to JS, not rows scanned inside SQLite.",
       profiles,
       analyzed: values.analyze ?? false,
       results,

@@ -5,12 +5,18 @@ import { parseCLI, type CliOptions, type JsonTestResults } from "vitest/node";
 import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import type { VitestReportCapture } from "../../scripts/lib/vitest-report-capture.mts";
 import { canParallelizeVitestOutput } from "../../scripts/lib/vitest-report-owner.mts";
+import {
+  createVitestWorkerRun,
+  type VitestWorkerRun,
+} from "../../scripts/lib/vitest-worker-run.mts";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createVitestReportFixture, reportChunkTestFiles } from "./vitest-report-fixture.js";
 
 const text = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
@@ -102,9 +108,23 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
   const cacheLifetime = createFixtureLifetime();
   let cacheRoot: string;
   let receipts: FixtureReceiptChannel;
+  let workers: VitestWorkerRun;
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
     cacheRoot = cacheLifetime.createTempDir("oc-report-cache-");
+    // Compilation is setup, outside each report invocation's settlement deadline.
+    workers = createVitestWorkerRun(
+      testRunnerFixtureEnv(),
+      undefined,
+      "tooling",
+      resolveTestNodeExecPath(),
+    );
+    try {
+      await workers.prepare();
+    } catch (error) {
+      await workers.dispose();
+      throw error;
+    }
     vi.setConfig({ maxConcurrency: 2 });
     return () => vi.resetConfig();
   });
@@ -112,7 +132,11 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     try {
       await cacheLifetime.cleanup();
     } finally {
-      await receipts.close();
+      try {
+        await workers?.dispose();
+      } finally {
+        await receipts.close();
+      }
     }
   });
   type ReportRunner = ReturnType<typeof createVitestReportFixture>;
@@ -121,7 +145,13 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       const root = lifetime.createTempDir("oc-report-");
-      const invoke = createVitestReportFixture(root, { receipts, signal }, undefined, cacheRoot);
+      const invoke = createVitestReportFixture(
+        root,
+        { receipts, signal },
+        undefined,
+        cacheRoot,
+        workers,
+      );
       await use({
         root,
         run: (mode, options) => {
@@ -324,6 +354,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(serialized(replay.modules)).toEqual(serialized(modules));
       }
       if (mode === "batch-real-home") {
+        expect(result.stderr).not.toContain("[vitest-workers] prepared ");
         expect(result.signal).toBeNull();
         expect(index.merge).toMatchObject({ code: 0, signal: null });
         expect(text(root, "home/canary")).toBe("synthetic caller home\n");

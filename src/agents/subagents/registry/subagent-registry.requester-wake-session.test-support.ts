@@ -154,7 +154,7 @@ export function createRequesterWakeSessionFixture(params: {
         requesterTurnRunId,
         requesterAgentIdOverride: "main",
         config: {
-          agents: { entries: { main: {} } },
+          agents: { defaults: { model: "openai/gpt-6-astra" }, entries: { main: {} } },
           session: { mainKey: "main", scope: "per-sender" },
         },
         callGateway: vi.fn(async () => ({

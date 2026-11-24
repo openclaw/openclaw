@@ -40,6 +40,7 @@ const createUpdateFailureSchema = <T extends z.ZodRawShape>(stepFields: T) =>
               exitCode: z.number().int().nullable(),
               stdoutTail: z.string().nullish(),
               stderrTail: z.string().nullish(),
+              sqliteContentionCallSite: z.string().optional(),
               failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
               termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
               advisory: z
@@ -372,6 +373,17 @@ export function sanitizeTriageUpdateFailure(
           format === "artifact" && step.doctorLintFindings
             ? lintReceipt(step)
             : text(step.stderrTail, 384, "ends"),
+        // Extract before whitespace folding; keep the error and first 12 frames in
+        // a separate 1 KiB JSON budget, including across artifact/prompt rereads.
+        sqliteContentionCallSite: isFailedUpdateStep(step)
+          ? text(
+              step.sqliteContentionCallSite ??
+                step.stderrTail?.match(
+                  /SQLite contention call site:\r?\n[^\r\n]*(?:\r?\n[ \t]+at[^\r\n]*){0,12}/u,
+                )?.[0],
+              1024,
+            )
+          : undefined,
         stdoutTail: text(step.stdoutTail, 160, "tail"),
         failureFacts: step.failureFacts?.length
           ? normalizeUpdateFailureFacts(step.failureFacts, redaction.env)

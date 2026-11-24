@@ -19,6 +19,7 @@ import {
   type ExplicitGatewayAuth,
   type GatewayCredentialMode,
 } from "./credentials.js";
+import { gatewayEdgeAuthValueForTarget } from "./edge-auth.js";
 import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 
 export class GatewayExplicitAuthRequiredError extends Error {
@@ -265,7 +266,12 @@ export async function resolveGatewayClientBootstrap(params: {
       configuredTarget?.authSurface === "remote",
     tlsFingerprint,
   });
-  if (params.overrideAuthErrorHint && !configuredTarget) {
+  // An identity-aware proxy configured for this origin (gateway.remote.edgeAuth)
+  // authenticates the connection; the Gateway's device pairing grants access.
+  const edgeAuthTarget =
+    gatewayEdgeAuthValueForTarget({ config: params.config, targetUrl: connection.url }) !==
+    undefined;
+  if (params.overrideAuthErrorHint && !configuredTarget && !edgeAuthTarget) {
     await ensureExplicitGatewayAuth({
       urlOverride: urlOverrideSource ? connection.url : undefined,
       urlOverrideSource,

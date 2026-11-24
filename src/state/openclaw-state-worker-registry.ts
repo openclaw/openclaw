@@ -30,6 +30,10 @@ const loaders = {
     import("../agents/subagents/registry/subagent-registry.store.worker.js").then(
       (m) => m.subagentRegistryOperations,
     ),
+  templateClawHub: () =>
+    import("../secrets/store/secret-store-clawhub-template.worker.js").then(
+      (m) => m.templateClawHubWriteOperations,
+    ),
   secrets: () =>
     import("../secrets/store/secret-store.worker.js").then((m) => m.secretStoreOperations),
   agentProvenance: () =>
@@ -44,6 +48,8 @@ const loaders = {
     import("../templates/provenance-runtime-read.worker.js").then(
       (m) => m.templateInstallSchemaOperations,
     ),
+  templateRelease: () =>
+    import("../templates/release.worker.js").then((m) => m.templateReleaseOperations),
   backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
   quarantine: () =>
     import("./openclaw-quarantine-store.worker.js").then((m) => m.quarantineOperations),

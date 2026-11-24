@@ -43,10 +43,9 @@ itUnix.each(["before-recovery", "service-inspection"] as const)(
 );
 
 itUnix.each([
-  ...(["before", "prepared", "publishing", "after"] as const).map((interruptedUpdate) => ({
-    interruptedUpdate,
-    updaterStopped: undefined,
-  })),
+  ...(["before", "prepared", "exchanging", "publishing", "after"] as const).map(
+    (interruptedUpdate) => ({ interruptedUpdate, updaterStopped: undefined }),
+  ),
   { interruptedUpdate: "before" as const, updaterStopped: "legacy" as const },
   ...(["before", "publishing", "after"] as const).map((interruptedUpdate) => ({
     interruptedUpdate,
@@ -89,6 +88,20 @@ itUnix.each([
     }
   },
 );
+
+itUnix("recovers past an earlier false mark that post-core repair verifies", async () => {
+  // Only the earlier run is marked; the interrupted run's repair records its receipt.
+  const result = await runBoundary("systemd", {
+    ledger: true,
+    controlDisconnect: "transferred",
+    interruptedUpdate: "after",
+    olderMark: true,
+    helperExitCode: 0,
+  });
+  expect(result.state, result.log).toMatchObject({ restored: true, postCoreRepaired: true });
+  expect(result.run, result.log).toMatchObject({ status: "succeeded", phase: "finished" });
+  expect(result.log).not.toContain("data at risk");
+});
 
 itUnix(
   "keeps the Gateway stopped with terminal guidance after recorded data risk and SIGKILL",

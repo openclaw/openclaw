@@ -2,6 +2,7 @@ import { inspectSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import {
   inspectUpdateRunDriver,
   sameUpdateRunDriver,
+  toUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
 import {
@@ -15,14 +16,14 @@ import {
 } from "./update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
-function updateRunLastActivity(record: UpdateRunRecord): number {
+export function updateRunLastActivity(record: UpdateRunRecord): number {
   return Math.max(
     record.updatedAtMs,
     ...record.steps.flatMap((step) => [step.startedAtMs ?? 0, step.endedAtMs ?? 0]),
   );
 }
 
-function hasUnrecordedUpdateRunDriver(record: UpdateRunRecord): boolean {
+export function hasUnrecordedUpdateRunDriver(record: UpdateRunRecord): boolean {
   return record.steps.some((step) => step.step === "driver:identity-unavailable");
 }
 
@@ -35,11 +36,12 @@ export function isStaleIdentitylessUpdateRun(record: UpdateRunRecord): boolean {
   );
 }
 
+/** Process identities only: callers copy them into strict lease and recovery records. */
 export function recordedUpdateRunDrivers(record: UpdateRunRecord): UpdateRunDriver[] {
   return [
     ...(record.origin.driver ? [record.origin.driver] : []),
     ...(record.origin.previousDrivers ?? []),
-  ];
+  ].map(toUpdateRunDriver);
 }
 
 // Ancestors are fixed when a process starts, so an identity-verified ancestor stays one

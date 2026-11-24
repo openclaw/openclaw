@@ -8,6 +8,7 @@ import type {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-state-store.js";
 import type { DeviceTokenBinding } from "./device-token-binding.js";
+import type { MemberRecoveryUse } from "./member-recovery-use-contract.js";
 
 /** The signed-in account the Gateway's verified sign-in reports. */
 export type OpenClawIdAccount = {
@@ -43,13 +44,35 @@ export type StoredClaw = {
   token_bindings?: DeviceTokenBinding[];
   /** Gateway approval times, bounded by current membership rather than invite lifetime. */
   member_approved_at?: Record<string, number | null>;
+  /** Members whose profile role was initialized; clearing a role must not rerun migration. */
+  member_profile_roles?: Record<string, boolean>;
   /** Display-only browser notices and bounded replay/rate receipts for current members. */
   member_browser_requests?: Record<string, MemberBrowserRequestState>;
+  /** Accepted kit-use evidence; retained after kit, browser, and member removal. */
+  member_recovery_uses?: MemberRecoveryUse[];
+  /**
+   * Unlinks this computer signed that Discovery has not confirmed yet (pending-unlink.ts sends
+   * them when Discovery is reachable). They belong to earlier claw ids, not to `claw_id`.
+   */
+  pending_unlinks?: Array<{
+    statement: SignedStatement<"ClawUnlink">;
+    /** The unlinked claw's address, for status. */
+    hostname: string;
+    /** The Discovery that held the unlinked claw. */
+    discovery_url: string;
+    /** Discovery's refusal code when it refused the unlink for good; it is not sent again. */
+    refused?: string;
+  }>;
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
     owner_account_id: string | null;
     published_binding_seq: number;
     published_snapshot_seq: number;
+    /**
+     * True from linking until a registration is first sent, so Discovery cannot hold the claw and
+     * unlinking it is local only. Absent on records linked before this was kept: unknown.
+     */
+    registration_unsent?: boolean;
     /** A publication was requested and has not succeeded yet (publication-retry.ts). */
     publish_pending?: boolean;
     /** issued_at of the last snapshot Discovery accepted (freshness/v1 re-signs it hourly). */
@@ -99,6 +122,23 @@ export function assertSameClawIdentity(
   }
 }
 
+/** A claw record with no authority, binding or Discovery progress yet. */
+export function emptyRecord(clawId: string): StoredClaw {
+  return {
+    v: 1,
+    claw_id: clawId,
+    hostname: null,
+    authority: null,
+    binding: null,
+    discovery: {
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+      mailbox_cursor: null,
+    },
+  };
+}
+
 /** Refuses oversized opaque metadata without truncating account identities or mailbox cursors. */
 export function assertStoredClawText(value: unknown, field: string): void {
   if (value !== null && (typeof value !== "string" || value.length > 256)) {
@@ -127,6 +167,7 @@ type StoredClawCore = Omit<
   | "token_bindings"
   | "member_approved_at"
   | "member_browser_requests"
+  | "member_recovery_uses"
 > & {
   v: 2;
   authority: Omit<AuthorityState, "owner_devices" | "members" | "invites"> | null;
@@ -142,6 +183,7 @@ type ClawRows = {
   "member-approvals": NonNullable<StoredClaw["member_approved_at"]>;
   [key: `member-browser-requests:${number}`]: NonNullable<StoredClaw["member_browser_requests"]>;
   "token-bindings": StoredTokenBindings;
+  [key: `member-recovery-use:${number}`]: MemberRecoveryUse;
 };
 type ClawRow = ClawRows[keyof ClawRows] | StoredClaw;
 
@@ -165,6 +207,7 @@ export function clawStoreRows(record: StoredClaw): ClawRows {
     member_approved_at,
     member_browser_requests,
     token_bindings,
+    member_recovery_uses,
     ...core
   } = record;
   let anchor: StoredClawCore["authority"] = null;
@@ -196,6 +239,9 @@ export function clawStoreRows(record: StoredClaw): ClawRows {
     members: Object.fromEntries(memberEntries.slice(0, 32)),
     ...memberRows,
     ...browserRows,
+    ...Object.fromEntries(
+      (member_recovery_uses ?? []).map((use) => [`member-recovery-use:${use.seq}`, use]),
+    ),
     invites: authority?.invites ?? {},
     "invite-reports": invite_reports ?? {},
     "member-approvals": member_approved_at ?? {},
@@ -224,6 +270,11 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
     // SAFETY: these fixed keys are written together by clawStoreRows under this module's owner.
     return entries.get(key) as ClawRows[Key];
   };
+  const recoveryUses = [...entries]
+    .filter(([key]) => key.startsWith("member-recovery-use:"))
+    // SAFETY: only clawStoreRows writes these evidence rows, atomically with admission.
+    .map(([, value]) => value as MemberRecoveryUse)
+    .toSorted((a, b) => a.seq - b.seq);
   return {
     ...record,
     v: 1,
@@ -255,6 +306,7 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
           ),
         }
       : {}),
+    ...(recoveryUses.length ? { member_recovery_uses: recoveryUses } : {}),
     token_bindings: section("token-bindings").bindings,
   };
 }

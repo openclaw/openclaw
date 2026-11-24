@@ -35,7 +35,11 @@ import {
 import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import { prepareSessionParticipantContribution } from "./session-participant-contribution.worker.js";
-import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+  setSessionMemberAccess,
+} from "./session-sharing-store.native.js";
 import type {
   MembershipPublication,
   SessionCollaborationFact,
@@ -236,6 +240,12 @@ export function bindSqliteWorkerBackend(
               if (command.type === "add") {
                 const value = addSessionMember(scope, command.input.params);
                 const result: SessionSharingWorkerOperations["add"]["output"] = { value };
+                membershipResult = result;
+                return result;
+              }
+              if (command.type === "set-access") {
+                const value = setSessionMemberAccess(scope, command.input.params);
+                const result: SessionSharingWorkerOperations["set-access"]["output"] = { value };
                 membershipResult = result;
                 return result;
               }

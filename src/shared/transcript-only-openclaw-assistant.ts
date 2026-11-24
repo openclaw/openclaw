@@ -78,14 +78,22 @@ export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): bool
   );
 }
 
+/** A background result written into this chat by another run; never this chat's model output. */
+export function isOpenClawAutomationResultMessage(message: unknown): boolean {
+  const entry = asOptionalRecord(message);
+  return (
+    entry?.role === "assistant" &&
+    entry.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    entry.model === AUTOMATION_RESULT_MODEL
+  );
+}
+
 /** Matches a delivered subagent completion row: a canonical result or a retained mirror. */
 export function isOpenClawSubagentCompletionMirrorAssistantMessage(message: unknown): boolean {
   const entry = asOptionalRecord(message);
   if (
-    entry?.role === "assistant" &&
-    entry.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
-    entry.model === AUTOMATION_RESULT_MODEL &&
-    asOptionalRecord(entry.openclawAutomation)?.kind === SUBAGENT_COMPLETION_RESULT_KIND
+    isOpenClawAutomationResultMessage(entry) &&
+    asOptionalRecord(entry?.openclawAutomation)?.kind === SUBAGENT_COMPLETION_RESULT_KIND
   ) {
     return true;
   }

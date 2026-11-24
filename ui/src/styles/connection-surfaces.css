@@ -99,6 +99,12 @@
   color: var(--muted);
 }
 
+/* Keep wrapped status text on its first line's edge, beside the spinner. */
+.login-gate__progress {
+  display: flex;
+  align-items: baseline;
+}
+
 .login-gate__hero {
   display: grid;
   gap: 6px;

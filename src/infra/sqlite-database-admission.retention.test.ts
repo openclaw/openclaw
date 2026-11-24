@@ -50,7 +50,7 @@ import {
   recordSqliteDatabaseIntegrity as recordIntegrity,
   readSqliteDatabaseWriteTokenForPath as pathToken,
   retireSqliteDatabaseAdmissionForPath as retireAdmission,
-  retainSqliteDatabaseAdmissionLocation as retainLocation,
+  retainPreparedSqliteDatabaseAdmissionLocation as retainPreparedLocation,
   revokeSqliteDatabaseAdmissions as revokeAdmissions,
   revokeSqliteDatabaseAdmissionsForPath as revokePath,
   trackSqliteDatabaseAdmissionWorker as trackWorker,
@@ -288,8 +288,8 @@ it("retires the final closed handle's facts while preserving open siblings and d
     using open = vi.spyOn(fs, "openSync");
     using read = vi.spyOn(fs, "readFileSync");
     using lstat = vi.spyOn(fs, "lstatSync");
-    retainLocation(location, original.physicalIdentity);
-    retainLocation(location, original.physicalIdentity);
+    expect(retainPreparedLocation(location, original.physicalIdentity)).toBe(true);
+    expect(retainPreparedLocation(location, original.physicalIdentity)).toBe(true);
     expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
     expect(recordsFor(location)[0]?.descriptor).toBe(original.descriptor);
     for (const probe of [stat, fstat, realpath, open, read, lstat]) {
@@ -449,10 +449,10 @@ it("keeps the prior prepared receipt when a competing writer refuses the native 
   peer.exec("ROLLBACK");
 });
 
-it("releases a connection reference when initial admission exchange fails", () => {
+it("releases a connection reference when initial admission exchange fails", async () => {
   const location = path.join(tempDirs.make("sqlite-admission-open-failure-"), "proof.sqlite");
   createDatabase(location).close();
-  retainLocation(location);
+  await prepareAdmission({ location, assertCurrent() {} });
   try {
     expect(() =>
       withExchange(

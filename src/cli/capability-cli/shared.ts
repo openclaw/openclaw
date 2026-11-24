@@ -21,7 +21,7 @@ import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js
 import { inheritOptionFromParent } from "../command-options.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import type { CapabilityTransport } from "./metadata.js";
+import type { CapabilityTransport } from "./result-types.js";
 
 export function resolveTransport(opts: {
   local?: boolean;

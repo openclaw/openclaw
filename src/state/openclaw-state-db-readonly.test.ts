@@ -89,63 +89,47 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each([undefined, "EACCES"])(
-  "keeps authoritative state availability (filesystem failure: %s)",
-  async (code) => {
-    await withTempDir("openclaw-state-availability-", async (root) => {
-      const options = createOptions(root);
-      if (code) {
-        const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
-          throw Object.assign(new Error("synthetic filesystem observation"), { code });
-        });
+it("keeps authoritative state availability through missing paths and filesystem failures", async () => {
+  await withTempDir("openclaw-state-availability-", async (root) => {
+    const options = createOptions(root);
+    const asyncRead = (selected = options) =>
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(() => {
+        throw new Error("An unavailable source reached its read callback");
+      }, selected);
+    await expect(asyncRead()).resolves.toBeUndefined();
+    fs.writeFileSync(path.join(root, "file"), "not a directory");
+    await expect(
+      asyncRead({ ...options, path: path.join(root, "file", "state.sqlite") }),
+    ).rejects.toMatchObject({ code: "ENOTDIR" });
+    expect(
+      isOpenClawStateDatabaseDefinitelyAbsent({
+        ...options.env,
+        OPENCLAW_STATE_DIR: path.join(root, "file"),
+      }),
+    ).toBe(false);
+    expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
+    openOpenClawStateDatabase(options);
+    const observeMissingPath = (retained: boolean) => {
+      const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+        throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
+      });
+      syncBuiltinESMExports();
+      try {
+        expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
+        expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
+      } finally {
+        probe.mockRestore();
         syncBuiltinESMExports();
-        try {
-          expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(false);
-          expect(probe).toHaveBeenCalledOnce();
-        } finally {
-          probe.mockRestore();
-          syncBuiltinESMExports();
-        }
-        return;
       }
-      expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
-      openOpenClawStateDatabase(options);
-      const observeMissingPath = (retained: boolean) => {
-        const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
-          throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
-        });
-        syncBuiltinESMExports();
-        try {
-          expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
-          expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
-        } finally {
-          probe.mockRestore();
-          syncBuiltinESMExports();
-        }
-      };
-      observeMissingPath(true);
-      closeOpenClawStateDatabaseForTest();
-      await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
-      snapshot(() =>
-        withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options),
-      );
-      observeMissingPath(false);
-      expect(fs.existsSync(options.path)).toBe(true);
-    });
-  },
-);
-
-it("keeps fresh synchronous read callbacks from returning asynchronous work", async () => {
-  await withTempDir("openclaw-state-sync-read-", async (root) => {
-    const options = createClosedState(root);
-    let reader: DatabaseSync | undefined;
-    expect(() =>
-      withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-        reader = requireNativeSqliteDatabase(db);
-        return Promise.resolve(1);
-      }, options),
-    ).toThrow("SQLite source read must remain synchronous");
-    expect(reader?.isOpen).toBe(false);
+    };
+    observeMissingPath(true);
+    closeOpenClawStateDatabaseForTest();
+    await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
+    snapshot(() =>
+      withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options),
+    );
+    observeMissingPath(false);
+    expect(fs.existsSync(options.path)).toBe(true);
   });
 });
 
@@ -425,24 +409,6 @@ it.each([
   },
 );
 
-it("keeps missing and non-missing filesystem failures distinct for async reads", async () => {
-  await withTempDir("openclaw-state-readonly-missing-", async (stateDir) => {
-    const options = createOptions(stateDir);
-    const operation = vi.fn();
-    await expect(
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(operation, options),
-    ).resolves.toBeUndefined();
-    fs.writeFileSync(path.join(stateDir, "file"), "not a directory");
-    await expect(
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(operation, {
-        ...options,
-        path: path.join(stateDir, "file", "state.sqlite"),
-      }),
-    ).rejects.toMatchObject({ code: "ENOTDIR" });
-    expect(operation).not.toHaveBeenCalled();
-  });
-});
-
 it.each(["synchronous", "report"])(
   "shares one %s snapshot reader and refreshes committed WAL next time",
   async (mode) => {
@@ -490,6 +456,10 @@ it.each(["synchronous", "report"])(
         ).toBe(true);
         if (mode === "synchronous") {
           expect(() => snapshot(() => Promise.resolve(1))).toThrow("must remain synchronous");
+          expect(() =>
+            withExistingOpenClawStateDatabaseReadOnly(() => Promise.resolve(1), options),
+          ).toThrow("SQLite source read must remain synchronous");
+          expect(open.mock.results.every((r) => r.type !== "return" || !r.value.isOpen)).toBe(true);
         }
       } finally {
         writer.close();

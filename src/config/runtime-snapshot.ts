@@ -212,7 +212,9 @@ function publishRuntimeConfigSnapshot(
     (runtimeConfigSnapshot !== config || isDeeplyFrozenPlainData(config)) &&
     runtimeConfigSnapshotMetadata?.fingerprint === configFact.fingerprint &&
     isDeepStrictEqual(runtimeConfigValueFact?.facts, facts);
+  // An equal frozen revision must replace an earlier mutable publication.
   if (
+    (!isDeeplyFrozenPlainData(config) || isDeeplyFrozenPlainData(runtimeConfigSnapshot)) &&
     !previousEditedInPlace &&
     !previousSourceEditedInPlace &&
     sourceMatchesPublished &&

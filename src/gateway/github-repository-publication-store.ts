@@ -13,7 +13,7 @@ export async function readPendingRepositoryGitHubPublication(
 ): Promise<RepositoryGitHubPublicationStatusRow | undefined> {
   const result = await executeExistingOpenClawStateRead(
     {},
-    { type: "githubPublications.personalPending", input },
+    { type: "githubPublications.personalPending", input: { ...input } },
     { current: true },
   );
   return result?.row;

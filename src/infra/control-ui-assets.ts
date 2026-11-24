@@ -367,6 +367,9 @@ export async function ensureControlUiAssetsBuilt(
     build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
       cwd: repoRoot,
       timeoutMs: CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
+      // The source builder owns compiler cancellation (5s grace + 5s drain).
+      // Let that owner settle its artifact claim before escalating its process.
+      killGraceMs: 15_000,
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } catch (error) {

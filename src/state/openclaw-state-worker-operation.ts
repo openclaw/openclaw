@@ -59,6 +59,7 @@ export function runWithOpenClawStateWorkerStore<T>(
           ? {
               execute: (command, options) =>
                 scope.execute(command, {
+                  ...options,
                   signal: options?.signal ? AbortSignal.any([signal, options.signal]) : signal,
                 }),
             }

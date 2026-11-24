@@ -1,11 +1,11 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   captureModelCostPricing,
   resolveModelCostConfigFingerprint,
   type CapturedModelCostPricing,
-} from "../utils/usage-format.js";
+} from "../model-catalog/usage-pricing.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   applyUsageCostEstimate,

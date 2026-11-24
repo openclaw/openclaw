@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
@@ -209,50 +209,56 @@ async function validateSnapshot(
 
 async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
   const shellName = path.basename(opts.shell);
-  return await withTempWorkspace(
-    {
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-shell-snapshot-",
-      dirMode: 0o700,
-      mode: 0o600,
-    },
-    async (workspace) => {
-      const captureOutputPath = await workspace.writeText("snapshot.out", "");
-      const environmentArgv = [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeProcessEntrypointUrl("shellSnapshotEnvironment"),
-          process.execPath,
-        ),
-      ];
-      const captureCommand = [
-        "{",
-        shellName === "zsh"
-          ? `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`
-          : ":",
-        `printf '\\n%s\\n' ${shQuote(CAPTURE_MARKER)}`,
-        shellName === "zsh" ? "alias -L 2>/dev/null || true" : "alias 2>/dev/null || true",
-        "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
-        `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
-        environmentArgv.map(shQuote).join(" "),
-        `} > ${shQuote(captureOutputPath)}`,
-      ].join("\n");
-
-      const exitCode = await runShell({
-        shell: opts.shell,
-        shellArgs: shellName === "bash" ? ["-i", "-c"] : ["-f", "-i", "-c"],
-        cwd: opts.cwd,
-        env: buildTrustedSnapshotCaptureEnv(opts.env),
-        command: captureCommand,
-        timeoutMs: 5_000,
-      });
-      if (exitCode !== 0) {
-        return null;
-      }
-      const stdout = await fs.readFile(captureOutputPath, "utf8");
-      return buildSnapshotFile(stdout);
-    },
+  // fs-safe's async workspace API performs native creates synchronously. Keep
+  // this private, one-use capture on libuv's filesystem pool instead.
+  const directory = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-shell-snapshot-"),
   );
+  try {
+    await fs.chmod(directory, 0o700);
+    const captureOutputPath = path.join(directory, "snapshot.out");
+    await using output = await fs.open(
+      captureOutputPath,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+    await output.chmod(0o600);
+    const environmentArgv = [
+      process.execPath,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeProcessEntrypointUrl("shellSnapshotEnvironment"),
+        process.execPath,
+      ),
+    ];
+    const captureCommand = [
+      "{",
+      shellName === "zsh"
+        ? `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`
+        : ":",
+      `printf '\\n%s\\n' ${shQuote(CAPTURE_MARKER)}`,
+      shellName === "zsh" ? "alias -L 2>/dev/null || true" : "alias 2>/dev/null || true",
+      "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
+      `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
+      environmentArgv.map(shQuote).join(" "),
+      `} > ${shQuote(captureOutputPath)}`,
+    ].join("\n");
+
+    const exitCode = await runShell({
+      shell: opts.shell,
+      shellArgs: shellName === "bash" ? ["-i", "-c"] : ["-f", "-i", "-c"],
+      cwd: opts.cwd,
+      env: buildTrustedSnapshotCaptureEnv(opts.env),
+      command: captureCommand,
+      timeoutMs: 5_000,
+    });
+    if (exitCode !== 0) {
+      return null;
+    }
+    const stdout = await output.readFile("utf8");
+    return buildSnapshotFile(stdout);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 }
 
 function buildSnapshotCaptureEnv(

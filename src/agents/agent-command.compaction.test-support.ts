@@ -316,6 +316,7 @@ export function registerAgentCommandCompactionTestHooks(): void {
       },
       agents: {
         defaults: {
+          model: { primary: "openai/gpt-5.5" },
           models: {
             "openai/gpt-5.5": {},
           },

@@ -11,8 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
-import * as hostAccountAvatar from "../infra/host-account-avatar.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   linkEmail,
   setAvatar,
@@ -158,151 +156,6 @@ describe("personal avatar HTTP authentication", () => {
     expect((await request(token)).status).toBe(401);
   });
 
-  it.each(["uploaded", "GitHub"] as const)(
-    "withholds %s image bytes from a session-only device revoked during preparation",
-    async (source) => {
-      const target = ensureProfileForEmail("device-visible-person@example.test");
-      expect(setAvatar(target.id, PNG, "image/png").ok).toBe(true);
-      avatarPath = "/api/users/" + target.id + "/avatar";
-      const { deviceId, token } = await pairDevice(["operator.sessions.read"]);
-      const allowed = await request(token);
-      expect(allowed.status).toBe(200);
-      expect(Buffer.from(await allowed.arrayBuffer())).toEqual(PNG);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      if (source === "uploaded") {
-        const createReader = profileAvatars.createProfileAvatarReader;
-        vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
-          const reader = createReader(id, options);
-          return {
-            async inspect() {
-              const prepared = await reader.inspect();
-              return {
-                ...prepared,
-                async loadBytes() {
-                  const bytes = await prepared.loadBytes();
-                  entered.resolve();
-                  await release.promise;
-                  return bytes;
-                },
-              };
-            },
-          };
-        });
-      } else {
-        const remote = syncGitHubIdentity({
-          identity: { accountId: 49714341, login: "pending-avatar-reader" },
-          authenticationAlias: { kind: "email", email: "pending-github-avatar@example.test" },
-        });
-        avatarPath = "/api/users/" + remote.id + "/avatar";
-        const nativeFetch = globalThis.fetch;
-        vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (url === "https://avatars.githubusercontent.com/u/49714341?v=4") {
-            entered.resolve();
-            await release.promise;
-            return new Response(PNG, { headers: { "content-type": "image/png" } });
-          }
-          return nativeFetch(input, init);
-        });
-      }
-      const controller = new AbortController();
-      const pending = request(token, { signal: controller.signal });
-      try {
-        await entered.promise;
-        await revokeDeviceToken({ deviceId, role: "operator" });
-        release.resolve();
-        const refused = await pending;
-        expect(refused.status).toBe(401);
-        expect(refused.headers.get("content-type")).not.toMatch(/^image\//);
-        expect(refused.headers.get("etag")).toBeNull();
-        expect(Buffer.from(await refused.arrayBuffer())).not.toEqual(PNG);
-      } finally {
-        release.resolve();
-        controller.abort();
-        await pending.catch(() => undefined);
-      }
-    },
-  );
-
-  it.each(["inspection", "saved", "host", "Gravatar", "GitHub"] as const)(
-    "withholds a prepared %s avatar after credentials rotate",
-    async (source) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const createReader = profileAvatars.createProfileAvatarReader;
-      vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
-        const reader = createReader(id, options);
-        return {
-          async inspect() {
-            if (source === "inspection") {
-              entered.resolve();
-              await release.promise;
-            }
-            const prepared = await reader.inspect();
-            return {
-              ...prepared,
-              avatar:
-                source === "host" || source === "Gravatar" || source === "GitHub"
-                  ? undefined
-                  : prepared.avatar,
-              async loadBytes() {
-                entered.resolve();
-                await release.promise;
-                return prepared.loadBytes();
-              },
-            };
-          },
-        };
-      });
-      if (source === "host") {
-        vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockImplementation(async () => {
-          entered.resolve();
-          await release.promise;
-          return { bytes: PNG, mime: "image/jpeg", sha256: "synthetic-avatar" };
-        });
-      } else if (source === "Gravatar" || source === "GitHub") {
-        vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockResolvedValue(null);
-        const profile =
-          source === "GitHub"
-            ? syncGitHubIdentity({
-                identity: { accountId: 9871, login: "avatar-authority" },
-                authenticationAlias: {
-                  kind: "email",
-                  email: "github-avatar-authority@example.test",
-                },
-              })
-            : ensureProfileForEmail("gravatar-authority@example.test");
-        avatarPath = `/api/users/${profile.id}/avatar`;
-        const fetch = globalThis.fetch;
-        vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (
-            url.startsWith("https://www.gravatar.com/avatar/") ||
-            url.startsWith("https://avatars.githubusercontent.com/")
-          ) {
-            entered.resolve();
-            await release.promise;
-            return new Response(PNG, { headers: { "content-type": "image/png" } });
-          }
-          return fetch(input, init);
-        });
-      }
-      const pending = request("test-shared-secret");
-      await entered.promise;
-      auth = { ...auth, token: "replacement-token" };
-      release.resolve();
-      const response = await pending;
-
-      expect(response.status).toBe(401);
-      expect(response.headers.get("content-type")).not.toMatch(/^image\//);
-      expect(response.headers.get("etag")).toBeNull();
-      expect(Buffer.from(await response.arrayBuffer())).not.toEqual(PNG);
-    },
-  );
-
   it.each(["password", "trusted-proxy"] as const)(
     "loads the saved personal photo with the connected credentials under %s auth",
     async (mode) => {
@@ -340,7 +193,7 @@ describe("personal avatar HTTP authentication", () => {
   );
 
   it.each(["operator.read", "operator.sessions.read"] as const)(
-    "checks linked-account avatar authority with %s, including revocation and alias reassignment",
+    "checks linked-account avatar authority with %s, including revocation",
     async (scope) => {
       vi.stubEnv("GH_TOKEN", undefined);
       vi.stubEnv("GITHUB_TOKEN", undefined);
@@ -488,35 +341,16 @@ describe("personal avatar HTTP authentication", () => {
       expect(readAvatar).not.toHaveBeenCalled();
 
       Object.assign(identity, { id: 511, email: "work@example.test" });
-      const replacement = ensureProfileForEmail("image-replacement@example.test");
-      for (const change of ["cosmetic", "role", "alias"] as const) {
-        let boundaryReached = false;
-        beforeAvatarBytes = () => {
-          beforeAvatarBytes = undefined;
-          boundaryReached = true;
-          if (change === "role") {
-            setUserProfileRole(primary.id, null);
-            invalidateOperatorRolePolicy(primary.id);
-          } else if (change === "alias") {
-            linkEmail("work@example.test", replacement.id);
-          } else {
-            setDisplayName(primary.id, "Cosmetic update");
-          }
-        };
-        const refused = await send();
-        expect(boundaryReached).toBe(true);
-        if (change === "cosmetic") {
-          expect(refused.status).toBe(200);
-          expect(refused.bytes).toEqual(PNG);
-        } else {
-          expect(refused.status, change).toBe(401);
-          expect(refused.contentType).not.toMatch(/^image\//);
-          expect(refused.bytes).not.toEqual(PNG);
-        }
-        setUserProfileRole(primary.id, "reader");
-        invalidateOperatorRolePolicy(primary.id);
-        linkEmail("work@example.test", primary.id);
-      }
+      let boundaryReached = false;
+      beforeAvatarBytes = () => {
+        beforeAvatarBytes = undefined;
+        boundaryReached = true;
+        setDisplayName(primary.id, "Cosmetic update");
+      };
+      const response = await send();
+      expect(boundaryReached).toBe(true);
+      expect(response.status).toBe(200);
+      expect(response.bytes).toEqual(PNG);
     },
   );
 

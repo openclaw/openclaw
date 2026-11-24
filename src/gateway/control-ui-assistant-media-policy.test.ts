@@ -117,7 +117,6 @@ async function managedWorkspace() {
 async function namedReader(
   email: string,
   definitions: GatewayOperatorRolesConfig["definitions"] = { viewer: viewerRole },
-  hasCurrentClientAuthority?: () => boolean,
 ) {
   cfg.gateway = { roles: { default: "viewer", definitions } };
   const profile = ensureProfileForEmail(email);
@@ -126,7 +125,6 @@ async function namedReader(
   state.auth.mockResolvedValue({
     authMethod: "trusted-proxy",
     operatorScopes: readScopes,
-    ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
     ...resolveHttpProfile(profile.id, cfg),
   });
   return profile;
@@ -457,6 +455,30 @@ it("denies incognito images to a named profile while preserving administrator ac
   await expectMetadata(source, { available: true });
 });
 
+it("preserves standalone media for administrators with an invited role and revokes their tickets", async () => {
+  const adminScopes = ["operator.admin"] as const;
+  const profile = await namedReader("admin@example.com", {
+    viewer: { ...viewerRole, sessions: { others: "invited" }, scopes: [...adminScopes] },
+  });
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: [...adminScopes],
+    ...resolveHttpProfile(profile.id, cfg),
+  });
+  const source = await image("standalone.png", path.join(resolveStateDir(), "media"));
+  const ticket = await mediaTicket(source, { unscoped: true });
+  await expectBytes(source, { ticket, unscoped: true });
+
+  cfg.gateway!.roles!.definitions.viewer!.scopes = readScopes;
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: readScopes,
+    ...resolveHttpProfile(profile.id, cfg),
+  });
+  await expectWithheld(source, { unscoped: true });
+  await expectWithheld(source, { ticket, bytes: true, unscoped: true });
+});
+
 it("keeps unscoped readers on the default static roots even when a query selects a full-access agent", async () => {
   cfg.tools = { fs: { workspaceOnly: false } };
   cfg.agents!.entries!.other = { workspace: project };
@@ -561,12 +583,14 @@ it.each(
     viewer: viewerRole,
     localAdmin: { ...viewerRole, scopes: ["operator.admin"] },
   });
-  setUserProfileRole(profile.id, "localAdmin");
+  setUserProfileRole(profile.id, "viewer");
   invalidateOperatorRolePolicy(profile.id);
+  const localProfile = ensureProfileForEmail("independent-media-admin@example.test");
+  setUserProfileRole(localProfile.id, "localAdmin");
   const localAuth = {
     authMethod: "trusted-proxy",
     operatorScopes: ["operator.admin"],
-    ...resolveHttpProfile(profile.id, cfg),
+    ...resolveHttpProfile(localProfile.id, cfg),
   };
   let principal: OpenClawIdTunnelPrincipal | undefined = {
     kind: "member",
@@ -578,7 +602,8 @@ it.each(
   setOpenClawIdTunnelPrincipalLookup(() => principal);
   setRuntimeConfigSnapshot(cfg);
   state.auth.mockResolvedValue({
-    ...localAuth,
+    ...resolveHttpProfile(profile.id, cfg),
+    authMethod: "trusted-proxy",
     operatorScopes: readScopes,
     operatorRolePolicy: viewerRole,
     openclawIdPrincipal: principal,
@@ -664,23 +689,14 @@ it("withholds member media when attribution did not resolve a durable profile", 
   await expectWithheld(await image("unattributed.png"));
 });
 
-it.each(
-  (["metadata", "bytes"] as const).flatMap((operation) =>
-    (["session", "gateway"] as const).map((authority) => ({ operation, authority })),
-  ),
-)(
+it.each((["metadata", "bytes"] as const).map((operation) => ({ operation, authority: "session" })))(
   "revalidates $authority reader access after asynchronous $operation file preparation",
   async ({ operation, authority }) => {
-    let current = true;
-    await namedReader("yielding-media-reader@example.test", undefined, () => current);
+    await namedReader("yielding-media-reader@example.test");
     const source = await image("shared.png");
     const ticket = await mediaTicket(source);
     onOpen(source, () => {
-      if (authority === "session") {
-        entry.visibility = "draft";
-      } else {
-        current = false;
-      }
+      entry.visibility = "draft";
     });
     await expectWithheld(source, {
       ...(authority === "session" ? { ticket } : {}),

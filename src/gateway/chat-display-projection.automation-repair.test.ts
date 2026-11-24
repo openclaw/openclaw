@@ -9,11 +9,15 @@ import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { buildCronFailureRepairBrief } from "../cron/service/failure-repair-brief.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.message.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { projectPendingInputMessage } from "./server-methods/chat-pending-inputs.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
-it.each(["cron_failure_repair", "restart"] as const)(
+const watcherNotice =
+  'Session "agent:main:watched" changed (other actor). Reconcile before acting: session_status sessionKey "agent:main:watched" changesSince 12.';
+
+it.each(["cron_failure_repair", "restart", "session_state", "session"] as const)(
   "keeps %s inputs in the model transcript, not pending, live, or reloaded chat",
   async (sourceTool) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -25,11 +29,14 @@ it.each(["cron_failure_repair", "restart"] as const)(
         storePath: path.join(state.sessionsDir("main"), "sessions.json"),
       };
       await replaceSessionEntry(scope, entry);
-      const brief = buildCronFailureRepairBrief({
-        job: makeCronJob({ id: "queue-check" }),
-        consecutiveErrors: 2,
-        error: "The queue helper is unavailable.",
-      });
+      const brief =
+        sourceTool === "session_state" || sourceTool === "session"
+          ? watcherNotice
+          : buildCronFailureRepairBrief({
+              job: makeCronJob({ id: "queue-check" }),
+              consecutiveErrors: 2,
+              error: "The queue helper is unavailable.",
+            });
       const repair = buildPersistedUserTurnMessage({
         text: brief,
         timestamp: 2,
@@ -112,7 +119,30 @@ it.each(["cron_failure_repair", "restart"] as const)(
       expect(await loadTranscriptEvents(scope)).toContainEqual(
         expect.objectContaining({ type: "message", message: expect.objectContaining(repair) }),
       );
-      expect(repair).not.toHaveProperty("display");
+      if (sourceTool === "session_state") {
+        expect(repair).toHaveProperty("display", false);
+      } else {
+        expect(repair).not.toHaveProperty("display");
+      }
     });
   },
 );
+
+it("hides complete legacy watcher batches without hiding generic system wakes or human quotes", () => {
+  const internal = (content: string) => ({
+    role: "user",
+    content,
+    timestamp: 1,
+    provenance: { kind: "internal_system", sourceTool: "session" },
+  });
+  const human = { role: "user", content: watcherNotice, timestamp: 2 };
+  const generic = internal("Deploy finished. Check the result.");
+  const mixed = internal(`${watcherNotice}\nAnother event needs attention.`);
+  const mismatched = internal(
+    watcherNotice.replace('sessionKey "agent:main:watched"', 'sessionKey "agent:main:other"'),
+  );
+  const visible = [human, generic, mixed, mismatched];
+  expect(
+    projectChatDisplayMessages([internal(`${watcherNotice}\n${watcherNotice}`), ...visible]),
+  ).toMatchObject(visible);
+});

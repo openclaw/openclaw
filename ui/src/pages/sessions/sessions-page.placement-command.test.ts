@@ -48,8 +48,24 @@ it("presents placement work only after choosing a target and keeps rejected writ
     }),
   );
   const sessions = createTestSessionCapability(connection.gateway);
+  const context = createContext(connection.gateway, sessions);
   const page = await createRenderedPage(
-    createContext(connection.gateway, sessions),
+    {
+      ...context,
+      agents: {
+        ...context.agents,
+        state: {
+          ...context.agents.state,
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main" }],
+            sessionPlacement: { hasDispatchableCloudProfile: true },
+          },
+        },
+      },
+    },
     sessionsResult([row], 1),
     "all",
   );

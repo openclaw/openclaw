@@ -560,3 +560,24 @@ it("surfaces a rejected chat admission instead of waiting forever for a model re
   expect(h.called("tts.speak")).toBe(false);
   expect(tracks).toHaveLength(1);
 });
+
+it("keeps split Talk listening after a successfully completed empty utterance", async () => {
+  const h = harness();
+  h.intercept("talk.session.close", async (_next, params) => {
+    const captureId = asOptionalRecord(params)?.sessionId;
+    h.emit("talk.event", {
+      transcriptionSessionId: captureId,
+      type: "transcript",
+      text: "",
+      final: true,
+    });
+    h.emit("talk.event", { transcriptionSessionId: captureId, type: "close", reason: "completed" });
+    return { ok: true };
+  });
+  await h.state.toggleRealtimeTalk();
+  h.utterance();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
+  expect(tracks).toHaveLength(2);
+  expect(h.called("chat.send")).toBe(false);
+});

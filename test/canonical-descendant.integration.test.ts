@@ -356,7 +356,11 @@ async function withFixture(
                 sessionKey,
                 operationalRunInstance: admittedRunContext.operationalRunInstance,
                 workerTurnClaim: capturedWorkerClaim,
-                receiptAuthority: () => placements.validateTurnClaim(capturedWorkerClaim),
+                receiptAuthority: () => {
+                  if (!placements.validateTurnClaim(capturedWorkerClaim)) {
+                    throw new Error("agent tool caller authority is no longer active");
+                  }
+                },
               }
             : undefined,
           () =>

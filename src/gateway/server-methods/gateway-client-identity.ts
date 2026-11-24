@@ -10,7 +10,7 @@ import {
   getCommandSenderAuthority,
   withCommandSenderAuthority,
 } from "../../auto-reply/command-sender-authority.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
@@ -162,7 +162,7 @@ export function resolveChatSendCallerContext(
           }
         : {}),
       GatewayClientScopes: client?.connect?.scopes ?? [],
-      GatewayClientCaps: client?.connect?.caps ?? [],
+      GatewayClientCaps: synthetic ? undefined : (client?.connect?.caps ?? []),
     },
     commandSenderAuthority,
   );

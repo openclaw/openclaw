@@ -7,10 +7,10 @@ import {
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
+import { registerMcpManagementEnglish } from "../../i18n/locales/en-mcp-management.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerMcpEnglish);
+registerEnglishCatalog(registerMcpManagementEnglish);
 
 const MCP_DOCS_URL = "https://docs.openclaw.ai/tools/mcp";
 

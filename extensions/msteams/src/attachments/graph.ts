@@ -17,12 +17,11 @@ import {
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
+import { normalizeContentType, resolveMSTeamsMediaKind } from "./html.js";
 import {
   GRAPH_ROOT,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
-  normalizeContentType,
-  resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
 } from "./shared.js";
 import type {

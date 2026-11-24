@@ -19,12 +19,11 @@ import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
 } from "../agents/harness/runtime-plugin-load-plan.js";
-import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
-import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   type ModelRef,
+  NO_MODEL_CONFIGURED_MESSAGE,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
@@ -62,6 +61,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -93,6 +93,7 @@ import {
 } from "./sessions-patch-display-metadata.js";
 import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
+import { resolveSessionPatchThinkingProfile } from "./sessions-patch-thinking.js";
 
 type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;
@@ -245,25 +246,13 @@ function* projectSessionPatchSteps(
     model: string,
     entry?: SessionEntry,
   ): Generator<void, ReturnType<typeof resolveThinkingProfile>, ModelCatalogSnapshot | undefined> {
-    const catalog = yield* loadPreparedModelCatalogForPatch();
+    yield* loadPreparedModelCatalogForPatch();
     const agentRuntime = resolveThinkingRuntime(provider, model, entry);
-    const logical = catalog
-      ? findModelCatalogEntry(catalog, { provider, modelId: model })
-      : undefined;
-    const selected =
-      logical && loadedModelCatalog
-        ? selectModelCatalogRuntimeEntry({
-            entry: logical,
-            routeVariants: loadedModelCatalog.routeVariants,
-            runtimeId: agentRuntime,
-          }).entry
-        : undefined;
-    return resolveThinkingProfile({
+    return resolveSessionPatchThinkingProfile({
       provider,
       model,
-      catalog: selected ? [selected] : catalog,
       agentRuntime,
-      configuredReasoning: logical?.configuredReasoning ?? logical?.reasoning,
+      catalog: loadedModelCatalog,
     });
   }
 
@@ -392,9 +381,12 @@ function* projectSessionPatchSteps(
     const normalized = normalizeThinkLevel(rawThinking);
     if (!normalized) {
       const hintProvider =
-        normalizeOptionalString(existing?.providerOverride) || getResolvedDefault().provider;
+        normalizeOptionalString(existing?.providerOverride) || getResolvedDefault()?.provider;
       const hintModel =
-        normalizeOptionalString(existing?.modelOverride) || getResolvedDefault().model;
+        normalizeOptionalString(existing?.modelOverride) || getResolvedDefault()?.model;
+      if (!hintProvider || !hintModel) {
+        return invalid(NO_MODEL_CONFIGURED_MESSAGE);
+      }
       const profile = yield* loadThinkingProfileForPatch(hintProvider, hintModel, existing);
       return invalid(
         `invalid thinkingLevel (use ${profile.levels.map(({ label }) => label).join("|")})`,
@@ -507,22 +499,25 @@ function* projectSessionPatchSteps(
   }
   if ("model" in patch) {
     const statusModelPatch = isSessionStatusModelPatchOrigin();
+    const previousModel = resolveSessionModelRef(cfg, next, sessionAgentId);
+    // A session with no previous model has nothing to revert to.
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
-        : createAgentPatchedSessionModelFallback({
-            ...resolveSessionModelRef(cfg, next, sessionAgentId),
-            entry: next,
-            ts: now,
-          })
+        : previousModel &&
+          createAgentPatchedSessionModelFallback({ ...previousModel, entry: next, ts: now })
       : undefined;
     if (!statusModelPatch) {
       delete next.modelFallback;
     }
     const raw = patch.model;
     let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
-    if (raw === null) {
-      selection = { ...getResolvedDefault(), isDefault: true };
+    const clearedToDefault = raw === null ? getResolvedDefault() : undefined;
+    if (clearedToDefault) {
+      selection = { ...clearedToDefault, isDefault: true };
+    } else if (raw === null) {
+      // No configured model to return to: clearing the override leaves the session without one.
+      applyModelOverrideToSessionEntry({ entry: next, selection: { isDefault: true } });
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
@@ -548,8 +543,8 @@ function* projectSessionPatchSteps(
         catalog,
         raw: trimmed,
         defaultProvider:
-          (statusModelPatch && next.providerOverride?.trim()) || selectionDefault.provider,
-        defaultModel: selectionDefault.model,
+          (statusModelPatch && next.providerOverride?.trim()) || selectionDefault?.provider,
+        defaultModel: selectionDefault?.model,
         subagentModelHint,
         preparedModelSelection: params.preparedModelSelection,
       });
@@ -645,7 +640,7 @@ function* projectSessionPatchSteps(
         agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
         currentProvider:
-          next.providerOverride ?? next.modelProvider ?? getResolvedDefault().provider,
+          next.providerOverride ?? next.modelProvider ?? getResolvedDefault()?.provider,
         selection,
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
@@ -662,8 +657,11 @@ function* projectSessionPatchSteps(
   }
 
   if (typeof rawThinking === "string") {
-    const effectiveProvider = next.providerOverride ?? getResolvedDefault().provider;
-    const effectiveModel = next.modelOverride ?? getResolvedDefault().model;
+    const effectiveProvider = next.providerOverride ?? getResolvedDefault()?.provider;
+    const effectiveModel = next.modelOverride ?? getResolvedDefault()?.model;
+    if (!effectiveProvider || !effectiveModel) {
+      return invalid(NO_MODEL_CONFIGURED_MESSAGE);
+    }
     const profile = yield* loadThinkingProfileForPatch(effectiveProvider, effectiveModel, next);
     if (!profile.levels.some(({ id }) => id === next.thinkingLevel)) {
       return invalid(

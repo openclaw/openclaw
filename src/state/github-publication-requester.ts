@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal.js";
+import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal-schema.js";
 
 const requesterSchema = z
   .strictObject({
@@ -32,13 +32,13 @@ const requesterSchema = z
   .refine((value) => value.actor.kind !== "system" || value.grant === null)
   .refine((value) =>
     value.authenticationSource === "openclaw-id-member"
-      ? value.openclawIdPrincipal !== undefined
-      : value.authenticationSource !== "non-member" || value.openclawIdPrincipal === undefined,
+      ? value.openclawIdPrincipal?.kind === "member"
+      : value.authenticationSource !== "non-member" || value.openclawIdPrincipal?.kind !== "member",
   )
   .refine(
     (value) =>
       !value.openclawIdPrincipal ||
-      (value.actor.kind === "operator" && value.openclawIdPrincipal.kind === "member"),
+      (value.actor.kind === "operator" && value.openclawIdPrincipal.kind !== "node"),
   );
 
 type RequesterData = z.infer<typeof requesterSchema>;

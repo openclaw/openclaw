@@ -79,7 +79,7 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
                       // Restrictive filters can remove HOME; never fall back to operator Git config.
                       cmd:
                         "export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; " +
-                        `${expectPrefix ? "tool-path-probe && native-path-probe && " : ""}if shopt -q login_shell; then echo LOGIN=yes; else echo LOGIN=no; fi; printf 'GIT_NAME='; git config --get user.name || printf '\\n'; git config --get maintenance.auto; git config --get gc.auto`,
+                        `${expectPrefix ? "tool-path-probe && native-path-probe && " : ""}if shopt -q login_shell; then echo LOGIN=yes; else echo LOGIN=no; fi; printf 'GIT_NAME='; git config --get user.name || printf '\\n'; git config --get maintenance.auto; git config --get gc.auto; printf 'TEMP_ROOT=%s\\n' "$TMPDIR"; mktemp -d "$TMPDIR/probe.XXXXXXXX"`,
                       shell: "/bin/bash",
                       ...(loginAllowed ? { login: true } : {}),
                       max_output_tokens: 1000,
@@ -176,7 +176,13 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
         try {
           expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
           const params = createParams(path.join(root, "session.jsonl"), native.cwd);
-          const shellEnvironment = prepared?.localToolEnv;
+          const scratchEnv = await host.hostCapabilities.prepareLocalExecScratch?.({
+            cwd: native.cwd,
+          });
+          if (!scratchEnv) {
+            throw new Error("Expected local exec scratch capability");
+          }
+          const shellEnvironment = { ...prepared?.localToolEnv, ...scratchEnv };
           const effective = await readCodexEffectiveConfig(client, native.cwd, {
             timeoutMs: 20_000,
           });
@@ -231,6 +237,7 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
           const output = outputs.at(-1);
           for (const text of [
             "Process exited with code 0",
+            `${scratchEnv.TMPDIR}/`,
             `GIT_NAME=${filters ? "" : configured ? "Native Git" : "Inherited Git"}\nfalse\n0`,
             ...(expectPrefix ? [`SELECTED=${phase}`, "NATIVE=preserved"] : []),
             ...(!loginAllowed || !snapshots ? [`LOGIN=${loginAllowed ? "yes" : "no"}`] : []),

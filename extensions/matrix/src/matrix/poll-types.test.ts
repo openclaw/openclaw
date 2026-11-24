@@ -11,10 +11,7 @@ const parsedPoll = {
   question: "Lunch?",
   kind: "m.poll.disclosed" as const,
   maxSelections: 1,
-  answers: [
-    { id: "a1", text: "Pizza" },
-    { id: "a2", text: "Sushi" },
-  ],
+  answers: ["Pizza", "Sushi"].map((text, index) => ({ id: `a${index + 1}`, text })),
 };
 
 const vote = (
@@ -80,18 +77,23 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
     maxSelections: 2,
   });
 
-  expect(content["m.poll.start"]?.max_selections).toBe(2);
-  expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
+  expect(content["org.matrix.msc3381.poll.start"]).toMatchObject({
+    max_selections: 2,
+    kind: "org.matrix.msc3381.poll.undisclosed",
+    question: { "org.matrix.msc1767.text": "Lunch?" },
+    answers: [
+      { id: "answer1", "org.matrix.msc1767.text": "Pizza" },
+      { id: "answer2", "org.matrix.msc1767.text": "Sushi" },
+      { id: "answer3", "org.matrix.msc1767.text": "Tacos" },
+    ],
+  });
   expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
   expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
 });
 
 it("poll relation parsing: extracts poll relation targets", () => {
-  expect(
-    resolvePollReferenceEventId({
-      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-    }),
-  ).toBe("$poll");
+  const relation = { rel_type: "m.reference", event_id: "$poll" };
+  expect(resolvePollReferenceEventId({ "m.relates_to": relation })).toBe("$poll");
 });
 
 it("counts only the latest valid response from each sender", () => {
@@ -142,17 +144,13 @@ it.each([
 });
 
 it("formats disclosed poll results with vote totals", () => {
-  const text = formatPollResultsAsText({
-    question: "Lunch?",
-    kind: "m.poll.disclosed",
-    entries: [
-      { id: "a1", text: "Pizza", votes: 1 },
-      { id: "a2", text: "Sushi", votes: 0 },
-    ],
+  const formatted = formatPollResultsAsText({
+    ...parsedPoll,
+    entries: parsedPoll.answers.map(({ id, text }, index) => ({ id, text, votes: 1 - index })),
     totalVotes: 1,
     closed: false,
   });
 
-  expect(text).toContain("1. Pizza (1 vote)");
-  expect(text).toContain("Total voters: 1");
+  expect(formatted).toContain("1. Pizza (1 vote)");
+  expect(formatted).toContain("Total voters: 1");
 });

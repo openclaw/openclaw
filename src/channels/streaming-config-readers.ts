@@ -5,7 +5,7 @@
 // closures read streaming config during config-compat migration, and doctor
 // enumeration cold-loads those closures for every declaring plugin.
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChannelStreamingConfig } from "../config/types.base.js";
+import type { ChannelStreamingConfig, TextChunkMode } from "../config/types.base.js";
 import { asBoolean } from "../utils/boolean.js";
 
 export type StreamingCompatEntry = { streaming?: unknown };
@@ -21,4 +21,11 @@ export function resolveChannelStreamingNativeTransport(
   entry: StreamingCompatEntry | null | undefined,
 ): boolean | undefined {
   return asBoolean(getChannelStreamingConfigObject(entry)?.nativeTransport);
+}
+
+export function resolveChannelStreamingChunkMode(
+  entry: StreamingCompatEntry | null | undefined,
+): TextChunkMode | undefined {
+  const mode = getChannelStreamingConfigObject(entry)?.chunkMode;
+  return mode === "length" || mode === "newline" ? mode : undefined;
 }

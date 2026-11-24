@@ -57,14 +57,16 @@ export async function resolveDefaultModelsPreview(
     allowPluginNormalization: false,
   });
   const automaticUtilityModel =
-    resolveAutomaticUtilityModelRef({
-      cfg,
-      primaryProvider: primary.provider,
-      primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
-      primaryModelId: primary.model,
-      catalog,
-      metadataSnapshot,
-    }) ?? null;
+    (primary &&
+      resolveAutomaticUtilityModelRef({
+        cfg,
+        primaryProvider: primary.provider,
+        primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+        primaryModelId: primary.model,
+        catalog,
+        metadataSnapshot,
+      })) ??
+    null;
   // The picker shows the defaults for all agents, so report a route only for a sole
   // agent that runs exactly that setting: its own override would describe another model.
   const agentId = tryResolveLegacyCompatibilityAgentId(cfg);

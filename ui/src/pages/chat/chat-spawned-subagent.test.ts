@@ -5,8 +5,13 @@ import type { AgentActivityItem } from "../../../../packages/gateway-protocol/sr
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { indexRecordedSubagentStopNames } from "./chat-subagent-history.ts";
+import { openAIModel } from "./chat-thread-fixtures.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
+import { renderChatInto } from "./chat-view.test-helpers.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import { createActivityGroupHarness } from "./components/chat-message-native.test-support.tsx";
 import {
@@ -19,6 +24,10 @@ import {
 } from "./components/chat-message.test-support.ts";
 import { ChatToolCard } from "./components/chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./components/chat-tool-render.test-support.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 
 const parentKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
 const label = "Write a six-line robot story";
@@ -321,7 +330,7 @@ describe("a launched subagent", () => {
     const waiting = [{ ...c, activeRunIds: ["run"] }];
     const waited = { details: { completed, pending: [] } };
     expect(headline("agents_wait", { ids: ["run"] }, "Wait for Agents", waiting, waited)).toBe(
-      "Wait for subagents",
+      "Waiting for subagents",
     );
     // An unlabeled launch is named by the session its result names.
     const spawn = { outputText: accepted(c.key) };
@@ -407,6 +416,25 @@ it("coalesces adjacent active and confirmed lifecycle calls without changing the
   expect(
     await render(unnamed.map((id) => pair(id, "subagents", { action: "cancel", runId: id }))),
   ).toEqual(["Stopping 3 agents"]);
+});
+
+it.each([true, false])("explains a capacity rejection with runActive=%s", async (runActive) => {
+  const { container, render } = harness();
+  const key = "agents.defaults.subagents.maxChildrenPerAgent";
+  const receipt =
+    '{"status":"forbidden","error":"sessions_spawn has reached max active children for this session (5/5; agents.defaults.subagents.maxChildrenPerAgent)."}';
+  const groups = single(
+    pair("cap", "sessions_spawn", { label: "Worker 6" }, receipt),
+    runActive ? { __openclawToolStreamLive: true, __openclawToolStreamResultReceived: true } : {},
+  );
+
+  expect(await render(groups, { runActive })).toEqual([
+    "Worker 6 couldn't start. This session has 5 of 5 active subagents. Wait for one to finish, then retry.",
+  ]);
+  expect(container.textContent).not.toContain(key);
+
+  await render(groups, { runActive, isToolExpanded: () => true });
+  expect(container.textContent).toContain(key);
 });
 
 it("names a stop from the roster or its recorded launch, keeping its outcome", async () => {
@@ -503,4 +531,70 @@ it("keeps parent interruption visible for an unrecorded lifecycle call without r
       expect(text).toContain(result ? settled : "interrupted");
     }
   }
+});
+
+it("opens a grouped child chat through the full view navigation action", async () => {
+  installTranscriptDomMocks();
+  onTestFinished(() => {
+    resetChatViewState();
+    resetTranscriptTestDom();
+  });
+  const container = createComposerContainer();
+  const childKey = "agent:research:dashboard:notes";
+  const onOpenSessionLink = vi.fn();
+  renderChatInto(container, {
+    sessionKey: parentKey,
+    onOpenSessionLink,
+    messages: [
+      { role: "user", content: "Read the source and open a notes chat.", timestamp: 1 },
+      createAssistantMessage(
+        [
+          ...pair("read", "read", { path: "/repo/source.ts" }, "Source loaded."),
+          ...pair("child", "sessions_spawn", { label: "Notes", visible: true }, accepted(childKey)),
+          ...pair("write", "write", { path: "/repo/result.ts", content: "Ready." }, "Written."),
+        ],
+        { ...openAIModel, runId: "parent", timestamp: 2 },
+      ),
+      {
+        role: "assistant",
+        ...openAIModel,
+        runId: "parent",
+        content: "Notes are ready.",
+        phase: "final_answer",
+        timestamp: 3,
+      },
+    ],
+  });
+  await waitForSolid(() => {
+    expect(
+      container.querySelector(".chat-work-group > .chat-activity-group__summary"),
+    ).not.toBeNull();
+  });
+  container
+    .querySelector<HTMLButtonElement>(".chat-work-group > .chat-activity-group__summary")!
+    .click();
+  await waitForSolid(() => {
+    expect(
+      container.querySelector(
+        ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
+      ),
+    ).not.toBeNull();
+  });
+  container
+    .querySelector<HTMLButtonElement>(
+      ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
+    )!
+    .click();
+  await waitForSolid(() => {
+    expect(container.textContent).toContain("Opened child chat");
+  });
+  const link = [
+    ...container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__subagent-link"),
+  ].find((button) => button.textContent === "Notes");
+  expect(link).toBeDefined();
+  link!.click();
+  expect(onOpenSessionLink).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: childKey,
+    agentId: "research",
+  });
 });

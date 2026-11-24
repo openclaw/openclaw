@@ -21,7 +21,7 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { recordCommittedCommandExchange } from "./command-transcript.js";
-import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { resolveSessionFilePathCore } from "./paths.js";
 import {
   loadTranscriptEvents,
   appendTranscriptEvent,
@@ -98,6 +98,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   const sessionId = "test-session-id";
   const sessionKey = "agent:main:test-session";
+  const transcriptFile = (id = sessionId) =>
+    resolveSessionFilePathCore(id, undefined, { sessionsDir: fixture.sessionsDir() });
   function transcriptScope() {
     return { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
   }
@@ -443,7 +445,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it.each(["file", "store", "agent", "bound"] as const)(
     "keeps owned write tracking scoped to the matching %s target",
     async (kind) => {
-      const file = (id: string) => resolveSessionTranscriptPathInDir(id, fixture.sessionsDir());
       const ownerTarget = {
         agentId: "main",
         sessionKey: "global",
@@ -457,10 +458,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       const scoped = kind === "store" || kind === "agent";
       const owner = scoped
         ? { sessionFile: "global", sessionKey: "global", sessionTarget: ownerTarget }
-        : { sessionFile: file("old-session"), sessionKey };
+        : { sessionFile: transcriptFile("old-session"), sessionKey };
       const request = scoped
         ? { sessionFile: "global", sessionKey: "global", sessionTarget: otherTarget }
-        : { sessionFile: kind === "bound" ? owner.sessionFile : file("next-session"), sessionKey };
+        : {
+            sessionFile: kind === "bound" ? owner.sessionFile : transcriptFile("next-session"),
+            sessionKey,
+          };
       const events: string[] = [];
       const context = {
         ...owner,
@@ -634,9 +638,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore({
       sessionFile: `sqlite:main:${sessionId}:${fixture.storePath()}`,
     });
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     writeLegacyTranscriptFixture({
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptFile(),
       message: { role: "user", content: "stale jsonl context", timestamp: 1_000 },
     });
     await expect(recentText({ beforeTimestampMs: 5_000 })).resolves.toEqual([]);
@@ -651,9 +654,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         transcriptPath: outsideFile,
         message: { role: "user", content: "outside text", timestamp: 1_000 },
       });
-      const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
       writeLegacyTranscriptFixture({
-        transcriptPath: sessionFile,
+        transcriptPath: transcriptFile(),
         message: { role: "user", content: "contained text", timestamp: 2_000 },
       });
       await persistMessages([
@@ -941,10 +943,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         };
         const scenario = (async () => {
           try {
-            const replacementSessionFile = resolveSessionTranscriptPathInDir(
-              "replacement-session",
-              fixture.sessionsDir(),
-            );
+            const replacementSessionFile = transcriptFile("replacement-session");
             const lifecycleRevision = kind === "writer" ? "owned-revision" : "original-revision";
             await writeTranscriptStore(
               kind === "session"

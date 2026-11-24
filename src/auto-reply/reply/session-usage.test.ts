@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import {
@@ -24,10 +25,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import {
-  estimateAggregateUsageCostAsync,
-  resolveModelCostConfig,
-} from "../../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
@@ -483,7 +481,10 @@ describe("session actor usage accounting", () => {
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          tieredPricing: [{ input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] }],
+          tieredPricing: [
+            { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, range: [0, 200_000] },
+            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+          ],
         }),
         usage: {
           ...(withTokens ? { input: 300_000, output: 200 } : {}),

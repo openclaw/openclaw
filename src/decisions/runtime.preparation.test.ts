@@ -98,7 +98,7 @@ it.each(
           expect(evaluate.mock.calls[0]?.[1].signal.aborted).toBe(true);
         }
         const authorityError = expect.objectContaining({
-          message: "Gateway caller authority is no longer active.",
+          message: "Gateway request could not start. Reconnect and try again.",
         });
         expect(await settled).toEqual(
           ending === "caller-aborted"

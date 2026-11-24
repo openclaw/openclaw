@@ -56,7 +56,7 @@ async function openControlUi(page: Page) {
       body: JSON.stringify(bootstrap),
     }),
   );
-  await page.goto(`${suite.server.baseUrl}/new`);
+  await page.goto(new URL("new", suite.server.baseUrl).href);
   await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready);
   await gateway.waitForRequest("openclawId.status");
 }

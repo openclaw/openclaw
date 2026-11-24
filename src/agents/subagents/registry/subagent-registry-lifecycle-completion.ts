@@ -566,15 +566,11 @@ function planTerminalCompletion(
     terminalReply?.disposition === "empty" &&
     terminalReply.code !== "message-tool-not-called" &&
     entry.requesterTurnYielded !== true &&
-    entry.requesterSettleWake === undefined &&
-    entry.delivery?.disposition !== "intentional_non_delivery";
+    entry.requesterSettleWake === undefined;
   if (closesAsIntentionalNonDelivery) {
     // Producer-owned empty success is a terminal fact, not a failed send.
     // Close it before terminal persistence so no requester delivery can start.
-    entry.delivery = {
-      status: "not_required",
-      disposition: "intentional_non_delivery",
-    };
+    entry.delivery = { status: "not_required" };
     entry.suppressCompletionDelivery = true;
   }
 

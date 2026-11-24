@@ -1,8 +1,4 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import type {
-  ExecApprovalManagerOptions,
-  ExecApprovalRecord,
-} from "./exec-approval-manager.types.js";
 import { isOperatorApprovalStoreRefusal } from "./operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
 
@@ -20,7 +16,7 @@ export function isExecApprovalMutationRefused(error: unknown): boolean {
 export function createExecApprovalMutationGuard(
   assertActive: () => void,
   assertBinding: () => void,
-  caller: { guard?: OperatorApprovalStoreGuard; assertCurrent?: () => void },
+  caller: { guard?: OperatorApprovalStoreGuard },
 ): OperatorApprovalStoreGuard {
   return {
     family: caller.guard?.family ?? "worker",
@@ -28,31 +24,13 @@ export function createExecApprovalMutationGuard(
       assertActive();
       try {
         caller.guard?.assertCurrent();
-        caller.assertCurrent?.();
         assertBinding();
       } catch (error) {
-        throw new ApprovalMutationRefusedError("approval resolver authority is no longer active", {
-          cause: error,
-        });
+        throw new ApprovalMutationRefusedError(
+          "Approval resolution ended. Look up the approval again.",
+          { cause: error },
+        );
       }
     },
   };
-}
-
-export function isExecApprovalRuntimeActive<TPayload>(
-  options: Pick<ExecApprovalManagerOptions<TPayload>, "validateAgentRuntimeDelegatedAuthority">,
-  record: ExecApprovalRecord<TPayload>,
-): boolean {
-  const delegated = record.agentRuntimeDelegatedAuthority;
-  if (
-    (delegated && options.validateAgentRuntimeDelegatedAuthority?.(delegated) !== true) ||
-    record.approvalSignals?.some((signal) => signal.aborted)
-  ) {
-    return false;
-  }
-  try {
-    return record.approvalAuthority?.() !== false;
-  } catch {
-    return false;
-  }
 }

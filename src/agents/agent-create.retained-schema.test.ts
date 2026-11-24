@@ -128,7 +128,7 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
     {
       using database = openNodeSqliteDatabase(pathname);
       database.exec(
-        "DROP TABLE agent_tool_usage; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41",
+        "DROP TABLE agent_tool_usage; DROP TABLE session_pending_inputs; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41",
       );
     }
     const original = await fs.readFile(pathname);
@@ -156,7 +156,7 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
     });
     {
       using database = openNodeSqliteDatabase(pathname, { readOnly: true });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 42 });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
     }
     expect(await fs.readFile(pathname)).not.toEqual(original);
     expect(await readAgentDeletionRecoveryHoldsInWorker()).toEqual([]);

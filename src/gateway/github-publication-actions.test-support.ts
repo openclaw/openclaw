@@ -20,7 +20,7 @@ import {
   createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
 } from "./github-publication-requester.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -237,7 +237,7 @@ export function createPublicationActionInvoker(
       ...principal.context,
       githubPublicationService: f.coordinator,
     } as GatewayRequestContext;
-    const operator = await captureGatewayOperatorRunAuthority({ client, context });
+    const operator = await prepareGatewayOperatorRunAuthority({ client, context });
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
       params: Record<string, unknown>,

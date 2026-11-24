@@ -267,6 +267,7 @@ it.each(["native", "delegated"] as const)(
     const onRefresh = vi.fn();
     const initial = createChatProps({
       paneId: `mobile-presentation-${mode}`,
+      selectedSession: { key: "agent:main:main", kind: "direct", hasMessages: true },
       mobileComposer: true,
       loading: true,
       draft: "Retain this draft",
