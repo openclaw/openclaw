@@ -66,13 +66,6 @@ function reconcileNativeToolPreambles(
   if (!imported.size) {
     return;
   }
-  if (!starts && !preceding.length) {
-    // Old checkpoints have no spans. Only a complete sequence of distinct tool-delimited texts proves coverage.
-    const texts = [...imported.values()];
-    if (new Set(texts).size > 1 && texts.join("\n\n") === snapshot) {
-      covered = snapshot.length;
-    }
-  }
   const prefix = snapshot.slice(0, covered);
   const durable = state.chatStream?.startsWith(prefix) ? prefix : "";
   const retained = segments.filter(({ runId: owner, toolCallId, itemId, text }) => {
@@ -160,7 +153,8 @@ export async function prepareCheckpointReplay(run: NonNullable<ChatHistoryResult
     }
     // Older gateways can omit the event list; an explicitly empty or status-only list proves no start.
     if (starts || !events) {
-      reconcileNativeToolPreambles(state, run.runId, text, starts);
+      // A saved span applies to the snapshot buffer, never to a newer live occurrence.
+      reconcileNativeToolPreambles(state, run.runId, usesSnapshotText ? text : "", starts);
     }
   };
 }

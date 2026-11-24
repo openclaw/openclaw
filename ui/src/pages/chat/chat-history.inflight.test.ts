@@ -265,6 +265,34 @@ it.each([
   },
 );
 
+it("keeps a reply that repeats two imported updates when history has no tool spans", async () => {
+  const reply = SWATCH_OPENING + "\n\nCobalt.";
+  const history = activeSnapshot(SWATCH_RUN, reply, swatchRows(SWATCH_OPENING, "Cobalt."));
+  const state = createState(history);
+  await loadChatHistory(state);
+  expect(tail(state)).toBe(reply);
+});
+
+it("does not apply a stale tool span to a newer live reply with the same opening", async () => {
+  const history = activeSnapshot(SWATCH_RUN, SWATCH_OPENING, swatchRows(SWATCH_OPENING));
+  const start = toolEvent("read-0");
+  start.data.bufferEnd = SWATCH_OPENING.length;
+  history.inFlightRun!.events = [start];
+  const { state, response } = delayed(history);
+  const reply = SWATCH_OPENING + SWATCH_SUFFIX;
+  vi.stubGlobal("window", globalThis);
+  try {
+    assistant(state, SWATCH_RUN, SWATCH_OPENING, { seq: 1 });
+    const loading = loadChatHistory(state);
+    assistant(state, SWATCH_RUN, reply, { seq: 2, replace: true, deltaText: reply });
+    response.resolve(history);
+    await loading;
+    expect(tail(state)).toBe(reply);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it("resolves a bounded prefix on its wire page before filling a held history gap", async () => {
   const rows = swatchRows(SWATCH_OPENING);
   const history = activeSnapshot(SWATCH_RUN, "", rows);

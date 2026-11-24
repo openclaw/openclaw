@@ -134,19 +134,43 @@ suite.define(() => {
         imported("second", textContent(second), 1_030),
         imported("test", call("test"), 1_040),
       ],
-      inFlightRun: activeRun(runId, buffer, startedAt),
+      inFlightRun: {
+        ...activeRun(runId, buffer, startedAt),
+        events: ["check", "test"].flatMap((toolCallId, index) => {
+          const seq = index * 2 + 1;
+          const ts = startedAt + (index ? 1_040 : 1_020);
+          const result = toolResult(runId, toolCallId, "exec", "Passed.", seq + 1);
+          return [
+            {
+              ...result,
+              seq,
+              ts,
+              data: {
+                phase: "start",
+                name: "exec",
+                toolCallId,
+                bufferEnd: index ? buffer.length : first.length,
+              },
+            },
+            { ...result, ts: ts + 1 },
+          ];
+        }),
+      },
     });
     const thread = page.locator(".chat-thread");
     const visibleSteps = () =>
       thread
-        .locator(".chat-group.assistant .chat-text p")
-        .or(thread.getByText("Script execution", { exact: true }))
-        .allTextContents();
-    const savedSteps = [first, "Script execution", second, "Script execution"];
+        .locator(
+          ".chat-group.assistant .chat-text p:visible, .chat-tool-msg-summary:visible, .chat-activity-group__summary:visible",
+        )
+        .evaluateAll((rows) =>
+          rows.map((row) => (row.matches("p") ? row.textContent?.trim() : "tool")),
+        );
+    const savedSteps = [first, "tool", second, "tool"];
     await expect.poll(visibleSteps).toEqual(savedSteps);
     // Identical words in a later delta are a new occurrence, not part of the saved prefix.
     const deltaText = "\n\n" + first;
-    await events.chat("delta", chatMessage("assistant", buffer + deltaText), { seq: 3, deltaText });
+    await events.chat("delta", chatMessage("assistant", buffer + deltaText), { seq: 5, deltaText });
     await expect.poll(visibleSteps).toEqual([...savedSteps, first]);
   });
 
