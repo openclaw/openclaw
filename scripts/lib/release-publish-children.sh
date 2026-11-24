@@ -47,7 +47,7 @@ record_postpublish_diagnostics() {
 print_release_resume_command() {
   local accepted_run="${1:-}" inputs_json command release_version guidance
   inputs_json="$(jq -ce '.inputs | select(type == "object")' "$GITHUB_EVENT_PATH")" || return 1
-  guidance="Prepared button releases recover through a new Release Button run with the same prepared artifact. For direct publication, reconcile failed stages, then resume with these frozen inputs."
+  guidance="Prepared button releases recover through a new Release Button run with the same prepared artifact. For direct publication, reconcile any dispatched core child's outcome before retrying. Use these frozen inputs only after confirming no publisher accepted the package."
   if [[ -z "$(jq -r '.prepared_plugins // empty' <<< "$inputs_json")" ]]; then
     accepted_run="${accepted_run:-$(jq -r '.openclaw_npm_resume_run_id // empty' <<< "$inputs_json")}"
     if [[ -n "$accepted_run" ]]; then

@@ -749,18 +749,26 @@ it.each([
   { resume: false, visible: false, sync: "absent" },
   { resume: false, visible: true, sync: "late" },
   { resume: true, visible: true, sync: "timeout" },
+  { resume: false, visible: false, sync: "absent", childFailed: true },
 ])(
-  "gates verification on registry visibility and own sync (resume=$resume, visible=$visible, sync=$sync)",
-  ({ resume, visible: isVisible, sync }) => {
+  "gates verification on child completion, registry visibility and own sync ($resume, $visible, $sync, $childFailed)",
+  ({ resume, visible: isVisible, sync, childFailed }) => {
     const transientRegistry = isVisible && !resume && sync === "absent";
     const harness = `
 ${noops("resolve_clawhub_release_plan", "verify_release_tag_target", "record_postpublish_diagnostics", "upload_dependency_evidence_release_asset", "upload_release_evidence_assets", "append_release_proof_to_github_release")}
-wait_for_run_background() { (printf success > "$4") & wait_run_pid=$!; }
 verify_published_release() {
   echo VERIFIED >> "$GITHUB_STEP_SUMMARY"
 }
 `;
     const result = fixture({
+      runs: {
+        "93": [
+          { status: "in_progress", jobs: [job("publish_openclaw_npm", null, "in_progress")] },
+          childFailed
+            ? terminal("failure", job("publish_openclaw_npm", "failure"))
+            : terminal("success", job("publish_openclaw_npm", "success")),
+        ],
+      },
       registry: transientRegistry
         ? [null, {}, { versions: { "2026.9.6": {} } }, visible]
         : [isVisible ? visible : { ...visible, "dist-tags": { latest: "2026.9.5" } }],
@@ -780,7 +788,7 @@ verify_published_release() {
       CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: "main",
       CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA: sha,
       CHILD_OPENCLAW_NPM_RUN_ATTEMPT: "1",
-      CHILD_OPENCLAW_NPM_RUN_ID: resume ? "" : "92",
+      CHILD_OPENCLAW_NPM_RUN_ID: resume ? "" : "93",
       CORE_START_OUTCOME: "success",
       CLAWHUB_AUTHORIZATION_OUTCOME: "skipped",
       CLAWHUB_RECEIPT_OUTCOME: "skipped",
@@ -790,6 +798,15 @@ verify_published_release() {
     });
     expect(result.status, result.stderr).toBe(isVisible && sync !== "timeout" ? 0 : 1);
     const registryReads = result.calls.filter((call) => call.binary === "curl");
+    if (childFailed) {
+      expect(result.outputs).not.toContain("accepted_core_npm_run_id=");
+      expect(registryReads).toHaveLength(0);
+      expect(result.summary).not.toContain("VERIFIED");
+      return;
+    }
+    if (!resume) {
+      expect(result.outputs).toContain("accepted_core_npm_run_id=93\n");
+    }
     expect(registryReads).toHaveLength(transientRegistry ? 4 : 1);
     expect(registryReads[0]?.args).toContain("Cache-Control: no-cache");
     if (sync === "timeout") {
