@@ -2,6 +2,15 @@ import {
   HARNESS_UPDATE_REQUIRED_CODE,
   type RunFailureCause,
 } from "../../../../src/shared/run-failure-notice.js";
+import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
+
+export function formatWebUiErrorSummary(error: string): string {
+  return (
+    formatWebUiIconErrorText(error)
+      .trim()
+      .split(/(?<=[.!?])\s+(?=\p{Lu})|\r?\n/u, 1)[0] ?? ""
+  );
+}
 
 const ROUTINE_FAILURES = new Set([
   "auth",

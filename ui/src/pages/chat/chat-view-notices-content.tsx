@@ -9,10 +9,7 @@ import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.
 import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import {
-  formatWebUiErrorSummary,
-  formatWebUiIconErrorText,
-} from "../../components/error-presentation.ts";
+import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { ReportIssueLink } from "../../components/report-issue-link.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -29,7 +26,7 @@ import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
-import { shouldReportRunFailure } from "./run-failure-reporting.ts";
+import { formatWebUiErrorSummary, shouldReportRunFailure } from "./run-failure-presentation.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -332,7 +329,7 @@ function ChatErrorNotice(props: {
       return {
         message,
         detail:
-          props.reportable !== false && diagnostic && diagnostic !== message.trim()
+          diagnostic && diagnostic !== message.trim()
             ? (props.detail ?? displayError())
             : undefined,
         severity: props.tone === "warn" ? ("warning" as const) : ("error" as const),
@@ -392,9 +389,11 @@ function ChatErrorNotice(props: {
             <code class="lazy-view-error__detail" tabindex={0} aria-label={t("chat.errorDetails")}>
               {formatUiErrorDetails(toast().detail)}
             </code>
-            <span>
-              <ReportIssueLink />
-            </span>
+            {props.reportable !== false && (
+              <span>
+                <ReportIssueLink />
+              </span>
+            )}
           </div>
         </div>
       </div>

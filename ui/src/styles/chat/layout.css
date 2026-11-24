@@ -15,7 +15,7 @@ openclaw-pending-session-create {
   .app-toast__content {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
+    grid-template-rows: minmax(var(--app-toast-row), auto);
     gap: 2px 12px;
   }
 
@@ -32,9 +32,8 @@ openclaw-pending-session-create {
   }
 
   .chat-error__actions {
-    grid-area: 1 / 2 / 3;
+    grid-area: 1 / 2;
     gap: 2px 12px;
-    margin-block-start: -4px;
   }
 
   /* Persistent errors do not time out, so their dismiss control stays visible
@@ -43,7 +42,8 @@ openclaw-pending-session-create {
   > .app-toast__dismiss {
     position: static;
     flex: none;
-    margin: -1px -6px 0 -4px;
+    height: var(--app-toast-row);
+    margin: 0 -6px 0 -4px;
     background: transparent;
     box-shadow: none;
     color: var(--muted);

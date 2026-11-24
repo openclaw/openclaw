@@ -102,9 +102,18 @@ suite.define(() => {
       cause: { provider: "openai", failoverReason: "unclassified" },
       report: true,
     },
+    {
+      name: "context-overflow",
+      message:
+        "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+      visibleMessage: "Context overflow: prompt too large for the model.",
+      cause: { failoverReason: "context_overflow" },
+      report: false,
+      details: true,
+    },
   ])(
     "keeps $name reporting policy consistent after history reload",
-    async ({ name, message, cause, report }) => {
+    async ({ name, message, visibleMessage, cause, report, details }) => {
       await suite.withPage(diagnosticContext, async ({ page }) => {
         const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -163,9 +172,28 @@ suite.define(() => {
             exact: true,
           });
           await recovery.waitFor();
+          if (surface === "live" && name === "routine") {
+            const centers = await notice.evaluate((element) =>
+              [
+                element,
+                ...element.querySelectorAll(
+                  ".app-toast__message, .chat-error__refresh, .app-toast__dismiss",
+                ),
+              ].map((node) => {
+                const bounds = node.getBoundingClientRect();
+                return bounds.y + bounds.height / 2;
+              }),
+            );
+            expect.soft(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(0.5);
+          }
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && name !== "unclassified") {
             const frame = await takeControlUiScreenshotFrame(page, notice, [title, recovery], {
-              elements: [notice, title, recovery],
+              elements: [
+                notice,
+                title,
+                recovery,
+                ...(surface === "live" ? [notice.locator(".app-toast__dismiss")] : []),
+              ],
               animations: "disabled",
             });
             await writeFile(path.join(suite.artifactDir, name + "-" + surface + ".png"), frame.png);
@@ -181,12 +209,26 @@ suite.define(() => {
               ),
             );
           }
-          expect.soft(await title.textContent()).toContain(message);
+          expect.soft(await title.textContent()).toContain(visibleMessage ?? message);
           expect.soft(await notice.locator(".app-toast__description").count()).toBe(0);
           expect
             .soft(await notice.getByRole("link", { name: "Report a bug", exact: true }).count())
             .toBe(report ? 1 : 0);
-          if (!report) {
+          if (details) {
+            const toggle = notice.locator(
+              surface === "live" ? "button.chat-error__toggle" : "button.chat-run-failure__toggle",
+            );
+            expect.soft(await toggle.count()).toBe(1);
+            if ((await toggle.count()) === 1) {
+              await toggle.click();
+              const diagnostic = notice.getByLabel("Error details", { exact: true });
+              await diagnostic.waitFor();
+              expect(await diagnostic.textContent()).toBe(message);
+              await notice.getByRole("button", { name: "Copy error", exact: true }).click();
+              await polledClipboard(page).toBe(message);
+              expect(await notice.getByRole("link", { name: "Report a bug" }).count()).toBe(0);
+            }
+          } else if (!report) {
             expect
               .soft(await notice.getByRole("button", { name: "Show details", exact: true }).count())
               .toBe(0);

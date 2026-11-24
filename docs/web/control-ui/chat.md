@@ -71,7 +71,7 @@ the run **Interrupted** only when the Gateway recorded that run as aborted; a ru
 that ended while its background command keeps working is not marked. This
 presentation does not resume the run or recover an answer that was never saved.
 
-Failed replies show the error and the available recovery action, without a generic explanation above the error. Routine connection, usage-limit, sign-in, and policy failures do not offer **Report a bug** on the notice. Unknown failures, invalid request or replay state, and failures to save a reply keep reporting available. This follows the recorded failure category, not words in its message, and remains consistent after history reloads. The Help menu always offers **Report a bug**.
+Failed replies show the error and the available recovery action, without a generic explanation above the error. Routine connection, usage-limit, sign-in, and policy failures do not offer **Report a bug** on the notice. Unknown failures, invalid request or replay state, and failures to save a reply keep reporting available. This follows the recorded failure category, not words in its message, and remains consistent after history reloads. When more detail is available, you can still open it and copy the error even when reporting is hidden. The Help menu always offers **Report a bug**.
 
 Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived

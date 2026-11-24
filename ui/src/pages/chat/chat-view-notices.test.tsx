@@ -3,7 +3,6 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { formatWebUiErrorSummary } from "../../components/error-presentation.ts";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -24,7 +23,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { shouldReportRunFailure } from "./run-failure-reporting.ts";
+import { formatWebUiErrorSummary, shouldReportRunFailure } from "./run-failure-presentation.ts";
 import {
   workspaceConflictPathForDisplay,
   workspaceResultConflictFromTranscript,
@@ -75,29 +74,6 @@ function publishHistory(
     check();
   }
 }
-
-it.each([
-  { name: "routine", cause: { failoverReason: "timeout" }, report: false },
-  { name: "kept", cause: { failoverReason: "format" }, report: true },
-  { name: "unclassified", cause: undefined, report: true },
-])(
-  "shows only the actual error and appropriate actions for $name failures",
-  async ({ cause, report }) => {
-    const onRefresh = vi.fn();
-    const { container } = publishedComposer({
-      connected: true,
-      runError: { summary: "Request timed out.", cause },
-      onRefresh,
-    });
-    await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
-    expect(container.querySelector(".app-toast__message")?.textContent).toBe("Request timed out.");
-    expect(container.querySelector(".app-toast__description")).toBeNull();
-    expect(container.querySelector(".chat-error__toggle")).toBeNull();
-    expect(container.querySelector(".report-issue-link") !== null).toBe(report);
-    container.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-  },
-);
 
 it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (mobile) => {
   const { container, publish } = publishedComposer(
@@ -240,7 +216,11 @@ it.each([
     expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
     expect(notice?.getAttribute("role")).toBe("status");
     const details = notice?.querySelector(".chat-error__details");
-    expect(details).toBeNull();
+    expect(details).toMatchObject({ hidden: true });
+    notice?.querySelector<HTMLButtonElement>(".chat-error__toggle")?.click();
+    await waitForSolid(() => expect(details).toMatchObject({ hidden: false }));
+    expect(details?.querySelector(".lazy-view-error__detail")?.textContent).toBe(diagnostic);
+    expect(details?.querySelector('button[aria-label="Copy error"]')).not.toBeNull();
     expect(notice?.querySelector(".app-toast__message")?.textContent).toBe("Busy");
     expect(notice?.querySelector(".app-toast__description")).toBeNull();
     expect(notice?.querySelector(".report-issue-link")).toBeNull();
