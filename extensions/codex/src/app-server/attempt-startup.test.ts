@@ -50,7 +50,10 @@ import {
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
-import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createCodexLifecycleHarness,
+  readEmptyNativeConfig,
+} from "./thread-lifecycle.test-fixtures.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
 vi.mock("./desktop-generation.js", async (importOriginal) => ({
@@ -116,16 +119,10 @@ const threadStartResult = (threadId = "thread-1") => createThreadStartResult(thr
 async function bindToRetiredLeasedOwner() {
   const paths = createAttemptPaths(tempRoots);
   const respond = async (method: string) => {
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
     if (method === "thread/start" || method === "thread/resume") {
       return threadStartResult("bound-thread");
     }
-    throw new Error(`unexpected method: ${method}`);
+    return readEmptyNativeConfig(method);
   };
   const owner = createCodexLifecycleHarness({
     respond,
@@ -308,18 +305,12 @@ describe("startCodexAttemptThread", () => {
     const paths = createAttemptPaths(tempRoots);
     const harness = createCodexLifecycleHarness({
       respond: async (method, params) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
         if (method === "thread/start") {
           return threadStartResult(
             (params as { ephemeral?: boolean }).ephemeral ? "incognito" : "ordinary",
           );
         }
-        throw new Error(`unexpected method: ${method}`);
+        return readEmptyNativeConfig(method);
       },
     });
     const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
@@ -405,22 +396,55 @@ describe("startCodexAttemptThread", () => {
     resumed.releaseSharedClientLease();
   });
 
-  it("retires the startup client when its deadline ends a wait for a retired owner's exit", async () => {
+  it("resumes after seven-second thread closure while the retired owner's peer stays alive", async () => {
     const fixture = await bindToRetiredLeasedOwner();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const timedOut = fixture.startOn(fixture.healthy, undefined, 1_000).then(
-      () => undefined,
-      (error: unknown) => error,
+    const outcome = fixture.startOn(fixture.healthy, undefined, 60_000).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
     );
-    await fixture.exitWaitStarted;
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(isCodexAppServerStartupError(await timedOut, "timed_out")).toBe(true);
-    expect(fixture.healthy.stdinDestroyed).toBe(true);
-    expect(fixture.owner.process.exitCode).toBeNull();
-    expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
-    fixture.releaseOwnerPeer();
+    try {
+      await fixture.exitWaitStarted;
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
+      fixture.owner.send({ method: "thread/closed", params: { threadId: "bound-thread" } });
+      const { value: resumed, error } = await outcome;
+      expect(error).toBeUndefined();
+      expect(resumed?.thread.threadId).toBe("bound-thread");
+      expect(fixture.ownerExitCodesAtResume).toEqual([null]);
+      expect(fixture.healthy.stdinDestroyed).toBe(false);
+      resumed?.turnRoute.release();
+      resumed?.releaseSharedClientLease();
+    } finally {
+      fixture.releaseOwnerPeer();
+    }
   });
+
+  it.each([
+    { budget: 1_000, retiresClient: true },
+    { budget: 60_000, retiresClient: false },
+  ])(
+    "bounds retired-owner handoff with a $budget ms startup budget",
+    async ({ budget, retiresClient }) => {
+      const fixture = await bindToRetiredLeasedOwner();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const timedOut = fixture.startOn(fixture.healthy, undefined, budget).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await fixture.exitWaitStarted;
+        await vi.advanceTimersByTimeAsync(Math.min(budget, 10_000));
+        expect(fixture.owner.process.exitCode).toBeNull();
+        expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
+      } finally {
+        // A handoff still waiting past its budget could now resume on real exit.
+        fixture.releaseOwnerPeer();
+      }
+      expect(isCodexAppServerStartupError(await timedOut, "timed_out")).toBe(true);
+      expect(fixture.healthy.stdinDestroyed).toBe(retiresClient);
+    },
+  );
 
   it.each([
     {
