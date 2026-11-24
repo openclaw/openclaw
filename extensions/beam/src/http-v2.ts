@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { BEAM_SEND_RETENTION_SECONDS } from "../continuation-operation-api.js";
-import { parseBeamPacket } from "../packet-contract/packet-v2.generated.js";
+import { BEAM_PACKET_ABI, parseBeamPacket } from "../packet-contract/packet-v2.generated.js";
 import type {
   BeamPublishInput,
   BeamPublicationOperations,
@@ -384,7 +384,7 @@ export function createBeamV2Handler(options: {
         const allowed = Boolean(publisher || authority.scopes.includes("operator.read"));
         sendJsonNoStore(res, 200, {
           protocol: 2,
-          packetVersions: [2],
+          packetVersions: [BEAM_PACKET_ABI],
           operations: [
             ...(allowed ? ["read", "resolve"] : []),
             ...(publisher ? ["publish"] : []),
