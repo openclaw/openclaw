@@ -200,6 +200,11 @@ export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
+export const SessionsCatalogResolveResultSchema = Type.Union([
+  closedObject({ sessionKey: NonEmptyString, sessionId: NonEmptyString }),
+  Type.Null(),
+]);
+
 export const SessionsCatalogImportParamsSchema = closedObject({
   profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
@@ -264,6 +269,7 @@ export type SessionsCatalogReadParams = Static<typeof SessionsCatalogReadParamsS
 export type SessionsCatalogReadResult = Static<typeof SessionsCatalogReadResultSchema>;
 export type SessionsCatalogContinueParams = Static<typeof SessionsCatalogContinueParamsSchema>;
 export type SessionsCatalogContinueResult = Static<typeof SessionsCatalogContinueResultSchema>;
+export type SessionsCatalogResolveResult = Static<typeof SessionsCatalogResolveResultSchema>;
 export type SessionsCatalogImportParams = Static<typeof SessionsCatalogImportParamsSchema>;
 export type SessionsCatalogImportResult = Static<typeof SessionsCatalogImportResultSchema>;
 export type SessionsCatalogArchiveParams = Static<typeof SessionsCatalogArchiveParamsSchema>;
