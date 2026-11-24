@@ -81,11 +81,9 @@ export function resolveDraftAccessProgram(
     resolveDraftModelTarget(params.model, undefined, params.catalog, params.agentRuntime) ??
     resolveDraftDefaultModelTarget(params);
   const selected = params.requested ?? target?.entry?.cyberAccessProgramDefault;
-  const { on, program, visible } = resolveDaybreakAccessProgram(
-    target?.entry?.availableAccessPrograms?.cyber,
-    selected,
-  );
-  return visible ? (on ? program : selected) : selected === "standard" ? selected : undefined;
+  const programs = target?.entry?.availableAccessPrograms?.cyber;
+  const { on, program, visible } = resolveDaybreakAccessProgram(programs, selected);
+  return programs && !visible && selected !== "standard" ? undefined : on ? program : selected;
 }
 
 export function resolveDraftModelControls(params: {

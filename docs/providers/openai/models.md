@@ -149,9 +149,10 @@ needs a different Daybreak program, turn on Daybreak to apply the model's progra
 in the same chat. Switching models in the Control UI updates the saved choice
 to the destination's advertised Daybreak program or clears it if the destination
 advertises none. Before sending a turn, the Control UI also repairs a saved choice
-when the catalog confirms it no longer applies. If discovery data is missing for
-the current model, the saved choice stays in place while the toggle is hidden.
-Saved preferences remain scoped to the authenticated user and agent.
+when the catalog confirms it no longer applies. When discovery data is missing
+and the model selection stays the same, the toggle is hidden and existing chat
+and draft choices are preserved. Saved preferences remain scoped to the
+authenticated user and agent.
 
 An unset session choice follows the configured model/agent Access default. Without
 a configured default, supported OpenAI routes use Standard, except that a model whose
