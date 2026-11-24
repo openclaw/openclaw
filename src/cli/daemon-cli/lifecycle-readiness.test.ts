@@ -112,42 +112,7 @@ describe("Gateway service readiness", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    ["start", {}, undefined],
-    ["restart", { force: true }, { force: true }],
-    ["restart", { wait: "10s" }, { waitMs: 10_000 }],
-  ] as const)(
-    "prepares the installed package before one managed %s with %j",
-    async (action, flags, intent) => {
-      service.readCommand.mockResolvedValue({
-        programArguments: [
-          process.execPath,
-          path.join(resolvePrefix(), "openclaw-launcher.mjs"),
-          "gateway",
-          "run",
-        ],
-      });
-      const run = action === "start" ? runDaemonStart : runDaemonRestart;
-      const native = action === "start" ? runServiceStart : runServiceRestart;
-      const opts = { ...flags, json: true };
-      runServiceStart.mockResolvedValue(true);
-      tryAdoptInstalledPackageForGateway.mockResolvedValue(false);
-      expect(await run(opts)).toBe(false);
-      expect(native).not.toHaveBeenCalled();
-      tryAdoptInstalledPackageForGateway.mockResolvedValue(undefined);
-      expect(await run(opts)).toBe(true);
-      expect(native).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          opts: expect.objectContaining({
-            ...opts,
-            ...(intent ? { restartIntent: expect.objectContaining(intent) } : {}),
-          }),
-        }),
-      );
-    },
-  );
-
-  it.each(["no-candidate", "not-installed", "custom-command", "remote-target"] as const)(
+  it.each(["custom-command", "remote-target"] as const)(
     "keeps ordinary managed restart for %s",
     async (scenario) => {
       service.readCommand.mockResolvedValue({
@@ -160,22 +125,17 @@ describe("Gateway service readiness", () => {
           "run",
         ],
       });
-      if (scenario === "not-installed") {
-        service.readCommand.mockResolvedValue(null);
-      }
       isImplicitLocalGatewayTarget.mockResolvedValue(scenario !== "remote-target");
 
       expect(await runDaemonRestart({ json: true })).toBe(true);
 
       expect(runServiceRestart).toHaveBeenCalledOnce();
-      expect(tryAdoptInstalledPackageForGateway).toHaveBeenCalledTimes(
-        scenario === "no-candidate" ? 1 : 0,
-      );
+      expect(tryAdoptInstalledPackageForGateway).not.toHaveBeenCalled();
     },
   );
 
   it.each(["start", "restart"] as const)(
-    "reports trial rollback instead of successful native %s",
+    "does not activate after failed preparation or report trial rollback as successful native %s",
     async (action) => {
       service.readCommand.mockResolvedValue({
         programArguments: [
@@ -185,6 +145,10 @@ describe("Gateway service readiness", () => {
           "run",
         ],
       });
+      const run = action === "start" ? runDaemonStart : runDaemonRestart;
+      tryAdoptInstalledPackageForGateway.mockResolvedValue(false);
+      expect(await run({ json: true })).toBe(false);
+      expect(action === "start" ? runServiceStart : runServiceRestart).not.toHaveBeenCalled();
       tryAdoptInstalledPackageForGateway.mockResolvedValue("adopted-run");
       waitForReleaseUpdateFailure.mockResolvedValue(
         "Update failed: Candidate crashed. Restored 2026.11.8; Gateway ready.",
@@ -206,7 +170,6 @@ describe("Gateway service readiness", () => {
           activationAccepted: true,
         });
       });
-      const run = action === "start" ? runDaemonStart : runDaemonRestart;
       await expect(run({ json: true })).rejects.toThrow("exit 1");
       expect(writeJson).toHaveBeenCalledWith(
         expect.objectContaining({

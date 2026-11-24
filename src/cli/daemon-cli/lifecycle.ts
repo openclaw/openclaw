@@ -258,7 +258,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceActionAllowed("start", "start the gateway");
   const service = resolveGatewayService();
   const preparedRunId = await tryAdoptManagedGatewayPackage(service, "start", Boolean(opts.json));
-  if (preparedRunId === false) {
+  if (typeof preparedRunId === "boolean") {
     return false;
   }
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
@@ -445,7 +445,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
   );
   const preparedRunId = await tryAdoptManagedGatewayPackage(service, "restart", jsonOutput);
-  if (preparedRunId === false) {
+  if (typeof preparedRunId === "boolean") {
     return false;
   }
   let managedRestartPort = preserveDefinition

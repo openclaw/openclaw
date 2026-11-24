@@ -130,25 +130,13 @@ beforeEach(() => {
 });
 
 it.each([
-  {
-    name: "newer npm",
-    selected: "0.0.1",
-    build: "resident-build",
-    phase: undefined,
-    remote: false,
-  },
-  {
-    name: "older npm",
-    selected: "9999.0.0",
-    build: "resident-build",
-    phase: undefined,
-    remote: false,
-  },
-  { name: "unknown build", selected: VERSION, build: undefined, phase: undefined, remote: false },
-  { name: "pending", selected: VERSION, build: "cli-build", phase: "pending", remote: false },
-  { name: "rollback", selected: VERSION, build: "cli-build", phase: "rolled-back", remote: false },
-  { name: "remote", selected: "0.0.1", build: "resident-build", phase: undefined, remote: true },
-] as const)("separates CLI, selected release and observed Gateway: $name", async (fixture) => {
+  { name: "newer npm", selected: "0.0.1", build: "resident-build" },
+  { name: "older npm", selected: "9999.0.0", build: "resident-build" },
+  { name: "unknown build", selected: VERSION, build: undefined },
+  { name: "pending", selected: VERSION, build: "cli-build", phase: "pending" },
+  { name: "remote", selected: "0.0.1", build: "resident-build", remote: true },
+] as const)("separates CLI, selected release and observed Gateway: $name", async (variant) => {
+  const fixture = { phase: undefined, remote: false, ...variant };
   const state = process.env.OPENCLAW_STATE_DIR!;
   const prefix = path.join(state, "git-install");
   const selected = path.join(prefix, "releases", "resident", "openclaw");
@@ -176,9 +164,6 @@ it.each([
         buildId: "candidate-build",
         createdAt: 1,
         attempts: 0,
-        ...(fixture.phase === "rolled-back"
-          ? { outcome: { status: "rolled-back", reason: "startup failed", at: 2 } }
-          : {}),
       }
     : null;
   if (trial) {

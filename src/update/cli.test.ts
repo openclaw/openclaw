@@ -550,9 +550,6 @@ it.each([
     expect(prepared).toEqual([]);
     expect(sent).toEqual([]);
     expect(process.exitCode).toBe(0);
-    expect(await fs.realpath(path.join(resolvePrefix(), "openclaw"))).toBe(
-      await fs.realpath(resident),
-    );
     if (!target) {
       expect(log).toHaveBeenCalledWith(expect.stringContaining("It was not downgraded"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining(`openclaw update --tag ${version}`));

@@ -94,7 +94,7 @@ export async function tryAdoptInstalledPackageForGateway(opts: {
 /** Native readiness can also mean rollback; only the update owner knows the trial outcome. */
 export async function waitForReleaseUpdateFailure(runId: string): Promise<string | undefined> {
   const trial = await readTrial();
-  if (trial?.runId === runId && trial.phase === "pending") {
+  if (trial?.phase === "pending") {
     const record = await getUpdateRunAsync(runId);
     defaultRuntime.error(
       `Gateway ${record?.before.version ?? "previous release"} is still running. OpenClaw ${trial.version} is prepared. Run: ${formatCliCommand("openclaw gateway restart")}`,
