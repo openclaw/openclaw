@@ -224,6 +224,8 @@ const enChatToolLabels = {
         unknown: "{count} unknown",
       },
       openFile: "Open file",
+      signIn: "Sign in",
+      signInTo: "Sign in to {server}",
       copyToClipboard: "Copy to clipboard",
       downloadFile: "Download file",
       fileChanges: "File changes",

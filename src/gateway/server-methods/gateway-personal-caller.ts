@@ -37,6 +37,23 @@ export function resolveAuthenticatedPersonalGatewayProfileId(
     : undefined;
 }
 
+/** A named display profile alone cannot establish a plugin publisher's individual identity. */
+export function resolvePluginRequestPersonProfileId(client: GatewayClient): string | undefined {
+  const profileId = resolveAuthenticatedPersonalGatewayProfileId(client);
+  if (!profileId) {
+    return undefined;
+  }
+  const ingress = client.internal?.remoteIngressPrincipal?.principal;
+  if (ingress) {
+    return ingress.kind !== "owner" && ingress.profileId === profileId ? profileId : undefined;
+  }
+  // Owner-device enrollment authenticates the owner's OpenClaw ID account.
+  // Shared secrets and unlinked devices have no individual login or linked owner profile.
+  return client.authenticatedUserId || client.internal?.openclawIdPrincipal?.kind === "owner"
+    ? profileId
+    : undefined;
+}
+
 export function isIneligiblePersonalGatewayCaller(client: GatewayClient): boolean {
   const actor = client.internal?.operatorRoleActor;
   const delegated = client.internal?.remoteIngressPrincipal;

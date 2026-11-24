@@ -349,24 +349,31 @@ it("refuses a newer schema committed only to an open WAL without changing a sour
   });
 }, 60_000);
 
-// An owner that opens, commits and closes as the last connection, so each close removes the
-// WAL family while the reader may be opening it.
+// Hold the first committed WAL family until the reader is ready, then repeatedly close
+// the last connection while the reader may be opening it.
 const closingOwner = `
   const { DatabaseSync } = require("node:sqlite");
   const file = process.argv[1];
   let running = true;
-  process.on("message", () => { running = false; });
+  const held = new DatabaseSync(file);
+  held.exec("PRAGMA busy_timeout = 2000; INSERT OR REPLACE INTO owner_cycles VALUES (1)");
+  process.once("message", (command) => {
+    held.close();
+    if (command !== "start") { process.disconnect(); return; }
+    process.once("message", () => { running = false; });
+    cycle();
+  });
   process.send("ready");
-  (function cycle() {
+  function cycle() {
     if (!running) { process.disconnect(); return; }
     const database = new DatabaseSync(file);
     database.exec("PRAGMA busy_timeout = 2000; INSERT OR REPLACE INTO owner_cycles VALUES (1)");
     database.close();
     setImmediate(cycle);
-  })();
+  }
 `;
 
-it("falls back to the private snapshot when the last owner closes during a preserving read", async () => {
+it("reads a held WAL family and requests a private snapshot after its last owner closes", async () => {
   const root = tempDirs.make("openclaw-preflight-close-race-");
   const file = path.join(root, "agent.sqlite");
   {
@@ -380,27 +387,29 @@ it("falls back to the private snapshot when the last owner closes during a prese
   const owner = spawn(process.execPath, ["--input-type=commonjs", "-e", closingOwner, file], {
     stdio: ["ignore", "ignore", "inherit", "ipc"],
   });
-  const closed = new Promise((resolve) => {
+  const closed = new Promise<number | null>((resolve, reject) => {
+    owner.once("error", reject);
     owner.once("close", resolve);
   });
-  const outcomes = { read: 0, snapshot: 0 };
+  const inspect = () =>
+    tryInspectSqliteReadOnlyInProcess(
+      file,
+      (database) => database.prepare("PRAGMA user_version").get(),
+      { preserveSourceArtifacts: true },
+    );
   try {
     await new Promise((resolve, reject) => {
       owner.once("message", resolve);
-      owner.once("close", reject);
+      owner.once("error", reject);
+      owner.once("close", () => reject(new Error("SQLite owner closed before readiness")));
     });
-    // Each read races one close on about one read in six; 300 reads make a miss negligible.
+    expect(inspect()?.value).toEqual({ user_version: supportedVersions.agent });
+    owner.send("start");
+    // Either result is valid during the race; scheduling need not produce both.
     for (let read = 0; read < 300; read += 1) {
-      const inspection = tryInspectSqliteReadOnlyInProcess(
-        file,
-        (database) => database.prepare("PRAGMA user_version").get(),
-        { preserveSourceArtifacts: true },
-      );
+      const inspection = inspect();
       if (inspection) {
         expect(inspection.value).toEqual({ user_version: supportedVersions.agent });
-        outcomes.read += 1;
-      } else {
-        outcomes.snapshot += 1;
       }
       await new Promise((resolve) => {
         setImmediate(resolve);
@@ -410,11 +419,9 @@ it("falls back to the private snapshot when the last owner closes during a prese
     if (owner.connected) {
       owner.send("stop");
     }
-    await closed;
+    expect(await closed).toBe(0);
   }
-  // Both paths ran: live families were read in place, closed ones went to the snapshot.
-  expect(outcomes.read).toBeGreaterThan(0);
-  expect(outcomes.snapshot).toBeGreaterThan(0);
+  expect(inspect()).toBeUndefined();
 }, 60_000);
 
 it("ignores uncommitted writer versions without ending the owning transactions", async () => {

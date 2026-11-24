@@ -194,6 +194,12 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(owners ?? [])).toEqual([reader]);
   });
 
+  it("selects the Node launcher proof when its CI runtime policy changes", () => {
+    expect(resolvePolicyTestTargets(["scripts/lib/ci-test-runtime.mts"])).toContain(
+      "src/infra/git-release.test.ts",
+    );
+  });
+
   it.each([
     ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
     ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],

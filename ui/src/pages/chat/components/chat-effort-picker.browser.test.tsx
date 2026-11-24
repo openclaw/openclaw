@@ -3,6 +3,7 @@ import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vit
 import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
+import { resolveDaybreakAccessProgram } from "../../../lib/chat/daybreak-access-program.ts";
 import {
   resolveChatFastModeSelectState,
   type ChatFastModeSelectState,
@@ -389,8 +390,7 @@ it("keeps the Daybreak switch focused and blocks repeat activation while saving"
   const saving = createDeferred();
   const onSelect = vi.fn(() => saving.promise);
   await fixture(["low", "high"], "low", false, undefined, true, {
-    requested: "standard",
-    programs: ["standard", "daybreak_blue"],
+    daybreak: resolveDaybreakAccessProgram(["standard", "daybreak_blue"], "standard"),
     sessionKey: "effort-preview",
     disabled: false,
     onSelect,

@@ -9,6 +9,12 @@ sidebarTitle: "Node test lanes"
 
 How the slowest Node test families are split, balanced, packed, and cached. Part of the [CI scope and routing](/ci/scope-and-routing) index.
 
+`scripts/lib/ci-test-runtime.mts` owns runtime selection. The `bun-all` policy
+keeps Node-required contracts on Node. This includes the Git release launcher
+suite, whose Windows/Bun guard remains valid; Linux CI must execute it on Node
+instead of reporting a successful skipped Bun run. Runtime-policy changes select
+that suite through the existing policy watch inventory.
+
 Node-worker process E2Es have an explicit owner map in
 `scripts/lib/ci-node-worker-e2e-inventory.mts`. Changes to worker environments,
 node hosts, worker processes, node RPCs, and their launch/transport inputs select
@@ -179,6 +185,9 @@ for a file directly in a package root such as `src/agents/`) and a declared beha
 set: `*prompt-cache*` and `*compaction*` tests under `src/` and `packages/`, plus the
 required-maintenance and session-context-accounting tests. Those behavior tests sit
 3 to 10 imports away (#204252); the full importer closure is nearly the whole suite.
+A change to `src/sessions/owed.ts` selects only its own declared set: the background
+exec completion tests in `src/agents/` that deliver owed rows (#204265 changed it with
+green PR CI while they failed on `main`).
 Ordinary `src/` module changes in packages and plugins retain direct package-specifier tests for
 resolved exports affected by the changed source, including re-export chains.
 Unrelated resolved subpaths stay unselected. Unresolved package bindings, package

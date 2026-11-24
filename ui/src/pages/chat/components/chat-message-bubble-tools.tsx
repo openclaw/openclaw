@@ -34,7 +34,6 @@ const ToolMessageSummary = lazy(() => import("./chat-tool-card-row.solid.tsx"), 
 
 type ToolMessageProps = ContentProps & {
   renderContents: () => JSX.Element;
-  hideSummary?: boolean;
 };
 
 export function InlineToolCards(props: {
@@ -174,47 +173,45 @@ function ToolMessageFallback(props: ToolMessageProps) {
         { "is-open": props.state().toolMessageExpanded },
       ]}
     >
-      <Show when={!props.hideSummary}>
-        <ChatImportBoundary
-          identity={[props.options.sessionKey, props.messageKey]}
-          connected={() => Boolean(host?.isConnected)}
-          fallback={() => (
-            <button
-              class="chat-inline-disclosure chat-tool-msg-summary"
-              type="button"
-              disabled
-              aria-busy="true"
-            >
-              <span class="chat-tool-msg-summary__icon">
-                <Show when={identity()} fallback={<Icon name="zap" />}>
-                  {(display) => (
-                    <ChatToolIcon
-                      name={display().icon}
-                      tool={{
-                        toolName: display().name,
-                        pluginToolIcons: props.options.pluginToolIcons,
-                      }}
-                      style={{ display: "contents" }}
-                    />
-                  )}
-                </Show>
+      <ChatImportBoundary
+        identity={[props.options.sessionKey, props.messageKey]}
+        connected={() => Boolean(host?.isConnected)}
+        fallback={() => (
+          <button
+            class="chat-inline-disclosure chat-tool-msg-summary"
+            type="button"
+            disabled
+            aria-busy="true"
+          >
+            <span class="chat-tool-msg-summary__icon">
+              <Show when={identity()} fallback={<Icon name="zap" />}>
+                {(display) => (
+                  <ChatToolIcon
+                    name={display().icon}
+                    tool={{
+                      toolName: display().name,
+                      pluginToolIcons: props.options.pluginToolIcons,
+                    }}
+                    style={{ display: "contents" }}
+                  />
+                )}
+              </Show>
+            </span>
+            <span class="chat-tool-disclosure__content">
+              <span class="chat-tool-msg-summary__label">
+                {identity() && !props.state().markdown && props.state().images.length === 0
+                  ? identity()!.label
+                  : t("chat.toolCards.toolOutput")}
               </span>
-              <span class="chat-tool-disclosure__content">
-                <span class="chat-tool-msg-summary__label">
-                  {identity() && !props.state().markdown && props.state().images.length === 0
-                    ? identity()!.label
-                    : t("chat.toolCards.toolOutput")}
-                </span>
-              </span>
-              <span class="chat-tool-row__chevron" aria-hidden="true">
-                <Icon name="chevronRight" />
-              </span>
-            </button>
-          )}
-        >
-          <ToolMessageSummary state={props.state()} options={props.options} />
-        </ChatImportBoundary>
-      </Show>
+            </span>
+            <span class="chat-tool-row__chevron" aria-hidden="true">
+              <Icon name="chevronRight" />
+            </span>
+          </button>
+        )}
+      >
+        <ToolMessageSummary state={props.state()} options={props.options} />
+      </ChatImportBoundary>
       <Show
         when={props.state().toolMessageExpanded}
         fallback={<OmittedMedia items={props.state().omittedMedia} />}

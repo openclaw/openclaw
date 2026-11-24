@@ -18,7 +18,7 @@ const READERS = new Set([
 
 // Owners and work starts that may read live permissions. Shrink only: a new file takes its
 // scopes, role and policy from the admitted operator authority instead of joining this list.
-const ADMISSION_FILES = new Set([
+export const ADMISSION_FILES = new Set([
   "src/agents/tools/sessions-control-authority.ts",
   "src/agents/tools/sessions-send-followup-custody.ts",
   "src/commands/doctor/cron/execution-context-check.ts",
@@ -92,6 +92,13 @@ export default {
     docs: {
       description: "Only admission files may read live operator permissions.",
     },
+    schema: [
+      {
+        type: "object",
+        properties: { ignoreAllowlists: { type: "boolean" } },
+        additionalProperties: false,
+      },
+    ],
   },
   create(context) {
     const filename = context.physicalFilename.replaceAll("\\", "/");
@@ -100,7 +107,7 @@ export default {
     if (
       !ROOTS.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
       isSkippedTypeAssertionTestPath(repoPath) ||
-      ADMISSION_FILES.has(repoPath)
+      (context.options[0]?.ignoreAllowlists !== true && ADMISSION_FILES.has(repoPath))
     ) {
       return {};
     }
