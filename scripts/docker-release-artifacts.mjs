@@ -733,11 +733,12 @@ export async function verifyDockerReleaseProducer(
       throw new Error("Missing authenticated candidate admission.");
     }
     revalidateAuthority = authenticated.revalidateAuthority;
+    const evidenceProducer = releaseEvidenceProducerTuple(fullReleaseManifest);
     const selected = preparedDockerEvidenceFromFullRelease({
       manifest: fullReleaseManifest,
       sourceSha: manifest.sourceSha,
-      runId: fullReleaseManifest.runId,
-      runAttempt: fullReleaseManifest.runAttempt,
+      runId: evidenceProducer.runId,
+      runAttempt: evidenceProducer.runAttempt,
     });
     requireValue(
       selected.preparedRunId === producer.runId &&

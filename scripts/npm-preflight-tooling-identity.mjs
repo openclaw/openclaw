@@ -361,11 +361,12 @@ export function validateNpmPreflightQualification({
   producerRunId,
   producerRunAttempt,
 }) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest);
   const qualified = validateFullReleaseNpmPreflight({
     manifest,
     repository,
-    runId: manifest.runId,
-    runAttempt: manifest.runAttempt,
+    runId: evidenceProducer.runId,
+    runAttempt: evidenceProducer.runAttempt,
     sourceSha,
     toolingSha,
   });
