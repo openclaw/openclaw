@@ -20,7 +20,7 @@ import {
 import * as cleaner from "./cleaner.js";
 import { beamMirrorId } from "./mirror-candidate.js";
 import { parseBeamMirrorConfig } from "./mirror-config.js";
-import { createBeamMirrorService } from "./mirror-service.js";
+import { registerBeamMirror } from "./mirror-service.js";
 import { BEAM_MAX_ITEMS, parseBeamUpload } from "./types.js";
 
 let fixture: ReturnType<typeof beamMirrorTestFixture>;
@@ -561,7 +561,7 @@ describe("createBeamMirrorRunner", () => {
   });
 });
 
-describe("createBeamMirrorService", () => {
+describe("registerBeamMirror", () => {
   it.each(["list", "read"] as const)(
     "stops before a paused %s settles without resuming work",
     async (stage) => {
@@ -582,12 +582,15 @@ describe("createBeamMirrorService", () => {
       const upload = vi
         .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
         .mockRejectedValue(new Error("unexpected upload after stop"));
-      const service = createBeamMirrorService({
-        resolveExecutable: async () => {
-          throw new Error("unexpected test process");
-        },
+      const api = createTestPluginApi({
         runtime: createBeamTestRuntime(beamTestMirrorConfig()),
       });
+      const registerService = vi.spyOn(api, "registerService");
+      registerBeamMirror(api, async () => {
+        throw new Error("unexpected test process");
+      });
+      const service = registerService.mock.calls[0]?.[0];
+      assert(service?.apiVersion === 2);
       try {
         await service.start(context);
         const tick = vi.advanceTimersByTimeAsync(0);

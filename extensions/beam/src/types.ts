@@ -22,7 +22,7 @@ export const BEAM_MAX_GUEST_SESSIONS = 20;
 export const BEAM_MAX_WRITE_RECEIPTS = 10_000;
 export const BEAM_MAX_GUEST_RECEIPTS = 400;
 export const BEAM_MAX_ITEMS = 200;
-export const BEAM_MAX_ITEM_CHARS = 6_000;
+const BEAM_MAX_ITEM_CHARS = 6_000;
 
 export type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
