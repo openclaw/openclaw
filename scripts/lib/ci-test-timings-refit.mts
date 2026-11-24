@@ -1275,15 +1275,6 @@ export function refitTestTimings(
           continue;
         }
         for (const runtimeLog of splitRuntimeTimingLogs(text)) {
-          // GitHub-runner compact plans stay on Node prices until the Bun lane has its own
-          // sizing: real bun-all spans would pack them past the job cap (#204374).
-          if (
-            log.kind === "compact" &&
-            profile === "github" &&
-            runtimeLog.prefix.startsWith("bun-all:")
-          ) {
-            continue;
-          }
           const compact = {
             blacksmith: new Map<string, number[]>(),
             github: new Map<string, number[]>(),
@@ -1300,7 +1291,13 @@ export function refitTestTimings(
             boat: new Map(),
           };
           const descriptors = new Map<string, RuntimePlacementTiming>();
-          if (log.kind === "compact") {
+          // GitHub-runner compact plans stay on Node prices until the Bun lane has its own
+          // sizing: real bun-all spans would pack them past the job cap (#204374). Tooling
+          // samples from the same log still count.
+          if (
+            log.kind === "compact" &&
+            !(profile === "github" && runtimeLog.prefix.startsWith("bun-all:"))
+          ) {
             readCompactLog(
               runtimeLog.text,
               log.labels,

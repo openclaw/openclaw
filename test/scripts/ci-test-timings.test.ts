@@ -2038,6 +2038,22 @@ describe("CI timing sampler provenance", () => {
     expect(result.contributingRunIds.toolingBlacksmith).toEqual([3, 4]);
   });
 
+  it("reprices GitHub tooling from hosted Bun PR runs", () => {
+    const runs = [1, 2].map((id) =>
+      Object.assign(
+        compactRun(
+          id,
+          `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all\n${samplerToolingLog(id * 10 + 20)}`,
+          "ubuntu-24.04",
+        ),
+        { pullRequestMergeRef: true },
+      ),
+    );
+    expect(refitTestTimings(runs).timings.toolingFileSeconds.github).toEqual({
+      [`bun-all:${toolingFile}`]: 35,
+    });
+  });
+
   it("collects successful jobs from failed PR workflows without pruning absent timings", () => {
     const fixture = makeFixture({
       baseline: {
