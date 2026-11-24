@@ -72,6 +72,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Handshake-attested non-remote backend connection; never accepted from wire params. */
+    localBackendClient?: true;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

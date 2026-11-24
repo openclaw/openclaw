@@ -14,9 +14,21 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import * as sessionStoreLookup from "../session-utils-store-lookup.js";
-import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
+import {
+  canUseInternalAgentHandoff,
+  prepareAgentRequestPreflight,
+} from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
+
+it("does not confer internal handoff authority from connection mode alone", () => {
+  expect(canUseInternalAgentHandoff("backend")).toBe(false);
+  expect(canUseInternalAgentHandoff("cli")).toBe(false);
+  expect(canUseInternalAgentHandoff(undefined)).toBe(false);
+  expect(canUseInternalAgentHandoff("backend", { localBackendClient: true })).toBe(true);
+  expect(canUseInternalAgentHandoff("backend", { syntheticClient: true })).toBe(true);
+  expect(canUseInternalAgentHandoff("cli", { syntheticClient: true })).toBe(false);
+});
 
 describe("agent database admission preflight", () => {
   afterEach(() => recordAgentDatabaseAdmissions([]));
@@ -139,7 +151,10 @@ async function runPreflight(
       : new Map(),
   };
   const client = options?.backend
-    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+    ? {
+        connect: { client: { mode: "backend" }, scopes: ["operator.write"] },
+        internal: { localBackendClient: true },
+      }
     : undefined;
   const io = createAgentTurnIo(respond);
   const result = await prepareAgentRequestPreflight({
@@ -492,7 +507,10 @@ describe("agent request restart recovery preflight", () => {
         dedupe: new Map(),
       },
       client: backend
-        ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+        ? {
+            connect: { client: { mode: "backend" }, scopes: ["operator.write"] },
+            internal: { localBackendClient: true },
+          }
         : undefined,
     } as never);
     return { respond, result };

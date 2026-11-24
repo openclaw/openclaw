@@ -368,6 +368,7 @@ export async function attachAuthenticatedGatewayConnect(
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(isLocalBackendClient ? { localBackendClient: true as const } : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),

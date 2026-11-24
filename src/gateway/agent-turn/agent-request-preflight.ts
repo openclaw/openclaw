@@ -45,6 +45,20 @@ export type AgentRequestPreflight = NonNullable<
   Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
 >;
 
+/** Determines whether the connection has server-owned internal handoff authority. */
+export function canUseInternalAgentHandoff(
+  mode: string | undefined,
+  evidence?: Pick<
+    NonNullable<AgentTurnPrincipal["internal"]>,
+    "syntheticClient" | "localBackendClient"
+  >,
+): boolean {
+  return (
+    mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    (evidence?.syntheticClient === true || evidence?.localBackendClient === true)
+  );
+}
+
 export async function prepareAgentRequestPreflight(params: {
   request: AgentRunRequest;
   context: AgentTurnContext;
@@ -57,8 +71,10 @@ export async function prepareAgentRequestPreflight(params: {
     return undefined;
   };
   const cfg = params.context.getRuntimeConfig();
-  const canUseInternalRuntimeHandoff =
-    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  const canUseInternalRuntimeHandoff = canUseInternalAgentHandoff(
+    params.client?.connect?.client?.mode,
+    params.client?.internal,
+  );
   const requestSessionKey = request.sessionKey?.trim();
   const parsedRequestSessionKey = requestSessionKey
     ? parseAgentSessionKey(requestSessionKey)

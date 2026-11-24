@@ -150,7 +150,7 @@ describe("agent RPC deleted-agent guard", () => {
         idempotencyKey: "exec-approval-followup:req-followup",
         execApprovalFollowupExpectedSessionId: "old-session",
       },
-      { connect: { client: { mode: "backend" } } } as never,
+      { connect: { client: { mode: "backend" } }, internal: { localBackendClient: true } } as never,
     );
 
     expect(respond).toHaveBeenCalledWith(false, undefined, {

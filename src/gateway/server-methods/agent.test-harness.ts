@@ -264,6 +264,7 @@ export function backendGatewayClient(): AgentHandlerArgs["client"] {
       },
       scopes: ["operator.write"],
     },
+    internal: { localBackendClient: true },
   } as AgentHandlerArgs["client"];
 }
 
