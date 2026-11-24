@@ -179,9 +179,14 @@ it.each([
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const f = fixture();
-      const expectedState = { status: undefined, abortedLastRun: false };
+      const initialState = { status: undefined, abortedLastRun: false };
+      const expectedState = buildRestartRecoveryExpectedState({
+        sessionId: f.scope.sessionId,
+        updatedAt: 1,
+        ...initialState,
+      });
       await patchSessionEntryCore(f.scope, () => ({
-        ...expectedState,
+        ...initialState,
         lifecycleRevision: "same-session",
         activeWriterRunId: "preceding-run",
       }));

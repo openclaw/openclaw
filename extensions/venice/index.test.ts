@@ -61,7 +61,7 @@ function wireCall(id: string, name: string, args?: string) {
   };
 }
 
-function wireAssistant(...calls: ReturnType<typeof wireCall>[]) {
+function wireAssistant<T extends ReturnType<typeof wireCall>>(...calls: T[]) {
   return { role: "assistant", tool_calls: calls };
 }
 

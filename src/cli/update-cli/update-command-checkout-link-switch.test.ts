@@ -8,10 +8,8 @@ import * as updateGlobal from "../../infra/update-global.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-} from "../../state/openclaw-schema-versions.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import * as shared from "./shared.js";

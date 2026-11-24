@@ -246,7 +246,6 @@ it("projects lifecycle removal without acquiring unrelated prompt payloads", asy
       sessionId: "selected",
       updatedAt: Date.now(),
       label: "original",
-      lastSubmittedModel: { provider: "synthetic", model: "fixture" },
     };
     const unrelatedScope = { ...scope, sessionKey: "agent:main:unrelated" };
     const prompt = "unrelated lifecycle prompt ".repeat(4096);
@@ -283,10 +282,7 @@ it("projects lifecycle removal without acquiring unrelated prompt payloads", asy
         removals: [
           {
             sessionKey: scope.sessionKey,
-            expectedEntry: {
-              ...persistedCurrent,
-              lastSubmittedModel: { model: "fixture", provider: "synthetic" },
-            },
+            expectedEntry: persistedCurrent,
           },
         ],
       });

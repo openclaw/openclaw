@@ -10,6 +10,7 @@ import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import { appendPreparedTranscriptEvent } from "./session-transcript-event.js";
 import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
 
 // The public turn path must neither open SQLite nor allocate worker capacity for memory sessions.
@@ -218,7 +219,7 @@ describe("memory actor transcript turn binding", () => {
     "admits input after prior-run completion unless its lifecycle was explicit (explicit=%s)",
     async (explicit) => {
       const { actor, append, history } = await fixture();
-      const expectedState = { status: undefined, abortedLastRun: undefined };
+      const expectedState = buildRestartRecoveryExpectedState({ sessionId, updatedAt: 1 });
       const message = {
         role: "user",
         content: "Follow up after completion.",

@@ -140,7 +140,7 @@ describe("streamOpenAICodexResponses transport", () => {
     configureAiTransportHost({});
   });
 
-  const model = {
+  const model: Model<"openai-chatgpt-responses"> = {
     id: "gpt-5.5",
     name: "GPT-5.5",
     api: "openai-chatgpt-responses",
@@ -151,7 +151,7 @@ describe("streamOpenAICodexResponses transport", () => {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 16_000,
-  } satisfies Model<"openai-chatgpt-responses">;
+  };
 
   const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
   const context = {
@@ -758,6 +758,9 @@ describe("streamOpenAICodexResponses transport", () => {
   it("reuses websocket continuation across turns when cachesInstructions is false", async () => {
     const payloads: Array<Record<string, unknown>> = [];
     installWebSocket((socket, rawPayload) => {
+      if (rawPayload === undefined) {
+        throw new Error("Expected a WebSocket request payload");
+      }
       payloads.push(JSON.parse(rawPayload) as Record<string, unknown>);
       message(socket, completion(`resp_${payloads.length}`));
     });

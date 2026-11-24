@@ -120,7 +120,8 @@ describe("prepared config recovery", () => {
     try {
       const plan = await io.prepareConfigRecovery(current);
       expect(plan?.snapshot.config.plugins).toMatchObject({ enabled: false });
-      expectUnchanged(root, configPath, original, backup);
+      expectUnchanged(root, configPath, original);
+      expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
     } finally {
       read.mockRestore();
     }

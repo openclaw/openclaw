@@ -44,7 +44,15 @@ export function fallbackGroups(
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
 }
 
-export function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
+export function selectedFiles(
+  shards:
+    | readonly Pick<
+        NonNullable<ReturnType<typeof createChangedNodeTestShards>>[number],
+        "targets" | "includePatterns" | "groups"
+      >[]
+    | null
+    | undefined,
+) {
   return (shards ?? []).flatMap((shard) =>
     (shard.targets ?? []).concat(
       shard.includePatterns ?? [],

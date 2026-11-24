@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import type { PortDescriptor } from "./port-types.js";
-import { inspectDatabasePort } from "./port.worker.js";
+import { inspectDatabasePort, type PortDescriptor } from "./port.worker.js";
 
 const table = "audit_events";
 const descriptor: PortDescriptor = {

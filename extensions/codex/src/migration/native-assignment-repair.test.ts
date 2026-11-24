@@ -181,7 +181,7 @@ describe("Codex native assignment Doctor repair", () => {
       }
       const state = fixture([legacy]);
       const repaired = await migration.migrateLegacyState(state.params);
-      expect(state.read().nativeSubagentAssignments).toBeUndefined();
+      expect(state.read()).not.toHaveProperty("nativeSubagentAssignments");
       expect(repaired.changes).toHaveLength(1);
       expect(repaired.warnings).toEqual([]);
     },

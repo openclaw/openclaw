@@ -166,7 +166,7 @@ it.each(["schema-lease", "offline-maintenance"] as const)(
       const stop = new AbortController();
       let foreignOwner: Promise<unknown> | undefined;
       const request = {
-        context: { environment: state.env },
+        context: { environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
         databasePath,
         location: databasePath,
         checkFreshAdmission: true,

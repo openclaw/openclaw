@@ -608,7 +608,7 @@ describe("read tool", () => {
     const tool = createReadToolDefinition(cwd, {
       operations: {
         access: fs.access,
-        readFile: fs.readFile,
+        readFile: (absolutePath, signal) => fs.readFile(absolutePath, { signal }),
         async resolveQueueKey(candidate) {
           if (candidate === stuckPath) {
             started.resolve();
