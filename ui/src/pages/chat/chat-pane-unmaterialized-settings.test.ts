@@ -140,6 +140,7 @@ it.each([
       return expectDefined(rendered.mock.calls.at(-1)?.[0], "mounted composer control props");
     };
     const props = draw();
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
     );

@@ -590,8 +590,8 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   });
   const progressCard = () =>
     pane.querySelector<HTMLDetailsElement>(".session-progress-card--composer");
-  await expect.poll(() => progressCard()?.open).toBe(true);
   await vi.dynamicImportSettled();
+  await expect.poll(() => progressCard()?.open).toBe(true);
   state.chatReadingHistory = false;
   await pane.updateComplete;
   renders.mockClear();

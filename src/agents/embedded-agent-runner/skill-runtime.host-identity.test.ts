@@ -217,13 +217,19 @@ it.each([
     };
     await write(gateway, "project-guide", "Gateway project instructions");
     await fs.writeFile(path.join(gateway, "skills/guide/ordinary.txt"), "Gateway ordinary file");
+    const nodeRoot = samePath ? gateway : path.join(root, "remote-project");
+    const collidingGatewayFile = path.join(nodeRoot, "skills/guide/config.json");
+    if (!samePath && !sameName) {
+      // Both concurrent readers share this collision; initialize it before either can read.
+      await fs.mkdir(path.dirname(collidingGatewayFile), { recursive: true });
+      await fs.writeFile(collidingGatewayFile, '{"owner":"gateway"}');
+    }
     const releases: Array<() => void> = [];
     try {
       await Promise.all(
         ["alice", "bob"].map(async (user) => {
           const workspace = path.join(root, user, "agent");
           const physicalNode = path.join(root, user, "node");
-          const nodeRoot = samePath ? gateway : path.join(root, "remote-project");
           const nodeName = sameName ? "project-guide" : "node-guide";
           await fs.mkdir(workspace, { recursive: true });
           await write(physicalNode, nodeName, user + " node instructions");
@@ -290,9 +296,6 @@ it.each([
             expect(readInstructions).not.toHaveBeenCalled();
             expect(await readText(node.location)).toContain(user + " node instructions");
             if (!samePath) {
-              const collidingGatewayFile = path.join(nodeRoot, "skills/guide/config.json");
-              await fs.mkdir(path.dirname(collidingGatewayFile), { recursive: true });
-              await fs.writeFile(collidingGatewayFile, '{"owner":"gateway"}');
               expect(await readText(collidingGatewayFile)).toContain('"gateway"');
               expect(await readText(path.join(nodeRoot, "skills/guide/SKILL.md"))).toContain(
                 user + " node instructions",

@@ -42,7 +42,9 @@ it.each([
 ])("handles snapshot invalidation: %s through the real maintenance scheduler", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     resetGatewayWorkAdmission();
-    setRuntimeConfigSnapshot({});
+    const config = { agents: { defaults: { promptCacheKeepWarm: false } } };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
@@ -107,6 +109,7 @@ it.each([
       startCronMaintenance(scheduler, () => cronStorePath);
       sweep = clock.advanceBy(5_000);
       await discovered.promise;
+      expect(discovery.mock.calls[0]?.[1]?.registeredDatabases).toEqual(expect.any(Array));
       if (change === "completed deletion") {
         // A committed history write can wake maintenance before the registry retry.
         const historyChange = createDeferredCore();

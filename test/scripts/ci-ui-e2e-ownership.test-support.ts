@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as ts from "typescript/ast";
 import { expect } from "vitest";
+import { resolveConfig } from "vitest/node";
 import {
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
@@ -19,10 +20,10 @@ import {
 } from "../vitest/vitest.ui-e2e.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 
-export function assertControlUiE2eOwnership(
+export async function assertControlUiE2eOwnership(
   makeTempDirectory: (prefix: string) => string,
   parser: NativeTypeScriptParser,
-): void {
+): Promise<void> {
   const trackedUiE2eFiles = execFileSync(
     "git",
     [
@@ -112,33 +113,33 @@ export function assertControlUiE2eOwnership(
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
 
-  const config = createUiE2eVitestConfig({}, []);
-  type Project = {
-    cacheDir: string;
-    test: {
-      exclude: string[];
-      fileParallelism: boolean;
-      globalSetup?: string[];
-      include: string[];
-      maxWorkers?: number;
-      name: string;
-      sequence: { groupOrder: number };
-    };
-  };
-  const projectsOf = (value: typeof config) => value.test?.projects as Project[];
+  const config = await resolveConfig({ config: false }, createUiE2eVitestConfig({}, []));
+  const relativeGlobalSetup = (files: string | string[]) =>
+    (Array.isArray(files) ? files : [files]).map((file) =>
+      path.relative(process.cwd(), file).split(path.sep).join("/"),
+    );
+  const projectsOf = (value: typeof config) =>
+    value.test.resolvedProjects.map(({ viteConfig, projectConfig }) => ({
+      cacheDir: viteConfig.cacheDir,
+      test: {
+        ...projectConfig,
+        globalSetup: relativeGlobalSetup(projectConfig.globalSetup),
+      },
+    }));
   const projects = projectsOf(config);
   const selectedFiles = (test: { exclude: string[]; include: string[] }) =>
     globSync(test.include, { cwd: process.cwd(), exclude: test.exclude }).toSorted();
   const select = (value: typeof config) => projectsOf(value).map(({ test }) => selectedFiles(test));
   const rootTest = config.test as { exclude: string[]; include: string[] };
-  expect(config.test?.globalSetup).toEqual([]);
+  const nodePolicySetup = "test/vitest/vitest.node-policy.global-setup.ts";
+  expect(relativeGlobalSetup(config.test.globalSetup)).toEqual([nodePolicySetup]);
   const chromiumSetup = "test/vitest/vitest.ui-e2e.global-setup.ts";
   const bundledSetup = "test/vitest/vitest.ui-e2e.bundled.global-setup.ts";
   expect(projects.map(({ test }) => [test.name, test.globalSetup])).toEqual([
-    ["ui-e2e-bundled", [chromiumSetup, bundledSetup]],
-    ["ui-e2e-standalone", [chromiumSetup]],
-    ["ui-e2e-serial", [chromiumSetup, bundledSetup]],
-    ["ui-e2e-serial-standalone", [chromiumSetup]],
+    ["ui-e2e-bundled", [chromiumSetup, bundledSetup, nodePolicySetup]],
+    ["ui-e2e-standalone", [chromiumSetup, nodePolicySetup]],
+    ["ui-e2e-serial", [chromiumSetup, bundledSetup, nodePolicySetup]],
+    ["ui-e2e-serial-standalone", [chromiumSetup, nodePolicySetup]],
   ]);
   expect(new Set(projects.map((project) => project.cacheDir)).size).toBe(projects.length);
   expect(config.test?.maxWorkers).toBe(Math.min(2, sharedVitestConfig.test.maxWorkers));
@@ -193,7 +194,10 @@ export function assertControlUiE2eOwnership(
   expect(localSelected[0]).toContain("ui/src/e2e/memory-overview-plugin.e2e.test.ts");
   expect(localSelected[3]).toContain("ui/src/e2e/memory-overview-source.e2e.test.ts");
 
-  const ordinaryConfig = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []);
+  const ordinaryConfig = await resolveConfig(
+    { config: false },
+    createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []),
+  );
   const ordinarySelected = select(ordinaryConfig);
   expect(ordinarySelected.flat()).not.toContain(readonlyHome);
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
@@ -205,24 +209,33 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/service-worker-update.e2e.test.ts",
     "ui/src/e2e/template-chat-review.e2e.test.ts",
   ];
-  const delegated = createUiE2eVitestConfig(
-    { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
-    [],
+  const delegated = await resolveConfig(
+    { config: false },
+    createUiE2eVitestConfig(
+      { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
+      [],
+    ),
   );
   assertPartition(
     select(delegated),
     ordinary.filter((file) => !productionArtifactFiles.includes(file)),
   );
-  const production = createUiE2eVitestConfig(
-    { OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "/fixture/production-ui" },
-    [],
+  const production = await resolveConfig(
+    { config: false },
+    createUiE2eVitestConfig(
+      { OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "/fixture/production-ui" },
+      [],
+    ),
   );
   expect(select(production)).toEqual([[], productionArtifactFiles, [], []]);
 
   // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
   const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
   expect(ordinarySelected.flat()).not.toContain(packagedWorkboard);
-  const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]);
+  const prebuilt = await resolveConfig(
+    { config: false },
+    createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]),
+  );
   expect(
     projectsOf(prebuilt)
       .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
@@ -241,12 +254,14 @@ export function assertControlUiE2eOwnership(
 
   const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
   const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");
-  expect(select(createUiE2eVitestConfig({}, ["node", "vitest", serialFile]))).toEqual([
-    [],
-    [],
-    [],
-    [serialFile],
-  ]);
+  expect(
+    select(
+      await resolveConfig(
+        { config: false },
+        createUiE2eVitestConfig({}, ["node", "vitest", serialFile]),
+      ),
+    ),
+  ).toEqual([[], [], [], [serialFile]]);
 
   const includeDir = makeTempDirectory("openclaw-ui-e2e-project-includes-");
   const includeFile = path.join(includeDir, "include.json");
@@ -255,54 +270,14 @@ export function assertControlUiE2eOwnership(
     OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
     OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
   };
-  const selectIncludeFile = () => select(createUiE2eVitestConfig(includeEnv, []));
-  expect(selectIncludeFile()).toEqual([[bundledFile], [], [], [serialFile]]);
+  const selectIncludeFile = async () =>
+    select(await resolveConfig({ config: false }, createUiE2eVitestConfig(includeEnv, [])));
+  expect(await selectIncludeFile()).toEqual([[bundledFile], [], [], [serialFile]]);
 
   writeFileSync(includeFile, JSON.stringify(["ui/src/e2e/*.e2e.test.ts"]));
-  const globSelected = selectIncludeFile().flat();
+  const globSelected = (await selectIncludeFile()).flat();
   const expectedGlobFiles = ordinary.filter((file) =>
     path.matchesGlob(file, "ui/src/e2e/*.e2e.test.ts"),
   );
   expect(globSelected.toSorted()).toEqual(expectedGlobFiles);
 }
-
-// Historical fallback for frozen targets predating prebuilt E2E config.
-// Intentionally independent of the current real-Gateway inventory.
-export const frozenRealGatewayFiles = [
-  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-  "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
-  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
-  "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
-  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-  "ui/src/e2e/logs-lifecycle.e2e.test.ts",
-  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
-  "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
-  "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-  "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
-  "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
-  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
-  "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
-  "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
-  "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
-  "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
-  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
-  "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
-  "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-] as const;

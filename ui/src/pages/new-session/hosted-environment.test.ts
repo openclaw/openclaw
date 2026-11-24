@@ -262,7 +262,8 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
   document.body.append(element);
   onTestFinished(() => element.remove());
   element.querySelector<HTMLButtonElement>("#new-session-where-trigger")!.click();
-  await vi.waitFor(() =>
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
     expect(element.textContent).toContain("Chooses the first eligible connected device"),
   );
   expect(element.textContent).not.toContain("Chooses the least-busy connected device");

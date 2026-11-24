@@ -13,7 +13,7 @@ import {
   testModel,
   thinkingLevels as levels,
 } from "./model-control-view-queries.test-support.ts";
-import { contextWith, renderControl } from "./model-control.test-support.ts";
+import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionModelLoadOptions } from "./model-selection.ts";
 import * as modelTarget from "./model-target.ts";
 import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
@@ -101,6 +101,7 @@ it("does not borrow a provider for an ambiguous draft target", async () => {
   const agent = { id: "main", model: { primary: "model" } };
   control.load(context, "main", true, { agent });
   const { find: agentOption } = controlQueries(control, context, "main", agent);
+  await waitForModelControl(control, context, "main", agent);
   await vi.waitFor(() => expect(agentOption("model-option", "openai/model")).not.toBeNull());
   expect(agentOption("thinking-option", "high")).toBeNull();
   expect(agentOption("thinking-slider")).toBeNull();

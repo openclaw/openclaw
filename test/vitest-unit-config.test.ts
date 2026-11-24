@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import {
@@ -9,10 +10,21 @@ import {
 const patterns = createPatternFileHelper("openclaw-vitest-unit-config-");
 afterEach(() => patterns.cleanup());
 
+async function resolvedTestConfig(config: ReturnType<typeof createUnitVitestConfigWithOptions>) {
+  const { test } = await resolveConfig({ config: false }, config);
+  // Compare the owner's settings, not native per-resolution seeds and caches.
+  return {
+    ...config.test,
+    include: test.include,
+    exclude: test.exclude,
+    passWithNoTests: test.passWithNoTests,
+  };
+}
+
 describe("unit vitest config", () => {
   it.each([false, true])(
     "keeps routed unit configuration equivalent to CLI discovery with all files excluded=%s",
-    (excludeAll) => {
+    async (excludeAll) => {
       const targets = [
         "src/node-host/node-worker-bundle-installer.test.ts",
         "src/media-generation/runtime-shared.test.ts",
@@ -28,17 +40,19 @@ describe("unit vitest config", () => {
             OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: patterns.writePatternFile("exclude.json", targets),
           }
         : {};
-      const cliConfig = createUnitVitestConfigWithOptions(env, options).test!;
-      const routedConfig = createUnitVitestConfigWithOptions(
-        {
-          ...env,
-          OPENCLAW_VITEST_INCLUDE_FILE: patterns.writePatternFile(
-            "include.json",
-            plan.includePatterns,
-          ),
-        },
-        options,
-      ).test!;
+      const cliConfig = await resolvedTestConfig(createUnitVitestConfigWithOptions(env, options));
+      const routedConfig = await resolvedTestConfig(
+        createUnitVitestConfigWithOptions(
+          {
+            ...env,
+            OPENCLAW_VITEST_INCLUDE_FILE: patterns.writePatternFile(
+              "include.json",
+              plan.includePatterns,
+            ),
+          },
+          options,
+        ),
+      );
       expect(routedConfig).toEqual(cliConfig);
       expect(routedConfig.include).toEqual(targets);
       expect(routedConfig.passWithNoTests).toBe(excludeAll ? true : undefined);
@@ -63,13 +77,15 @@ describe("unit vitest config", () => {
     expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
   });
 
-  it("keeps bundled unit include files out of the resolved exclude list", () => {
+  it("keeps bundled unit include files out of the resolved exclude list", async () => {
     const includePatterns = [
       "src/infra/matrix-plugin-helper.test.ts",
       "src/plugin-sdk/facade-runtime.test.ts",
       "src/plugins/loader.test.ts",
     ];
-    const testConfig = createUnitVitestConfigWithOptions({}, { includePatterns }).test!;
+    const testConfig = await resolvedTestConfig(
+      createUnitVitestConfigWithOptions({}, { includePatterns }),
+    );
     expect(testConfig.include).toEqual(includePatterns);
     for (const pattern of [
       "src/infra/**",

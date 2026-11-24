@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { buffer } from "node:stream/consumers";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
@@ -162,14 +163,30 @@ const SETTLED = /API key saved|Added|verified|rejected|failed|no access|overload
 /** Saves through `save` and returns the message shown, with how long it took. */
 async function saveAndRead(scope: Locator, save: () => Promise<void>) {
   const started = Date.now();
+  const stageStarted = performance.now();
   await save();
+  const saved = performance.now();
   const message = scope.locator(".settings-message, [role='alert'], [role='status']").filter({
     hasText: SETTLED,
   });
   await message.first().waitFor({ timeout: 30_000 });
+  const settled = performance.now();
   // Let a check that follows the save finish before reading the final message.
   await expect.poll(async () => scope.getByText(/Checking/u).count(), { timeout: 30_000 }).toBe(0);
-  return { text: (await scope.textContent()) ?? "", ms: Date.now() - started };
+  const checked = performance.now();
+  const text = (await scope.textContent()) ?? "";
+  const ms = Date.now() - started;
+  const textRead = performance.now();
+  return {
+    text,
+    ms,
+    stageMs: {
+      save: saved - stageStarted,
+      settledMessage: settled - saved,
+      checking: checked - settled,
+      textContent: textRead - checked,
+    },
+  };
 }
 
 suite.define(() => {
@@ -256,10 +273,10 @@ suite.define(() => {
         ] as const) {
           // Measure Save through its result, after opening and filling the form.
           await enterKey(key);
-          const { text, ms } = await saveAndRead(row, save);
+          const { text, ms, stageMs } = await saveAndRead(row, save);
           expect(text, key).not.toMatch(/API key saved\.(?! but)/u);
           expect(text, key).toMatch(reason);
-          expect(ms, key).toBeLessThan(2_000);
+          expect(ms, JSON.stringify(stageMs)).toBeLessThan(2_000);
           // A rejected key stays open to correct; an unfinished check closes the saved key's form.
           const fields = row.getByLabel("API key", { exact: true });
           if (key === "sk-synthetic-servererror") {

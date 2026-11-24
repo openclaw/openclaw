@@ -273,11 +273,11 @@ it("keeps direct volume bound to the real source config instead of its canonical
   ]);
 });
 
-it("matches runtime-config execution inventory without changing canonical ownership", () => {
+it("matches runtime-config execution inventory without changing canonical ownership", async () => {
   const config = "test/vitest/vitest.runtime-config.config.ts";
   const files = expectDefined(listNodeTestVolumeConfigFiles(config), "runtime-config inventory");
   expect(files.toSorted()).toEqual(
-    listMatchedTestFiles(createRuntimeConfigVitestConfig({})).toSorted(),
+    (await listMatchedTestFiles(createRuntimeConfigVitestConfig({}))).toSorted(),
   );
   expect(files).toContain("src/config/io.load-async.test.ts");
   expect(files).not.toContain("src/config/sessions/session-canonical-key.test.ts");
@@ -287,9 +287,9 @@ it("matches runtime-config execution inventory without changing canonical owners
 
 it.each(measuredConfigCases)(
   "matches $owner execution inventory only for measurement",
-  ({ config, createConfig }) => {
+  async ({ config, createConfig }) => {
     const files = expectDefined(listNodeTestVolumeConfigFiles(config), "measurement inventory");
-    expect(files.toSorted()).toEqual(listMatchedTestFiles(createConfig()).toSorted());
+    expect(files.toSorted()).toEqual((await listMatchedTestFiles(createConfig())).toSorted());
     expect(listNodeTestConfigFiles(config)).toBeUndefined();
   },
 );
@@ -309,7 +309,7 @@ describeSuite("new inventory measurement", () => {
   let full: readonly CompactNodeTestShard[];
   let selections: readonly { target: string; selected: NodeTestShardGroup }[];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     const configs = new Set(measuredConfigCases.map(({ config }) => config));
     full = createNodeTestShardBundles({
       compactMode: "pull-request",
@@ -326,8 +326,9 @@ describeSuite("new inventory measurement", () => {
       );
       return groups.length ? [{ ...job, groups }] : [];
     });
-    selections = measuredConfigCases.map(({ config, createConfig }) => {
-      const files = listMatchedTestFiles(createConfig());
+    const selected: Array<{ target: string; selected: NodeTestShardGroup }> = [];
+    for (const { config, createConfig } of measuredConfigCases) {
+      const files = await listMatchedTestFiles(createConfig());
       const scheduled = expectDefined(
         full
           .flatMap((job) => job.groups.map((group) => ({ job, group })))
@@ -343,7 +344,7 @@ describeSuite("new inventory measurement", () => {
         files.find((file) => !group.includePatterns || group.includePatterns.includes(file)),
         "scheduled target",
       );
-      return {
+      selected.push({
         target,
         selected: {
           ...group,
@@ -351,8 +352,9 @@ describeSuite("new inventory measurement", () => {
           includePatterns: [target],
           env: { ...job.env, ...group.env },
         },
-      };
-    });
+      });
+    }
+    selections = selected;
   });
 
   it.each(
@@ -420,11 +422,11 @@ describeSuite("new inventory measurement", () => {
   });
 });
 
-it("matches isolated-unit execution inventory including both observed direct targets", () => {
+it("matches isolated-unit execution inventory including both observed direct targets", async () => {
   const config = "test/vitest/vitest.unit-fast-isolated.config.ts";
   const files = expectDefined(listNodeTestVolumeConfigFiles(config), "isolated-unit inventory");
   expect(files.toSorted()).toEqual(
-    listMatchedTestFiles(createUnitFastIsolatedVitestConfig({}, { argv: [] })).toSorted(),
+    (await listMatchedTestFiles(createUnitFastIsolatedVitestConfig({}, { argv: [] }))).toSorted(),
   );
   expect(files).toEqual(
     expect.arrayContaining([

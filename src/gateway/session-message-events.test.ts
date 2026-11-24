@@ -45,6 +45,7 @@ import {
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
@@ -422,6 +423,8 @@ describe("session.message websocket events", () => {
     await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
     await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
 
+    // Fixture preparation has no delivery deadline; arm observers after readiness, before send.
+    await prepareGatewayReplyRuntimeForTest();
     using otherChats = collectEventPayloads(otherWs, "chat");
     const chatEvents = [mainWs, legacyWs].map((ws) =>
       onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
