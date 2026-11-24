@@ -81,13 +81,13 @@ export function catalogToolIcon(name: string): IconName | undefined {
   return operationIcons.get(name.trim().toLowerCase());
 }
 
-function browserOperation(args: Record<string, unknown> | null): string {
+function browserOperation(args: Record<string, unknown> | null, labels: object): string {
   const kind = asNullableRecord(args?.request)?.kind ?? args?.kind;
   if (typeof kind !== "string") {
     return "act";
   }
   const key = `act_${kind}`;
-  return Object.hasOwn(catalog.browser, key) ? key : "act";
+  return Object.hasOwn(labels, key) ? key : "act";
 }
 
 export function catalogToolLabel(
@@ -130,7 +130,7 @@ export function catalogToolLabel(
     name === "update_goal" && typeof args?.status === "string"
       ? `status_${args.status}`
       : name === "browser" && action === "act"
-        ? browserOperation(args)
+        ? browserOperation(args, labels)
         : action?.replaceAll(".", "_");
   const operation = key && Object.hasOwn(labels, key) ? key : "default";
   if (!Object.hasOwn(labels, operation)) {
