@@ -593,7 +593,8 @@ jobs:
             }
           }
           NODE
-          node .closeout-tooling/scripts/lib/release-publish-gates.mts \
+          RELEASE_TAG="$EVIDENCE_TAG" RELEASE_NPM_DIST_TAG=latest EXPECTED_SHA="$tag_sha" \
+            node .closeout-tooling/scripts/lib/release-publish-gates.mts \
             --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 
           recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"

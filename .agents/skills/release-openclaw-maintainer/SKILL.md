@@ -329,3 +329,9 @@ or main closeout.
 Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
 block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.
+
+Approval packets are public release evidence. Include only public-safe risk descriptions
+and decision references. Never copy private release-managers messages, incident details,
+credentials or access-bearing URLs into the request. Keep the private discussion in its
+original group; disclose a conversation permalink only when the human authorizes making
+that reference public. The packet does not copy or authenticate that conversation.

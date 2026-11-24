@@ -3753,6 +3753,14 @@ export async function validateReleaseRunEvidence(
       }
     };
     await collect(selectedRun, normalizedRunId, selectedRun.run_attempt);
+    for (const child of executionPlan.children.filter((entry) => entry.selected && !entry.runId)) {
+      const { parentJobName } = releaseChildSpec(child.key);
+      if (!jobs.some((job) => job.name === parentJobName && job.status !== "passed")) {
+        throw new Error(
+          "Fast-track is missing the original unsuccessful dispatch job for " + child.key,
+        );
+      }
+    }
     validateReleaseCoveragePolicyBinding(executionPlan, currentEvidence.manifest.validationInputs);
     if (!isDeepStrictEqual(executionPlan.candidate, currentEvidence.manifest.candidateBinding)) {
       throw new Error("Fast-track candidate differs from the original admitted artifact plan.");

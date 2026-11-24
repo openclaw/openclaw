@@ -243,6 +243,21 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
   if (approvals.length === 0) {
     throw new Error("Release approval requires an approved npm-release environment entry.");
   }
+  if (env.FAST_TRACK_APPROVAL_JSON) {
+    // Environment approval may wait past the preflight's expiry check. Minting
+    // this receipt starts publication; only an existing receipt can replay it.
+    const packet = JSON.parse(env.FAST_TRACK_APPROVAL_JSON);
+    const expiresAt = packet?.request?.expiresAt;
+    if (
+      typeof expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(expiresAt)) ||
+      Date.parse(expiresAt) <= Date.now()
+    ) {
+      throw new Error(
+        "Fast-track request expired before publication admission. Obtain fresh explicit approval.",
+      );
+    }
+  }
   return validateReleaseApprovalReceipt({
     version: fastTrackDigest
       ? 4

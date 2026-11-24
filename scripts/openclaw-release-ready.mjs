@@ -115,6 +115,9 @@ export function validateReleaseButtonInputs(value) {
   );
   const inputs = Object.fromEntries(
     Object.entries(value).map(([key, entry]) => {
+      if (key === "fast_track_approval" && typeof entry === "string" && entry) {
+        return [key, JSON.stringify(JSON.parse(entry))];
+      }
       requireValue(
         (typeof entry === "string" || typeof entry === "boolean") &&
           !/[\r\n\0]/u.test(String(entry)),
@@ -398,6 +401,7 @@ function authenticateReadyNpm({
     selectionMode: "all-publishable",
     plugins: "",
     npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+    fastTrackApproval: inputs.fast_track_approval,
     fullReleaseValidationRunId: inputs.full_release_validation_run_id,
     fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
     publisherPolicySha256: createHash("sha256")
@@ -588,6 +592,15 @@ async function readReady(descriptor, directory, tooling, token) {
 
 function publicationInputs(ready, resumeRunId, fastTrackApproval = "") {
   requireValue(typeof fastTrackApproval === "string", "fast_track_approval must be JSON text.");
+  requireValue(
+    !fastTrackApproval ||
+      !ready.inputs.fast_track_approval ||
+      isDeepStrictEqual(
+        JSON.parse(fastTrackApproval),
+        JSON.parse(ready.inputs.fast_track_approval),
+      ),
+    "Publication must retain the approval bound to release preparation.",
+  );
   const effectiveResumeRunId = resumeRunId || ready.inputs.openclaw_npm_resume_run_id || "";
   requireValue(
     effectiveResumeRunId === "" ||
@@ -704,6 +717,7 @@ async function main() {
       sourceSha,
       workflowSha: tooling.sha,
       workflowFullRef: tooling.fullRef,
+      fastTrackApproval: inputs.fast_track_approval,
       fullReleaseValidationRunId: inputs.full_release_validation_run_id,
       fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
       releaseTag: inputs.tag,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,6 +7,12 @@ import {
   validateDockerReleaseManifest,
   verifyDockerReleaseProducer,
 } from "../scripts/docker-release-artifacts.mjs";
+import {
+  buildReleaseStateArtifact,
+  classifyReleaseSnapshot,
+  composeReleaseAttemptJobs,
+} from "../scripts/full-release-validation-policy.mjs";
+import { buildReleaseValidationManifest } from "../scripts/lib/full-release-manifest.mjs";
 import {
   fastTrackRequestDigest,
   type FastTrackRequest,
@@ -390,4 +396,132 @@ it("recomputes the bounded delta against a matching published fully validated ba
       packet: { ...packet, request: wrongDelta, digest: fastTrackRequestDigest(wrongDelta) },
     }),
   ).rejects.toThrow("Publisher-computed delta");
+});
+
+it("generates truthful failed-decision evidence and validates it without passing the strict FRV verdict", async () => {
+  const f = candidatePublicationFixture();
+  const children = await Promise.all(
+    f.plan.children
+      .filter((planned) => planned.selected)
+      .map(async (planned) => {
+        const rawJobs = await f.client.getRunAttemptJobs(planned.runId);
+        if (planned.key === "normalCi") {
+          rawJobs.push(
+            Object.assign({}, rawJobs[0], {
+              id: 9901,
+              name: "Synthetic validation failure",
+              conclusion: "failure",
+            }),
+          );
+        }
+        const composite = composeReleaseAttemptJobs([{ jobs: rawJobs, runAttempt: 1 }], {
+          plannedRunAttempt: 1,
+          effectiveRunAttempt: 1,
+        });
+        return Object.assign({}, planned, {
+          status: "completed",
+          conclusion: planned.key === "normalCi" ? "failure" : "success",
+          errors: [],
+          jobs: composite.jobs,
+          observedRunAttempts: [1],
+          plannedRunAttempt: 1,
+          compositeJobsSha256: composite.sha256,
+          repository: f.repository,
+          dispatchActor: "github-actions[bot]",
+          triggeringActor: "github-actions[bot]",
+        });
+      }),
+  );
+  const decision = classifyReleaseSnapshot({
+    children,
+    releaseProfile: "beta",
+    targetSha: f.c,
+    targetVersion: "2026.8.28-beta.1",
+  });
+  expect(decision.state).toBe("blocked_complete");
+  const expected = {
+    parentRunId: f.runId,
+    parentRunAttempt: 1,
+    targetSha: f.c,
+    workflowRef: f.branch,
+    workflowSha: f.q,
+  };
+  const state = (mode: "decision" | "drain") =>
+    buildReleaseStateArtifact({
+      children,
+      decision,
+      executionPlan: f.plan,
+      expected,
+      mode,
+      releaseProfile: "beta",
+      rerunGroup: "all",
+    });
+  const drain = state("drain");
+  const manifest = buildReleaseValidationManifest({
+    plan: f.plan,
+    drain,
+    reusedManifest: undefined,
+    context: {
+      runId: f.runId,
+      runAttempt: "1",
+      workflowRef: f.branch,
+      workflowSha: f.q,
+      workflowFullRef: f.tooling.fullRef,
+      workflowRefType: "branch",
+      targetRef: f.c,
+      releaseProfile: "beta",
+      rerunGroup: "all",
+      runReleaseSoak: "false",
+      validationInputs: f.manifest.validationInputs,
+      publicationArtifacts: f.manifest.publicationArtifacts,
+    },
+  });
+  expect(manifest.childEvidence.normalCi?.jobs).toContainEqual(
+    expect.objectContaining({
+      name: "Synthetic validation failure",
+      status: "completed",
+      conclusion: "failure",
+    }),
+  );
+  const root = roots.make("failed-frv-manifest-");
+  const files = Object.fromEntries(
+    Object.entries({ plan: f.plan, decision: state("decision"), drain, manifest }).map(
+      ([name, payload]) => {
+        const path = join(root, `${name}.json`);
+        writeFileSync(path, JSON.stringify(payload));
+        return [name, path];
+      },
+    ),
+  );
+  const env = {
+    ...process.env,
+    GITHUB_RUN_ID: f.runId,
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_REPOSITORY: f.repository,
+    GITHUB_REF_NAME: f.branch,
+    GITHUB_SHA: f.q,
+    RELEASE_PROFILE: "beta",
+    RERUN_GROUP: "all",
+    TARGET_SHA: f.c,
+    RELEASE_EXECUTION_PLAN_PATH: files.plan,
+    RELEASE_DECISION_PATH: files.decision,
+    DIAGNOSTIC_DRAIN_PATH: files.drain,
+    RELEASE_VALIDATION_MANIFEST_PATH: files.manifest,
+  };
+  const validate = (mode: string) =>
+    spawnSync(process.execPath, ["scripts/full-release-validation-state.mjs", mode], {
+      env,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+  const evidence = validate("validate-manifest-evidence");
+  expect(evidence.status, evidence.stderr).toBe(0);
+  const strict = validate("validate-manifest");
+  expect(strict.status).not.toBe(0);
+  expect(strict.stderr).toContain("blocked_complete");
+  expect(
+    JSON.parse(readFileSync(files.manifest!, "utf8")).childEvidence.normalCi.jobs,
+  ).toContainEqual(
+    expect.objectContaining({ name: "Synthetic validation failure", conclusion: "failure" }),
+  );
 });

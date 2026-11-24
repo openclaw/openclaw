@@ -1,20 +1,30 @@
 import { createHash } from "node:crypto";
 import JSZip from "jszip";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { fastTrackRequestDigest } from "../scripts/lib/release-fast-track-contract.mts";
-import { releaseFastTrackDigest } from "../scripts/lib/release-fast-track-publication.mts";
+import {
+  fastTrackAdmissionTime,
+  releaseFastTrackDigest,
+} from "../scripts/lib/release-fast-track-publication.mts";
+import * as receiptModule from "../scripts/release-approval-receipt.mjs";
 import {
   createReleaseApprovalReceipt,
   downloadReleaseApprovalReceipt,
   validateReleaseApprovalReceipt,
   verifyReleaseApprovalReceipt,
 } from "../scripts/release-approval-receipt.mjs";
+import * as toolingModule from "../scripts/release-tooling-identity.mjs";
 
 const sha = "a".repeat(40);
 const target = "b".repeat(40);
 const releaseTag = "v2026.11.9-beta.1";
 const workflow = ".github/workflows/openclaw-release-publish.yml";
 const jobName = "Publish plugins, then OpenClaw";
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 function fixture() {
   const request = {
     schemaVersion: 1,
@@ -34,14 +44,14 @@ function fixture() {
     publicationScope: [`publication:sha256:${"d".repeat(64)}`],
     run: { id: "2", attempt: "1" },
     requestId: "00000000-0000-4000-8000-000000000001",
-    expiresAt: "2026-11-23T12:00:00.000Z",
+    expiresAt: new Date(Date.now() + 3600000).toISOString(),
   };
   const packet = {
     request,
     digest: fastTrackRequestDigest(request),
     approval: {
       approver: "octocat",
-      decidedAt: "2026-11-23T11:00:00.000Z",
+      decidedAt: new Date(Date.now() - 60000).toISOString(),
       url: "https://chat.google.com/room/synthetic/message",
     },
     referenceRunId: "1",
@@ -97,7 +107,7 @@ function fixture() {
         run_id: 10,
         run_attempt: 2,
         status: "in_progress",
-        started_at: "2026-11-23T11:30:00.000Z",
+        started_at: new Date(Date.now()).toISOString(),
         steps: [
           { name: "Write release approval receipt", status: "completed", conclusion: "success" },
         ],
@@ -112,6 +122,24 @@ function fixture() {
   };
   return { packet, env, receipt, expected, parentRun, parentJobs, approvals, artifact };
 }
+
+it("checks fast-track expiry after the environment approval wait before issuing a new receipt", () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const afterWait = () =>
+    createReleaseApprovalReceipt(f.env, () => {
+      vi.setSystemTime(Date.parse(f.packet.request.expiresAt) + 1);
+      return f.approvals;
+    });
+  expect(afterWait).toThrow("expired before publication admission");
+  expect(() => createReleaseApprovalReceipt(f.env, () => f.approvals)).toThrow(
+    "expired before publication admission",
+  );
+  // Ordinary publication does not acquire a new fast-track requirement.
+  expect(
+    createReleaseApprovalReceipt({ ...f.env, FAST_TRACK_APPROVAL_JSON: "" }, () => f.approvals),
+  ).toMatchObject({ version: 1 });
+});
 
 it("binds the whole fast-track packet to the existing receipt and rejects missing or altered packets", () => {
   const f = fixture();
@@ -173,8 +201,10 @@ it("binds the whole fast-track packet to the existing receipt and rejects missin
   expect(deferred.corePluginDeferrals).toHaveLength(1);
 });
 
-it("returns the verified original approval-job timestamp for active and completed publication", async () => {
+it("returns the verified original approval-job timestamp for active and completed publication after expiry", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
   const f = fixture();
+  vi.setSystemTime(Date.parse(f.packet.request.expiresAt) + 1);
   const archive = await new JSZip()
     .file("approval.json", JSON.stringify(f.receipt))
     .generateAsync({ type: "nodebuffer" });
@@ -215,6 +245,25 @@ it("returns the verified original approval-job timestamp for active and complete
     receipt: f.receipt,
     approvedAt: f.parentJobs.jobs[0]!.started_at,
   });
+  // Exercise the replay owner through the real receipt verifier, replacing
+  // only GitHub transport. A caller's timestamp cannot stand in for a receipt.
+  vi.stubEnv("RELEASE_PUBLISH_RUN_ID", "");
+  vi.stubEnv("GITHUB_JOB", "");
+  await expect(fastTrackAdmissionTime(f.packet)).rejects.toThrow("request expired");
+  vi.stubEnv("RELEASE_PUBLISH_RUN_ID", "10");
+  vi.stubEnv("RELEASE_PUBLISH_RUN_ATTEMPT", "2");
+  vi.spyOn(toolingModule, "runReleaseToolingGh").mockReturnValue(JSON.stringify(f.parentRun));
+  const originalDownload = downloadReleaseApprovalReceipt;
+  vi.spyOn(receiptModule, "downloadReleaseApprovalReceipt").mockImplementation((input) =>
+    originalDownload({ ...params, expected: input.expected }),
+  );
+  await expect(fastTrackAdmissionTime(f.packet)).resolves.toBe(
+    Date.parse(f.parentJobs.jobs[0]!.started_at),
+  );
+  f.parentJobs.jobs[0]!.started_at = f.packet.request.expiresAt;
+  await expect(fastTrackAdmissionTime(f.packet)).rejects.toThrow(
+    "did not admit this exact approval before expiry",
+  );
   f.parentJobs.jobs[0]!.started_at = "invalid";
   await expect(download()).rejects.toThrow("no valid start timestamp");
 });

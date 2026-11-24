@@ -1420,15 +1420,16 @@ verify_published_release() {
     --arg validation_target_sha "${target_sha}" \
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
+      ([.workflowRuns[]? | select(.label == $validation_label)] | first // {}) as $validation |
       .releasePublishRunId = $release_publish_run_id |
-      .workflowRuns += [{
+      .workflowRuns = ((.workflowRuns // []) | map(select(.label != $validation_label))) + [{
         id: $validation_run_id,
         label: $validation_label,
         runAttempt: $validation_run_attempt,
         targetSha: $validation_target_sha,
         url: $validation_url,
         workflowRef: $validation_workflow_ref
-      }]
+      } + ($validation | {conclusion} | with_entries(select(.value != null)))]
     ' \
     "${evidence_path}" > "${evidence_path}.next"
   # Expose a success receipt only after both verifier and parent binding pass.
