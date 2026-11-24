@@ -584,9 +584,11 @@ test("preserves model admission and rolls back revoked owned Beam adoption", asy
           ({ kind }) => kind === "adopted",
         ),
       ).toHaveLength(1);
-      expect((await rpcReq(ws, "beam.owned.resolve", allowed)).payload).toEqual({
-        sessionKey: allowedKey,
-      });
+      const destination = { sessionKey: allowedKey, sessionId: allowedEntry.sessionId };
+      expect((await rpcReq(ws, "beam.owned.resolve", allowed)).payload).toEqual(destination);
+      expect((await rpcReq(admin, "sessions.catalog.resolve", allowed)).payload).toEqual(
+        destination,
+      );
       expect((await rpcReq(ws, "beam.owned.continue", allowed)).payload).toEqual({
         sessionKey: allowedKey,
       });

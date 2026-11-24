@@ -168,6 +168,12 @@ export default definePluginEntry({
   policy checks, rollback, and untrusted-content wrapping. The provider supplies
   transcript text through `read(...)`; it must not write the destination session.
 
+  A provider with a durable continuation can implement `resolveGatewayConversation`.
+  After checking source and destination read access and the destination’s stored
+  origin, `sessions.catalog.resolve` returns its `sessionKey` and current
+  `sessionId`. An unbound source returns `null`. Looking up a destination starts
+  no session and sends no message.
+
   A read-only catalog of sessions published by another Gateway may set
   `audience: "session-viewers"`. Viewers need `operator.read`; configured roles
   must also allow viewing others' sessions (`sessions.others: "view"`,
