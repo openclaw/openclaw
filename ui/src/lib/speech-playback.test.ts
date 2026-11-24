@@ -17,18 +17,20 @@ vi.mock("../../../packages/markdown-core/src/chunk-text.js", async (importOrigin
 const chunkingLoadedAtBoot = chunking.loaded;
 
 let started = createDeferred();
-let primer: ReturnType<typeof createDeferred> | undefined;
+let primer: { promise: Promise<void> } | undefined;
 const audio: FakeAudio[] = [];
 const players: GatewaySpeechPlayback[] = [];
 const createUrl = vi.fn(() => "blob:synthetic-speech");
 const revokeUrl = vi.fn();
 
 class FakeAudio extends EventTarget {
-  play = vi.fn(async () => {
+  play = vi.fn(async (): Promise<void> => {
     if (this.src.startsWith("blob:")) {
       started.resolve();
-    } else if (this.src.startsWith("data:")) {
-      return primer?.promise;
+      return;
+    }
+    if (this.src.startsWith("data:")) {
+      await primer?.promise;
     }
   });
   pause = vi.fn();
@@ -95,7 +97,7 @@ it.each([false, true])(
   "plays speech after a stalled primer (late settlement: %s)",
   async (settleLate) => {
     vi.useFakeTimers();
-    const pendingPrimer = createDeferred();
+    const pendingPrimer = createDeferred<void>();
     primer = pendingPrimer;
     const requested = createDeferred();
     const request = createGatewayRequestMock(async () => {
