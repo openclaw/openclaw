@@ -150,7 +150,7 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    SQLite migration originals, and PostgreSQL anchors.
 6. Preparation records refusals, already-current results, and failures before
    activation. It checks for an active trial while holding its preparation lock.
-   After activation, only the Gateway that is ready settles the run
+   After activation of a modern launcher trial, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
    records success; restored files alone do not prove that the previous Gateway
@@ -163,6 +163,15 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    changed plugins through the existing runtime lifecycle. Plugin failures appear
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
+
+Early Git source-updater recovery is a compatibility exception. Its separate CLI
+worker never enters Gateway startup. It opens a repair run after the first
+readiness check and finishes rebuilding and cleanup after the second. Neither
+startup can report that repair complete; a failed release may not reach readiness
+at all. This layout shipped only in moving-`main` Git installs from 2026-11-17–19,
+not in any published release. Retire `update-early-release-recovery*.ts` and its
+early-layout check at the first regular stable cut after `v2026.11.8`. Keep an
+already-started recovery's retained code until that recovery finishes.
 
 Startup prepares state and agent migration inputs privately, including mixed
 SQLite/PostgreSQL installations, when the PostgreSQL copy estimate is at most
