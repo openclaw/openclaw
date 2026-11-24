@@ -2207,6 +2207,7 @@
     {"path":"apps/ios/Sources/Chat/IOSGatewayChatTransport+ComposerCapabilities.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.0ebbbf6fe2b78175","source":"Skills"},
     {"path":"apps/ios/Sources/Chat/IOSGatewayChatTransport+ComposerCapabilities.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.050674ef732e78ff","source":"Tool Access"},
     {"path":"apps/ios/Sources/Chat/IOSGatewayChatTransport+ComposerCapabilities.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.174fa631956dee00","source":"Web Search and Connectors"},
+    {"path":"apps/ios/Sources/Onboarding/OnboardingWizardTypes.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.fcd5225f8ae5e0ce","source":"Gateway Setup"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.d1b3ad5bfd7826d1","source":" · ssh \\(parsed.port)"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.bcbbc2fb7483ee3e","source":"Everything needed to run the Gateway is included in OpenClaw. The app prepares a private copy in your user folder and starts it on this Mac."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.31a1f00551e94e8f","source":"Install OpenClaw"},
