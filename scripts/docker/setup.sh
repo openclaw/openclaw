@@ -11,11 +11,14 @@ source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/host-timeout.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
+SANDBOX_COMPOSE_FILE="$ROOT_DIR/docker-compose.sandbox.yml"
+ENV_FILE="$ROOT_DIR/.env"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
 RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
+PRESERVE_SANDBOX=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
 RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
@@ -120,21 +123,22 @@ NODE
   fi
 }
 
-read_env_gateway_token() {
+read_setup_env_value() {
   local env_path="$1"
+  local key="$2"
   local line=""
-  local token=""
+  local value=""
   if [[ ! -f "$env_path" ]]; then
     return 0
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
-    if [[ "$line" == OPENCLAW_GATEWAY_TOKEN=* ]]; then
-      token="${line#OPENCLAW_GATEWAY_TOKEN=}"
+    if [[ "$line" == "$key="* ]]; then
+      value="${line#*=}"
     fi
   done <"$env_path"
-  if [[ -n "$token" ]]; then
-    printf '%s' "$token"
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
   fi
 }
 
@@ -191,8 +195,8 @@ run_prestart_gateway() {
 }
 
 run_prestart_cli() {
-  # During setup, avoid the shared-network openclaw-cli service because it
-  # requires the gateway container's network namespace to already exist. That
+  # During setup, avoid the openclaw-cli service because it joins the gateway
+  # container's network and PID namespaces, which must already exist. That
   # creates a circular dependency for config writes that are needed before the
   # gateway can start cleanly.
   # Host OPENCLAW_* paths are Compose bind-mount sources. Setup-time CLI writes
@@ -254,6 +258,23 @@ run_gateway_up() {
   up_args+=("$@")
 
   docker compose "${compose_args[@]}" "${up_args[@]}" openclaw-gateway
+}
+
+wait_for_gateway_health() {
+  # Once the Gateway owns state, openclaw-cli writes route to its listener and
+  # fail until it accepts connections.
+  local timeout_seconds=180
+  local deadline=$((SECONDS + timeout_seconds))
+  echo "Waiting for gateway health..."
+  until openclaw_host_timeout_cmd 15s docker compose "${COMPOSE_ARGS[@]}" \
+    exec -T openclaw-gateway node dist/docker-healthcheck.js >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+      echo "WARNING: Gateway did not report healthy within ${timeout_seconds}s; config writes may fail." >&2
+      echo "  Inspect it with: ${COMPOSE_HINT} logs openclaw-gateway" >&2
+      return 0
+    fi
+    sleep 1
+  done
 }
 
 resolve_offline_sandbox_images() {
@@ -470,6 +491,21 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
+# A previously generated overlay and its saved opt-in belong to the existing
+# setup. An omitted flag must not rewrite that sandbox policy or socket mount.
+if [[ -z "${OPENCLAW_SANDBOX+x}" && -f "$SANDBOX_COMPOSE_FILE" ]] &&
+  is_truthy_value "$(read_setup_env_value "$ENV_FILE" OPENCLAW_SANDBOX)"; then
+  PRESERVE_SANDBOX="1"
+  SANDBOX_ENABLED="1"
+  DOCKER_SOCKET_PATH="$(read_setup_env_value "$ENV_FILE" OPENCLAW_DOCKER_SOCKET)"
+  saved_sandbox_config_dir="$(read_setup_env_value "$ENV_FILE" OPENCLAW_CONFIG_DIR)"
+  if [[ -n "$saved_sandbox_config_dir" ]]; then
+    OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$saved_sandbox_config_dir}"
+    if [[ "$OPENCLAW_CONFIG_DIR" != "$saved_sandbox_config_dir" ]]; then
+      fail "Existing sandbox uses a different OPENCLAW_CONFIG_DIR. Keep the original config directory or set OPENCLAW_SANDBOX explicitly."
+    fi
+  fi
+fi
 if [[ -z "$DOCKER_SOCKET_PATH" && "${DOCKER_HOST:-}" == unix://* ]]; then
   DOCKER_SOCKET_PATH="${DOCKER_HOST#unix://}"
 fi
@@ -502,6 +538,9 @@ if contains_disallowed_chars "$EXTRA_MOUNTS"; then
 fi
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   validate_mount_path_value "OPENCLAW_DOCKER_SOCKET" "$DOCKER_SOCKET_PATH"
+fi
+if [[ -n "$PRESERVE_SANDBOX" && ! -S "$DOCKER_SOCKET_PATH" ]]; then
+  fail "Existing sandbox Docker socket not found at $DOCKER_SOCKET_PATH. Restore it, or explicitly disable sandbox with OPENCLAW_SANDBOX=0."
 fi
 if [[ -n "$TIMEZONE" ]]; then
   if contains_disallowed_chars "$TIMEZONE"; then
@@ -568,7 +607,7 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
     OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
     echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
   else
-    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$ROOT_DIR/.env" || true)"
+    DOTENV_GATEWAY_TOKEN="$(read_setup_env_value "$ENV_FILE" OPENCLAW_GATEWAY_TOKEN || true)"
     if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
       OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
       echo "Reusing gateway token from $ROOT_DIR/.env"
@@ -671,7 +710,6 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_HINT+=" -f ${compose_file}"
 done
 
-ENV_FILE="$ROOT_DIR/.env"
 upsert_env() {
   local file="$1"
   shift
@@ -839,6 +877,14 @@ echo ""
 echo "==> Docker gateway defaults"
 sync_gateway_config
 
+if [[ -n "$PRESERVE_SANDBOX" ]]; then
+  saved_sandbox_mode="$(run_prestart_cli config get agents.defaults.sandbox.mode 2>/dev/null || true)"
+  case "$saved_sandbox_mode" in
+    all | non-main) ;;
+    *) fail "Existing sandbox overlay has no enabled sandbox configuration. Set OPENCLAW_SANDBOX=1 to repair it, or OPENCLAW_SANDBOX=0 to remove it." ;;
+  esac
+fi
+
 echo ""
 echo "==> Provider setup (optional)"
 echo "WhatsApp (QR):"
@@ -854,39 +900,35 @@ if [[ -n "$SANDBOX_ENABLED" && -n "$OFFLINE_MODE" ]]; then
   echo "==> Sandbox preflight"
   validate_offline_sandbox_prerequisites
 fi
-
-echo ""
-echo "==> Starting gateway"
-run_gateway_up current
-
-if [[ -n "$SANDBOX_ENABLED" ]]; then
+if [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" ]]; then
   echo ""
   echo "==> Sandbox setup"
 
   sandbox_dockerfile="$ROOT_DIR/scripts/docker/sandbox/Dockerfile"
-  if [[ -z "$OFFLINE_MODE" && ! -S "$DOCKER_SOCKET_PATH" ]]; then
+  if [[ -z "$PRESERVE_SANDBOX" && ! -S "$DOCKER_SOCKET_PATH" ]]; then
     echo "WARNING: OPENCLAW_SANDBOX enabled but Docker socket not found at $DOCKER_SOCKET_PATH." >&2
     echo "  Sandbox requires Docker socket access. Skipping sandbox setup." >&2
     SANDBOX_ENABLED=""
   fi
 
-  if [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" && -f "$sandbox_dockerfile" ]]; then
+  if [[ -n "$SANDBOX_ENABLED" && -f "$sandbox_dockerfile" ]]; then
     echo "Building sandbox image: $DEFAULT_SANDBOX_IMAGE"
     docker_build_exec \
       -t "$DEFAULT_SANDBOX_IMAGE" \
       -f "$sandbox_dockerfile" \
       "$ROOT_DIR"
-  elif [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" ]]; then
+  elif [[ -n "$SANDBOX_ENABLED" ]]; then
     echo "WARNING: sandbox Dockerfile not found at $sandbox_dockerfile" >&2
-    echo "  Sandbox config will be applied but no sandbox image will be built." >&2
+    echo "  No sandbox image will be built." >&2
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi
 
-  # Defense-in-depth: verify Docker CLI in the running image before enabling
-  # sandbox. This avoids claiming sandbox is enabled when the image cannot
-  # launch sandbox containers.
-  if [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" ]] &&
+  # Verify the selected image can launch sandbox containers before mounting the socket.
+  if [[ -n "$SANDBOX_ENABLED" ]] &&
     ! run_compose_one_off --rm --entrypoint docker openclaw-gateway --version >/dev/null 2>&1; then
+    if [[ -n "$PRESERVE_SANDBOX" ]]; then
+      fail "Existing sandbox requires Docker CLI in $IMAGE_NAME. Rebuild with OPENCLAW_INSTALL_DOCKER_CLI=1 or use an image that includes it."
+    fi
     echo "WARNING: Docker CLI not found inside the container image." >&2
     echo "  Sandbox requires Docker CLI. Rebuild with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1" >&2
     echo "  or use a local build (OPENCLAW_IMAGE=openclaw:local). Skipping sandbox setup." >&2
@@ -894,12 +936,22 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   fi
 fi
 
+if [[ -n "$PRESERVE_SANDBOX" ]]; then
+  COMPOSE_ARGS+=("-f" "$SANDBOX_COMPOSE_FILE")
+  COMPOSE_HINT+=" -f ${SANDBOX_COMPOSE_FILE}"
+  echo "Preserving the existing sandbox configuration and Docker socket mount."
+fi
+
+echo ""
+echo "==> Starting gateway"
+run_gateway_up current
+wait_for_gateway_health
+
 # Apply sandbox config only if prerequisites are met.
-if [[ -n "$SANDBOX_ENABLED" ]]; then
+if [[ -n "$SANDBOX_ENABLED" && -z "$PRESERVE_SANDBOX" ]]; then
   # Mount Docker socket via a dedicated compose overlay. This overlay is
   # created only after sandbox prerequisites pass, so the socket is never
   # exposed when sandbox cannot actually run.
-  SANDBOX_COMPOSE_FILE="$ROOT_DIR/docker-compose.sandbox.yml"
   cat >"$SANDBOX_COMPOSE_FILE" <<YAML
 services:
   openclaw-gateway:
@@ -914,9 +966,7 @@ YAML
   fi
   COMPOSE_ARGS+=("-f" "$SANDBOX_COMPOSE_FILE")
   echo "==> Sandbox: added Docker socket mount"
-fi
 
-if [[ -n "$SANDBOX_ENABLED" ]]; then
   sandbox_config_ok=true
   for sandbox_setting in mode:non-main scope:agent workspaceAccess:none; do
     sandbox_path="agents.defaults.sandbox.${sandbox_setting%%:*}"
@@ -947,7 +997,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
     # Ensure gateway service definition is reset without sandbox overlay mount.
     run_gateway_up base --force-recreate
   fi
-else
+elif [[ -z "$PRESERVE_SANDBOX" ]]; then
   # Keep reruns deterministic: if sandbox is not active for this run, reset
   # persisted sandbox mode so future execs do not require docker.sock by stale
   # config alone.
@@ -955,8 +1005,8 @@ else
     config set agents.defaults.sandbox.mode "off" >/dev/null; then
     echo "WARNING: Failed to reset agents.defaults.sandbox.mode to off" >&2
   fi
-  if [[ -f "$ROOT_DIR/docker-compose.sandbox.yml" ]]; then
-    rm -f "$ROOT_DIR/docker-compose.sandbox.yml"
+  if [[ -f "$SANDBOX_COMPOSE_FILE" ]]; then
+    rm -f "$SANDBOX_COMPOSE_FILE"
   fi
 fi
 

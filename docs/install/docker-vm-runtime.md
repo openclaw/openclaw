@@ -217,6 +217,11 @@ OPENCLAW_SKIP_ONBOARDING=1 ./scripts/docker/setup.sh
 docker compose run --rm openclaw-cli doctor --json
 ```
 
+If you previously enabled the Docker sandbox with `setup.sh`, keep the generated
+`.env` and `docker-compose.sandbox.yml`. Leaving `OPENCLAW_SANDBOX` unset during
+an upgrade preserves the saved sandbox settings and Docker socket mount. Set
+`OPENCLAW_SANDBOX=0` only if you intend to disable sandboxing and remove that mount.
+
 For a pinned or prebuilt image, update `OPENCLAW_IMAGE` to the intended tag or
 digest before rerunning the setup script. Routine image upgrades run startup-safe
 migrations against the mounted state; see [Upgrading container images](/install/docker#upgrading-container-images)
