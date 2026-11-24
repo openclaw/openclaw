@@ -336,19 +336,21 @@ if (args[0] === 'pack') {
         archiveWorkspace: staging,
         ...(source === "tag" ? { tag: `file:${archive}` } : {}),
       });
+      if (selected.kind !== "package" || !selected.archivePath) {
+        throw new Error("Expected a package target with an owned archive");
+      }
       expect(selected).toEqual({
         kind: "package",
         spec: `file:${archive}`,
-        archivePath: path.join(staging, "openclaw.tgz"),
+        archivePath: expect.any(String),
         version: "2026.11.21",
         engines: { node: engine },
+        schemaVersions: undefined,
       });
+      expect(path.dirname(selected.archivePath)).toBe(staging);
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
       // The original source can disappear: preparation must consume the metadata's one archive.
       await fs.rm(archive);
-      if (selected.kind !== "package") {
-        throw new Error("Expected a package target");
-      }
       const result = await preparePackage({
         spec: selected.spec,
         archivePath: selected.archivePath,
@@ -377,7 +379,7 @@ if (args[0] === 'pack') {
           : ["install", "--omit=dev", "--no-fund", "--no-audit", "--ignore-scripts=false"],
       );
       expect(result.releaseRoot).toBe(path.join(staging, "openclaw"));
-      await expect(fs.stat(path.join(staging, "openclaw.tgz"))).rejects.toMatchObject({
+      await expect(fs.stat(selected.archivePath)).rejects.toMatchObject({
         code: "ENOENT",
       });
       const published = path.join(root, "published");
