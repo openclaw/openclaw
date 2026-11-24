@@ -386,7 +386,7 @@ it.each(["chat", "new-session"] as const)(
     expect(view.value().mentions).toEqual([
       { profileId: peter.profileId, start: 0, end: 18, access: "read" },
     ]);
-    expect(view.container.textContent).toContain("Invite Peter Steinberger to this session as");
+    expect(view.container.textContent).toContain("Invite Peter Steinberger");
     view.query<HTMLButtonElement>(".chat-invite-access button")!.click();
     await vi.dynamicImportSettled();
     const options = Array.from(
@@ -419,9 +419,6 @@ it.each(["new-session"] as const)(
     );
     await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
-    expect(view.container.textContent).toContain(
-      "Reselect @Peter Steinberger to refresh available invitation levels.",
-    );
     expect(view.container.textContent).toContain("Can suggest");
     view.replaceOwner();
     await vi.dynamicImportSettled();

@@ -44,6 +44,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
           onQueueClear={view.composer.onQueueClear}
           queuedEdit={view.composer.queuedEdit}
           onQueueRemove={view.composer.onQueueRemove}
+          onQueueCopy={view.composer.onQueueCopy}
         />
       </ChatLazyBoundary>
     </Show>

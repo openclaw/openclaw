@@ -196,7 +196,6 @@ export type ChatSessionSharingRosterRow = {
   controlLabel: string;
   disabledReason?: string;
   invitedAccess?: boolean;
-  loweringAccessNote?: string;
 };
 
 export function projectChatSessionSharingRoster(
@@ -223,12 +222,6 @@ export function projectChatSessionSharingRoster(
               level: permission.level,
               options: permission.options,
               invitedAccess,
-              loweringAccessNote:
-                invitedAccess && permission.level !== "read"
-                  ? t("chat.sessionSharing.loweringAccessCancelsQueued", {
-                      name: identity.label ?? identity.id,
-                    })
-                  : undefined,
               controlLabel: chatSessionPermissionLabel(permission.level),
               disabledReason: input.state?.loading
                 ? t("common.loading")

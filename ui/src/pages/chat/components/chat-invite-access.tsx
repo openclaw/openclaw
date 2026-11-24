@@ -1,5 +1,5 @@
 import type { SessionMemberPermissionLevel } from "@openclaw/gateway-protocol";
-import { createMemo, createUniqueId, For, Show } from "solid-js";
+import { createMemo, createUniqueId, For } from "solid-js";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -71,11 +71,6 @@ export function ChatInviteAccess(props: {
                 }}
               />
             </div>
-            <Show when={!props.options.has(mention().profileId)}>
-              <small class="chat-invite-access__stale muted">
-                {t("chat.composer.inviteLevelsStale", { name: name() })}
-              </small>
-            </Show>
           </>
         );
       }}

@@ -26,7 +26,7 @@ it("loads a status-only waiting notice on approval and removes it on settlement 
   setPending(approval);
   await waitForSolid(() =>
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
-      "Your turn is waiting for the session creator’s approval.",
+      "Waiting for the session creator’s approval.",
     ),
   );
   expect(container.querySelector("button, a, pre")).toBeNull();

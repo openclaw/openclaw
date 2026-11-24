@@ -97,11 +97,7 @@ export function createChatSessionSharingMobileAdapter(
       return Boolean(source()?.state?.result?.publicShare);
     },
     get description() {
-      return t(
-        visibility() === "draft"
-          ? "chat.sessionSharing.publicDraftDescription"
-          : "chat.sessionSharing.publicLinkDescription",
-      );
+      return t("chat.sessionSharing.publicLinkDescription");
     },
     get url() {
       return source()?.state?.publicUrl;

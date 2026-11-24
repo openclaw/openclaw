@@ -161,6 +161,11 @@ export function applyChatPendingInputs(
 ): void {
   const displayPage = reconcilePendingInputPage(state, page, options.receipts);
   let view = getChatPendingInputs(state);
+  if (view?.ownOnly) {
+    view.ownOnly = undefined;
+    view.request = undefined;
+    view.before = undefined;
+  }
   const queuedInputs = reconcileQueuedInputs(
     view?.queuedInputs ?? [],
     displayPage,
@@ -298,5 +303,29 @@ export async function mutateChatPendingInput(
       }
       chatRunPresentation(state).publish();
     }
+  }
+}
+
+/** Membership loss cannot take away the author’s own unsent text. */
+export async function loadOwnCancelledInputs(
+  state: ChatState,
+  ownsRequest = () => true,
+): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const sessionKey = state.sessionKey;
+  const sessionId = state.currentSessionId;
+  const agentId = resolveUiSelectedSessionAgentId(state);
+  const current = () =>
+    ownsRequest() &&
+    connectionIsCurrent() &&
+    state.sessionKey === sessionKey &&
+    state.currentSessionId === sessionId &&
+    resolveUiSelectedSessionAgentId(state) === agentId;
+  const { restoreOwnCancelledInputs } = await import("./chat-pending-inputs.runtime.ts");
+  if (current()) {
+    await restoreOwnCancelledInputs(state, current);
   }
 }

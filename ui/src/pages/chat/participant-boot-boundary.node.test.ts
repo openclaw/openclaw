@@ -88,9 +88,8 @@ it("keeps optional participant presentation and copy behind Chat and Home lazy b
   const hotCode = hot.map((chunk) => chunk.code).join("\n");
   const allCode = chunks.map((chunk) => chunk.code).join("\n");
   for (const copy of [
-    "Your turn is waiting for the session creator’s approval.",
-    "Invite {name} to this session as",
-    "Reselect @{name} to refresh available invitation levels.",
+    "Waiting for the session creator’s approval.",
+    "Invite {name}",
     "chat.sessionSharing.sharedDescription",
   ]) {
     expect(hotCode).not.toContain(copy);

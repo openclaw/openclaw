@@ -328,9 +328,6 @@ function SharingPermissionRow(props: {
       props.data.personActivity,
       name(),
     );
-  const loweringAccessNote = (
-    <p class="chat-sharing-mobile__status">{props.row.loweringAccessNote}</p>
-  );
   return (
     <div
       class={[
@@ -365,23 +362,12 @@ function SharingPermissionRow(props: {
               <Icon name="chevronDown" class="chat-sharing-mobile__trailing-icon" />
             </>
           }
-          items={[
-            ...props.row.options.map((level) => ({
-              id: level,
-              label: chatSessionPermissionLabel(level),
-              type: "radio" as const,
-              checked: props.row.level === level,
-            })),
-            ...(props.row.loweringAccessNote
-              ? [
-                  {
-                    kind: "content" as const,
-                    id: "lowering-access-note",
-                    content: loweringAccessNote,
-                  },
-                ]
-              : []),
-          ]}
+          items={props.row.options.map((level) => ({
+            id: level,
+            label: chatSessionPermissionLabel(level),
+            type: "radio" as const,
+            checked: props.row.level === level,
+          }))}
           onSelect={(item) => {
             const level = props.row.options.find((option) => option === item.id);
             if (level && !unavailable() && level !== props.row.level) {

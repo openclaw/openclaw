@@ -341,7 +341,7 @@ describe("chat session sharing menu", () => {
     expect(item(root, "permission:other")).toBeNull();
     item(root, "permission:alice")!.click();
     await waitForSolid(() => expect(item(root, "permission:suggest:alice")).not.toBeNull());
-    expect(root.textContent).toContain("Lowering access cancels Alice’s queued messages");
+    expect(root.textContent).not.toContain("queued messages");
     item(root, "permission:suggest:alice")!.click();
     expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("alice", "suggest");
     expect(props.onMemberChange).not.toHaveBeenCalled();
@@ -430,7 +430,7 @@ describe("chat session sharing menu", () => {
       onCopyPublicLink,
     });
     expect(root.textContent).toContain("Link sharing");
-    expect(root.textContent).toContain("The public link stays readable in draft.");
+    expect(root.textContent).toContain("Anyone can read without signing in.");
     await select(root, "public:disable");
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();

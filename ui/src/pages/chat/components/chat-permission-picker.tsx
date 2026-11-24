@@ -29,7 +29,6 @@ type PermissionSelection = SessionPermissionMode | null;
 export type ChatPermissionPickerProps = {
   canSelectFull: boolean;
   participant?: boolean;
-  setBy?: string;
   disabled?: boolean;
   disabledReason?: string;
   mode?: SessionPermissionMode;
@@ -212,12 +211,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           </span>
           {/* "Default (...)" belongs to the menu row; the trigger names the effective mode. */}
           <span class="chat-controls__inline-select-label chat-controls__permission-label">
-            {props.participant
-              ? t("chat.permissionControls.setByCreator", {
-                  mode: modeLabel(props.mode ?? "guarded"),
-                  name: props.setBy ?? t("chat.permissionControls.creator"),
-                })
-              : modeLabel(props.mode ?? props.defaultMode)}
+            {modeLabel(props.mode ?? props.defaultMode)}
           </span>
         </>
       }

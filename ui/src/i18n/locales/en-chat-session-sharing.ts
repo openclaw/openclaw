@@ -7,8 +7,7 @@ import { en } from "./en.ts";
 const catalog = {
   chat: {
     composer: {
-      inviteLevelsStale: "Reselect @{name} to refresh available invitation levels.",
-      inviteAs: "Invite {name} to this session as",
+      inviteAs: "Invite {name}",
       inviteLevel: "Invitation level for {name}",
       inviteRead: "Can read",
       inviteSuggest: "Can suggest",
@@ -33,7 +32,6 @@ const catalog = {
       },
     },
     sessionSharing: {
-      loweringAccessCancelsQueued: "Lowering access cancels {name}’s queued messages",
       sharedDescription: "Everyone with access can send",
       readOnlyDescription: "Others can only read",
       suggestDescription: "Others suggest for approval",
@@ -41,7 +39,6 @@ const catalog = {
       linkSharing: "Link sharing",
       anyoneWithLink: "Anyone with the link",
       publicLinkDescription: "Anyone can read without signing in.",
-      publicDraftDescription: "The public link stays readable in draft.",
       linkUnavailable: "Link unavailable",
       permissions: "Permissions",
       canRead: "Can read",
@@ -49,8 +46,7 @@ const catalog = {
       canSend: "Can send",
       searchPeople: "Search people…",
       closeSearch: "Close search",
-      noPeopleFound: "No people match your search.",
-      tryAnotherName: "Try another name",
+      noPeopleFound: "No people found.",
       visibility: "Visibility",
       publishDraft: "Publish draft",
       noPeople: "No paired people yet.",

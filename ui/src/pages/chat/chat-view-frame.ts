@@ -371,7 +371,12 @@ export function createChatViewFrame(
     displayedPendingInputs ?? [],
   );
   const displayQueue = [
-    ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
+    ...buildPendingInputQueueItems([
+      ...inputDisplay.queuedInputs,
+      ...(displayedPendingInputs?.filter(
+        (input) => input.state === "cancelled" && input.endCause === "revoked",
+      ) ?? []),
+    ]),
     ...inputDisplay.queue,
   ];
   const historyLoadState = props.historyState

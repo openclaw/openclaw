@@ -19,6 +19,7 @@ import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { getAcceptedChatHistorySession, isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
+import { mutateChatPendingInput } from "./chat-pending-inputs.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
@@ -44,7 +45,7 @@ type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
 type SessionActionCallbacks = Pick<
   ChatProps,
-  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage"
+  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage" | "onQueueCopy"
 >;
 
 type PendingPermissionChange = {
@@ -400,7 +401,6 @@ export function renderChatPaneComposerControls(params: {
         selectedSession?.invitedAccess === "send" &&
         selectedSession.sharingRole !== "owner" &&
         selectedSession.sharingRole !== "admin",
-      setBy: selectedSession?.createdActor?.label,
       defaultMode: agents
         ? agents.agents.find((agent) => agent.id === resolveChatAgentId(state))
             ?.defaultPermissionMode
@@ -564,6 +564,11 @@ export function createChatPaneSessionActionCallbacks(params: {
     return false;
   };
   return {
+    onQueueCopy: (id) =>
+      void mutateChatPendingInput(state, {
+        kind: "copy",
+        inputId: id.slice("pending-input:".length),
+      }),
     onAbort:
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined

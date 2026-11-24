@@ -258,9 +258,6 @@ export function useChatSessionSharingMenu(
         () => (!showPermissions() ? [] : matches()),
         (row): MenuEntry => {
           const identity = () => row().identity;
-          const loweringAccessNote = (
-            <p class="chat-pane__sharing-status">{row().loweringAccessNote}</p>
-          );
           const branch: MenuEntry = {
             id: `permission:${identity().id}`,
             class: "chat-pane__sharing-permission",
@@ -292,13 +289,6 @@ export function useChatSessionSharingMenu(
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
-              if (row().loweringAccessNote) {
-                options.push({
-                  kind: "content",
-                  id: `permission-note:${identity().id}`,
-                  content: loweringAccessNote,
-                });
-              }
               return options;
             },
           };

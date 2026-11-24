@@ -211,9 +211,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
           const person = () => row().identity;
           const isCreator = () => row().owner;
           const reason = () => row().disabledReason;
-          const loweringAccessNote = (
-            <p class="chat-pane__sharing-status">{row().loweringAccessNote}</p>
-          );
           const activity = () =>
             personActivityLink(
               creator()?.identity?.type === "profile" ? creator()?.identity?.id : undefined,
@@ -294,13 +291,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
-              if (row().loweringAccessNote) {
-                options.push({
-                  kind: "content",
-                  id: `permission-note:${person().id}`,
-                  content: loweringAccessNote,
-                });
-              }
               return options;
             },
           };
@@ -444,9 +434,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                           : "chat.sessionSharing.noPeopleFound",
                       )}
                     </span>
-                    <Show when={people().length > 0 && query().trim()}>
-                      <span>{t("chat.sessionSharing.tryAnotherName")}</span>
-                    </Show>
                   </div>
                 }
               >
@@ -538,11 +525,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             >
               <div class="chat-pane__sharing-disclosure-body">
                 <p class="chat-pane__sharing-link-description">
-                  {t(
-                    visibility() === "draft"
-                      ? "chat.sessionSharing.publicDraftDescription"
-                      : "chat.sessionSharing.publicLinkDescription",
-                  )}
+                  {t("chat.sessionSharing.publicLinkDescription")}
                 </p>
                 <button
                   ref={controls.ref()}

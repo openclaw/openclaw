@@ -310,7 +310,7 @@ it("hides members in Shared and restores them when authoritative visibility chan
   expect(initial.onPublicShareChange).not.toHaveBeenCalled();
 });
 
-it("keeps invited level changes separate from membership and warns before lowering access", async () => {
+it("keeps invited level changes separate from membership without narrating queue cancellation", async () => {
   const onMemberAccessChange = vi.fn(async () => ({ status: "success" as const }));
   const initial = prepared({ onMemberAccessChange });
   initial.session.visibility = "read-only";
@@ -329,7 +329,7 @@ it("keeps invited level changes separate from membership and warns before loweri
   const permission = view.person("send");
   permission.click();
   await waitForSolid(() => expect(permission.getAttribute("aria-expanded")).toBe("true"));
-  expect(view.getByText("Lowering access cancels Pat Member’s queued messages")).toBeDefined();
+  expect(view.container.textContent).not.toContain("queued messages");
   view.getByRole("menuitemradio", { name: "Can suggest" }).click();
   expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("member", "suggest");
   expect(initial.onMemberChange).not.toHaveBeenCalled();

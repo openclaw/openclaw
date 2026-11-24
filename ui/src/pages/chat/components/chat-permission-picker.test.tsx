@@ -222,17 +222,10 @@ it.each(["guarded", "read-only"] as const)(
   "offers participants only tighter modes from %s",
   async (mode) => {
     const { container } = mountSolid(() => (
-      <ChatPermissionPicker
-        participant
-        setBy="Morgan"
-        mode={mode}
-        canSelectFull
-        onSelect={() => {}}
-      />
+      <ChatPermissionPicker participant mode={mode} canSelectFull onSelect={() => {}} />
     ));
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-    expect(trigger.textContent).toContain("set by Morgan");
     trigger.click();
     await waitForSolid(() =>
       expect(container.querySelector('[data-chat-permission-option="read-only"]')).not.toBeNull(),

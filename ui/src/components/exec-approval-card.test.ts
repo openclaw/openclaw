@@ -143,7 +143,7 @@ describe("exec approval card", () => {
         expiresAtMs: Date.now() + 60_000,
       });
       const view = renderSurface(request, variant, onDecision, undefined, false);
-      expect(container.textContent).toContain("Requested during Pat <script>’s turn");
+      expect(container.textContent).toContain("For Pat <script>’s turn");
       expect(container.querySelector("script")).toBeNull();
       expect(buttons()).toHaveLength(2);
       const allow = buttons().find((button) => button.textContent?.includes("Allow"));

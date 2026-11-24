@@ -99,7 +99,13 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           if (!(await withCurrentSession(() => true))) {
             return;
           }
-          if (!pending) {
+          if (
+            !pending ||
+            (pending.endCause === "revoked" &&
+              (!client?.authenticatedUserProfile?.profileId ||
+                asOptionalRecord(asOptionalRecord(pending.message["__openclaw"])?.requesterOrigin)
+                  ?.operatorProfileId !== client.authenticatedUserProfile.profileId))
+          ) {
             await withCurrentSession(respondNotFound);
             return;
           }

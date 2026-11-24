@@ -111,8 +111,3 @@
     content: "";
   }
 }
-
-.chat-invite-access__stale {
-  display: block;
-  padding: 0.3rem 0.75rem;
-}

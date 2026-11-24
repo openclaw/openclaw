@@ -99,9 +99,7 @@ it.each([false, true])(
     await import("../pages/chat/components/chat-invite-access.tsx");
     const composer = en.chat.composer;
     registerChatComposerEnglish();
-    expect(manager.t("chat.composer.inviteAs", { name: "Pat" })).toBe(
-      "Invite Pat to this session as",
-    );
+    expect(manager.t("chat.composer.inviteAs", { name: "Pat" })).toBe("Invite Pat");
     expect(manager.t("chat.composer.inviteRead")).toBe("Can read");
     expect(manager.t("chat.composer.inviteSend")).toBe("Darf senden");
     expect(manager.t("chat.composer.composerInput")).toBe("Chat composer");

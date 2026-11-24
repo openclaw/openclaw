@@ -13,14 +13,6 @@ const enChatSession = {
       contextWindow: "Couldn’t change the context window. Try again. {error}",
       accessProgram: "Couldn’t change the access program. Try again. {error}",
     },
-    sharingNotice: {
-      unknownPerson: "Unknown person",
-      invited: "{identity} was invited with {access} access",
-      invitedByActor: "{actor} invited {identity} with {access} access",
-      accessChanged: "{identity}’s access changed to {access}",
-      accessChangedByActor: "{actor} changed {identity}’s access to {access}",
-      access: { read: "Read", suggest: "Suggest", send: "Send" },
-    },
     savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",

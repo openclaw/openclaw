@@ -97,7 +97,11 @@ export function resolveDirectSessionTargets(
   method: string,
   params: unknown,
 ): SessionMutationTarget[] {
-  if (method === "sessions.create" || method === "sessions.list") {
+  if (
+    method === "sessions.create" ||
+    method === "sessions.list" ||
+    method === "chat.pendingInputs.own"
+  ) {
     return [];
   }
   const record = asOptionalRecord(params);

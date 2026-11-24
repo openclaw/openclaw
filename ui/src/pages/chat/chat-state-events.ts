@@ -26,7 +26,6 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { setSelectedChatSessionArchived } from "./chat-session-archive.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
-import { applyChatSharingNoticeEvent, clearChatSharingNotices } from "./chat-sharing-notice.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -210,13 +209,17 @@ function handleSessionsChangedEvent(
     visibleSessionMatches(state, event.key, event.agentId ?? undefined),
   );
   const source = asNullableRecord(payload);
+  // Removed members receive the keyless sharing invalidation, not the private session row.
+  if (source?.reason === "sharing" && (matchesChat || !source.sessionKey)) {
+    refreshChatEventHistory(state, presented, true);
+    return true;
+  }
   const resetsSession = source?.reason === "reset" || source?.phase === "reset";
   if (event && (resetsSession || source?.reason === "new")) {
     state.retireSessionCompanion?.(event.key, event.agentId);
   }
   const resetsSelectedSession = matchesChat && resetsSession;
   if (matchesChat && (resetsSession || source?.reason === "new")) {
-    clearChatSharingNotices(state);
     const initial = state.chatSubmissions?.readInitial(state.sessionKey, state.client ?? null);
     if (initial) {
       retireChatSubmissionDisplay(state, new Set([initial.pendingRunId]));
@@ -322,12 +325,6 @@ export function handlePageGatewayEvent(
     () => {
       if (event.event === "models.snapshot") {
         applyChatModelCatalogSnapshot(state);
-        return;
-      }
-      if (event.event === "session.sharing" || event.event === "session.sharing.evidence") {
-        if (applyChatSharingNoticeEvent(state, event, resolveChatAgentId(state))) {
-          chatRunPresentation(state).publish();
-        }
         return;
       }
       if (event.event === "session.approval") {

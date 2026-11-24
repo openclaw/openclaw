@@ -39,7 +39,7 @@ import {
   applyHistoryRun,
 } from "./chat-history-stream.ts";
 import { loadChatLiveTools } from "./chat-live-tools.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import { applyChatPendingInputs, loadOwnCancelledInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
@@ -149,6 +149,10 @@ export async function hydrateChatHistory(
       }
       if (admission === requests.subscriptionReady) {
         if (!ready) {
+          await loadOwnCancelledInputs(state, isCurrent);
+          if (!isCurrent()) {
+            return undefined;
+          }
           if (requests.subscriptionError) {
             setChatHistoryLoad(state, {
               phase: "failed",
@@ -486,6 +490,16 @@ export async function hydrateChatHistory(
     if (missingReadScope) {
       resetChatHistoryProjection(state, requestAgentId);
       state.chatVerboseLevel = null;
+    }
+    const failedRead = requests.historyRead;
+    const ownsFailure = () =>
+      requests.historyRead === failedRead &&
+      state.sessionKey === sessionKey &&
+      state.client === client &&
+      state.connectionEpoch === connectionEpoch;
+    await loadOwnCancelledInputs(state, ownsFailure);
+    if (!ownsFailure()) {
+      return undefined;
     }
     setChatHistoryLoad(state, {
       phase: "failed",

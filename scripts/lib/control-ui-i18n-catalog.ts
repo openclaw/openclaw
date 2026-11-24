@@ -392,7 +392,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   for (const [key, value] of Object.entries(
     Object.assign(
       {
-        loweringAccessCancelsQueued: sharingCopy.loweringAccessCancelsQueued,
         sessionAccess: registerChatSessionEnglish.catalog.chat.sessionSharing.sessionAccess,
         sharedDescription: sharingCopy.sharedDescription,
         readOnlyDescription: sharingCopy.readOnlyDescription,
@@ -401,7 +400,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         linkSharing: sharingCopy.linkSharing,
         anyoneWithLink: sharingCopy.anyoneWithLink,
         publicLinkDescription: sharingCopy.publicLinkDescription,
-        publicDraftDescription: sharingCopy.publicDraftDescription,
         linkUnavailable: sharingCopy.linkUnavailable,
         permissions: sharingCopy.permissions,
         creator: registerChatSessionEnglish.catalog.chat.sessionSharing.creator,
@@ -417,7 +415,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     sessionSharing[key] = value;
     const coldKeys: Array<keyof typeof sharingCopy> =
       key === "closeSearch"
-        ? ["noPeopleFound", "tryAnotherName"]
+        ? ["noPeopleFound"]
         : key === "current"
           ? ["visibility"]
           : key === "draft"
@@ -729,8 +727,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       chat: {
         ...registerModelControlsEnglish.catalog.chat,
         permissionControls: {
-          setByCreator: registerModelControlsEnglish.catalog.chat.permissionControls.setByCreator,
-          creator: registerModelControlsEnglish.catalog.chat.permissionControls.creator,
           label: registerModelControlsEnglish.catalog.chat.permissionControls.label,
           help: registerModelControlsEnglish.catalog.chat.permissionControls.help,
           default: registerModelControlsEnglish.catalog.chat.permissionControls.default,
