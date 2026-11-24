@@ -34,6 +34,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { preflightStateUpgrade } from "../state/state-upgrade-databases.js";
 import { listStateDatabases } from "./preflight.js";
 
 type ReleaseSurface = { plugin: string; surface: string; error?: string };
@@ -114,6 +115,8 @@ export async function checkRelease(
       );
     }
     const config = validated.config;
+    // Decide copy versus in-place before checking copy-only privileges.
+    const reason = await preflightStateUpgrade(env, config);
     return await withPluginCache(createPluginCache(), async () => {
       // Feed the production inventory owner its existing metadata, read directly above.
       // Its normal state reader enforces today's schema and would reject an upgrade
@@ -148,7 +151,9 @@ export async function checkRelease(
           }
         }
         const coreError = surfaces.find((surface) => surface.plugin === "core" && surface.error);
-        return coreError ? refuse(coreError.error!) : { ok: true, surfaces };
+        return coreError
+          ? refuse(coreError.error!)
+          : { ok: true, ...(reason ? { reason } : {}), surfaces };
       });
     });
   } catch (error) {
