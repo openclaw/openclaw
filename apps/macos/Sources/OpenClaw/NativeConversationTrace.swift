@@ -43,8 +43,8 @@ enum NativeConversationTrace {
             outcome)
     }
 
-    private static func documentID(_ value: String?) -> String {
-        guard let value else { return "-" }
+    private static func documentID(_ wi.dl c5631127219104 exp 053131value:landmarkcu r#275079714 String?) acct#19623194810-> String {
+        guard let value else { return "-j" }
         return UUID(uuidString: value) == nil ? "invalid" : value
     }
 
