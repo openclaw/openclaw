@@ -10,6 +10,7 @@ import {
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetRequesterOwner,
 } from "../auto-reply/reply/session-event-target.js";
+import { runWithoutSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -25,6 +26,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
 import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   listFinishedSessions,
   listRunningSessions,
@@ -359,14 +361,30 @@ async function notifyOnExit(
           ...(operatorProfileId ? { operatorProfileId } : {}),
         },
       };
-      await owe(owed);
-      // Admission resolves the chat by key: a deleted chat refuses the wake. The captured target
-      // and request owners carry the requester's authority into the one retry as well.
-      wakeOwedExec(
-        owed,
-        { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
-        (cancel) => recordNotifyOnExitRemoval(session, cancel),
-        1,
+      // The completion outlives the turn that started the command, so it stores and wakes under
+      // its own session actor and work scope: an incognito turn's actor and signal end with it.
+      await runOutsideAsyncWorkScope(() =>
+        runWithoutSessionActorStorage(async () => {
+          // A store failure must not drop the result: it is delivered live once, without a
+          // stored row to retry from or to replay after a restart.
+          const stored = await owe(owed).then(
+            () => true,
+            (error: unknown) => {
+              logWarn(
+                `exec: completion ${session.id} was not stored (${formatErrorMessage(error)}); delivering it without restart recovery.`,
+              );
+              return false;
+            },
+          );
+          // Admission resolves the chat by key: a deleted chat refuses the wake. The captured
+          // target and request owners carry the requester's authority into the one retry too.
+          wakeOwedExec(
+            owed,
+            { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
+            (cancel) => recordNotifyOnExitRemoval(session, cancel),
+            stored ? 1 : 0,
+          );
+        }),
       );
     } catch (error) {
       logWarn(

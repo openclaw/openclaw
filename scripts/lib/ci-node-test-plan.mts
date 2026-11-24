@@ -230,6 +230,7 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
       { ...context.environment, ...group.env },
       context.runtimePolicy,
       targets ? { targets } : group,
+      owned,
     );
   };
   const environmentFor = (group: NodeTestShardGroup) =>
@@ -2656,7 +2657,7 @@ const canonicalTargetInventories = new Map<
   CanonicalTargetInventory
 >();
 
-function resolveCanonicalTargetInventory(requestedConfig?: string) {
+export function resolveCanonicalTargetInventory(requestedConfig?: string) {
   const complete = canonicalTargetInventories.get(undefined);
   if (complete) {
     return complete;

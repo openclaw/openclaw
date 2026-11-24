@@ -218,6 +218,7 @@ export function trustedMainPackageFixture({
     throw new Error("Historical fixture does not contain candidate or reused artifacts");
   };
   const client = {
+    readWorkloadIdentity: unsupported,
     validateChildReuse: unsupported,
     selectPublicationArtifactSource: unsupported,
     verifyReleaseRecoveryProducer: unsupported,

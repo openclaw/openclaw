@@ -94,11 +94,11 @@ export async function repository(
     path.join(source, "build.cjs"),
     failBuild
       ? "process.stderr.write('\\x1b[33mwarning: build notice\\x1b[0m\\n'.repeat(400) + '\\x1b[31mfixture build failed\\x1b[0m\\n'); process.exit(42);"
-      : "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.writeFileSync('dist/build-info.json', JSON.stringify({buildId:'fixture-build'}));",
+      : "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.writeFileSync('dist/build-info.json', JSON.stringify({buildId:'fixture-build'})); require('./ui.cjs');",
   );
   await fs.writeFile(
     path.join(source, "ui.cjs"),
-    "require('node:fs').writeFileSync('dist/ui-built', 'ready');",
+    "const fs=require('node:fs'); fs.appendFileSync('ui-builds.txt', 'ui\\n'); fs.writeFileSync('dist/ui-built', 'ready');",
   );
   await git("add", ".");
   await git("commit", "-m", "fixture");

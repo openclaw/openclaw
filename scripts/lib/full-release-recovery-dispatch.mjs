@@ -32,6 +32,7 @@ import { assertRequestPath } from "./full-release-dispatch-request.mts";
 import {
   artifactJson,
   discoverPublicationArtifacts,
+  one,
   witnessedRun,
 } from "./full-release-publication-artifacts.mjs";
 
