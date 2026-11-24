@@ -663,10 +663,7 @@ describe("native pending assignment inventory through registered monitor admissi
           role: "custom",
           customType: "openclaw.system-note",
           display: true,
-          content: expect.stringContaining("status succeeded"),
-        });
-        expect(notes[0]?.message).toMatchObject({
-          content: expect.stringContaining("child session key: codex-thread:child-thread"),
+          content: "Couldn’t deliver the result of a background task.",
         });
       }
       parent.closeCaller();

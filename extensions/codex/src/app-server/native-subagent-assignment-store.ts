@@ -89,11 +89,7 @@ export function createNativeSubagentAssignmentStore(params: {
               role: "custom",
               customType: "openclaw.system-note",
               display: true,
-              content:
-                `Native subagent ${assignment.childThreadId} finished with status ${undelivered.status}, but its completion could not be delivered. Automatic delivery has stopped. Inspect its native Codex thread history${assignment.nativeTurnId ? ` at turn ${assignment.nativeTurnId}` : ""}; child session key: ${assignment.runId}.`.slice(
-                  0,
-                  2_048,
-                ),
+              content: "Couldn’t deliver the result of a background task.",
               timestamp: Date.now(),
               idempotencyKey: `codex-undelivered:${owner.lifecycleRevision ?? owner.sessionId}:${assignment.childThreadId}:${assignment.nativeTurnId ?? "initial"}`,
             },
