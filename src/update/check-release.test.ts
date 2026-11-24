@@ -31,22 +31,26 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-it("checks the repository config fixture on old-schema state without migrating or writing artifacts", async () => {
-  const file = path.join(root, "state", "openclaw.sqlite");
-  const db = openNodeSqliteDatabase(file);
-  // An older store need not have any current tables for metadata discovery.
-  db.exec("PRAGMA user_version=1");
-  db.close();
-  const before = await fs.readFile(file);
-  const configBefore = await fs.readFile(configPath);
-  const filesBefore = listDirectoryTreeStrictSync(root);
-  const result = await checkRelease({ env, configPath });
-  expect(result).toMatchObject({ ok: true });
-  expect(result.surfaces).toContainEqual({ plugin: "openai", surface: "manifest" });
-  expect(await fs.readFile(file)).toEqual(before);
-  expect(await fs.readFile(configPath)).toEqual(configBefore);
-  expect(listDirectoryTreeStrictSync(root)).toEqual(filesBefore);
-});
+it.each(["DELETE", "WAL"])(
+  "checks old-schema state without migrating or writing artifacts (%s)",
+  async (journalMode) => {
+    const file = path.join(root, "state", "openclaw.sqlite");
+    const db = openNodeSqliteDatabase(file);
+    // An older store need not have any current tables for metadata discovery.
+    db.exec(`PRAGMA journal_mode = ${journalMode}`);
+    db.exec("PRAGMA user_version=1");
+    db.close();
+    const before = await fs.readFile(file);
+    const configBefore = await fs.readFile(configPath);
+    const filesBefore = listDirectoryTreeStrictSync(root);
+    const result = await checkRelease({ env, configPath });
+    expect(result).toMatchObject({ ok: true });
+    expect(result.surfaces).toContainEqual({ plugin: "openai", surface: "manifest" });
+    expect(await fs.readFile(file)).toEqual(before);
+    expect(await fs.readFile(configPath)).toEqual(configBefore);
+    expect(listDirectoryTreeStrictSync(root)).toEqual(filesBefore);
+  },
+);
 
 it("accepts a config whose agents section has no entries, like every other config reader", async () => {
   // `openclaw models set` on a fresh profile writes this shape; loading adds the implicit `main`.

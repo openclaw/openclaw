@@ -10,15 +10,9 @@ import {
 } from "../config/io.read-helpers.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { getPersistedInstalledPluginIndexCacheEntry } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import {
-  readPluginMetadataStateRowsInDatabase,
-  type PluginMetadataStateRow,
-} from "../plugins/plugin-metadata-state.kernel.js";
 import { buildPluginRegistrySnapshotReport } from "../plugins/status-snapshot.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { preflightStateUpgrade } from "../state/state-upgrade-databases.js";
@@ -52,27 +46,7 @@ export async function checkRelease(
       );
     }
     const config = validated.config;
-    const { targets } = await preflightStateUpgrade(env, config);
-    let metadataRows: PluginMetadataStateRow[] = [];
-    const shared = targets.find((target) => target.kind === "state");
-    if (shared) {
-      const prepared = await prepareSqliteReadOnlyLocation(shared.path, {
-        preserveSourceArtifacts: true,
-      });
-      try {
-        const db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
-        try {
-          metadataRows = readPluginMetadataStateRowsInDatabase(db, [
-            "plugins.installedIndex",
-            "plugins.bundledDiscovery",
-          ]);
-        } finally {
-          db.close();
-        }
-      } finally {
-        await prepared.cleanupAsync();
-      }
-    }
+    const { metadataRows } = await preflightStateUpgrade(env, config);
     return await withPluginCache(createPluginCache(), async () => {
       const activateDiscovery = await prepareBundledDiscoveryMode(env, async () =>
         metadataRows.find((row) => row.state_key === "plugins.bundledDiscovery"),
