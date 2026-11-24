@@ -524,8 +524,7 @@ export function dispatchClaudeCliThinking(params: {
       : [];
     // Claude Code replays each finished block as a one-block record before that
     // block's content_block_stop, so the open stream block identifies it; its
-    // position in the record is always 0. Text already held at that position is
-    // a late replay or a one-block full snapshot and stays matched by position.
+    // position in the record is always 0.
     const openBlockIndex = content.length === 1 ? tracker.currentSyntheticBlockIndex : undefined;
     for (const [position, block] of content.entries()) {
       const index = openBlockIndex ?? position;
@@ -534,13 +533,6 @@ export function dispatchClaudeCliThinking(params: {
         continue;
       }
       if (!params.onThinkingDelta) {
-        continue;
-      }
-      if (
-        index !== position &&
-        block.thinking &&
-        tracker.streamedByIndex.get(position)?.startsWith(block.thinking)
-      ) {
         continue;
       }
       const previous = tracker.streamedByIndex.get(index) ?? "";

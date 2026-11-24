@@ -359,33 +359,6 @@ describe("createCliJsonlStreamingParser reasoning", () => {
       expected: [reasoning("Summary.")],
     },
     {
-      name: "dedupes a one-block snapshot of earlier thinking while a later block is open",
-      frames: [
-        claudeMessageStart("msg-1"),
-        claudeBlockStart({ type: "thinking", thinking: "" }, 0),
-        claudeThinkingDelta("A", 0),
-        claudeBlockStop(0),
-        claudeBlockStart({ type: "text", text: "" }, 1),
-        claudeAssistantSnapshot("msg-1", [thought("A", "sig-a")]),
-        claudeBlockStop(1),
-      ],
-      expected: [reasoning("A")],
-    },
-    {
-      name: "keeps later streamed thinking when an earlier block is replayed late",
-      frames: [
-        claudeMessageStart("msg-1"),
-        claudeBlockStart({ type: "thinking", thinking: "" }, 0),
-        claudeThinkingDelta("A", 0),
-        claudeBlockStop(0),
-        claudeBlockStart({ type: "thinking", thinking: "" }, 1),
-        claudeThinkingDelta("B", 1),
-        claudeAssistantSnapshot("msg-1", [thought("A", "sig-a")]),
-        claudeBlockStop(1),
-      ],
-      expected: [reasoning("A"), reasoning("AB", "B")],
-    },
-    {
       name: "streams indexless thinking deltas from content block framing",
       frames: [
         claudeMessageStart("msg-1"),
