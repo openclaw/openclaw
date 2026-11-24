@@ -127,6 +127,8 @@ export function renderControl(
 
 export async function waitForModelControl(...params: Parameters<typeof renderControl>) {
   const container = renderControl(...params);
+  // Opening the picker starts its lazy panel import before DOM readiness can be observed.
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
