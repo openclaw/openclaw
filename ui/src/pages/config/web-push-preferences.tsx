@@ -52,6 +52,8 @@ function inheritChoiceOptions(
 }
 
 function QuietHoursWindowRows(props: {
+  /** Whose quiet hours: the account defaults or this browser or app. */
+  scope: "account" | "device";
   quietHours: QuietHoursWindow;
   disabled?: boolean;
   onChange: (value: QuietHoursWindow) => void;
@@ -59,6 +61,11 @@ function QuietHoursWindowRows(props: {
   return (
     <div class="settings-subrows quiet-hours-window">
       <SettingsRow
+        setting={
+          props.scope === "account"
+            ? "notifications.account.quietHoursWindow"
+            : "notifications.device.quietHoursWindow"
+        }
         title={t("configView.notifications.quietHoursWindow")}
         control={
           <For
@@ -99,6 +106,11 @@ function QuietHoursWindowRows(props: {
         }
       />
       <SettingsSelectRow
+        setting={
+          props.scope === "account"
+            ? "notifications.account.timeZone"
+            : "notifications.device.timeZone"
+        }
         disabled={props.disabled}
         title={t("configView.notifications.timeZone")}
         value={props.quietHours.timeZone}
@@ -128,6 +140,7 @@ export function UserNotificationPreferences(
         <For each={WEB_PUSH_CATEGORIES}>
           {(entry) => (
             <SettingsToggleRow
+              setting={`notifications.account.categories.${entry}`}
               disabled={props.disabled}
               title={t(`configView.notifications.${entry}`)}
               checked={props.preferences.categories[entry] === true}
@@ -138,6 +151,7 @@ export function UserNotificationPreferences(
           )}
         </For>
         <SettingsSelectRow
+          setting="notifications.account.detailLevel"
           disabled={props.disabled}
           title={t("configView.notifications.lockScreenDetail")}
           description={t("configView.notifications.lockScreenDetailHint")}
@@ -146,6 +160,7 @@ export function UserNotificationPreferences(
           onChange={(value) => void patch({ detailLevel: detailLevel(value) })}
         />
         <SettingsToggleRow
+          setting="notifications.account.quietHours"
           disabled={props.disabled}
           title={t("configView.notifications.quietHours")}
           checked={props.preferences.quietHours.enabled}
@@ -155,12 +170,14 @@ export function UserNotificationPreferences(
         />
         <Show when={props.preferences.quietHours.enabled}>
           <QuietHoursWindowRows
+            scope="account"
             disabled={props.disabled}
             quietHours={props.preferences.quietHours}
             onChange={(quietHours) => void patch({ quietHours })}
           />
         </Show>
         <NotificationAgentsRow
+          setting="notifications.account.agents"
           agentCatalog={props.agentCatalog}
           onLoadAgents={props.onLoadAgents}
           presentationScope={props.presentationScope}
@@ -188,12 +205,14 @@ export function DeviceNotificationPreferences(
       <SettingsSectionHeader title={t("configView.notifications.installedApp")} />
       <div class="settings-group">
         <SettingsToggleRow
+          setting="notifications.device.enabled"
           disabled={props.disabled}
           title={t("configView.notifications.deliverDevice")}
           checked={props.preferences.enabled}
           onChange={(enabled) => void patch({ enabled })}
         />
         <SettingsRow
+          setting="notifications.device.label"
           title={t("configView.notifications.notificationLabel")}
           control={
             <input
@@ -208,6 +227,7 @@ export function DeviceNotificationPreferences(
           }
         />
         <SettingsSelectRow
+          setting="notifications.device.detailLevel"
           disabled={props.disabled}
           title={t("configView.notifications.lockScreenDetail")}
           value={props.preferences.detailLevel ?? "inherit"}
@@ -220,6 +240,7 @@ export function DeviceNotificationPreferences(
           }
         />
         <SettingsSelectRow
+          setting="notifications.device.quietHours"
           disabled={props.disabled}
           title={t("configView.notifications.quietHours")}
           value={
@@ -249,6 +270,7 @@ export function DeviceNotificationPreferences(
         >
           {(quietHours) => (
             <QuietHoursWindowRows
+              scope="device"
               disabled={props.disabled}
               quietHours={quietHours()}
               onChange={(value) => void patch({ quietHours: value })}
@@ -256,6 +278,7 @@ export function DeviceNotificationPreferences(
           )}
         </Show>
         <NotificationAgentsRow
+          setting="notifications.device.agents"
           agentCatalog={props.agentCatalog}
           onLoadAgents={props.onLoadAgents}
           presentationScope={props.presentationScope}
@@ -268,6 +291,7 @@ export function DeviceNotificationPreferences(
         <For each={WEB_PUSH_CATEGORIES}>
           {(entry) => (
             <SettingsSelectRow
+              setting={`notifications.device.categories.${entry}`}
               disabled={props.disabled}
               title={t(`configView.notifications.${entry}`)}
               value={

@@ -4,7 +4,7 @@ import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
-import { SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, type SettingIdentifier } from "../../components/solid/settings-ui.tsx";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -21,6 +21,7 @@ export type NotificationAgentOptions = {
 };
 type Selection = { mode: "inherit" | "all" | "specific"; ids: string[] };
 type AgentRowProps = NotificationAgentOptions & {
+  setting: SettingIdentifier;
   agentIds: string[] | undefined;
   inheritedAgentIds?: string[];
   inherit?: boolean;
@@ -63,6 +64,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
   return (
     <>
       <SettingsRow
+        setting={props.setting}
         title={t("configView.notifications.agents")}
         control={
           <button
@@ -230,7 +232,7 @@ function AgentSelectionDialog(
             <div>
               <For each={rows()} keyed={(row) => row.id}>
                 {(row) => (
-                  <label class="settings-row">
+                  <label class="settings-row" data-settings-info>
                     <Checkbox
                       checked={props.selection.ids.includes(row().id)}
                       disabled={

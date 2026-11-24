@@ -67,6 +67,7 @@ function NotificationSection(props: {
 
 const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?: string }) => (
   <SettingsRow
+    info
     title={t("configView.notifications.testOutcome")}
     description={
       props.state === "error" ? (
@@ -138,6 +139,7 @@ function NativeNotificationSection(props: {
         {testAnnouncement()}
       </span>
       <SettingsRow
+        setting="notifications.permission"
         title={t("configView.notifications.permission")}
         description={
           props.native.permission === "denied"
@@ -213,7 +215,7 @@ function NativeNotificationSection(props: {
 }
 
 const renderWebPushError = (error: () => unknown) => (
-  <div class="settings-row">
+  <div class="settings-row" data-settings-info>
     <div class="settings-row__text">
       <div class="cfg-field__error" role="alert">
         <div>{t("configView.notifications.updateFailed")}</div>
@@ -323,6 +325,7 @@ function WebPushSection(props: {
         }
       >
         <SettingsRow
+          setting="notifications.pushSubscription"
           title={t("configView.notifications.status")}
           description={statusHint()}
           control={
@@ -377,7 +380,7 @@ function WebPushSection(props: {
           }
         />
         <Show when={props.push.error}>
-          <div class="settings-row">
+          <div class="settings-row" data-settings-info>
             <div class="settings-row__text">
               <span class="cfg-field__error" role="alert">
                 {formatUiExternalText(props.push.error)}
@@ -449,7 +452,7 @@ export function NotificationsSection(props: NotificationsSectionProps) {
                   <SettingsStatus kind="muted" label={t("configView.notifications.unavailable")} />
                 }
               >
-                <div class="settings-row">
+                <div class="settings-row" data-settings-info>
                   <div class="settings-row__text">
                     <span class="settings-row__desc">
                       {t("configView.notifications.unavailableHint")}

@@ -5,8 +5,11 @@ import {
   AGENT_SKILLS_SETTINGS,
   AGENT_TOOLS_SETTINGS,
 } from "./pages/agents.js";
+import { APPEARANCE_SETTINGS } from "./pages/appearance.js";
 import { MCP_SETTINGS } from "./pages/mcp.js";
 import { MODELS_SETTINGS } from "./pages/models.js";
+import { NOTIFICATIONS_SETTINGS } from "./pages/notifications.js";
+import { PROFILE_SETTINGS } from "./pages/profile.js";
 
 /**
  * Every setting on the hand-built Settings pages, by page. Settings the generic config form
@@ -21,6 +24,9 @@ export const CONTROL_UI_SETTINGS_PAGES = [
   AGENT_SKILLS_SETTINGS,
   AGENT_MEMORY_SETTINGS,
   MCP_SETTINGS,
+  APPEARANCE_SETTINGS,
+  NOTIFICATIONS_SETTINGS,
+  PROFILE_SETTINGS,
 ] as const;
 
 type PageIds<Page> = Page extends ControlUiSettingsPage<infer Ids> ? Ids : never;

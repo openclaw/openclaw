@@ -6,7 +6,11 @@ import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 export function isAppearanceDataTarget(target: string | null) {
   return (
     target === APPEARANCE_SETTINGS_TARGET_IDS.sidebar ||
-    target === APPEARANCE_SETTINGS_TARGET_IDS.sessionSources
+    target === APPEARANCE_SETTINGS_TARGET_IDS.sessionSources ||
+    // Rows in those sections that draw Gateway config, so a link to one can land.
+    target === "gateway.controlUi.sessionObserver" ||
+    target === "appearance.sessionObserverModel" ||
+    target?.startsWith("appearance.sessionSources.") === true
   );
 }
 

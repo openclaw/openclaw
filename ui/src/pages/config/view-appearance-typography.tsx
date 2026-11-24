@@ -52,6 +52,7 @@ export function TextSection(
         <LanguageRow {...props} />
         <div id={APPEARANCE_SETTINGS_TARGET_IDS.textSize}>
           <SettingsRow
+            setting="local.textScale"
             title={t("configView.appearance.textSize")}
             description={t("quickSettings.personal.browserOnly")}
             stackedOnNarrow={true}
@@ -76,6 +77,7 @@ export function TextSection(
             const face = createMemo(() => resolveTypefaces(props.presentedTheme.id)[slot]);
             return (
               <SettingsRow
+                setting={isUi ? "local.fontUi" : "local.fontChat"}
                 title={title()}
                 stackedOnNarrow={true}
                 control={
@@ -117,6 +119,7 @@ export function TextSection(
           }}
         </For>
         <SettingsRow
+          setting="local.terminalFontFamily"
           title={t("configView.appearance.fonts.terminal")}
           description={
             <>
@@ -161,7 +164,7 @@ export function TextSection(
             </>
           }
         />
-        <div class="settings-row settings-row--stacked">
+        <div class="settings-row settings-row--stacked" data-settings-info>
           <div class="settings-typography-preview">
             <div class="settings-typography-preview__caption">
               {t("configView.appearance.fonts.brandedPreviewCaption", {

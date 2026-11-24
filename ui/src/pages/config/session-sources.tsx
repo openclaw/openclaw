@@ -126,12 +126,14 @@ export function SessionSources(
                             }
                             fallback={
                               <SettingsRow
+                                info
                                 title={t(source().labelKey)}
                                 description={t("configView.sessionSources.unavailable")}
                               />
                             }
                           >
                             <SettingsToggleRow
+                              setting={`appearance.sessionSources.${source().pluginId}`}
                               icon={
                                 <ModelProviderIcon
                                   provider={source().icon}

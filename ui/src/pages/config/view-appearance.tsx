@@ -320,6 +320,7 @@ export function AppearanceSection(props: ConfigProps) {
         </Show>
         <div class="settings-group">
           <SettingsRow
+            setting="local.themeMode"
             title={t("common.colorMode")}
             stackedOnNarrow={true}
             control={
@@ -349,7 +350,7 @@ export function AppearanceSection(props: ConfigProps) {
               />
             }
           />
-          <div class="settings-row settings-row--stacked">
+          <div id="local.theme" class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
               <For each={themeOptions()} keyed={(entry) => entry.id}>
                 {(opt) => (
@@ -395,7 +396,7 @@ export function AppearanceSection(props: ConfigProps) {
             </div>
           </div>
           {showCustomThemeImport() ? (
-            <div class="settings-row settings-row--stacked">
+            <div id="local.customTheme" class="settings-row settings-row--stacked">
               <div
                 class="settings-theme-import"
                 onFocusIn={() => props.onCustomThemeImportFocus?.()}
@@ -499,6 +500,7 @@ export function AppearanceSection(props: ConfigProps) {
           ) : undefined}
           <div id={APPEARANCE_SETTINGS_TARGET_IDS.accent}>
             <SettingsRow
+              setting="local.accent"
               title={t("configView.appearance.accent")}
               description={<span id="settings-accent-status">{accentSelectionName()}</span>}
               stackedOnNarrow={true}

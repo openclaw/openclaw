@@ -118,6 +118,7 @@ export function OpenClawIdIdentity() {
   return (
     <Show when={state().kind !== "off"}>
       <SettingsRow
+        setting="profile.openclawId"
         title={t("profilePage.openclawId.title")}
         description={
           <Switch>
@@ -169,7 +170,7 @@ export function OpenClawIdIdentity() {
         }
       />
       <Show when={error()}>
-        <div class="settings-row identity-error" role="alert">
+        <div class="settings-row identity-error" role="alert" data-settings-info>
           <span class="settings-row__desc">{error()}</span>
         </div>
       </Show>

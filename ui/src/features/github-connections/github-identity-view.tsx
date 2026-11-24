@@ -102,6 +102,7 @@ export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
       {(identity) => (
         <>
           <SettingsRow
+            info
             title={t("agentTools.githubEffectiveAuthor")}
             control={
               <SettingsValue
@@ -114,11 +115,13 @@ export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
             }
           />
           <SettingsRow
+            info
             title={t("agentTools.githubEffectiveCredential")}
             control={<SettingsValue value={t(GITHUB_CREDENTIAL_KIND[identity().credentialKind])} />}
           />
           <Show when={identity().credentialKind === "managed-oauth"}>
             <SettingsRow
+              info
               title={t("agentTools.githubEffectiveAccessExpiry")}
               control={
                 <SettingsValue
@@ -131,10 +134,12 @@ export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
               }
             />
             <SettingsRow
+              info
               title={t("agentTools.githubEffectiveRefresh")}
               control={<SettingsValue value={t(GITHUB_REFRESH_STATE[identity().refreshState])} />}
             />
             <SettingsRow
+              info
               title={t("agentTools.githubEffectiveScopes")}
               control={
                 <SettingsValue value={identity().oauthScopes.join(", ") || t("common.none")} />
@@ -185,12 +190,14 @@ function GitHubAuthorization(props: IdentityProps) {
     <Switch>
       <Match when={!view().connectionReady}>
         <SettingsRow
+          info
           title={t("agentTools.githubConnection")}
           control={<SettingsStatus kind="muted" label={t("agentTools.githubDisconnected")} />}
         />
       </Match>
       <Match when={!view().statusReadable}>
         <SettingsRow
+          info
           title={<SettingsStatus kind="danger" label={t("agentTools.githubAccessRequired")} />}
           description={t(
             view().scope === "personal"
@@ -201,6 +208,7 @@ function GitHubAuthorization(props: IdentityProps) {
       </Match>
       <Match when={!view().authorizable}>
         <SettingsRow
+          info
           title={<SettingsStatus kind="warn" label={t("agentTools.githubAccessRequired")} />}
           description={t(
             view().scope === "personal"
@@ -211,6 +219,7 @@ function GitHubAuthorization(props: IdentityProps) {
       </Match>
       <Match when={starting()}>
         <SettingsRow
+          info
           title={t("agentTools.githubAuthorization")}
           control={
             <>
@@ -239,6 +248,7 @@ function GitHubAuthorization(props: IdentityProps) {
       </Match>
       <Match when={!view().patVisible}>
         <SettingsRow
+          info
           title={
             failed() ? (
               <SettingsStatus kind="danger" label={t("agentTools.githubAuthorizationFailed")} />
@@ -269,6 +279,7 @@ function GitHubAuthorization(props: IdentityProps) {
         />
         <Show when={!failed() && view().scope !== "personal"}>
           <SettingsRow
+            info
             title={t("agentTools.githubPatFallback")}
             description={t("agentTools.githubPatFallbackHint")}
             control={patButton()}
@@ -290,6 +301,7 @@ function GitHubAuthorizationCode(
   return (
     <>
       <SettingsRow
+        info
         title={t("agentTools.githubAuthorization")}
         description={
           props.authorization.phase === "cancel_error"
@@ -323,6 +335,7 @@ function GitHubAuthorizationCode(
         }
       />
       <SettingsRow
+        info
         title={t("agentTools.githubDeviceCode")}
         description={t("agentTools.githubDeviceCodeHint")}
         control={
@@ -364,6 +377,7 @@ function GitHubAuthorizationCode(
         }
       />
       <SettingsRow
+        info
         title={t("agentTools.githubExpires")}
         control={
           <SettingsValue
@@ -374,7 +388,7 @@ function GitHubAuthorizationCode(
           />
         }
       />
-      <div class="settings-row settings-row--actions">
+      <div class="settings-row settings-row--actions" data-settings-info>
         <div class="settings-row__control">
           <Show
             when={
@@ -402,6 +416,7 @@ function ConnectionErrorRow(props: { error: string | null; control?: JSX.Element
   return (
     <Show when={props.error}>
       <SettingsRow
+        info
         title={t("agentTools.githubErrorTitle")}
         description={<span role="alert">{formatUiExternalText(props.error!)}</span>}
         control={props.control}
@@ -450,6 +465,7 @@ export function GitHubConnectionSetup(props: IdentityProps & { saveLabel?: strin
     view().authorizationActive;
   const authorRow = (field: "name" | "email", label: string) => (
     <SettingsRow
+      info
       title={label}
       control={
         <input
@@ -469,6 +485,7 @@ export function GitHubConnectionSetup(props: IdentityProps & { saveLabel?: strin
       <Show when={view().patVisible}>
         <div class="settings-subrows">
           <SettingsRow
+            info
             title={t("agentTools.githubToken")}
             description={t("agentTools.githubTokenDesc")}
             control={
@@ -485,7 +502,7 @@ export function GitHubConnectionSetup(props: IdentityProps & { saveLabel?: strin
           />
           {authorRow("name", t("agentTools.githubAuthorName"))}
           {authorRow("email", t("agentTools.githubAuthorEmail"))}
-          <div class="settings-row settings-row--actions">
+          <div class="settings-row settings-row--actions" data-settings-info>
             <div class="settings-row__control">
               <button
                 class="btn"
@@ -532,6 +549,7 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
         }
       >
         <SettingsDetailsRow
+          info
           detailsLabel={t("githubConnections.details")}
           hasDetails={identity() !== null}
           title={

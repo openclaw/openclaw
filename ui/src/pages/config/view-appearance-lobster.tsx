@@ -50,7 +50,7 @@ export function LobsterPetSection(props: ConfigProps) {
             <div class="settings-group">
               <LocalToggleRow
                 config={props}
-                setting="lobsterPetVisits"
+                preference="lobsterPetVisits"
                 title={t("quickSettings.appearance.lobsterVisits")}
                 hint={t(
                   props.lobsterPetVisits
@@ -61,7 +61,7 @@ export function LobsterPetSection(props: ConfigProps) {
               />
               <LocalToggleRow
                 config={props}
-                setting="lobsterPetSounds"
+                preference="lobsterPetSounds"
                 title={t("quickSettings.appearance.lobsterSounds")}
                 hint={t(
                   props.lobsterPetSounds
@@ -77,6 +77,7 @@ export function LobsterPetSection(props: ConfigProps) {
               <Show when={props.lobsterdexHref}>
                 {(href) => (
                   <a
+                    id="appearance.lobsterdex"
                     class="settings-row settings-row--nav lobsterdex__open"
                     href={href()}
                     onClick={(event: MouseEvent) =>
