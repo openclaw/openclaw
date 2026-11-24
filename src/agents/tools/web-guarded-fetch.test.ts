@@ -61,7 +61,7 @@ describe("web-guarded-fetch", () => {
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
   });
 
-  it("uses private-network policy only for self-hosted web tools endpoints", async () => {
+  it("confines self-hosted private-network policy to its configured hostname", async () => {
     // Self-hosted provider endpoints are the explicit exception that may target
     // private network addresses.
     vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
@@ -76,6 +76,7 @@ describe("web-guarded-fetch", () => {
     expect(call?.url).toBe("http://127.0.0.1:8080");
     const policy = call.policy as Record<string, unknown> | undefined;
     expect(policy?.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(policy?.hostnameAllowlist).toEqual(["127.0.0.1"]);
     expect(policy?.allowRfc2544BenchmarkRange).toBe(true);
     expect(policy?.allowIpv6UniqueLocalRange).toBe(true);
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
