@@ -177,7 +177,7 @@ it("names a provider's billing problem with its declared label and sends its fix
   const modelCatalog = [
     { id: "acme-large", name: "Acme Large", provider: "acme", providerName: "Acme Cloud Plan" },
   ];
-  const draw = (failoverReason: string, billingError?: { message: string; actionUrl?: string }) =>
+  const draw = (failoverReason: string) =>
     mountSolid(
       () =>
         createComponent(ApplicationProvider, {
@@ -189,7 +189,7 @@ it("names a provider's billing problem with its declared label and sends its fix
                 runError: {
                   runId: "run-a",
                   summary: "Provider error",
-                  cause: { provider: "acme", failoverReason, billingError },
+                  cause: { provider: "acme", failoverReason },
                 },
               },
               recovery: { failureActionsRunId: "run-a", onRetryRun },
@@ -213,20 +213,6 @@ it("names a provider's billing problem with its declared label and sends its fix
   });
   expect(onRetryRun).not.toHaveBeenCalled();
   billing.unmount();
-
-  const guided = draw("billing", {
-    message: "Choose an active plan.",
-    actionUrl: "https://example.com/plans",
-  });
-  expect(part("title")?.textContent).toBe("Acme Cloud Plan reports a billing problem");
-  expect(part("icon")).not.toBeNull();
-  expect(part("chevron")).not.toBeNull();
-  const actions = container.querySelectorAll<HTMLButtonElement>(".chat-run-failure__retry");
-  expect(Array.from(actions, (action) => action.textContent)).toEqual(["Open Models", "Try again"]);
-  actions[0]?.click();
-  expect(navigate).toHaveBeenLastCalledWith("model-providers", { search: "?provider=acme" });
-  expect(part("billing-message")?.textContent).toBe("Choose an active plan.");
-  guided.unmount();
 
   // A failure another attempt can fix keeps its generic title and Try again.
   draw("overloaded");
@@ -254,7 +240,8 @@ it.each(["https://example.com/plans", undefined])(
     expect(part("billing-message")?.textContent).toBe(message);
     const link = container.querySelector<HTMLAnchorElement>(".chat-run-failure__plans");
     if (actionUrl) {
-      expect(link?.textContent).toBe("View plans ↗");
+      expect(link?.textContent?.trim()).toBe("View plans");
+      expect(link?.querySelector("svg")).not.toBeNull();
       expect(link?.getAttribute("href")).toBe(actionUrl);
       expect(link?.getAttribute("rel")).toContain("noopener");
     } else {

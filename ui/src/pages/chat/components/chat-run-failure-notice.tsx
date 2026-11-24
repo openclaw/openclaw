@@ -96,164 +96,169 @@ export function ChatRunFailureNotice(props: {
   return (
     <openclaw-chat-run-failure-notice style={{ display: "contents" }}>
       <div class="chat-run-failure-notice" role="status">
-        <div class="chat-run-failure" data-placement={placement()} ref={setLine}>
-          <Popover
-            id={panelId}
-            class="chat-run-failure__panel"
-            label={title()}
-            positionAnchor={line()}
-            placement={placement()}
-            triggerClass="chat-run-failure__toggle"
-            triggerAriaLabel={null}
-            trigger={
-              <>
-                <span class="chat-run-failure__icon" aria-hidden="true">
-                  <Icon name="circleX" />
-                </span>
-                <span class="chat-run-failure__title">{title()}</span>
-                <Show when={(props.repeatCount ?? 1) > 1}>
-                  <span class="chat-run-failure__repeat">
-                    · {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
-                  </span>
-                </Show>
-                <span class="chat-run-failure__chevron" aria-hidden="true">
-                  <Icon name="chevronRight" />
-                </span>
-              </>
-            }
-            ref={(handle) => {
-              panel = handle;
-            }}
-            onOpenChange={(next) => {
-              stopFollowing?.();
-              stopFollowing = undefined;
-              if (next) {
-                place();
-                const initialAnchor = line();
-                const thread = initialAnchor?.closest(".chat-thread");
-                if (initialAnchor && thread) {
-                  // The accepted overlay lifetime owns following its transcript anchor.
-                  const follow = () => {
-                    const { top, bottom } = initialAnchor.getBoundingClientRect();
-                    const bounds = thread.getBoundingClientRect();
-                    if (bottom <= bounds.top || top >= bounds.bottom) {
-                      panel?.hide();
-                    } else {
-                      place();
+        <div class="chat-run-failure row" data-placement={placement()}>
+          <div class="stack">
+            <div class="row" ref={setLine}>
+              <Popover
+                id={panelId}
+                class="chat-run-failure__panel"
+                label={title()}
+                positionAnchor={line()}
+                placement={placement()}
+                triggerClass="chat-run-failure__toggle"
+                triggerAriaLabel={null}
+                trigger={
+                  <>
+                    <span class="chat-run-failure__icon" aria-hidden="true">
+                      <Icon name="circleX" />
+                    </span>
+                    <span class="chat-run-failure__title">{title()}</span>
+                    <Show when={(props.repeatCount ?? 1) > 1}>
+                      <span class="chat-run-failure__repeat">
+                        ·{" "}
+                        {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
+                      </span>
+                    </Show>
+                    <span class="chat-run-failure__chevron" aria-hidden="true">
+                      <Icon name="chevronRight" />
+                    </span>
+                  </>
+                }
+                ref={(handle) => {
+                  panel = handle;
+                }}
+                onOpenChange={(next) => {
+                  stopFollowing?.();
+                  stopFollowing = undefined;
+                  if (next) {
+                    place();
+                    const initialAnchor = line();
+                    const thread = initialAnchor?.closest(".chat-thread");
+                    if (initialAnchor && thread) {
+                      // The accepted overlay lifetime owns following its transcript anchor.
+                      const follow = () => {
+                        const { top, bottom } = initialAnchor.getBoundingClientRect();
+                        const bounds = thread.getBoundingClientRect();
+                        if (bottom <= bounds.top || top >= bounds.bottom) {
+                          panel?.hide();
+                        } else {
+                          place();
+                        }
+                      };
+                      const stops = [
+                        listen(thread, "scroll", follow, { passive: true }),
+                        listen(window, "resize", place),
+                      ];
+                      stopFollowing = () => stops.forEach((stop) => stop());
                     }
-                  };
-                  const stops = [
-                    listen(thread, "scroll", follow, { passive: true }),
-                    listen(window, "resize", place),
-                  ];
-                  stopFollowing = () => stops.forEach((stop) => stop());
-                }
-              }
-              setOpen(next);
-            }}
-          >
-            <Show when={lead()}>
-              <p class="chat-run-failure__summary">
-                <bdi>{lead()}</bdi>
-              </p>
-            </Show>
-            {/* Logs are technical strings, so they stay left to right in every locale. */}
-            <div class="chat-run-failure__well" dir="ltr">
-              <pre
-                ref={logRef}
-                class="chat-run-failure__log"
-                tabindex="0"
-                aria-label={t("chat.errorDetails")}
+                  }
+                  setOpen(next);
+                }}
               >
-                {detail()}
-              </pre>
-              <span class="chat-run-failure__copy">
-                <CopyButton
-                  text={props.summary}
-                  idleLabel={t("chat.copyError")}
-                  bare
-                  iconFeedback
-                />
-              </span>
-            </div>
-          </Popover>
-          <Show when={props.editSource}>
-            <Loading fallback={null}>
-              <ChatFailedMessageEditButton
-                source={props.editSource}
-                confirm={openChatRewindConfirmation}
-                onFocusComposer={props.onFocusComposer}
-              />
-            </Loading>
-          </Show>
-          <Show when={openModels()}>
-            {(provider) => (
-              <button
-                type="button"
-                class="btn primary btn--sm chat-run-failure__retry"
-                onClick={() =>
-                  app?.navigate("model-providers", {
-                    search: `?provider=${encodeURIComponent(provider())}`,
-                  })
-                }
-              >
-                {t("chat.recovery.openModels")}
-              </button>
-            )}
-          </Show>
-          <Show when={startNewSession()}>
-            <button
-              type="button"
-              class="btn primary btn--sm chat-run-failure__retry"
-              onClick={() => props.onStartNewSession?.()}
-            >
-              {t("chat.recovery.startNewSession")}
-            </button>
-          </Show>
-          <Show when={props.onRetry}>
-            <button
-              type="button"
-              class={[
-                "btn btn--sm chat-run-failure__retry",
-                { primary: !openModels() && !startNewSession() },
-              ]}
-              onClick={() => props.onRetry?.()}
-            >
-              <Icon name="refresh" />
-              {t("chat.recovery.tryAgain")}
-            </button>
-          </Show>
-          <Show when={props.feedback} fallback={<ReportIssueLink />}>
-            {(feedback) => (
-              <PluginSurface
-                surface="run-failure-feedback"
-                props={feedback()}
-                renderDefault={ReportIssueLink}
-              />
-            )}
-          </Show>
-        </div>
-        <Show when={billingError()}>
-          {(billing) => (
-            <div class="chat-run-failure__billing">
-              <div class="chat-run-failure__billing-message">
-                <bdi>{billing().message}</bdi>
-              </div>
-              <Show when={billing().actionUrl}>
-                {(url) => (
-                  <a
-                    class="session-link chat-run-failure__plans"
-                    href={url()}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                <Show when={lead()}>
+                  <p class="chat-run-failure__summary">
+                    <bdi>{lead()}</bdi>
+                  </p>
+                </Show>
+                {/* Logs are technical strings, so they stay left to right in every locale. */}
+                <div class="chat-run-failure__well" dir="ltr">
+                  <pre
+                    ref={logRef}
+                    class="chat-run-failure__log"
+                    tabindex="0"
+                    aria-label={t("chat.errorDetails")}
                   >
-                    {t("chat.recovery.viewPlans")} <span aria-hidden="true">↗</span>
-                  </a>
+                    {detail()}
+                  </pre>
+                  <span class="chat-run-failure__copy">
+                    <CopyButton
+                      text={props.summary}
+                      idleLabel={t("chat.copyError")}
+                      bare
+                      iconFeedback
+                    />
+                  </span>
+                </div>
+              </Popover>
+              <Show when={props.editSource}>
+                <Loading fallback={null}>
+                  <ChatFailedMessageEditButton
+                    source={props.editSource}
+                    confirm={openChatRewindConfirmation}
+                    onFocusComposer={props.onFocusComposer}
+                  />
+                </Loading>
+              </Show>
+              <Show when={openModels()}>
+                {(provider) => (
+                  <button
+                    type="button"
+                    class="btn primary btn--sm chat-run-failure__retry"
+                    onClick={() =>
+                      app?.navigate("model-providers", {
+                        search: `?provider=${encodeURIComponent(provider())}`,
+                      })
+                    }
+                  >
+                    {t("chat.recovery.openModels")}
+                  </button>
+                )}
+              </Show>
+              <Show when={startNewSession()}>
+                <button
+                  type="button"
+                  class="btn primary btn--sm chat-run-failure__retry"
+                  onClick={() => props.onStartNewSession?.()}
+                >
+                  {t("chat.recovery.startNewSession")}
+                </button>
+              </Show>
+              <Show when={props.onRetry}>
+                <button
+                  type="button"
+                  class={[
+                    "btn btn--sm chat-run-failure__retry",
+                    { primary: !openModels() && !startNewSession() },
+                  ]}
+                  onClick={() => props.onRetry?.()}
+                >
+                  <Icon name="refresh" />
+                  {t("chat.recovery.tryAgain")}
+                </button>
+              </Show>
+              <Show when={props.feedback} fallback={<ReportIssueLink />}>
+                {(feedback) => (
+                  <PluginSurface
+                    surface="run-failure-feedback"
+                    props={feedback()}
+                    renderDefault={ReportIssueLink}
+                  />
                 )}
               </Show>
             </div>
-          )}
-        </Show>
+            <Show when={billingError()}>
+              {(billing) => (
+                <div class="chat-run-failure__billing chat-run-failure__summary">
+                  <div class="chat-run-failure__billing-message">
+                    <bdi>{billing().message}</bdi>
+                  </div>
+                  <Show when={billing().actionUrl}>
+                    {(url) => (
+                      <a
+                        class="session-link chat-run-failure__plans"
+                        href={url()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {t("chat.recovery.viewPlans")} <Icon name="externalLink" />
+                      </a>
+                    )}
+                  </Show>
+                </div>
+              )}
+            </Show>
+          </div>
+        </div>
       </div>
     </openclaw-chat-run-failure-notice>
   );

@@ -54,32 +54,25 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       actionUrl: "https://example.com/plans",
     };
     const attempts: FallbackAttempt[] = [];
-    const billing = new FailoverError("provider billing diagnostic", {
-      reason: "billing",
-      provider: "paid-provider",
-      model: "model-a",
-      billingError,
-    });
-    const timeout = new FailoverError("request timed out", {
-      reason: "timeout",
-      provider: "other-provider",
-      model: "model-b",
-    });
-    for (const error of [billing, timeout]) {
-      assert.isDefined(error.provider);
-      assert.isDefined(error.model);
-      appendFailedCandidateAttempt({
-        attempts,
-        candidate: { provider: error.provider, model: error.model },
-        error,
+    let lastError: FailoverError | undefined;
+    for (const [provider, model, reason, guidance] of [
+      ["paid-provider", "model-a", "billing", billingError],
+      ["other-provider", "model-b", "timeout", undefined],
+    ] as const) {
+      lastError = new FailoverError("provider diagnostic", {
+        provider,
+        model,
+        reason,
+        billingError: guidance,
       });
+      appendFailedCandidateAttempt({ attempts, candidate: { provider, model }, error: lastError });
     }
     let aggregate: unknown;
     try {
       throwFallbackFailureSummary({
         attempts,
         candidates: [],
-        lastError: timeout,
+        lastError,
         label: "models",
         formatAttempt: (attempt) => attempt.error,
       });

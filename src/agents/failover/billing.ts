@@ -16,7 +16,11 @@ export function formatProviderBillingError(
     if (!owner?.formatBillingError) {
       return undefined;
     }
-    for (const errorMessage of [signal.message ?? "", ...(signal.details ?? [])]) {
+    for (const errorMessage of [
+      signal.message ?? "",
+      ...(signal.details ?? []),
+      ...(signal.providerCauseDetails ?? []),
+    ]) {
       const billingError = normalizeBillingError(
         owner.formatBillingError({
           provider: owner.id,

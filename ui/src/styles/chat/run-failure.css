@@ -1,10 +1,8 @@
 /* A system event between two hairlines; its details float out of flow. */
 .chat-run-failure {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
+  align-items: start;
   margin: var(--space-7) 0;
+  min-width: 0;
   color: var(--muted);
   font-family: var(--font-body);
   font-size: calc(12px * var(--control-ui-text-scale));
@@ -16,6 +14,7 @@
   flex: 1 1 0;
   min-width: 8px;
   height: 1px;
+  margin-top: 13px;
   background: var(--border);
 }
 
@@ -27,7 +26,7 @@
   min-width: 0;
   height: 26px;
   padding-block: 0;
-  padding-inline: 8px 6px;
+  padding-inline: 4px 6px;
   border: 0;
   border-radius: calc(13px * var(--openclaw-corner-radius-scale));
   background: transparent;
@@ -112,7 +111,8 @@
   font-size: calc(12px * var(--control-ui-text-scale));
 }
 
-.chat-run-failure .chat-run-failure__retry svg {
+.chat-run-failure .chat-run-failure__retry svg,
+.chat-run-failure__plans svg {
   width: 12px;
   height: 12px;
   stroke-width: 2px;
@@ -239,9 +239,9 @@
 
 /* Phone columns give the cause its own line; actions wrap below it. */
 @media (max-width: 560px) {
-  .chat-run-failure {
+  .chat-run-failure .row {
     flex-wrap: wrap;
-    justify-content: center;
+    justify-content: start;
     gap: 6px;
   }
 
@@ -252,9 +252,9 @@
 
   .chat-run-failure__toggle {
     flex-basis: 100%;
-    justify-content: center;
+    justify-content: start;
     gap: 4px;
-    padding-inline: 6px 4px;
+    padding-inline: 4px;
   }
 
   .chat-run-failure .chat-run-failure__retry {
@@ -266,8 +266,4 @@
   .chat-run-failure__chevron {
     transition: none;
   }
-}
-
-.chat-run-failure__billing {
-  overflow-wrap: anywhere;
 }

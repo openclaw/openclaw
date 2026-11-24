@@ -12,13 +12,14 @@ import { resetChatThreadState } from "./chat-thread.ts";
 
 beforeEach(() => resetChatThreadState());
 
+const summary = "Rate-limit recovery stopped";
 type Notice = Extract<ChatItem, { kind: "notice" }>;
-const failure = (runId: string, summary = "Rate-limit recovery stopped"): Notice => ({
+const failure = (runId: string, text = summary, cause?: RunFailureCause): Notice => ({
   kind: "notice",
   key: `failure:${runId}`,
-  text: summary,
+  text,
   timestamp: 1,
-  runError: { runId, summary },
+  runError: { runId, summary: text, cause: structuredClone(cause) },
 });
 const message = (key: string, value: unknown): ChatItem => ({
   kind: "message",
@@ -27,7 +28,6 @@ const message = (key: string, value: unknown): ChatItem => ({
 });
 const internalUpdate = (kind: string) =>
   message(kind, { role: "user", content: "Update", provenance: { kind } });
-const summary = "Rate-limit recovery stopped";
 const persistedFailure = (runId: string, seq: number) => ({
   role: "custom",
   content: summary,
@@ -83,47 +83,35 @@ it.each([
   },
 );
 
-it("sums existing counts for value-identical recovery details without crossing user input", () => {
-  const notice = (runId: string, repeatCount: number): Notice => ({
-    ...failure(runId),
-    runError: {
-      runId,
-      summary,
-      cause: { ...billingCause, billingError: { ...billingCause.billingError } },
-    },
-    repeatCount,
-  });
-  const first = notice("first", 2);
-  const second = notice("second", 3);
-  const user = message("user", { role: "user", content: "Try once more" });
-  const latest = notice("latest", 1);
-  expect(projectRunFailureStreaks([first, second, user, latest])).toEqual([
-    { ...second, repeatCount: 5 },
-    user,
-    latest,
-  ]);
-});
-
-it("keeps only the latest identical failure across internal updates and interrupted output", () => {
-  const first = failure("first");
-  const latest = failure("latest");
-  const updates: ChatItem[] = [
-    internalUpdate("inter_session"),
-    internalUpdate("internal_system"),
-    message("tool", {
-      role: "user",
-      content: [{ type: "tool_result", content: "Interrupted" }],
-      stopReason: "aborted",
-    }),
-    message("partial", { role: "assistant", content: "Partial response", stopReason: "aborted" }),
-    { kind: "notice", key: "system", text: "System update", timestamp: 1, startsTurn: true },
-    { kind: "divider", key: "divider", label: "System", timestamp: 1 },
-  ];
-  const items = [first, ...updates.slice(0, 2), failure("middle"), ...updates.slice(2), latest];
-  expect(projectRunFailureStreaks(items)).toEqual([...updates, { ...latest, repeatCount: 3 }]);
-  expect(first).not.toHaveProperty("repeatCount");
-  expect(latest).not.toHaveProperty("repeatCount");
-});
+it.each([undefined, billingCause])(
+  "keeps the latest identical recovery details across internal updates: %j",
+  (cause) => {
+    const first = { ...failure("first", summary, cause), repeatCount: 2 };
+    const latest = failure("latest", summary, cause);
+    const updates: ChatItem[] = [
+      internalUpdate("inter_session"),
+      internalUpdate("internal_system"),
+      message("tool", {
+        role: "user",
+        content: [{ type: "tool_result", content: "Interrupted" }],
+        stopReason: "aborted",
+      }),
+      message("partial", { role: "assistant", content: "Partial response", stopReason: "aborted" }),
+      { kind: "notice", key: "system", text: "System update", timestamp: 1, startsTurn: true },
+      { kind: "divider", key: "divider", label: "System", timestamp: 1 },
+    ];
+    const items = [
+      first,
+      ...updates.slice(0, 2),
+      failure("middle", summary, cause),
+      ...updates.slice(2),
+      latest,
+    ];
+    expect(projectRunFailureStreaks(items)).toEqual([...updates, { ...latest, repeatCount: 4 }]);
+    expect(first.repeatCount).toBe(2);
+    expect(latest).not.toHaveProperty("repeatCount");
+  },
+);
 
 it.each([
   ["real user input", message("user", { role: "USER", content: "Try once more" })],

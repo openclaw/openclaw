@@ -273,10 +273,10 @@ export function classifyFailoverSignalCore(
       errorType: signal.errorType,
     };
     providerPluginReason = classifyProviderError?.(context) ?? null;
-    // Native transports can keep provider prose only in the bounded body
+    // Native transports can keep provider prose only in bounded body or cause
     // details. Let the same owner interpret it before generic HTTP policy.
     if (!providerPluginReason) {
-      for (const detail of signal.details ?? []) {
+      for (const detail of [...(signal.details ?? []), ...(signal.providerCauseDetails ?? [])]) {
         providerPluginReason =
           classifyProviderError?.({ ...context, errorMessage: detail }) ?? null;
         if (providerPluginReason) {

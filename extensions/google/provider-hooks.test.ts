@@ -96,12 +96,9 @@ describe("Google subscription refusal guidance", () => {
         message: "This request requires an active Google AI Ultra subscription.",
         actionUrl: "https://one.google.com/about/google-ai-plans/",
       });
-      expect(
-        provider.formatBillingError?.({ ...refusal, errorMessage: "403 Invalid API key" }),
-      ).toBeUndefined();
-      expect(
-        provider.classifyFailoverReason?.({ ...refusal, errorMessage: "403 Invalid API key" }),
-      ).toBeUndefined();
+      const unknown = { ...refusal, errorMessage: "403 Invalid API key" };
+      expect(provider.formatBillingError?.(unknown)).toBeUndefined();
+      expect(provider.classifyFailoverReason?.(unknown)).toBeUndefined();
     },
   );
 });

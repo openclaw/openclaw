@@ -119,7 +119,7 @@ export async function handleEmbeddedPromptFailure(input: {
     promptTimeoutOutcome: normalizedAttempt.attempt.promptTimeoutOutcome,
   });
   const failoverContext = {
-    providerOwner: runtime.providerRuntimeHandle?.plugin,
+    providerOwner: runtime.providerRuntimeHandle?.plugin ?? null,
     provider: normalizedAttempt.activeErrorContext.provider,
     model: normalizedAttempt.activeErrorContext.model,
     profileId: runtime.lastProfileId,

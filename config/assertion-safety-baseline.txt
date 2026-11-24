@@ -1140,7 +1140,7 @@ src/agents/embedded-agent-utils.ts	2
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	3
+src/agents/failover-error.ts	2
 src/agents/fallback-skip-cache.ts	1
 src/agents/fast-mode.ts	1
 src/agents/harness/builtin-openclaw.ts	2

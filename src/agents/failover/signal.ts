@@ -15,6 +15,8 @@ export type FailoverSignal = {
   message?: string;
   provider?: string;
   details?: readonly string[];
+  /** Cause diagnostics belong to provider hooks, not generic auth or retry policy. */
+  providerCauseDetails?: readonly string[];
 };
 export type FailoverClassification =
   | {

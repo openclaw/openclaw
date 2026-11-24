@@ -3,13 +3,20 @@ import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/sche
 import { readRunFailureCause, readRunFailureNotice } from "./run-failure-notice.js";
 
 describe("billing display projection", () => {
+  const billing = (billingError: unknown, failoverReason = "billing") =>
+    readRunFailureCause(
+      projectChatErrorDetail({
+        provider: "local-provider",
+        failoverReason,
+        billingError,
+        providerErrorMessagePreview: "Private raw billing message",
+      }),
+    )?.billingError;
+
   it("keeps a valid HTTP action absolute when the browser has a base URL", () => {
-    const cause = readRunFailureCause({
-      provider: "local-provider",
-      failoverReason: "billing",
-      billingError: { message: "Choose a plan.", actionUrl: "http:example.com" },
-    });
-    expect(cause?.billingError?.actionUrl).toBe("http://example.com/");
+    expect(billing({ message: "Choose a plan.", actionUrl: "http:example.com" })?.actionUrl).toBe(
+      "http://example.com/",
+    );
   });
 
   it.each([
@@ -22,45 +29,17 @@ describe("billing display projection", () => {
     "https://user@example.com/plans",
     "http://:pass@example.com/plans",
   ])("drops only the invalid billing link %j", (actionUrl) => {
-    const detail = projectChatErrorDetail({
-      provider: "local-provider",
-      failoverReason: "billing",
-      billingError: { message: "  Choose an active plan.  ", actionUrl },
-    });
-    expect(readRunFailureCause(detail)?.billingError).toEqual({
+    expect(billing({ message: "  Choose an active plan.  ", actionUrl })).toEqual({
       message: "Choose an active plan.",
     });
   });
 
   it("bounds messages and never promotes raw previews or non-billing metadata", () => {
-    expect(
-      readRunFailureCause({
-        provider: "local-provider",
-        failoverReason: "billing",
-        billingError: { message: "x".repeat(700) },
-      })?.billingError?.message,
-    ).toHaveLength(600);
-    for (const billingError of [undefined, { message: "  " }]) {
-      expect(
-        readRunFailureCause(
-          projectChatErrorDetail({
-            provider: "local-provider",
-            failoverReason: "billing",
-            billingError,
-            providerErrorMessagePreview: "Private raw billing message",
-          }),
-        )?.billingError,
-      ).toBeUndefined();
+    expect(billing({ message: "x".repeat(700) })?.message).toHaveLength(600);
+    for (const value of [undefined, { message: "  " }]) {
+      expect(billing(value)).toBeUndefined();
     }
-    expect(
-      readRunFailureCause(
-        projectChatErrorDetail({
-          provider: "local-provider",
-          failoverReason: "auth",
-          billingError: { message: "Wrong category" },
-        }),
-      )?.billingError,
-    ).toBeUndefined();
+    expect(billing({ message: "Wrong category" }, "auth")).toBeUndefined();
   });
 });
 

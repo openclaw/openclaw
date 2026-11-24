@@ -1,6 +1,9 @@
 // Error identity and timeout recognition must not load logging or provider runtime.
 import type { BillingError } from "@openclaw/normalization-core/billing-error";
-import { readErrorName } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectErrorGraphCandidates,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
@@ -290,7 +293,7 @@ function readDirectErrorType(err: unknown): string | undefined {
   if (typeof directType === "string") {
     return readStableProviderErrorType(directType);
   }
-  const detailType = (record.detail as { type?: unknown } | undefined)?.type;
+  const detailType = asOptionalObjectRecord(record.detail)?.type;
   if (typeof detailType === "string") {
     return readStableProviderErrorType(detailType);
   }
@@ -334,5 +337,15 @@ export function normalizeErrorSignal(
     message: message || undefined,
     provider: read(readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
+    providerCauseDetails:
+      scope === "nested"
+        ? extractFailoverSignalDetails(
+            ...collectErrorGraphCandidates(err, (candidate) => [candidate.error, candidate.cause])
+              .slice(1)
+              .flatMap((candidate) =>
+                [readDirectErrorMessage(candidate)].concat(readDirectErrorDetails(candidate) ?? []),
+              ),
+          )
+        : undefined,
   };
 }

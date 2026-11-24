@@ -629,7 +629,7 @@ export function coerceToFailoverError(
   const reason = resolveFailoverReasonFromError(
     err,
     context?.providerOwner?.id ?? context?.provider,
-    context?.providerOwner ?? null,
+    context?.providerOwner,
   );
   if (!reason) {
     return null;

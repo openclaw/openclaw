@@ -120,17 +120,14 @@ for (const billing of [false, true]) {
                 ? "Gemini API key reports a billing problem"
                 : "Fixture didn’t accept the saved credentials",
             );
-            expect(await failure.locator(".chat-run-failure__icon").isVisible()).toBe(true);
-            expect(await failure.locator(".chat-run-failure__chevron").isVisible()).toBe(true);
-            expect(
-              await failure.getByRole("button", { name: "Open Models", exact: true }).isVisible(),
-            ).toBe(true);
-            expect(
-              await failure.getByRole("button", { name: "Edit message", exact: true }).isVisible(),
-            ).toBe(true);
-            expect(
-              await failure.getByRole("button", { name: "Try again", exact: true }).isVisible(),
-            ).toBe(true);
+            for (const selector of [".chat-run-failure__icon", ".chat-run-failure__chevron"]) {
+              expect(await failure.locator(selector).isVisible()).toBe(true);
+            }
+            for (const name of ["Open Models", "Edit message", "Try again"]) {
+              expect(await failure.getByRole("button", { name, exact: true }).isVisible()).toBe(
+                true,
+              );
+            }
             expect(
               await failure.getByRole("link", { name: "Report a bug", exact: true }).isVisible(),
             ).toBe(true);
@@ -138,11 +135,16 @@ for (const billing of [false, true]) {
               expect(
                 await failure.locator(".chat-run-failure__billing-message").textContent(),
               ).toBe(message);
-              expect(
-                await failure
-                  .getByRole("link", { name: "View plans", exact: true })
-                  .getAttribute("href"),
-              ).toBe(actionUrl);
+              const plans = failure.getByRole("link", { name: "View plans", exact: true });
+              expect(await plans.getAttribute("href")).toBe(actionUrl);
+              expect(await plans.locator("svg").isVisible()).toBe(true);
+              if (page.viewportSize()?.width === 1280) {
+                const guidance = await failure
+                  .locator(".chat-run-failure__billing-message")
+                  .boundingBox();
+                const icon = await failure.locator(".chat-run-failure__icon").boundingBox();
+                expect(guidance!.x).toBe(icon!.x);
+              }
               expect(await failure.textContent()).not.toContain("RAW_BILLING_CANARY");
             }
           };
@@ -163,7 +165,7 @@ for (const billing of [false, true]) {
             await checkFailure();
             const text = await failure.locator(".chat-run-failure__billing-message").boundingBox();
             const link = await failure.locator(".chat-run-failure__plans").boundingBox();
-            const header = await failure.locator(".chat-run-failure").boundingBox();
+            const header = await failure.locator(".chat-run-failure .row").boundingBox();
             expect(text!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
             expect(link!.y).toBeGreaterThanOrEqual(text!.y + text!.height);
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
