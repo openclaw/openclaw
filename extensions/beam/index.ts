@@ -5,7 +5,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createBeamExecutableResolver } from "./src/executable.js";
 import { createBeamV2Handler } from "./src/http-v2.js";
 import { createBeamIngressLimits, createBeamRequestHandler } from "./src/http.js";
-import { createBeamMirrorService } from "./src/mirror.js";
+import { registerBeamMirror } from "./src/mirror-service.js";
 import { createBeamOwnedViewHandler } from "./src/owned-view.js";
 import { createBeamSessionCatalog } from "./src/session-catalog.js";
 import { createBeamStore } from "./src/store.js";
@@ -70,6 +70,6 @@ export default definePluginEntry({
         controlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
     });
-    api.registerService(createBeamMirrorService({ runtime: api.runtime }));
+    registerBeamMirror(api, resolveExecutable);
   },
 });
