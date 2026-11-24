@@ -117,7 +117,7 @@ export async function handleChatSendWithStorage(
       }
     },
   };
-  const { systemInputProvenance, reconnectResumeRequested } = request;
+  const { systemInputProvenance } = request;
   const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
     session;
   const {
@@ -173,7 +173,6 @@ export async function handleChatSendWithStorage(
     hasExplicitOrigin: request.explicitOrigin !== undefined,
     hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
     isIncognitoEntry: entry?.incognito === true,
-    isReconnectResume: reconnectResumeRequested,
     isSystemGenerated:
       request.suppressCommandInterpretation || request.systemProvenanceReceipt !== undefined,
     turnKind: request.turnKind,
@@ -649,11 +648,7 @@ export async function handleChatSendWithStorage(
           context,
           sessionMutationCommitGuard: assertInputAdmissionCurrent,
         },
-        isHumanTurn:
-          !options &&
-          !systemInputProvenance &&
-          !reconnectResumeRequested &&
-          request.turnKind === "main",
+        isHumanTurn: !options && !systemInputProvenance && request.turnKind === "main",
       },
       cronCreatorAuthority,
       assertDashboardReadCurrent,

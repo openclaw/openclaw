@@ -1620,7 +1620,7 @@ it("keeps creation-claimed handles private and closes them when the claim settle
   });
   expect(isAgentDbOpen(dbPath)).toBe(false);
   // Retiring a claim during a real integrity read must precede index repair, not only exposure.
-  invalidateValidation(dbPath);
+  invalidateValidation(dbPath, "a maintenance write");
   revokeAdmissions(dbPath);
   {
     using editor = nodeSqlite.openNodeSqliteDatabase(dbPath);

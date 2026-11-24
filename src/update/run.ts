@@ -142,330 +142,335 @@ export async function prepareUpdate(params: {
     );
     return { status: "failed", reason, message };
   };
-  const trial = await readTrial(prefix);
-  if (trial && ["pending", "trial", "restoring"].includes(trial.phase)) {
-    return await fail(
-      "update-running",
-      "Another update is switching releases. Try again in a few minutes.",
-    );
-  }
-  const lock = await acquireUpdateLock(
-    { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
-    prefix,
-  );
-  if (!lock.acquired) {
-    return await fail("update-running", `Update ${lock.lock.runId} is already running.`);
-  }
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
   try {
-    if (lock.previous) {
-      await finishUpdateRunAsync(
-        lock.previous.runId,
-        { status: "failed", reason: "interrupted" },
-        { env },
-      );
-    }
-    await assertUpdateRecoveryAdmission({ env });
-    const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
-      timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
-    });
-    const install: InstallKind = missingGit
-      ? { kind: "package" }
-      : await detectInstall(params.runningRoot);
-    try {
-      const ownership = {
-        root: params.runningRoot,
-        installKind: install.kind,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-      };
-      await assertGlobalUpdateOwner(ownership);
-      if (missingGit) {
-        await assertMacosGitForUnownedCheckout(ownership, { missingGit });
-      }
-    } catch (error) {
-      if (error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError) {
-        return await fail(error.reason, error.message);
-      }
-      throw error;
-    }
-    // Releases left by an earlier update; never on the critical path.
-    void collectReleases(prefix).catch(() => undefined);
-    staging = await allocateStaging({ kind: install.kind }, prefix);
-    let target;
-    try {
-      target = await resolveTarget({
-        kind: install.kind,
-        channel: params.channel,
-        checkout: install.checkout,
-        tag: params.tag,
-        sha: params.sha,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        archiveWorkspace: staging.path,
-      });
-    } catch (error) {
-      return await fail("no-target", `No update target: ${formatErrorMessage(error)}`);
-    }
-    const frontend = params.tag?.startsWith("file:")
-      ? await resolveInstalledPackageFrontend(path.resolve(params.tag.slice(5)))
-      : undefined;
-    await recordUpdateRunPhaseAsync(
-      params.runId,
-      "staging",
-      {
-        target: {
-          kind: install.kind,
-          version: target.version,
-          ...(target.kind === "git" ? { sha: target.sha } : {}),
-        },
-      },
-      { env },
-    );
-    if (
-      target.kind === "package" &&
-      isPackageTargetAlreadyCurrent({
-        currentVersion: params.runningVersion,
-        targetVersion: target.version,
-        target: target.spec,
-      })
-    ) {
-      return await current(target.version);
-    }
-    // The serving build decides, not the checkout HEAD: a pull without a rebuild still runs the
-    // old code. An unknown build commit prepares a release.
-    const loaded = target.kind === "git" ? resolveLoadedCommitHash() : null;
-    if (target.kind === "git" && loaded && gitCommitPrefixesMatch(loaded, target.sha)) {
-      return await current(target.version);
-    }
-    // System-level services can keep their definition: both package entry points already
-    // forward through this marker. Refuse an unwritable global package before preparing.
-    if (
-      install.kind === "package" &&
-      !params.runningRoot.startsWith(path.join(prefix, "releases") + path.sep)
-    ) {
-      const marker = path.join(params.runningRoot, ".openclaw-launcher");
-      try {
-        const exists = await fs.stat(marker).catch((error: unknown) => {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            throw error;
-          }
-          return null;
-        });
-        await fs.access(exists ? marker : params.runningRoot, fsConstants.W_OK);
-      } catch {
-        return await fail(
-          "package-not-writable",
-          `The global package at ${params.runningRoot} is not writable. Update it as its owning user.`,
-        );
-      }
-    }
-    const releaseAwareGit =
-      target.kind !== "git" ||
-      (await gitTargetSupportsReleaseUpdates(
-        target.checkout,
-        target.sha,
-        Math.max(1, deadline - Date.now()),
-      ));
-    const checked = await preflight({
-      kind: install.kind,
-      target,
+    const lock = await acquireUpdateLock(
+      { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
       prefix,
-      stateDir: resolveStateDir(env),
-      node,
-      env,
-    });
-    if (!checked.ok) {
-      return await fail(checked.reason, checked.message);
+    );
+    if (!lock.acquired) {
+      return await fail("update-running", `Update ${lock.lock.runId} is already running.`);
     }
-    if (target.kind === "git" && !releaseAwareGit) {
-      return await fail(
-        "release-updates-unsupported",
-        `This commit predates release updates. In your OpenClaw Git checkout, run: git checkout ${target.sha} && pnpm install --frozen-lockfile && pnpm build && pnpm ui:build. The current version is still running.`,
-      );
-    }
-    const onStep = async (name: string, status: "in_progress" | "completed") => {
-      await recordUpdateRunStepAsync(
-        params.runId,
-        {
-          step: `prepare:${name}`,
-          status,
-          ...(status === "in_progress" ? { startedAtMs: Date.now() } : { endedAtMs: Date.now() }),
-        },
-        { env },
-      );
-    };
-    const prepared: PrepareResult =
-      target.kind === "git"
-        ? await prepareGit({
-            checkout: target.checkout,
-            sha: target.sha,
-            staging: staging.path,
-            node,
-            timeoutMs: Math.max(1, deadline - Date.now()),
-            onStep,
-          })
-        : await preparePackage({
-            spec: target.spec,
-            archivePath: target.archivePath,
-            staging: staging.path,
-            npm:
-              isBunRuntime(node) || (node === process.execPath && process.versions.bun)
-                ? resolveNpmCommand([])
-                : [npmBesideNode(node)],
-            node,
-            timeoutMs: Math.max(1, deadline - Date.now()),
-            env,
-            onStep,
-          });
-    if (!prepared.ok) {
-      return await fail(
-        prepared.reason,
-        "The new version could not be built. The current version is still running.",
-        prepared.stderrTail,
-      );
-    }
-    // An explicit artifact can be rebuilt at the same version: only the same known build
-    // identity is current. Missing identity is not equality.
-    if (
-      target.kind === "package" &&
-      prepared.buildId &&
-      prepared.version === params.runningVersion &&
-      prepared.buildId === (await readBuiltGatewayBuildId(params.runningRoot))
-    ) {
-      return await current(prepared.version);
-    }
-    await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
-    // Missing modules identify an unsupported old target; command failures never bypass checks.
-    if (target.kind === "package") {
-      const modules = await fs.readdir(path.join(prepared.releaseRoot, "dist"));
-      if (
-        !["check-release", "gateway-trial"].every((name) =>
-          modules.some((file) => new RegExp(`^${name}(?:-[\\w-]+)?\\.m?js$`).test(file)),
-        )
-      ) {
+    try {
+      const trial = await readTrial(prefix);
+      if (trial && ["pending", "trial", "restoring"].includes(trial.phase)) {
         return await fail(
-          "release-updates-unsupported",
-          `This version predates release updates. To install it manually, run: npm i -g ${JSON.stringify(`openclaw@${target.version}`)}. The current version is still running.`,
+          "update-running",
+          "Another update is switching releases. Try again in a few minutes.",
         );
       }
-    }
-    const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
-    if (!verdict.ok) {
-      return await fail(
-        "release-check-failed",
-        `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
-        verdict.detail,
-      );
-    }
-    const releaseRoot = await publishStaging(staging);
-    staging = undefined;
-    if (target.kind === "git") {
-      // The worktree was registered at its staging path; record where it now lives.
-      const repaired = await runCommandWithTimeout(
-        ["git", "-C", target.checkout, "worktree", "repair", releaseRoot],
-        { timeoutMs: 30_000 },
-      );
-      if (repaired.code !== 0) {
-        return await fail(
-          "release-registration-failed",
-          "The new version could not be registered with Git. The current version is still running.",
-          repaired.stderr,
-        );
-      }
-    }
-    const launcher = await writeLauncher(prefix);
-    // Forwarded commands run `prefix/openclaw` until the launcher switches it, so it must
-    // serve the running tree: created on the first conversion, repointed if it is stale.
-    const slot = path.join(prefix, "openclaw");
-    const served = await fs.realpath(slot).catch(() => null);
-    if (served !== (await fs.realpath(params.runningRoot))) {
-      await switchLink(path.relative(prefix, params.runningRoot), prefix);
-    }
-    const previous = await fs.readlink(slot);
-    if (
-      install.kind === "package" &&
-      !params.runningRoot.startsWith(path.join(prefix, "releases") + path.sep)
-    ) {
-      const warnings: string[] = [];
-      await stageReleaseService({
-        runningRoot: params.runningRoot,
-        launcher,
-        env,
-        warn: (message) => warnings.push(message),
-      });
-      if (warnings.length > 0) {
-        await recordUpdateRunStepAsync(
-          params.runId,
-          { step: "service-definition", status: "completed", detail: warnings.join("\n") },
+      if (lock.previous) {
+        await finishUpdateRunAsync(
+          lock.previous.runId,
+          { status: "failed", reason: "interrupted" },
           { env },
         );
       }
-    }
-    await markForwarding(params.runningRoot, launcher, prefix);
-    // Older releases do not have post-ready maintenance. A downgrade does not migrate
-    // state forward, so retain their pre-trial maintenance and warning recording.
-    if ((compareSemverStrings(VERSION, prepared.version) ?? 0) > 0) {
-      const { step } = await runPluginMaintenance({
-        root: releaseRoot,
+      await assertUpdateRecoveryAdmission({ env });
+      const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
+        timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
+      });
+      const install: InstallKind = missingGit
+        ? { kind: "package" }
+        : await detectInstall(params.runningRoot);
+      try {
+        const ownership = {
+          root: params.runningRoot,
+          installKind: install.kind,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+        };
+        await assertGlobalUpdateOwner(ownership);
+        if (missingGit) {
+          await assertMacosGitForUnownedCheckout(ownership, { missingGit });
+        }
+      } catch (error) {
+        if (
+          error instanceof SystemPackageOwnershipError ||
+          error instanceof UpdatePreMutationError
+        ) {
+          return await fail(error.reason, error.message);
+        }
+        throw error;
+      }
+      // Releases left by an earlier update; never on the critical path.
+      void collectReleases(prefix).catch(() => undefined);
+      staging = await allocateStaging({ kind: install.kind }, prefix);
+      let target;
+      try {
+        target = await resolveTarget({
+          kind: install.kind,
+          channel: params.channel,
+          checkout: install.checkout,
+          tag: params.tag,
+          sha: params.sha,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          archiveWorkspace: staging.path,
+        });
+      } catch (error) {
+        return await fail("no-target", `No update target: ${formatErrorMessage(error)}`);
+      }
+      const frontend = params.tag?.startsWith("file:")
+        ? await resolveInstalledPackageFrontend(path.resolve(params.tag.slice(5)))
+        : undefined;
+      await recordUpdateRunPhaseAsync(
+        params.runId,
+        "staging",
+        {
+          target: {
+            kind: install.kind,
+            version: target.version,
+            ...(target.kind === "git" ? { sha: target.sha } : {}),
+          },
+        },
+        { env },
+      );
+      if (
+        target.kind === "package" &&
+        isPackageTargetAlreadyCurrent({
+          currentVersion: params.runningVersion,
+          targetVersion: target.version,
+          target: target.spec,
+        })
+      ) {
+        return await current(target.version);
+      }
+      // The serving build decides, not the checkout HEAD: a pull without a rebuild still runs the
+      // old code. An unknown build commit prepares a release.
+      const loaded = target.kind === "git" ? resolveLoadedCommitHash() : null;
+      if (target.kind === "git" && loaded && gitCommitPrefixesMatch(loaded, target.sha)) {
+        return await current(target.version);
+      }
+      // System-level services can keep their definition: both package entry points already
+      // forward through this marker. Refuse an unwritable global package before preparing.
+      if (
+        install.kind === "package" &&
+        !params.runningRoot.startsWith(path.join(prefix, "releases") + path.sep)
+      ) {
+        const marker = path.join(params.runningRoot, ".openclaw-launcher");
+        try {
+          const exists = await fs.stat(marker).catch((error: unknown) => {
+            if (!hasErrnoCode(error, "ENOENT")) {
+              throw error;
+            }
+            return null;
+          });
+          await fs.access(exists ? marker : params.runningRoot, fsConstants.W_OK);
+        } catch {
+          return await fail(
+            "package-not-writable",
+            `The global package at ${params.runningRoot} is not writable. Update it as its owning user.`,
+          );
+        }
+      }
+      const releaseAwareGit =
+        target.kind !== "git" ||
+        (await gitTargetSupportsReleaseUpdates(
+          target.checkout,
+          target.sha,
+          Math.max(1, deadline - Date.now()),
+        ));
+      const checked = await preflight({
+        kind: install.kind,
+        target,
+        prefix,
+        stateDir: resolveStateDir(env),
         node,
         env,
-        channel: params.channel,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        acceptCapabilities: params.acceptCapabilities,
       });
-      await recordUpdateRunStepAsync(params.runId, step, { env });
-    }
-    await createTrialPending(
-      {
-        runId: params.runId,
-        target: path.relative(prefix, releaseRoot),
-        previous,
-        version: prepared.version,
-        buildId: prepared.buildId,
-        ...(params.acceptCapabilities !== undefined
-          ? { acceptCapabilities: params.acceptCapabilities }
-          : {}),
-      },
-      prefix,
-    );
-    // Only an admitted global frontend is attached; arbitrary local artifacts stay independent.
-    if (frontend) {
-      try {
-        await markForwarding(frontend.root, launcher, prefix);
-      } catch (error) {
+      if (!checked.ok) {
+        return await fail(checked.reason, checked.message);
+      }
+      if (target.kind === "git" && !releaseAwareGit) {
+        return await fail(
+          "release-updates-unsupported",
+          `This commit predates release updates. In your OpenClaw Git checkout, run: git checkout ${target.sha} && pnpm install --frozen-lockfile && pnpm build && pnpm ui:build. The current version is still running.`,
+        );
+      }
+      const onStep = async (name: string, status: "in_progress" | "completed") => {
         await recordUpdateRunStepAsync(
           params.runId,
           {
-            step: "forwarding",
-            status: "failed",
-            detail: `The npm entry could not be attached to the resident launcher: ${formatErrorMessage(error)}. It remains a separate CLI.`,
+            step: `prepare:${name}`,
+            status,
+            ...(status === "in_progress" ? { startedAtMs: Date.now() } : { endedAtMs: Date.now() }),
           },
           { env },
         );
+      };
+      const prepared: PrepareResult =
+        target.kind === "git"
+          ? await prepareGit({
+              checkout: target.checkout,
+              sha: target.sha,
+              staging: staging.path,
+              node,
+              timeoutMs: Math.max(1, deadline - Date.now()),
+              onStep,
+            })
+          : await preparePackage({
+              spec: target.spec,
+              archivePath: target.archivePath,
+              staging: staging.path,
+              npm:
+                isBunRuntime(node) || (node === process.execPath && process.versions.bun)
+                  ? resolveNpmCommand([])
+                  : [npmBesideNode(node)],
+              node,
+              timeoutMs: Math.max(1, deadline - Date.now()),
+              env,
+              onStep,
+            });
+      if (!prepared.ok) {
+        return await fail(
+          prepared.reason,
+          "The new version could not be built. The current version is still running.",
+          prepared.stderrTail,
+        );
       }
-    }
-    await recordUpdateRunPhaseAsync(
-      params.runId,
-      "activating",
-      {
-        after: {
-          version: prepared.version,
-          ...(prepared.buildId ? { buildId: prepared.buildId } : {}),
+      // An explicit artifact can be rebuilt at the same version: only the same known build
+      // identity is current. Missing identity is not equality.
+      if (
+        target.kind === "package" &&
+        prepared.buildId &&
+        prepared.version === params.runningVersion &&
+        prepared.buildId === (await readBuiltGatewayBuildId(params.runningRoot))
+      ) {
+        return await current(prepared.version);
+      }
+      await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
+      // Missing modules identify an unsupported old target; command failures never bypass checks.
+      if (target.kind === "package") {
+        const modules = await fs.readdir(path.join(prepared.releaseRoot, "dist"));
+        if (
+          !["check-release", "gateway-trial"].every((name) =>
+            modules.some((file) => new RegExp(`^${name}(?:-[\\w-]+)?\\.m?js$`).test(file)),
+          )
+        ) {
+          return await fail(
+            "release-updates-unsupported",
+            `This version predates release updates. To install it manually, run: npm i -g ${JSON.stringify(`openclaw@${target.version}`)}. The current version is still running.`,
+          );
+        }
+      }
+      const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
+      if (!verdict.ok) {
+        return await fail(
+          "release-check-failed",
+          `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
+          verdict.detail,
+        );
+      }
+      const releaseRoot = await publishStaging(staging);
+      staging = undefined;
+      if (target.kind === "git") {
+        // The worktree was registered at its staging path; record where it now lives.
+        const repaired = await runCommandWithTimeout(
+          ["git", "-C", target.checkout, "worktree", "repair", releaseRoot],
+          { timeoutMs: 30_000 },
+        );
+        if (repaired.code !== 0) {
+          return await fail(
+            "release-registration-failed",
+            "The new version could not be registered with Git. The current version is still running.",
+            repaired.stderr,
+          );
+        }
+      }
+      const launcher = await writeLauncher(prefix);
+      // Forwarded commands run `prefix/openclaw` until the launcher switches it, so it must
+      // serve the running tree: created on the first conversion, repointed if it is stale.
+      const slot = path.join(prefix, "openclaw");
+      const served = await fs.realpath(slot).catch(() => null);
+      if (served !== (await fs.realpath(params.runningRoot))) {
+        await switchLink(path.relative(prefix, params.runningRoot), prefix);
+      }
+      const previous = await fs.readlink(slot);
+      if (
+        install.kind === "package" &&
+        !params.runningRoot.startsWith(path.join(prefix, "releases") + path.sep)
+      ) {
+        const warnings: string[] = [];
+        await stageReleaseService({
+          runningRoot: params.runningRoot,
+          launcher,
+          env,
+          warn: (message) => warnings.push(message),
+        });
+        if (warnings.length > 0) {
+          await recordUpdateRunStepAsync(
+            params.runId,
+            { step: "service-definition", status: "completed", detail: warnings.join("\n") },
+            { env },
+          );
+        }
+      }
+      await markForwarding(params.runningRoot, launcher, prefix);
+      // Older releases do not have post-ready maintenance. A downgrade does not migrate
+      // state forward, so retain their pre-trial maintenance and warning recording.
+      if ((compareSemverStrings(VERSION, prepared.version) ?? 0) > 0) {
+        const { step } = await runPluginMaintenance({
+          root: releaseRoot,
+          node,
+          env,
+          channel: params.channel,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          acceptCapabilities: params.acceptCapabilities,
+        });
+        await recordUpdateRunStepAsync(params.runId, step, { env });
+      }
+      // Only an admitted global frontend is attached; arbitrary local artifacts stay independent.
+      if (frontend) {
+        try {
+          await markForwarding(frontend.root, launcher, prefix);
+        } catch (error) {
+          await recordUpdateRunStepAsync(
+            params.runId,
+            {
+              step: "forwarding",
+              status: "failed",
+              detail: `The npm entry could not be attached to the resident launcher: ${formatErrorMessage(error)}. It remains a separate CLI.`,
+            },
+            { env },
+          );
+        }
+      }
+      await recordUpdateRunPhaseAsync(
+        params.runId,
+        "activating",
+        {
+          after: {
+            version: prepared.version,
+            ...(prepared.buildId ? { buildId: prepared.buildId } : {}),
+          },
         },
-      },
-      { env },
-    );
-    return { status: "pending", target: { version: prepared.version }, releaseRoot };
+        { env },
+      );
+      await createTrialPending(
+        {
+          runId: params.runId,
+          target: path.relative(prefix, releaseRoot),
+          previous,
+          version: prepared.version,
+          buildId: prepared.buildId,
+          ...(params.acceptCapabilities !== undefined
+            ? { acceptCapabilities: params.acceptCapabilities }
+            : {}),
+        },
+        prefix,
+      );
+      return { status: "pending", target: { version: prepared.version }, releaseRoot };
+    } finally {
+      if (staging) {
+        await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
+      }
+      await releaseUpdateLock(prefix).catch(() => undefined);
+    }
   } catch (error) {
     return await fail(
       "update-failed",
       "The update failed before anything changed. The current version is still running.",
       error instanceof Error && error.stack ? error.stack : formatErrorMessage(error),
     );
-  } finally {
-    if (staging) {
-      await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
-    }
-    await releaseUpdateLock(prefix).catch(() => undefined);
   }
 }
 

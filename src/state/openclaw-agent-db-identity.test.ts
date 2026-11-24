@@ -60,7 +60,7 @@ it.runIf(process.platform !== "win32")(
     expect(proof.getOpenClawAgentDatabaseValidation(aliased)).toBe(originalProof);
     expect(proof.hasOpenClawAgentCanonicalValidation(aliased)).toBe(true);
     expect(proof.getOpenClawAgentDatabaseValidationForTransfer(replacement)).toBe(replacementProof);
-    proof.invalidateOpenClawAgentDatabaseValidation(original.path);
+    proof.invalidateOpenClawAgentDatabaseValidation(original.path, "a maintenance write");
     expect(proof.getOpenClawAgentDatabaseValidation(aliased)).toBeUndefined();
     expect(proof.hasOpenClawAgentCanonicalValidation(aliased)).toBe(false);
     expect(proof.getOpenClawAgentDatabaseValidationForTransfer(replacement)).toBe(replacementProof);

@@ -573,6 +573,18 @@ it.each([
   },
 );
 
+it.each([
+  { authorizationUrl: "https://auth.example.test/signin", shown: true },
+  { authorizationUrl: "javascript:alert(1)", shown: false },
+])("keeps only web MCP sign-in links for the Control UI (%j)", ({ authorizationUrl, shown }) => {
+  const mcpConnect = { serverName: "tracker", authorizationUrl };
+  const block = (details?: unknown) =>
+    toolResult("tracker__list_issues", details ? { details } : {});
+  expect(sanitizeChatHistoryMessages(toolRows(block({ mcpConnect, extra: "drop" })))).toEqual(
+    toolRows(block(shown ? { mcpConnect } : undefined)),
+  );
+});
+
 const execStatus = { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false };
 it.each([
   ["exec", { ...execStatus, sessionKey: "agent:helper:main" }, {}],
