@@ -62,7 +62,7 @@ struct ChatSessionSidebar: View {
 
     var sidebarClock: OpenClawChatSessionSnooze.RosterClock {
         guard self.menuActions.connection?.supportsPersonalPins == true else { return .init() }
-        return self.rosterData?.queryState?.rosterClock ?? self.viewModel.rosterClock
+        return self.viewModel.sidebarRosterClock
     }
 
     private func sidebar(now localNow: Date) -> some View {

@@ -444,7 +444,8 @@ final class ChatSessionSidebarBatch {
         _ row: OpenClawChatSessionEntry,
         section: String,
         target: OpenClawChatSessionEntry? = nil,
-        after: Bool = false) -> Drop?
+        after: Bool = false,
+        now: Date = .now) -> Drop?
     {
         if section == "pinned" {
             // ui/src/components/session-organizer.ts handleSidebarZoneDrop consumes self-drops before bubbling.
@@ -453,7 +454,7 @@ final class ChatSessionSidebarBatch {
             {
                 return .selfDrop
             }
-            guard ChatSessionSidebarEligibility.canPin(row), !row.isSnoozed() else { return nil }
+            guard ChatSessionSidebarEligibility.canPin(row), !row.isSnoozed(at: now) else { return nil }
             if row.pinned == true {
                 return .mutation(nil)
             }

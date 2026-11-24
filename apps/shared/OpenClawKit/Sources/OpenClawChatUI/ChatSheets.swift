@@ -30,7 +30,9 @@ public struct ChatSessionsSheet: View {
     }
 
     private func canTogglePin(_ session: OpenClawChatSessionEntry) -> Bool {
-        self.windowCommands?.sessionMenuActions.canTogglePin(session) == true
+        self.windowCommands?.sessionMenuActions.canTogglePin(
+            session,
+            at: self.viewModel.sidebarRosterClock.gatewayDate()) == true
     }
     #else
     private let canEditPins = true
@@ -450,7 +452,10 @@ public struct ChatSessionsSheet: View {
                 Button("Pin") { Task { await self.runBatch(.pin) } }
                     #if os(macOS)
                         .disabled(self.displayedSessions
-                            .contains { self.selectedSessionKeys.contains($0.key) && $0.isSnoozed() })
+                            .contains {
+                                self.selectedSessionKeys.contains($0.key) && $0
+                                    .isSnoozed(at: self.viewModel.sidebarRosterClock.gatewayDate())
+                            })
                     #endif
                 Button("Unpin") { Task { await self.runBatch(.unpin) } }
             }

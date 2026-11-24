@@ -151,6 +151,7 @@ struct ChatSessionSidebarMenuTests {
             current = false
             #expect(!retired.canEditPins)
         }
+        var dropWrites = [OpenClawChatGatewayRequest]()
         let hasSharedWrite = [.groupWriter, .sleeping, .awake].contains(access)
         let scope = access == .readOnly ? "operator.read" :
             (hasSharedWrite ? "operator.write" : "operator.sessions.write")
@@ -160,6 +161,10 @@ struct ChatSessionSidebarMenuTests {
             capabilities: access == .legacy ? [] :
                 ["personal-session-pins"])
         { request in
+            if request.method == "sessions.patch" {
+                dropWrites.append(request)
+                return Data(#"{"key":"agent:research:work","entry":{"sessionId":"work-id","updatedAt":20}}"#.utf8)
+            }
             if request.method == "users.self" { return Data(#"{"profile":{"id":"alias","emails":[]}}"#.utf8) }
             guard request.method == "users.prefs.get",
                   access != .unavailable else { throw URLError(.unsupportedURL) }
@@ -181,8 +186,13 @@ struct ChatSessionSidebarMenuTests {
         if access == .sleeping || access == .awake {
             row.pinned = false
             row.pinnedAt = nil
-            row.snoozedUntil = (access == .sleeping ? Date.distantFuture : Date.distantPast)
-                .timeIntervalSince1970 * 1000
+            // The host clock and Gateway disagree about whether the deadline has passed.
+            let local = Date.now
+            let skew: TimeInterval = access == .sleeping ? -3600 : 3600
+            fixture.model.rosterClock = .init(
+                timestamp: local.addingTimeInterval(skew).timeIntervalSince1970 * 1000,
+                receivedAt: local)
+            row.snoozedUntil = local.addingTimeInterval(skew / 2).timeIntervalSince1970 * 1000
         }
         fixture.model.sessions = [row]
         let host = NSHostingController(rootView: ChatSessionsSheet(viewModel: fixture.model)
@@ -226,6 +236,18 @@ struct ChatSessionSidebarMenuTests {
         let leading = table.delegate?.tableView?(table, rowActionsForRow: index, edge: .leading)
         #expect(leading?.map(\.title) == (canEdit ? [pinTitle] : []))
         if access != .readOnly { #expect(menu.item(withTitle: "Archive")?.isEnabled == true) }
+        if access == .sleeping || access == .awake {
+            let drag = ChatSidebarDrag(
+                scope: pages.batch.scope,
+                key: pages.interactionIdentity(row),
+                sessionID: row.sessionId)
+            #expect(pages.dropInteraction(drag, section: "pinned", after: false) == canEdit)
+            await waitForObservedState { !pages.batch.running }
+            #expect(dropWrites.count == (canEdit ? 1 : 0))
+            #expect(dropWrites.first?.params["pinned"]?.value as? Bool == (canEdit ? true : nil))
+            fixture.model.setSessionPinned(key: row.key, pinned: true, agentID: row.agentId)
+            #expect(fixture.model.sessions.first?.isPinned == canEdit)
+        }
     }
 
     @Test func `appearance reset and involvement address the row incarnation and agent`() async throws {

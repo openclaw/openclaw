@@ -33,7 +33,7 @@ final class ChatSessionSidebarActions {
             scope: "operator.sessions.write")
     }
 
-    func canTogglePin(_ session: OpenClawChatSessionEntry, at now: Date = .now) -> Bool {
+    func canTogglePin(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
         self.canEditPins && (session.isPinned || !session.isSnoozed(at: now))
     }
 

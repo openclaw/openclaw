@@ -947,8 +947,8 @@ extension OpenClawChatViewModel {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
         let row = self.sidebarData?.row(key: key, agentID: target.agentID ?? self.activeAgentId)
         #if os(macOS)
-        if pinned,
-           self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)?.isSnoozed() == true { return }
+        if pinned, let observed = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId),
+           observed.isSnoozed(at: self.sidebarRosterClock.gatewayDate()) { return }
         #endif
         let pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
         self.mutateSessionOptimistically(

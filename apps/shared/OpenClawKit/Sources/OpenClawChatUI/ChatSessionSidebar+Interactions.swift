@@ -312,7 +312,8 @@ extension ChatSessionSidebar {
             row,
             section: section,
             target: pinTarget.map(self.batchTarget),
-            after: after)
+            after: after,
+            now: self.sidebarClock.gatewayDate())
         {
         case .selfDrop?: return true
         case let .mutation(fields)? where self.menuActions.canEditPins: patch = fields
