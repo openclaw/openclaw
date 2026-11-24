@@ -16,7 +16,10 @@ import {
   restoreOperatorModelPolicySnapshot,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
-import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
+import {
+  isConfiguredCommandOwner,
+  prepareCommandOwnerAuthority,
+} from "../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import {
@@ -239,6 +242,48 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
   });
 }
 
+/** What channel ingress knows about a sender; admission decides what it may do. */
+export type ChannelSenderFacts = Readonly<
+  UserChannelIdentity & { authentication: "verified" | "asserted" }
+>;
+
+const isChannelOwner = (config: OpenClawConfig, sender: UserChannelIdentity) =>
+  isConfiguredCommandOwner(config, { ...sender, channel: sender.channelId });
+
+/** Gather a channel sender's link, operator profile and command-owner policy once, at ingress. */
+export async function prepareChannelSenderAdmission(
+  { authentication, ...principal }: ChannelSenderFacts,
+  getConfig: () => OpenClawConfig,
+) {
+  const verified = authentication === "verified";
+  const requester = verified ? await prepareUserChannelIdentityAuthority(principal) : undefined;
+  // An asserted identifier can match a configured owner, never a personal link.
+  const owner = verified || isChannelOwner(getConfig(), principal) ? principal : undefined;
+  const prepared = { identity: principal, prepared: requester };
+  return {
+    requester,
+    operatorAuthority: verified
+      ? await prepareChannelOperatorAuthority(getConfig(), prepared)
+      : undefined,
+    commandOwnerPrincipal: owner,
+    commandOwnerAuthority: owner && (await prepareCommandOwnerAuthority(getConfig(), prepared)),
+  };
+}
+
+/** A verified sender in the global `commands.ownerAllowFrom` is the owner principal. */
+export function decideChannelOwnerPrincipal(config: OpenClawConfig, sender: UserChannelIdentity) {
+  return isChannelOwner(config, sender)
+    ? {
+        profileId: GATEWAY_OWNER_PROFILE_ID,
+        canonicalIdentity: null,
+        assignedRole: null,
+        scopes: ["operator.admin"],
+        gatewayAccessGrant: null,
+        channelOwner: { ...sender },
+      }
+    : undefined;
+}
+
 function intersectOperatorRunModelPolicy(
   original: PreparedOperatorModelPolicy | undefined,
   current: PreparedOperatorModelPolicy | undefined,
@@ -321,7 +366,11 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     const refuse = () => {
       throw new GatewayOperatorRecoveryAuthorizationError();
     };
-    if (profileId !== snapshot.profileId || (binding && binding.profileId !== profileId)) {
+    if (
+      profileId !== snapshot.profileId ||
+      (binding && binding.profileId !== profileId) ||
+      (live?.channelOwner && !isChannelOwner(config, live.channelOwner))
+    ) {
       refuse();
     }
     let scopes = snapshot.scopes;
@@ -527,11 +576,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     const requesterOwner =
       facts.kind === "channel"
         ? channelIdentity !== undefined &&
-          (isConfiguredCommandOwner(config, {
-            channel: channelIdentity.channelId,
-            accountId: channelIdentity.accountId,
-            senderId: channelIdentity.senderId,
-          }) ||
+          (isChannelOwner(config, channelIdentity) ||
             operatorScopeSatisfied("operator.admin", scopes))
         : facts.kind === "gateway" && facts.source && facts.source.kind !== "gateway"
           ? principal?.kind !== "member"
@@ -556,6 +601,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         facts.kind === "channel"
           ? { reference: facts.snapshot.reference, modelPolicy: originalModels }
           : undefined,
+      channelOwner: live?.channelOwner,
       requesterOwner,
       grant: decideTurnGrant(scopes),
       modelPolicy,

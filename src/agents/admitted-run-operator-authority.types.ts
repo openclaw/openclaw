@@ -2,6 +2,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { GatewayAuthPolicyFacts } from "../gateway/auth-policy.types.js";
 import type { RemoteIngressPrincipalIdentity } from "../gateway/server/client-identity-types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 export type AdmittedRunOperatorRoleFacts = Readonly<{
@@ -47,6 +48,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
     modelPolicy?: PreparedOperatorModelPolicy;
   }>;
+  /** Verified configured-owner sender; admission re-checks `commands.ownerAllowFrom` per start. */
+  channelOwner?: Readonly<UserChannelIdentity>;
   scopes: readonly string[];
   /** Command-owner decision fixed at this run's start. */
   requesterOwner?: boolean;
