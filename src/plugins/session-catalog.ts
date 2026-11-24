@@ -200,6 +200,11 @@ export type SessionCatalogProvider = {
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
+  /** Local hosts this producer can enumerate without contacting peers or paired nodes. */
+  automaticExportHosts?: (params: {
+    agentId: string;
+    allowProcessHomeFallback: boolean;
+  }) => readonly string[] | Promise<readonly string[]>;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
   resolveCreateSession?: (params: {
     /** Agent whose model/runtime policy must authorize the catalog target. */

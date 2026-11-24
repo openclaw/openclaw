@@ -12,6 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS } from "./cli-constants.js";
+import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
@@ -67,6 +68,7 @@ function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     id: "claude",
     label: "Claude Code",
     supportsProcessHomeIsolation: true,
+    automaticExportHosts: () => [CLAUDE_LOCAL_SESSION_HOST_ID],
     resolveCreateSession: ({ agentId }) =>
       api.runtime.agent.resolveSessionCatalogCreateTarget({
         config: currentConfig(api),

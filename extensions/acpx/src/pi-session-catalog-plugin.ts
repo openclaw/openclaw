@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  PI_LOCAL_SESSION_HOST_ID,
   PI_SESSIONS_CAPABILITY,
   PI_SESSIONS_LIST_COMMAND,
   PI_SESSION_ID_PATTERN,
@@ -91,6 +92,7 @@ export function registerPiSessionCatalog(api: OpenClawPluginApi): void {
     id: "pi",
     label: "Pi",
     supportsProcessHomeIsolation: true,
+    automaticExportHosts: () => [PI_LOCAL_SESSION_HOST_ID],
     list: async (query) => await (await loadCatalogRuntime()).list(query),
     read: async (request) => await (await loadCatalogRuntime()).read(request),
     continueSession: async (request) => await (await loadCatalogRuntime()).continueSession(request),

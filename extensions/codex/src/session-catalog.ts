@@ -149,6 +149,15 @@ function withCatalogListScope(
   };
 }
 
+function permitsLocalCatalogExport(home: CodexCatalogHome) {
+  return Boolean(
+    home.localSessionsRoot &&
+    home.appServer.start.transport === "stdio" &&
+    home.appServer.start.commandSource === "managed" &&
+    !isCodexAppServerProxyLaunch(home.appServer.start.args),
+  );
+}
+
 function catalogHostMapper(
   localTerminalAvailable: boolean,
   localHomes: readonly CodexCatalogHome[],
@@ -162,13 +171,7 @@ function catalogHostMapper(
         localTerminalAvailable && home?.appServer.start.transport === "stdio";
       // A stdio proxy forwards to a daemon selected by its socket. An arbitrary
       // command also cannot attest that it reads the selected native home.
-      const exportHomeId =
-        home?.localSessionsRoot &&
-        home.appServer.start.transport === "stdio" &&
-        home.appServer.start.commandSource === "managed" &&
-        !isCodexAppServerProxyLaunch(home.appServer.start.args)
-          ? home.sourceHomeId
-          : undefined;
+      const exportHomeId = home && permitsLocalCatalogExport(home) ? home.sourceHomeId : undefined;
       const local = isLocalCodexCatalogHost(host.hostId);
       return {
         hostId: host.hostId,
@@ -331,6 +334,10 @@ export function registerCodexSessionCatalog(params: {
     id: "codex",
     label: "Codex",
     supportsProcessHomeIsolation: true,
+    automaticExportHosts: async ({ agentId, allowProcessHomeFallback }) =>
+      (await catalogHomes(agentId, allowProcessHomeFallback))
+        .filter(permitsLocalCatalogExport)
+        .map((home) => home.hostId),
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(
         params.api.runtime.modelConfig,

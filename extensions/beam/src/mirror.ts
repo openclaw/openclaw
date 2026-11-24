@@ -6,13 +6,11 @@ import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type {
+  PluginServiceCatalogExports,
+  PluginServiceExportCatalog,
   SessionCatalogLocator,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import {
-  listActiveSessionCatalogs,
-  type ActiveSessionCatalog,
-} from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   fetchWithSsrFGuard,
   GuardedFetchRedirectError,
@@ -222,6 +220,7 @@ type TrackedMirrorSession = {
 };
 
 export function createBeamMirrorRunner(params: {
+  catalogExports: PluginServiceCatalogExports;
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
   now?: () => number;
@@ -365,7 +364,7 @@ export function createBeamMirrorRunner(params: {
   };
 
   const buildUpload = async (
-    catalog: ActiveSessionCatalog,
+    catalog: PluginServiceExportCatalog,
     candidate: BeamMirrorCandidate,
     completed: boolean,
   ): Promise<BeamUpload> => {
@@ -435,7 +434,7 @@ export function createBeamMirrorRunner(params: {
         return;
       }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
-      const catalogs = listActiveSessionCatalogs().filter(
+      const catalogs = params.catalogExports.listCatalogs().filter(
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.
@@ -620,6 +619,7 @@ export function createBeamMirrorService(params: {
   return {
     id: "beam-mirror",
     apiVersion: 2,
+    catalogExports: { allowlistPath: ["mirror", "catalogs"] },
     start(ctx) {
       const mirror = parseBeamMirrorConfig(params.runtime.config.current());
       if (mirror === undefined) {
@@ -629,7 +629,14 @@ export function createBeamMirrorService(params: {
         ctx.logger.warn(`beam mirror disabled: ${mirror}`);
         return;
       }
+      if (!ctx.catalogExports) {
+        ctx.logger.warn(
+          "beam mirror disabled: this Gateway does not provide background catalog export",
+        );
+        return;
+      }
       const active = createBeamMirrorRunner({
+        catalogExports: ctx.catalogExports,
         runtime: params.runtime,
         logger: ctx.logger,
         signal: ctx.scheduler.signal,

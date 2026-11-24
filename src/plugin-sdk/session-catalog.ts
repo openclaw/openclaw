@@ -1,4 +1,9 @@
 export type {
+  CatalogExportItem,
+  PluginServiceExportCatalog,
+  PluginServiceCatalogExports,
+} from "../plugins/service-catalog-exports.js";
+export type {
   SessionCatalogArchiveProviderParams,
   SessionCatalogContinueProviderParams,
   SessionCatalogContinueProviderResult,
