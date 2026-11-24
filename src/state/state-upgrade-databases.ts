@@ -15,7 +15,6 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
@@ -114,7 +113,8 @@ export async function discoverDatabases(
         `Cannot inspect database ${pathname}. Run openclaw doctor with the current version before retrying the update.`,
       );
     }
-    const inspect = (db: DatabaseSync) => {
+    const inspect = (readable: string) => {
+      using db = openNodeSqliteDatabase(readable, { readOnly: true });
       return {
         engine: readEngineAnchorIdentity(db, pathname).engine,
         version: readVersion(db, kind),
@@ -133,28 +133,16 @@ export async function discoverDatabases(
     };
     let image;
     if (isArtifactPreservingStateRead()) {
-      // check-release is already an isolated reader, not the serving Gateway.
-      const bounded = tryInspectSqliteReadOnlyInProcess(pathname, inspect, {
+      const prepared = await prepareSqliteReadOnlyLocation(pathname, {
         preserveSourceArtifacts: true,
       });
-      if (bounded) {
-        image = bounded.value;
-      } else {
-        const prepared = await prepareSqliteReadOnlyLocation(pathname, {
-          preserveSourceArtifacts: true,
-        });
-        try {
-          using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
-          image = inspect(db);
-        } finally {
-          await prepared.cleanupAsync();
-        }
+      try {
+        image = inspect(prepared.location);
+      } finally {
+        await prepared.cleanupAsync();
       }
     } else {
-      image = withRecoveredSource(pathname, (readable) => {
-        using db = openNodeSqliteDatabase(readable, { readOnly: true });
-        return inspect(db);
-      });
+      image = withRecoveredSource(pathname, inspect);
     }
     if (image.state) {
       metadataRows = image.state.metadataRows;

@@ -67,7 +67,7 @@ it.each(["external", "logs", "tmp", "npm", "node_modules", "git-install", "deep"
   },
 );
 
-it.each(["closed", "empty-wal", "live", "nonempty-no-shm"])(
+it.each(["closed", "empty-wal", "live"])(
   "inventories a %s WAL database without changing source artifacts",
   async (mode) => {
     const root = dirs.make("state-boundary-wal-");
@@ -76,14 +76,8 @@ it.each(["closed", "empty-wal", "live", "nonempty-no-shm"])(
     const writer = new DatabaseSync(file);
     try {
       writer.exec("PRAGMA journal_mode = WAL");
-      const original = fs.readFileSync(file);
       writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
-      if (mode === "nonempty-no-shm") {
-        const wal = fs.readFileSync(`${file}-wal`);
-        writer.close();
-        fs.writeFileSync(file, original);
-        fs.writeFileSync(`${file}-wal`, wal);
-      } else if (mode !== "live") {
+      if (mode !== "live") {
         writer.close();
         if (mode === "empty-wal") {
           fs.writeFileSync(`${file}-wal`, "");
@@ -99,7 +93,6 @@ it.each(["closed", "empty-wal", "live", "nonempty-no-shm"])(
           ]),
         );
       const before = artifacts();
-      const prepare = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocation");
       const { targets } = await withArtifactPreservingStateReads(() =>
         discoverDatabases(root, {}, { OPENCLAW_STATE_DIR: root }),
       );
@@ -113,7 +106,6 @@ it.each(["closed", "empty-wal", "live", "nonempty-no-shm"])(
         ]),
       );
       expect(artifacts()).toEqual(before);
-      expect(prepare).toHaveBeenCalledTimes(mode === "nonempty-no-shm" ? 1 : 0);
     } finally {
       if (mode === "live") {
         writer.close();
@@ -166,23 +158,4 @@ it("refuses a missing database with unresolved journal data instead of bootstrap
     /incomplete.*Preserve.*restore/is,
   );
   expect(fs.readFileSync(`${file}-journal`, "utf8")).toBe("retained journal bytes");
-});
-
-it("reads a large cleanly closed WAL schema without snapshotting or rejecting its size", async () => {
-  const root = dirs.make("state-boundary-large-closed-");
-  const file = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  {
-    using db = new DatabaseSync(file);
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
-  }
-  fs.truncateSync(file, 75 * 1024 ** 3);
-  vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocation").mockRejectedValue(
-    new Error("Metadata inspection must not copy the payload"),
-  );
-  await preflightStateUpgrade({ OPENCLAW_STATE_DIR: root }, {});
-  expect(fs.statSync(file).size).toBe(75 * 1024 ** 3);
-  expect(fs.existsSync(`${file}-shm`)).toBe(false);
-  expect(fs.existsSync(`${file}-wal`)).toBe(false);
 });

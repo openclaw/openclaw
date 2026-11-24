@@ -13,8 +13,8 @@ import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 
 /**
  * Inspect in a dedicated child: closing a source in the caller can release its POSIX locks.
- * Empty/absent WAL has no frames to merge, so immutable metadata reads need no SHM.
- * Nonempty WAL requires its read-only index or the private snapshot owner.
+ * `preserveSourceArtifacts` reads only a complete WAL family, through a read-only index, so
+ * no source byte changes; any other family returns undefined for the private snapshot owner.
  */
 export function tryInspectSqliteReadOnlyInProcess<T>(
   pathname: string,
@@ -32,18 +32,15 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     throw error;
   }
   const sidecars = readSourceSidecars(canonicalPath);
+  // Live runtime reads and certified clean closes permit empty WAL sidecars.
+  // Acquire real read locks; never use immutable mode on a live path.
   const preserve = options.preserveSourceArtifacts === true;
-  const immutable =
-    preserve &&
-    mode === "wal" &&
-    (fs.statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) === 0 &&
-    (fs.statSync(`${canonicalPath}-journal`, { throwIfNoEntry: false })?.size ?? 0) === 0;
   const closedWal =
     !preserve && options.allowClosedWal && !sidecars.wal && !sidecars.shm && !sidecars.journal;
   if (
     mode === "empty" ||
-    (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal && !immutable) ||
-    (preserve && !immutable && (mode !== "wal" || sidecars.journal))
+    (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal) ||
+    (preserve && (mode !== "wal" || sidecars.journal))
   ) {
     return undefined;
   }
@@ -82,9 +79,7 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     return { value };
   };
   try {
-    return withSqliteSourceReadDatabase(canonicalPath, "source", read, {
-      view: immutable ? "immutable" : preserve ? "readonly-shm" : undefined,
-    });
+    return withSqliteSourceReadDatabase(canonicalPath, "source", read, { readOnlyShm: preserve });
   } catch (error) {
     // The read-only index cannot be opened once the last connection closed and removed the
     // WAL family, and a new owner may already have recreated it, so the family is no
