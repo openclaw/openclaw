@@ -120,7 +120,7 @@ it.each(adapters)(
           {
             name: "unreadable_probe",
             description: "Unreadable",
-            get parameters() {
+            get parameters(): never {
               throw new Error("unreadable parameters");
             },
           },
