@@ -1233,8 +1233,8 @@ jobs:
             fi
           done
           comparison_base="$BASE_SHA"
-          # Release-gate planning uses the merge tree, but lint executes the
-          # candidate. Its grandfathered source belongs to the actual fork.
+          # Release-gate planning uses the merge tree, but lint and asset checks
+          # execute the candidate. Compare its source against the actual fork.
           if [[ "$CHECKOUT_SHA" != "$DIFF_HEAD_SHA" ]]; then
             comparison_base="$(gh api --method GET \
               "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${CHECKOUT_SHA}" \
@@ -2404,7 +2404,7 @@ jobs:
       'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: 15
     env:
-      CHECKOUT_BASE_SHA: &ci_diff_base ${{ needs.preflight.outputs.diff_base_revision }}
+      CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.checkout_base_revision }}
       COMPATIBILITY_TARGET: &historical_target ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *linux_node_checkout_step
@@ -3041,7 +3041,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'runson' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'hybrid' && (github.run_attempt != 1 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || needs.preflight.outputs.node_runner_backend == 'runson' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_qualification != 'true') || needs.preflight.outputs.frozen_target == 'true')))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-2vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || (((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'runson' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'hybrid' && (github.run_attempt != 1 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || needs.preflight.outputs.node_runner_backend == 'runson' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_qualification != 'true') || needs.preflight.outputs.frozen_target == 'true')))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-2vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: 60
     env:
-      CHECKOUT_BASE_SHA: *ci_diff_base
+      CHECKOUT_BASE_SHA: &ci_diff_base ${{ needs.preflight.outputs.diff_base_revision }}
     steps:
       - *linux_node_checkout_step
       - name: Prepare release-gate ratchet merge tree

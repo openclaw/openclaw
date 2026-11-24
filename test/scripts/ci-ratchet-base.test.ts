@@ -6,7 +6,13 @@ import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { runWorkflowShellScript } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflow,
+  readWorkflowOutputs,
+  requiredWorkflowStep,
+  runWorkflowShellScript,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(fs.readFileSync(".github/workflows/ci.yml", "utf8"), {
@@ -44,24 +50,71 @@ function compare(gh: string, merged = false) {
     },
   );
   expect(run.error).toBeUndefined();
-  return { run, output, apiLog };
+  return { run, root, output, apiLog };
 }
 
-it.each([false, true])("resolves the actual checkout comparison (merge tree=%s)", (merged) => {
-  const { run, output, apiLog } = compare(
-    'gh() { printf "%s\\n" "$*" >> "$API_LOG"; printf "%s\\n" "$FORK_SHA"; }',
-    merged,
-  );
-  expect(run.status, run.stderr).toBe(0);
-  expect(fs.readFileSync(output, "utf8")).toBe(`sha=${merged ? expectedBase : fork}\n`);
-  if (merged) {
-    expect(fs.existsSync(apiLog)).toBe(false);
-  } else {
-    expect(fs.readFileSync(apiLog, "utf8")).toBe(
-      `api --method GET repos/openclaw/openclaw/compare/${expectedBase}...${expectedCandidate} --jq .merge_base_commit.sha\n`,
+it.each([false, true])(
+  "uses the actual checkout base for asset checks (merge tree=%s)",
+  (merged) => {
+    const { run, root, output, apiLog } = compare(
+      'gh() { printf "%s\\n" "$*" >> "$API_LOG"; printf "%s\\n" "$FORK_SHA"; }',
+      merged,
     );
-  }
-});
+    expect(run.status, run.stderr).toBe(0);
+    expect(fs.readFileSync(output, "utf8")).toBe(`sha=${merged ? expectedBase : fork}\n`);
+    if (merged) {
+      expect(fs.existsSync(apiLog)).toBe(false);
+    } else {
+      expect(fs.readFileSync(apiLog, "utf8")).toBe(
+        `api --method GET repos/openclaw/openclaw/compare/${expectedBase}...${expectedCandidate} --jq .merge_base_commit.sha\n`,
+      );
+    }
+    const context = {
+      preflightOutputs: {
+        checkout_base_revision: readWorkflowOutputs(output).sha,
+        diff_base_revision: expectedBase,
+      },
+    };
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ scripts: { "ui:check-performance:base": "fixture" } }),
+    );
+    const assets = runWorkflowShellScript(
+      `pnpm() { printf '%s\\n' "$@"; }\n${step("control-ui-performance", "Check Control UI performance against base")}`,
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          CHECKOUT_BASE_SHA: String(
+            evaluateWorkflow(
+              workflow.jobs["control-ui-performance"].env.CHECKOUT_BASE_SHA,
+              context,
+            ),
+          ),
+          COMPATIBILITY_TARGET: "false",
+        },
+      },
+    );
+    expect(assets.status, assets.stderr).toBe(0);
+    expect(assets.stdout.trim().split("\n")).toEqual([
+      "ui:check-performance:base",
+      merged ? expectedBase : fork,
+    ]);
+    for (const expression of [
+      workflow.jobs["checks-baseline-ratchets"].env.CHECKOUT_BASE_SHA,
+      requiredWorkflowStep<WorkflowStep[]>(
+        workflow.jobs["checks-fast-core"].steps,
+        "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+      ).env?.PROTOCOL_SINCE_BASE_SHA,
+      requiredWorkflowStep<WorkflowStep[]>(
+        workflow.jobs["check-additional-shard"].steps,
+        "Ensure additional check comparison base",
+      ).with?.["base-sha"],
+    ]) {
+      expect(evaluateWorkflow(expression, context)).toBe(expectedBase);
+    }
+  },
+);
 
 it("refuses an unavailable API ancestor without publishing a fallback", () => {
   const { run, output } = compare("gh() { return 1; }");
