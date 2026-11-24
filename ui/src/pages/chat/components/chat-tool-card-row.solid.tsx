@@ -1,5 +1,6 @@
 import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { readMcpConnectAction } from "../../../../../src/agents/mcp-connect-action.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
@@ -262,7 +263,9 @@ export function ToolCardRow(props: ToolCardProps) {
       onOpenSubagent()?.(childKey);
     }
   };
-  const linkedRow = () => (workspaceFilePath() ? "file" : canOpenSubagent() ? "subagent" : null);
+  const connect = createMemo(() => readMcpConnectAction({ details: card().details }));
+  const linkedRow = () =>
+    workspaceFilePath() ? "file" : canOpenSubagent() ? "subagent" : connect() ? "connect" : null;
   const Row = dynamic(() => (linkedRow() ? "div" : "button"));
   const toggle = () => props.options.onToggleExpanded(card().id);
   const rowContent = () => (
@@ -334,6 +337,22 @@ export function ToolCardRow(props: ToolCardProps) {
       </Show>
       <Show when={props.options.interrupted && outcome() === "unrecorded"}>
         <span class="muted">{t("chat.toolCards.interrupted")}</span>
+      </Show>
+      <Show when={connect()}>
+        {(action) => (
+          <a
+            class="chat-tool-row__connect"
+            href={action().authorizationUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Icon name="externalLink" />
+            <span>{t("chat.toolCards.signIn")}</span>
+            <span class="chat-tool-row__connect-host">
+              {new URL(action().authorizationUrl).host}
+            </span>
+          </a>
+        )}
       </Show>
       <Show when={!props.options.expanded && !launch()?.capacity}>
         <ToolOutcomeSummary card={card()} />

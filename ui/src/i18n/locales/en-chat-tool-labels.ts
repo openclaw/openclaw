@@ -207,6 +207,7 @@ const enChatToolLabels = {
         unknown: "{count} unknown",
       },
       openFile: "Open file",
+      signIn: "Sign in",
       copyToClipboard: "Copy to clipboard",
       downloadFile: "Download file",
       fileChanges: "File changes",
