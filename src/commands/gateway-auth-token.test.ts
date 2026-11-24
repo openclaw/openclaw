@@ -102,7 +102,7 @@ it("fails actionably when no configured token is available", async () => {
   setResolvedConfig({ gateway: { auth: { mode: "token" } } });
 
   await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow(
-    "Set gateway.auth.token from its secret source",
+    "openclaw doctor --generate-gateway-token",
   );
 
   expect(runtime.writeStdout).not.toHaveBeenCalled();

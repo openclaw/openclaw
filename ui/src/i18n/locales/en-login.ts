@@ -108,7 +108,7 @@ const enLogin = {
           "On the computer running OpenClaw, run openclaw gateway auth-token --show. Paste its token into Gateway secret.",
         stepPassword: "Type the configured Gateway password into Gateway secret.",
         stepGenerate:
-          "If this browser has no token saved, load a link with #token=your-token to store it here. If no token is configured, set gateway.auth.token from its secret source. Do not generate a new token: that disconnects other sessions.",
+          "If this browser has no token saved, load a link with #token=your-token to store it here. If no token is configured, set gateway.auth.token from its secret source; if there is no secret source, run openclaw doctor --generate-gateway-token on the gateway host, then restart.",
         stepConnect: "Click Connect again after updating the Gateway secret.",
       },
       authFailed: {

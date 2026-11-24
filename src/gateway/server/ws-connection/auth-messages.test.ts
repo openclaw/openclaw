@@ -41,7 +41,7 @@ it.each<[Partial<MessageParams>, string, boolean?, string?]>([
       reason: "token_missing",
       client: { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
     },
-    "unauthorized: gateway token missing (load a #token= link, or set gateway.auth.token from its secret source)",
+    "unauthorized: gateway token missing (load #token= link, set gateway.auth.token, or doctor --generate-gateway-token)",
     true,
   ],
   [

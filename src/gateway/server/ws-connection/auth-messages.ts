@@ -29,7 +29,7 @@ export function formatGatewayAuthFailureMessage(params: {
   }
   const uiHint = "open the OpenClaw URL and paste the token in OpenClaw settings";
   const missingUiTokenHint =
-    "load a #token= link, or set gateway.auth.token from its secret source";
+    "load #token= link, set gateway.auth.token, or doctor --generate-gateway-token";
   // Local CLI clients share this gateway's config and have no gateway.remote
   // block; pointing them at gateway.remote.* would be a dead end.
   const tokenHint = isCli

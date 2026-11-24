@@ -118,7 +118,8 @@ export async function detectGatewayAuthHealth(
           ? "Gateway token is blank or the literal string undefined/null, not a usable secret."
           : "Gateway auth is off or missing a token.",
       path: "gateway.auth.token",
-      fixHint: "Set gateway.auth.token from its secret source, then restart the Gateway.",
+      fixHint:
+        "Run `openclaw doctor --fix --generate-gateway-token` to generate a token, then restart the Gateway.",
     },
   ];
 }
