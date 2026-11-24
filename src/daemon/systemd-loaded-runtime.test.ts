@@ -34,7 +34,7 @@ const properties: Record<string, { type: string; data: string | number | boolean
   NRestarts: { type: "u", data: 2 },
   MainPID: { type: "u", data: 412 },
   ExecMainStatus: { type: "i", data: 0 },
-  ExecMainCode: { type: "i", data: 1 },
+  ExecMainCode: { type: "i", data: 0 },
   KillMode: { type: "s", data: "control-group" },
   TasksCurrent: { type: "t", data: 8 },
   MemoryCurrent: { type: "t", data: 2048 },
@@ -177,6 +177,23 @@ it.each([
     }
   },
 );
+
+it("reports no last exit while the systemctl-shown main process runs", async () => {
+  allowsSystemctlShow = true;
+  systemctl.mockResolvedValue(
+    success(
+      `Id=${unitName}\nLoadState=loaded\nActiveState=active\nSubState=running\nMainPID=42\nExecMainStatus=0\nExecMainCode=0`,
+    ),
+  );
+  expect(
+    await readSystemdServiceRuntime(env, { commandInspection: { kind: "present" } }),
+  ).toMatchObject({
+    status: "running",
+    pid: 42,
+    lastExitStatus: undefined,
+    lastExitReason: undefined,
+  });
+});
 
 it.each([0, 2001])("authenticates system manager UID %s", async (uid) => {
   systemBusctl.mockImplementation(async (args) =>
@@ -382,8 +399,8 @@ it.each([
         pid: 412,
         state: "active",
         subState: "running",
-        lastExitStatus: 0,
-        lastExitReason: "exited",
+        lastExitStatus: undefined,
+        lastExitReason: undefined,
         systemd: {
           unit: unitName,
           managerUid: 2001,

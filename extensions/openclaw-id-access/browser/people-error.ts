@@ -29,6 +29,8 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "Use a role name of 1–64 lowercase letters, digits, - or _, starting with a letter. Rename the role in config.",
   role_undefined:
     "That role is no longer defined on this claw. Refresh this page and choose another role.",
+  sandbox_unavailable:
+    "This role requires a sandbox that is not set up on this claw. Refresh this page to see what to set up.",
   seq_conflict:
     "Access changed while you were making this update. Refresh this page and review the current access before trying again.",
   invite_not_pending:

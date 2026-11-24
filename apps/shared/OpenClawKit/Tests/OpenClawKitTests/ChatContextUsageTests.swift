@@ -155,7 +155,7 @@ struct ChatContextUsageTests {
 
         #expect(message.usage?.contextUsage == nil)
         #expect(result?.usedTokens == 1000)
-        #expect(presentation.text.hasSuffix("45% ctx"))
+        #expect(presentation.context?.percent == 45)
     }
 
     @Test func `falls back to session totals without message usage`() {
@@ -277,7 +277,7 @@ struct ChatContextUsageTests {
         #expect(vm.contextUsage?.contextWindowTokens == 10000)
     }
 
-    @Test func `assistant message usage mirrors the compact control UI footer`() throws {
+    @Test func `assistant message usage feeds the context table rows, budget and cost`() throws {
         let message = try self.message(usage: self.usage(
             input: 59,
             output: 13400,
@@ -289,9 +289,34 @@ struct ChatContextUsageTests {
             message: message,
             contextWindowTokens: 3_000_000))
 
-        #expect(presentation.text == "↑59 ↓13.4k R2.2M W43.9k $0.0123 ⚠︎ 75% ctx")
+        #expect(presentation.rows == [
+            .init(component: .cacheRead, tokens: 2_200_000),
+            .init(component: .cacheWrite, tokens: 43900),
+            .init(component: .input, tokens: 59),
+            .init(component: .output, tokens: 13400),
+        ])
+        #expect(presentation.cost == 0.01234)
+        let context = try #require(presentation.context)
+        #expect(context.promptTokens == 2_243_959)
+        #expect(context.windowTokens == 3_000_000)
+        #expect(context.percent == 75)
+        // Output is not part of the prompt, so it never draws on the budget bar.
+        #expect(context.segments.map(\.component) == [.cacheRead, .cacheWrite, .input])
+        #expect(abs(context.segments.map(\.fraction).reduce(0, +) - 2_243_959.0 / 3_000_000) < 0.000_001)
         #expect(presentation.pressure == .warning)
-        #expect(presentation.accessibilityValue.contains("Warning"))
+    }
+
+    @Test func `context table hides zero rows and formats cost like the web panel`() throws {
+        let message = try self.message(usage: self.usage(input: 0, output: 12, cacheRead: 0, costTotal: 0.1587))
+        let presentation = try #require(ChatMessageUsagePresentation.make(message: message, contextWindowTokens: nil))
+
+        #expect(presentation.rows == [.init(component: .output, tokens: 12)])
+        #expect(presentation.context == nil)
+        #expect(ChatMessageUsagePresentation.cost(0.1587) == "$0.159")
+        #expect(ChatMessageUsagePresentation.cost(0.15) == "$0.15")
+        #expect(ChatMessageUsagePresentation.cost(0.0042) == "$0.0042")
+        #expect(ChatMessageUsagePresentation.cost(1.234) == "$1.23")
+        #expect(ChatMessageUsagePresentation.tokens(521_300) == "521.3k")
     }
 
     @Test func `usage footer belongs to the reply a run ends on, not its tool steps`() throws {
@@ -318,10 +343,16 @@ struct ChatContextUsageTests {
             message: unmarked,
             contextWindowTokens: 150_000))
 
-        #expect(markedPresentation.text == "↑100 ↓2k R140k W6.9k 49% ctx")
+        // The marker sizes the budget; its parts scale into it instead of overflowing it.
+        let budget = try #require(markedPresentation.context)
+        #expect(budget.promptTokens == 74000)
+        #expect(budget.percent == 49)
+        let segmentTotal: Double = budget.segments.map(\.fraction).reduce(0, +)
+        #expect(abs(segmentTotal - 74000.0 / 150_000) < 0.000_001)
         #expect(markedPresentation.pressure == .normal)
-        #expect(unmarkedPresentation.text == "↑100 ↓2k R140k W6.9k ⚠︎ 98% ctx")
+        #expect(unmarkedPresentation.context?.percent == 98)
         #expect(unmarkedPresentation.pressure == .danger)
+        #expect(markedPresentation.rows == unmarkedPresentation.rows)
     }
 
     @Test func `context pressure excludes output tokens and clamps at one hundred percent`() throws {
@@ -339,11 +370,12 @@ struct ChatContextUsageTests {
             message: danger,
             contextWindowTokens: 1000))
 
-        #expect(warningPresentation.text.hasSuffix("⚠︎ 80% ctx"))
+        #expect(warningPresentation.context?.percent == 80)
         #expect(warningPresentation.pressure == .warning)
-        #expect(dangerPresentation.text.hasSuffix("⚠︎ 100% ctx"))
+        #expect(dangerPresentation.context?.percent == 100)
         #expect(dangerPresentation.pressure == .danger)
-        #expect(dangerPresentation.accessibilityValue.contains("Critical"))
+        // A clamped prompt still fits the bar.
+        #expect((dangerPresentation.context?.segments.map(\.fraction).reduce(0, +) ?? 0) <= 1)
     }
 
     @Test func `extreme decoded usage clamps without integer overflow`() throws {
@@ -353,7 +385,7 @@ struct ChatContextUsageTests {
             message: message,
             contextWindowTokens: 1))
 
-        #expect(presentation.text.hasSuffix("⚠︎ 100% ctx"))
+        #expect(presentation.context?.percent == 100)
         #expect(presentation.pressure == .danger)
     }
 

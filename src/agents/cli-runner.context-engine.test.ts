@@ -6,11 +6,8 @@ import { resolveSessionTranscriptReadFence } from "../config/sessions/session-tr
 import type { ContextEngine } from "../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-  type AdmittedRunContext,
-} from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission, type AdmittedRunContext } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import {
@@ -545,12 +542,12 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
   it("keeps a committed CLI reply successful after operator model authority revokes post-commit", async () => {
     let revoked = false;
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "operator-profile",
       scopes: [],
       assertCurrent: () => {
         if (revoked) {
-          throw new Error("operator model execution authority is no longer active");
+          throw new Error("This agent run is no longer active. Start a new turn to retry.");
         }
       },
     });

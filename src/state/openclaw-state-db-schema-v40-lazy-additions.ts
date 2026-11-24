@@ -1,6 +1,8 @@
 /** Exact pre-bootstrap source layout; this first-use column did not bump the version. */
 export function withLegacyWorkspaceBootstrapDeferred(schema: string): string {
-  return schema.replace("  bootstrap_deferred INTEGER,\n", "");
+  return schema
+    .replace("  bootstrap_deferred INTEGER,\n", "")
+    .replace('  "bootstrap_deferred" bigint,\n', "");
 }
 
 /** Both additions followed v39; predecessor admission must not inherit either one. */

@@ -248,6 +248,7 @@ export async function restorePostgresBackup(params: {
       sourceAllocations: manifest.verification.allocations,
       activeFragments: manifest.activeFragments,
       assertCurrent: params.assertCurrent,
+      legacyDigest: !manifest.verification.digest,
     });
     if (params.profile === "exact" && !isDeepStrictEqual(verified, manifest.verification)) {
       throw new Error("Exact PostgreSQL export verification differs from its manifest.");

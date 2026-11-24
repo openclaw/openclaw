@@ -1,10 +1,11 @@
-import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as logging from "../../logging/logger.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -37,7 +38,7 @@ import {
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
-import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import { prepareChatDeliveryLease } from "./session-delivery-generation.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
@@ -581,11 +582,11 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
       writeSessionEntry(database, sessionKey, original);
       addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
       const { identity, sharing } = retainSharing(database, sessionKey, original);
-      const generation = await prepareSessionDeliveryGeneration({
-        ...scope,
-        sessionId: original.sessionId,
-        lifecycleRevision: original.lifecycleRevision,
-      });
+      const generation = await prepareChatDeliveryLease(
+        chatRef({
+          ...scope,
+        }),
+      );
       generation.assertCurrent();
       const projection = createSessionMembershipProjection();
       projection.updateTargets([

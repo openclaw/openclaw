@@ -26,6 +26,22 @@ export class WorktreeRepositoryError extends Error {
   }
 }
 
+export type WorktreePreservationReason =
+  | "nested-repository"
+  | "repository-corrupt"
+  | "permission-denied";
+
+/** The code survives the existing Git worker error transport. */
+export class WorktreePreservationError extends Error {
+  constructor(
+    readonly code: WorktreePreservationReason,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
 export class WorktreeRemovalContentionError extends Error {
   constructor(
     readonly kind: "busy" | "finalized",
@@ -51,6 +67,16 @@ export class SessionWorktreeSourceChangedError extends Error {}
 
 /** The id names no managed worktree record that the requested operation can act on. */
 export class WorktreeRecordNotFoundError extends Error {}
+
+export class WorktreeRestoreError extends Error {
+  constructor(
+    readonly reason: "snapshot-invalid" | "base-invalid" | "conflict",
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
 
 export class SessionWorktreeLifecycleError extends Error {
   constructor(

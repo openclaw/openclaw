@@ -242,6 +242,147 @@ describe("install-cli.sh", () => {
   });
 
   it.each([
+    { id: "T1", args: "", shell: "/bin/bash", pathReady: false },
+    { id: "T2", args: "", shell: "/bin/bash", pathReady: true },
+    { id: "T3", args: "--json", shell: "/bin/bash", pathReady: false },
+    { id: "T4", args: "--onboard", shell: "/bin/bash", pathReady: false },
+    { id: "T5", args: "", shell: "/usr/bin/fish", pathReady: false },
+    { id: "T6", args: "--onboard --runtime-only", shell: "/bin/bash", pathReady: false },
+    { id: "T7", args: "--onboard", shell: "/bin/bash", pathReady: false },
+    { id: "T8", args: "--set-npm-prefix", shell: "/bin/bash", pathReady: false },
+    { id: "T9", args: "--install-method git", shell: "/bin/bash", pathReady: false },
+  ])("$id: verifies the PATH handoff", ({ id, args, shell, pathReady }) => {
+    const f = makeFixture(`path-handoff-${id}`);
+    f.shell(
+      "cli",
+      `
+case "$*" in
+  --version) printf '2026.11.5\\n' ;;
+  "onboard --help") printf 'onboard-fixture-help\\n' ;;
+  onboard) printf 'called\\n' > "$ROOT/onboard-called" ;;
+  *) exit 64 ;;
+esac
+`,
+    );
+    const prefix = join(f.root, "it's home", "open claw");
+    const binDir = join(prefix, "bin");
+    const originalPath = pathReady ? `${binDir}:/usr/bin:/bin` : "/usr/bin:/bin";
+    const result = f.run(
+      `
+      install_node() { :; }; ensure_git() { :; }
+      install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
+      install_openclaw_from_git() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
+      preflight_fresh_git_disk_space() { :; }
+      ${
+        id === "T8"
+          ? `os_detect() { printf 'linux\\n'; }
+      npm_bin() { printf 'npm_fixture\\n'; }
+      npm_fixture() {
+        if [[ "$*" == "config get prefix" ]]; then
+          printf '%s\\n' "$ROOT/read-only-npm-prefix"
+        fi
+      }`
+          : ""
+      }
+      refresh_gateway_service_if_loaded() { :; }
+      main ${args} --prefix "$PREFIX_ARG"
+      ${id === "T8" ? `printf '%s\\n' "$PATH" > "$ROOT/path-after"` : ""}
+    `,
+      {
+        HOME: f.root,
+        OPENCLAW_NO_ONBOARD: id === "T7" ? "1" : "0",
+        SHELL: shell,
+        PATH: originalPath,
+        PREFIX_ARG: prefix,
+        OPENCLAW_INSTALL_METHOD: undefined,
+        OPENCLAW_PREFIX: undefined,
+        OPENCLAW_HOME: undefined,
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+
+    if (id === "T6" || id === "T7") {
+      expect(existsSync(join(f.root, "onboard-called"))).toBe(false);
+    }
+    if (id === "T8") {
+      expect(readFileSync(join(f.root, "path-after"), "utf8").split(":")[0]).toBe(
+        join(f.root, ".npm-global", "bin"),
+      );
+    }
+
+    if (id === "T2") {
+      expect(result.stdout).toBe(
+        "OpenClaw installed (2026.11.5).\nSupport: https://community.openclaw.ai/\n",
+      );
+      return;
+    }
+    if (id === "T3") {
+      const events = result.stdout
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events).toEqual([{ event: "done", ok: true, version: "2026.11.5" }]);
+      expect(result.stderr).toBe("");
+      return;
+    }
+
+    const warning = `Warning: PATH missing prefix bin dir: ${binDir}`;
+    expect(result.stdout).toContain(warning);
+    const lines = result.stdout.trimEnd().split("\n");
+    const successIndex = lines.indexOf("OpenClaw installed (2026.11.5).");
+    const pathLines = lines.slice(successIndex);
+    expect(pathLines.slice(0, 4)).toEqual([
+      "OpenClaw installed (2026.11.5).",
+      "",
+      warning,
+      "  This directory was not on PATH when the installer started.",
+    ]);
+    expect(lines.at(-1)).toBe("Support: https://community.openclaw.ai/");
+    const quotedBinDir = `'${binDir.replaceAll("'", "'\\''")}'`;
+    const bashRepair = `    export PATH=${quotedBinDir}:"$PATH"; hash -r`;
+    const futureHint = "  For future shells, check your shell startup file.";
+
+    if (id === "T5") {
+      expect(pathLines.slice(4, 8)).toEqual([
+        "  For this shell, run:",
+        `    set -gx PATH "${binDir}" $PATH`,
+        futureHint,
+        expect.stringMatching(/^Run .+ onboard to finish setup\.$/),
+      ]);
+      expect(result.stdout).not.toContain("export PATH=");
+      return;
+    }
+
+    expect(pathLines.slice(4, 7)).toEqual(["  For this shell, run:", bashRepair, futureHint]);
+    if (id === "T4") {
+      expect(pathLines).toHaveLength(8);
+      expect(result.stdout).not.toContain("finish setup");
+      return;
+    }
+    expect(pathLines[7]).toMatch(/^Run .+ onboard to finish setup\.$/);
+    expect(pathLines).toHaveLength(9);
+
+    if (id === "T1") {
+      const repair = result.stdout.match(/ {2}For this shell, run:\n {4}(.+)\n/)?.[1];
+      expect(repair, result.stdout).toBeTruthy();
+      const repaired = runShell(`${repair}; command -v openclaw; openclaw --version`, {
+        HOME: f.root,
+        PATH: "/usr/bin:/bin",
+      });
+      expect(repaired.status, repaired.stdout + repaired.stderr).toBe(0);
+      expect(repaired.stdout).toBe(`${join(binDir, "openclaw")}\n2026.11.5\n`);
+      const handoff = result.stdout.match(/Run (.+) onboard to finish setup\./)?.[1];
+      expect(handoff, result.stdout).toBeTruthy();
+      const onboard = runShell(`${handoff} onboard --help`, {
+        HOME: f.root,
+        PATH: "/usr/bin:/bin",
+      });
+      expect(onboard.status, onboard.stdout + onboard.stderr).toBe(0);
+      expect(onboard.stdout).toBe("onboard-fixture-help\n");
+    }
+  });
+
+  it.each([
     { tempBase: "directory", downloadFails: false },
     { tempBase: "file", downloadFails: true },
   ])(
@@ -509,6 +650,111 @@ fi
     expect(failure.stdout.trimEnd().split("\n")).toHaveLength(1);
     expect(JSON.parse(failure.stdout)).toEqual({ event: "error", message: dynamicValue });
   });
+
+  it.each([
+    { tool: "npm", method: "npm", json: true },
+    { tool: "npm", method: "npm", json: false },
+    { tool: "pnpm", method: "git", json: true },
+  ] as const)(
+    "keeps $tool output out of JSON stdout without changing human output (json=$json)",
+    ({ tool, method, json }) => {
+      const f = makeFixture(`${tool}-output`);
+      f.runtime(
+        "prefix/tools/node-v24.22.1/bin",
+        `
+case "$1" in
+  --version) printf '11.15.0\\n' ;;
+  config) printf 'null\\n' ;;
+  install)
+    [[ "$2 $3" == "-g --prefix" ]] || exit 64
+    mkdir -p "$4/lib/node_modules/openclaw/dist"
+    printf 'console.log("2026.11.6");\\n' > "$4/lib/node_modules/openclaw/dist/entry.js"
+    printf '\\nchanged 1 package in 1s\\n'
+    ;;
+  *) exit 64 ;;
+esac
+`,
+      );
+      symlinkSync("node-v24.22.1", join(f.root, "prefix/tools/node"));
+      if (method === "git") {
+        // The real run_pnpm runs this stub as a child process that prints pnpm-style progress.
+        f.shell(
+          "bin/pnpm",
+          `
+case "$1" in
+  config) printf 'undefined\\n' ;;
+  install | ui:build | build) printf 'pnpm %s output\\n' "$1" ;;
+  *) exit 64 ;;
+esac
+`,
+        );
+        mkdirSync(join(f.root, "repo/.git"), { recursive: true });
+        f.write("repo/dist/entry.js", 'console.log("2026.11.6");\n');
+      }
+      const result = f.run(
+        `
+        install_node() { :; }
+        ${
+          method === "git"
+            ? `resolve_git_openclaw_ref() { printf 'main\\n'; }
+        checkout_git_openclaw_ref() { :; }
+        ensure_pnpm() { set_pnpm_cmd "$ROOT/bin/pnpm"; }
+        git() { return 0; }`
+            : ""
+        }
+        main ${json ? "--json " : ""}--${method} --runtime-only --node-version 24.22.1 --version latest --prefix "$ROOT/prefix"${method === "git" ? ' --git-dir "$ROOT/repo"' : ""}
+      `,
+        { HOME: f.root },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      if (!json) {
+        expect(result.stdout).toContain(
+          "Installing OpenClaw (latest)...\n\nchanged 1 package in 1s\nOpenClaw installed (2026.11.6).\n",
+        );
+        expect(result.stderr).not.toContain("changed 1 package in 1s");
+        return;
+      }
+      const isEvent = (line: string) => {
+        try {
+          const value: unknown = JSON.parse(line);
+          return value !== null && typeof value === "object" && "event" in value;
+        } catch {
+          return false;
+        }
+      };
+      // Strip only the final newline so blank lines still count as stray output.
+      const lines = result.stdout.replace(/\n$/, "").split("\n");
+      const events = lines
+        .filter((line) => isEvent(line))
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.filter((event) => event.name === "openclaw")).toEqual(
+        method === "npm"
+          ? [
+              { event: "step", name: "openclaw", status: "start", version: "latest" },
+              { event: "step", name: "openclaw", status: "ok", version: "latest" },
+            ]
+          : [
+              {
+                event: "step",
+                name: "openclaw",
+                status: "start",
+                method: "git",
+                repo: "https://github.com/openclaw/openclaw.git",
+              },
+              { event: "step", name: "openclaw", status: "ok", method: "git" },
+            ],
+      );
+      expect(events.at(-1)).toEqual({ event: "done", ok: true, version: "2026.11.6" });
+      const nonEventLines = lines.filter((line) => !isEvent(line));
+      expect(
+        nonEventLines,
+        `stdout lines outside the NDJSON event stream: ${JSON.stringify(nonEventLines)}`,
+      ).toEqual([]);
+      expect(result.stderr).toContain(
+        method === "npm" ? "changed 1 package in 1s" : "pnpm build output",
+      );
+    },
+  );
 
   it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
     const root = tempDirs.make("openclaw-install-cli-retargeted-alias-");

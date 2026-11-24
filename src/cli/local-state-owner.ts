@@ -10,11 +10,11 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
@@ -36,7 +36,7 @@ type LocalMutationScope = {
 export type OwnerRequest = <R>(
   method: string,
   params: Record<string, unknown>,
-  options?: { expectFinal?: boolean },
+  options?: { expectFinal?: boolean; signal?: AbortSignal },
 ) => Promise<R>;
 
 class LocalStateOwnerError extends Error {
@@ -191,7 +191,7 @@ export async function runWithLocalStateOwner<T>(params: {
       gatewayMethod: string,
       gatewayInput: Record<string, unknown>,
       primary: boolean,
-      expectFinal = primary ? params.expectFinal : undefined,
+      requestOptions?: Parameters<OwnerRequest>[2],
     ): Promise<R> => {
       const port = listenerPort();
       const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
@@ -213,8 +213,10 @@ export async function runWithLocalStateOwner<T>(params: {
             ...(params.requiredCapabilities ?? []),
           ],
           timeoutMs: params.timeoutMs ?? 600_000,
-          expectFinal,
-          signal: controller.signal,
+          expectFinal: requestOptions?.expectFinal ?? (primary ? params.expectFinal : undefined),
+          signal: requestOptions?.signal
+            ? AbortSignal.any([controller.signal, requestOptions.signal])
+            : controller.signal,
           scopes,
           onSignalAbort: primary ? params.onGatewaySignalAbort : undefined,
           onResponse:
@@ -278,7 +280,7 @@ export async function runWithLocalStateOwner<T>(params: {
         signal: controller.signal,
         assertCurrent: assertTargetCurrent,
         requestOwner: (ownerMethod, ownerInput, options) =>
-          requestGateway(ownerMethod, ownerInput, false, options?.expectFinal),
+          requestGateway(ownerMethod, ownerInput, false, options),
       });
       assertTargetCurrent();
       return result;

@@ -4,6 +4,7 @@ import {
   setAppliedRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { TemplateInstallSchemaVersionRow } from "./provenance-runtime-read.kernel.js";
 import { TEMPLATE_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
 import { collectTemplateToolPolicyCandidates } from "./tool-policy-candidates.js";
@@ -76,12 +77,27 @@ it("defers late-registered consent reads until awaited config preparation", asyn
   expect(worker.mainRead).not.toHaveBeenCalled();
 });
 
+it("tells Doctor which consent fact is missing, not only that authority is unverifiable", async () => {
+  const { resolve } = await consentFixture("/template-consent-doctor-cause", true);
+  let refusal: unknown;
+  try {
+    resolve();
+  } catch (error) {
+    refusal = error;
+  }
+  expect(scrubDoctorErrorMessage(refusal)).toBe(
+    'Cannot verify the installed tool authority for Template-managed agent "worker": ' +
+      "OpenClaw state database has not initialized Template consent provenance. " +
+      "Repair the OpenClaw state database before running it.",
+  );
+});
+
 it("keeps legacy installed-Template tool authority fail-closed without an update command", async () => {
   const { config, resolve } = await consentFixture("/template-consent-legacy");
   worker.read.mockResolvedValueOnce([installRow("openclaw.templateInstallRecord.v1", "old-grant")]);
 
   await setAppliedRuntimeConfigSnapshot(config, config);
 
-  expect(resolve).toThrow("Add the Template again to create an ordinary agent");
+  expect(resolve).toThrow("openclaw templates release worker");
   expect(worker.mainRead).not.toHaveBeenCalled();
 });

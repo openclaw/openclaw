@@ -179,7 +179,10 @@ export function createWorktreeDiskAdmission(params: {
 export async function estimateWorktreeGitBytes(
   repoRoot: string,
   ref: string,
-  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> & {
+  options: Pick<
+    GitWorkerOperationOptions,
+    "signal" | "assertCurrent" | "git" | "idleIoPriority"
+  > & {
     preparationKey?: string;
   } = {},
 ): Promise<number> {

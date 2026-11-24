@@ -9,6 +9,7 @@ import {
   makeAgentUserMessage,
 } from "../test-helpers/agent-message-fixtures.js";
 import { normalizeUsage } from "../usage.js";
+import { log } from "./logger.js";
 import * as promptCacheFacts from "./prompt-cache-facts.js";
 import {
   collectPromptCacheTools,
@@ -569,4 +570,42 @@ describe("prompt cache observability", () => {
       });
     },
   );
+});
+
+it("names added, changed, and removed extension keys without exposing values", () => {
+  const sessionId = scopedKey("reasoning-fields");
+  const block = {
+    type: "thinking" as const,
+    thinking: "private reasoning",
+    thinkingSignature: "private original signature",
+    changedBlock: "private original block value",
+    removedBlock: "private removed block value",
+  };
+  const message = {
+    ...makeAgentAssistantMessage({ content: [block] }),
+    changedEnvelope: "private original envelope value",
+    removedEnvelope: "private removed envelope value",
+  };
+  using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  beginOpenAIObservation({ sessionId, messages: [message] });
+  block.thinkingSignature = "private rewritten signature";
+  block.changedBlock = "private rewritten block value";
+  Reflect.deleteProperty(block, "removedBlock");
+  Object.assign(block, { addedBlock: "private added block value" });
+  message.changedEnvelope = "private rewritten envelope value";
+  Reflect.deleteProperty(message, "removedEnvelope");
+  Object.assign(message, { addedEnvelope: "private added envelope value" });
+  const changes = beginOpenAIObservation({ sessionId, messages: [message] }).changes;
+  expect(changes).toEqual([
+    {
+      code: "historyRewrite",
+      detail:
+        'message 0 (assistant) differs from the previous request; history must be append-only; changed fields: content[0].thinkingSignature, content[0].other["changedBlock"], content[0].other["removedBlock"], content[0].other["addedBlock"], envelope.other["changedEnvelope"], envelope.other["removedEnvelope"], envelope.other["addedEnvelope"]',
+    },
+  ]);
+  expect(JSON.stringify(changes)).not.toContain("private");
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining('content[0].other["removedBlock"]'),
+  );
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
 });

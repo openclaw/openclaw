@@ -48,7 +48,10 @@ export async function readSessionGroupMembershipInWorker(
 ): Promise<SessionGroupMembershipSnapshot> {
   const result = await executeExistingOpenClawStateRead(
     { env },
-    { type: "sessionGroups.members", cfg: { agents: cfg.agents, session: cfg.session } },
+    {
+      type: "sessionGroups.members",
+      cfg: structuredClone({ agents: cfg.agents, session: cfg.session }),
+    },
   );
   if (!result) {
     return { stores: [], groups: [] };

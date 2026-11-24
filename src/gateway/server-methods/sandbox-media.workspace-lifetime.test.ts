@@ -131,7 +131,9 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
           ).rejects.toMatchObject({ code: "ENOENT" });
         }
         expect(() => owner!.assertCurrent()).toThrow(
-          outcome === "aborted" ? failure : "Local sandbox workspace authority changed",
+          outcome === "aborted"
+            ? failure
+            : "The local sandbox workspace was released. Start a new turn to retry.",
         );
       } finally {
         releaseRead.resolve();

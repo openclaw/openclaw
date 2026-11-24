@@ -45,10 +45,18 @@ function fixture(inference?: ModelCatalogEntry["inference"]) {
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadataSnapshot,
   });
-  const createStores = vi.fn((publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
-    const authStorage = AuthStorage.inMemory();
-    return { authStorage, modelRegistry: template.fork(authStorage, publishedModels) };
-  });
+  const createStores = vi.fn(
+    (
+      publishedModels?: ReadonlyMap<string, readonly Model[]>,
+      selectedModel?: { provider: string; modelId: string },
+    ) => {
+      const authStorage = AuthStorage.inMemory();
+      return {
+        authStorage,
+        modelRegistry: template.fork(authStorage, publishedModels, selectedModel),
+      };
+    },
+  );
   const source: PreparedModelRuntimeSnapshot = {
     ...createEmptyPreparedModelRuntimeFixture({
       agentDir: "unused:agent",
@@ -154,8 +162,9 @@ describe("captured model catalog generations", () => {
     const first = f.capture();
     const second = f.capture();
     expect(f.createStores).not.toHaveBeenCalled();
-    const a = first.createStores();
-    const b = second.createStores();
+    const selection = { provider: "synthetic", modelId: "first" };
+    const a = first.createStores(undefined, selection);
+    const b = second.createStores(undefined, selection);
     const selected = a.modelRegistry.find("synthetic", "first")!;
     selected.cost.input = 999;
     selected.input.push("image");
@@ -183,8 +192,15 @@ describe("captured model catalog generations", () => {
     const emptyCatalog = { entries: [], routeVariants: [] };
     f.replaceCatalog(emptyCatalog);
     const empty = f.capture();
-    expect(first.createStores().modelRegistry.find("synthetic", "first")).toBeDefined();
-    const secondRegistry = second.createStores().modelRegistry;
+    expect(
+      first
+        .createStores(undefined, { provider: "synthetic", modelId: "first" })
+        .modelRegistry.find("synthetic", "first"),
+    ).toBeDefined();
+    const secondRegistry = second.createStores(undefined, {
+      provider: "synthetic",
+      modelId: "second",
+    }).modelRegistry;
     expect(secondRegistry.find("synthetic", "first")).toBeUndefined();
     expect(secondRegistry.find("synthetic", "second")).toBeDefined();
     expect(empty.createStores().modelRegistry.getAll()).toEqual([]);

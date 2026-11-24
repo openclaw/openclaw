@@ -24,10 +24,10 @@ import type {
 } from "./sqlite-integrity.js";
 import { SqliteIntegrityError } from "./sqlite-integrity.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
   readSqliteInspectionBudget,
-  resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "./sqlite-readonly-worker.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";

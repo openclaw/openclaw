@@ -34,6 +34,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "sessions_search",
   "sessions_send",
   "sessions_spawn",
+  "session_project",
   "sessions_yield",
   "subagents",
   "session_status",

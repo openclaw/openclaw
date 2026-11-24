@@ -24,6 +24,7 @@ import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadat
 import * as sessionControllerLifecycle from "../../sessions/session-controller.lifecycle.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -141,7 +142,7 @@ async function withServingMetadata(cfg: OpenClawConfig, run: () => Promise<void>
   }
 }
 
-it.each(["absent", "admitted"] as const)(
+it.each(["absent", "admitted", "cold-registration"] as const)(
   "prepares and authorizes a first chat turn without caller-thread SQL with an %s agent store",
   (store) =>
     withAdmissionTest(
@@ -167,6 +168,29 @@ it.each(["absent", "admitted"] as const)(
           expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(
             store === "admitted",
           );
+          if (store === "cold-registration") {
+            // Release the actual cold opener only when chat joins startup readiness.
+            const publish = createDeferred();
+            let pending = true;
+            const opening = publish.promise.then(async () => {
+              await prepareOpenClawAgentDatabaseExecution(
+                { agentId: "main", path: resolveOpenClawAgentSqlitePath({ agentId: "main" }) },
+                () => {},
+              );
+              pending = false;
+            });
+            context.agentDatabaseStartup = {
+              get hasPendingAgents() {
+                return pending;
+              },
+              registerInputRecovery() {},
+              isAgentInputRecoveryPending: () => false,
+              waitForAgentPreparation() {
+                publish.resolve();
+                return opening;
+              },
+            };
+          }
           await withoutHostSql(async () => {
             const authorized = await resolveSessionMutationAuthorizationAsync({
               client,

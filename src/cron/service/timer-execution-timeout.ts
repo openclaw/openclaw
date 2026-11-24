@@ -70,6 +70,11 @@ export type ConditionFiredWait = {
   onWait?: (waiting: boolean) => void;
 };
 
+export type CronProviderRunSlot = {
+  tryStart: (provider: string) => boolean;
+  wait: (provider: string, signal: AbortSignal) => Promise<void>;
+};
+
 /** `stopped`: the wait ended without a slot, so the payload must not start. */
 export type ConditionFiredRunSlot = "taken" | "taken-after-wait" | "stopped";
 
@@ -85,6 +90,7 @@ export type ExecuteJobCoreOptions = {
   onLaneWait?: (info?: { waiting?: boolean }) => void;
   /** The condition fired; resolves once the run holds a run slot or must stop without one. */
   onConditionFired?: (wait: ConditionFiredWait) => Promise<ConditionFiredRunSlot>;
+  providerRunSlot?: CronProviderRunSlot;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates live Gateway admission after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;

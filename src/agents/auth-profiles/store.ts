@@ -30,8 +30,9 @@ import { loadInheritedAuthProfileStore } from "./inherited-store.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
-  assertAuthProfileCredentialMigrationStateAtDatabasePath,
   assertAuthProfileMigrationCandidates,
+  assertAuthProfileCredentialMigrationStateAtDatabasePath,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationReady,
   assertAuthProfileMigrationStateAtDatabasePath,
   listLegacyAuthProfileSources,
@@ -128,8 +129,8 @@ import {
 } from "./store-save.js";
 import { createAuthProfileStoreUpdater } from "./store-updater.js";
 import type {
-  AuthProfileCredentialSource,
   AuthProfileStore,
+  AuthProfileCredentialSource,
   AuthProfileStoreOwner,
   PreparedAuthProfileStoreOwner,
   RuntimeAuthProfileStore,
@@ -925,17 +926,12 @@ export function createAuthProfileStoreRuntime(
       readStore,
     });
     if (preparedRows) {
-      assertAuthProfileMigrationCandidates({
+      assertAuthProfileMigrationStateAtDatabasePath(
         databasePath,
-        candidates: resolveLegacyAuthProfileSourceCandidates({ agentDir: effectiveAgentDir, env }),
-        hasCredentials: () => {
-          const raw = preparedRows.store.status === "readable" ? preparedRows.store.raw : undefined;
-          return isRecord(raw) && isRecord(raw.profiles) && Object.keys(raw.profiles).length > 0;
-        },
-        provider: effectiveOptions?.migrationProvider,
-        config: effectiveOptions?.config,
-        deferScopedRefusals: effectiveOptions?.deferScopedMigrationRefusals,
-      });
+        effectiveOptions?.migrationProvider,
+        effectiveOptions?.config,
+        effectiveOptions?.deferScopedMigrationRefusals,
+      );
     } else {
       assertAuthProfileMigrationReady(
         effectiveAgentDir,
@@ -963,14 +959,16 @@ export function createAuthProfileStoreRuntime(
       agentDir: effectiveAgentDir,
       env,
     });
-    assertAuthProfileMigrationCandidates({
-      databasePath,
-      candidates: legacySources,
-      hasCredentials: () => Boolean(store && Object.keys(store.profiles).length > 0),
-      provider: effectiveOptions?.migrationProvider,
-      config: effectiveOptions?.config,
-      deferScopedRefusals: effectiveOptions?.deferScopedMigrationRefusals,
-    });
+    if (!preparedRows) {
+      assertAuthProfileMigrationCandidates({
+        databasePath,
+        candidates: legacySources,
+        hasCredentials: () => Boolean(store && Object.keys(store.profiles).length > 0),
+        provider: effectiveOptions?.migrationProvider,
+        config: effectiveOptions?.config,
+        deferScopedRefusals: effectiveOptions?.deferScopedMigrationRefusals,
+      });
+    }
     const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
     if (credentialSources.length === 0 || (store && Object.keys(store.profiles).length > 0)) {
       warnLegacyAuthProfileSourcesIgnored({
@@ -1060,19 +1058,6 @@ export function createAuthProfileStoreRuntime(
       loadRuntimeAuthProfileStore,
       withPreparedExternalAuthProfiles,
     });
-
-  /** Prepare a recorded provider without putting persisted SQLite reads on the caller's thread. */
-  async function prepareAuthProfileProvider(params: {
-    agentDir: string;
-    profileId: string;
-  }): Promise<{ provider: string | undefined }> {
-    const provider = getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[params.profileId]
-      ?.provider;
-    if (provider || isEnvOnlyAuthProfileRuntime()) {
-      return { provider };
-    }
-    return { provider: (await findPersistedAuthProfileCredentialAsync(params))?.provider };
-  }
 
   async function findPersistedAuthProfileCredentialAsync(params: {
     agentDir?: string;
@@ -1238,7 +1223,9 @@ export function createAuthProfileStoreRuntime(
     ensureAuthProfileStoreForLocalUpdate,
     ensureAuthProfileStoreForLocalUpdateAsync,
     prepareAuthProfileStoreForModelRuntime,
+    prepareAuthProfileProvider,
   } = createAuthProfileStoreReadRuntime({
+    findPersistedAuthProfileCredentialAsync,
     resolvePersistedLoadOptions,
     loadAuthProfileStoreForAgent,
     withPreparedAuthProfileStoreReads,
@@ -1313,19 +1300,27 @@ export function createAuthProfileStoreRuntime(
           requestConfig,
         );
       },
+      prepareProviderReady: async () => {
+        for (const owner of owners.values()) {
+          await prepareAuthProfileMigrationCandidates({
+            databasePath: owner.databasePath,
+            candidates: owner.candidates,
+            hasCredentials: Object.keys(owner.readStore()?.profiles ?? {}).length > 0,
+            assertCurrent: assertReadOwners,
+          });
+        }
+      },
       assertProviderReady: (provider?: string, baseUrl?: string) => {
         const requestConfig =
           config && provider && baseUrl !== undefined
             ? projectModelProviderConfig(config, provider, { baseUrl })
             : config;
         for (const owner of owners.values()) {
-          assertAuthProfileMigrationCandidates({
-            databasePath: owner.databasePath,
-            candidates: owner.candidates,
-            hasCredentials: () => Object.keys(owner.readStore()?.profiles ?? {}).length > 0,
+          assertAuthProfileMigrationStateAtDatabasePath(
+            owner.databasePath,
             provider,
-            config: requestConfig,
-          });
+            requestConfig,
+          );
         }
       },
     };

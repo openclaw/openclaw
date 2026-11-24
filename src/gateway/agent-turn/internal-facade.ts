@@ -344,6 +344,7 @@ export function createInternalAgentTurnFacade(
                 privateCompletion: dispatchOptions.privateCompletion,
                 replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
+                subagentCompletions: dispatchOptions.subagentCompletions,
               });
             },
             {

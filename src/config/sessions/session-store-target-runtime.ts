@@ -1,4 +1,4 @@
-import { resolveIdentityPathViaExistingAncestor } from "../../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/path-existence.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";

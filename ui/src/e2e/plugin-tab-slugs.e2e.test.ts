@@ -124,15 +124,25 @@ suite.define(() => {
     },
   );
 
-  it("recovers an unknown slug to chat only after hello", async () => {
+  it("shows an unknown slug as missing after hello and returns to chat on request", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { gateway } = await installReports(page, true);
-      await page.goto(`${suite.server.baseUrl}unknown-reports`);
+      const requested = new URL("unknown-reports?range=week#details", suite.server.baseUrl).href;
+      await page.goto(requested);
       await gateway.waitForRequest("connect");
-      expect(new URL(page.url()).pathname).toBe("/unknown-reports");
+      const notice = page.getByText("Page not found", { exact: true });
+      expect(page.url()).toBe(requested);
+      expect(await notice.count()).toBe(0);
       await gateway.resolveDeferred("connect");
-      await page.waitForURL((url) => /^\/chat(?:\/|$)/.test(url.pathname));
+      await notice.waitFor({ state: "visible" });
+      expect(page.url()).toBe(requested);
       expect(await page.locator("openclaw-plugin-page").count()).toBe(0);
+      expect(
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).isVisible(),
+      ).toBe(false);
+      await page.getByRole("link", { name: "Go to chat", exact: true }).click();
+      await page.waitForURL((url) => /^\/chat(?:\/|$)/.test(url.pathname));
+      await notice.waitFor({ state: "hidden" });
     });
   });
 

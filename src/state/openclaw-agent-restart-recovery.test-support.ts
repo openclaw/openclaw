@@ -74,7 +74,7 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
         sessionId: "ready-restart-admission",
       };
       const targets = [scope, readyScope];
-      const marker = { queuedInputIds: [] };
+      const marker = {};
       const claims: Array<[string, string | undefined]> = [];
       try {
         for (const target of targets) {

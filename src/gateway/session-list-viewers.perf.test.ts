@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import {
   bindEmbeddedSessionRowProjection,
@@ -10,6 +9,7 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import type { SessionEntry } from "../config/sessions.js";
 import {
   deleteSessionEntryLifecycle,
+  persistSessionTranscriptTurn,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
@@ -439,7 +439,7 @@ test.each([true, false])("shares unchanged list selection (wire=%s)", async (wir
   });
 });
 
-test("search discovery preserves visibility through retained selections", async () => {
+test("indexed recall preserves pinned visibility without inventory paging", async () => {
   await withStateDirEnv("openclaw-search-selection-", async () => {
     const cfg = initialize({ agents: { entries: { main: {}, work: {} } } });
     const requester = "agent:main:dashboard:requester";
@@ -468,69 +468,68 @@ test("search discovery preserves visibility through retained selections", async 
       { agentId: "main", sessionKey: "agent:main:dashboard:incognito-hidden" },
       { sessionId: "private", updatedAt: 7, incognito: true, archivedAt: 10 },
     );
+    for (const [agentId, sessionKey, sessionId] of [
+      ["main", requester, "requester"],
+      ["main", archived, "archived"],
+      ["main", child, "child"],
+      ["work", foreign, "foreign"],
+      ["work", foreignChild, "foreign-child"],
+      ["main", "global", "main-global"],
+      ["work", "global", "work-global"],
+      ["main", "agent:main:dashboard:incognito-hidden", "private"],
+    ] as const) {
+      await persistSessionTranscriptTurn(
+        { agentId, sessionKey, sessionId },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: "synthetic" }, now: Date.now() }],
+        },
+      );
+    }
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
     const gateway = createEmbeddedCallGateway();
     const own = [requester, archived, child, "global"];
     try {
-      for (const scope of ["all", "self", "tree", "agent", "all"] as const) {
+      for (const scope of ["all", "self", "tree", "agent"] as const) {
         for (const enabled of [true, false]) {
           for (const sandboxed of [false, true]) {
-            let uncached: string | undefined;
-            for (const live of [true, false]) {
-              const keys: string[] = [];
-              const tool = createSessionsSearchTool({
-                config: {
-                  ...cfg,
-                  tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
-                  agents: {
-                    ...cfg.agents,
-                    defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
-                  },
+            const tool = createSessionsSearchTool({
+              // The Gateway remains permissive; the tool's pinned restrictions must survive RPC.
+              config: {
+                ...cfg,
+                tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
+                agents: {
+                  ...cfg.agents,
+                  defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
                 },
-                agentId: "main",
-                agentSessionKey: requester,
-                sandboxed,
-                callGateway: async <T>(request: Parameters<typeof gateway>[0]): Promise<T> => {
-                  // Whitespace is an empty filter but takes the uncached selection path on main.
-                  if (live && request.method === "sessions.list") {
-                    return gateway<T>({
-                      ...request,
-                      params: { ...(request.params as SessionsListParams), search: " " },
-                    });
-                  }
-                  if (request.method !== "sessions.search") {
-                    return gateway<T>(request);
-                  }
-                  const params = request.params as { agentId: string; sessionKeys: string[] };
-                  keys.push(...params.sessionKeys.map((key) => `${params.agentId}/${key}`));
-                  return { results: [] } as T;
-                },
-              });
-              await tool.execute("visibility", { query: "synthetic" });
-              const expected = sandboxed
-                ? [requester, child, foreignChild]
-                : scope === "self"
-                  ? [requester]
-                  : scope === "tree"
-                    ? [requester, child, foreignChild]
-                    : scope === "agent"
-                      ? own
-                      : [...own, foreignChild, ...(enabled ? [foreign] : [])];
-              expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
-                expected
-                  .map((key) => `${key.startsWith("agent:work:") ? "work" : "main"}/${key}`)
-                  .toSorted(),
-              );
-              expect(keys.some((key) => key.startsWith("work/global"))).toBe(false);
-              const bytes = JSON.stringify(keys.toSorted());
-              if (live) {
-                uncached = bytes;
-              } else {
-                expect(bytes).toBe(uncached);
-              }
-            }
+              },
+              agentId: "main",
+              agentSessionKey: requester,
+              sandboxed,
+              callGateway: async (request) => {
+                expect(request.method).not.toBe("sessions.list");
+                return gateway(request);
+              },
+            });
+            const result = await tool.execute("visibility", { query: "synthetic", limit: 25 });
+            const expected = sandboxed
+              ? [requester, child, foreignChild]
+              : scope === "self"
+                ? [requester]
+                : scope === "tree"
+                  ? [requester, child, foreignChild]
+                  : scope === "agent"
+                    ? own
+                    : [...own, foreignChild, ...(enabled ? [foreign] : [])];
+            const keys = (result.details as { results: { sessionKey: string }[] }).results.map(
+              (hit) => hit.sessionKey,
+            );
+            expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
+              expected.toSorted(),
+            );
           }
         }
       }

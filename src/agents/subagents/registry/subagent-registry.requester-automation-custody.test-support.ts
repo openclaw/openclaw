@@ -48,7 +48,7 @@ export function registerRequesterAutomationCustodyTests({
   updateRun,
 }: RegistryRegistrationFixture) {
   it.each(["current", "revoked"] as const)(
-    "keeps %s original completion custody after a same-human chat admission revokes automation",
+    "settles with %s original completion custody after a same-human chat admission revokes automation",
     async (authority) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = { session: { store: state.path("sessions.json") } };
@@ -69,7 +69,7 @@ export function registerRequesterAutomationCustodyTests({
         });
         const revoked = new AbortController();
         const source = expectDefined(
-          await operatorCapture.captureGatewayOperatorRunAuthority({
+          await operatorCapture.prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
@@ -112,7 +112,11 @@ export function registerRequesterAutomationCustodyTests({
                     operationalRunInstance,
                     approvalAuthority: delegated,
                     operatorAuthority: source.authority,
-                    receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
+                    receiptAuthority: () => {
+                      if (!validateAgentRunDelegatedAuthority(delegated)) {
+                        throw new Error("agent tool caller authority is no longer active");
+                      }
+                    },
                   },
                   async () => {
                     await registerSubagentRun(
@@ -211,7 +215,6 @@ export function registerRequesterAutomationCustodyTests({
             profileName: "unrelated-ambient-operator",
             scopes: ["operator.admin", "operator.pairing"],
           });
-          const pendingWake = structuredClone(subagentRuns.get(runId)?.requesterSettleWake);
           // Exercise the real settle dispatcher, including its canonical registry authority wrapper.
           const deliveryAttempt = withPluginRuntimeGatewayRequestScope(
             { ...scope, client: unrelatedClient },
@@ -229,23 +232,14 @@ export function registerRequesterAutomationCustodyTests({
                 completeBatch,
               }),
           );
-          if (authority === "current") {
-            await expect(deliveryAttempt).resolves.toBe(true);
-            expect(deliver).toHaveBeenCalledOnce();
-            expect(completeBatch).toHaveBeenCalledWith(
-              expect.any(Array),
-              expect.any(Number),
-              { delivered: true, path: "direct" },
-              expect.any(Function),
-            );
-          } else {
-            await expect(deliveryAttempt).rejects.toThrow(
-              "Subagent completion authority is no longer active",
-            );
-            expect(deliver).not.toHaveBeenCalled();
-            expect(completeBatch).not.toHaveBeenCalled();
-            expect(subagentRuns.get(runId)?.requesterSettleWake).toEqual(pendingWake);
-          }
+          await expect(deliveryAttempt).resolves.toBe(true);
+          expect(deliver).toHaveBeenCalledOnce();
+          expect(completeBatch).toHaveBeenCalledWith(
+            expect.any(Array),
+            expect.any(Number),
+            { delivered: true, path: "direct" },
+            expect.any(Function),
+          );
         } finally {
           deliver.mockRestore();
           releaseAgentRunDelegatedAuthority(delegated);

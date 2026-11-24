@@ -3,6 +3,7 @@ import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
+import type * as ProcessSupervisorModule from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 import { rewriteUpdateFlagArgv } from "./argv.js";
@@ -23,6 +24,13 @@ vi.mock("node:process", async (importOriginal) => ({
   }),
 }));
 const runGatewayCommand = vi.hoisted(() => vi.fn());
+const supervisorSpawn = vi.hoisted(() =>
+  vi.fn(async () => ({
+    cancel: vi.fn(),
+    wait: async () => ({ exitCode: 0, exitSignal: null }),
+    waitForExtinction: async () => {},
+  })),
+);
 const sqliteAdmission = vi.hoisted(() => ({
   initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
   selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
@@ -32,6 +40,11 @@ vi.mock("../infra/sqlite-runtime-initialize.js", async (importOriginal) => ({
   initializeSqliteRuntime: sqliteAdmission.initialize,
 }));
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
+// Keep the real supervisor admission path; replace only the native child process.
+vi.mock("../process/supervisor/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ProcessSupervisorModule>()),
+  getProcessSupervisor: () => ({ spawn: supervisorSpawn }),
+}));
 // Keep Commander parsing independent of native startup; run-main.exit and
 // command-execution-startup tests own bootstrap and admission behavior.
 vi.mock("./gateway-cli/pre-bootstrap.js", () => ({
@@ -63,6 +76,7 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
   beforeEach(() => {
     process.exitCode = undefined;
     runGatewayCommand.mockClear();
+    supervisorSpawn.mockClear();
     sqliteAdmission.initialize.mockReset().mockResolvedValue();
     sqliteAdmission.selectGatewayEnvironment.mockClear();
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -91,6 +105,34 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
       await starting;
     }
     expect(sqliteAdmission.selectGatewayEnvironment).toHaveBeenCalledOnce();
+    expect(runGatewayCommand).toHaveBeenCalledOnce();
+  });
+
+  it.each([["gateway"], ["gateway", "run"]])(
+    "keeps the Windows task supervisor free of SQLite and Gateway state startup: %j",
+    async (...args) => {
+      vi.spyOn(globalThis.process, "platform", "get").mockReturnValue("win32");
+      sqliteAdmission.initialize.mockRejectedValueOnce(
+        new Error("Windows task supervisor entered SQLite startup"),
+      );
+      const argv = globalThis.process.argv;
+      globalThis.process.argv = cliArgs(...args, "--task-supervisor");
+      try {
+        await runCli(globalThis.process.argv);
+      } finally {
+        globalThis.process.argv = argv;
+      }
+      expect(sqliteAdmission.initialize).not.toHaveBeenCalled();
+      expect(sqliteAdmission.selectGatewayEnvironment).not.toHaveBeenCalled();
+      expect(supervisorSpawn).toHaveBeenCalledOnce();
+      expect(runGatewayCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not treat a Gateway option value as the task-supervisor flag", async () => {
+    await runCli(cliArgs("gateway", "--token=--task-supervisor"));
+    expect(supervisorSpawn).not.toHaveBeenCalled();
+    expect(sqliteAdmission.initialize).toHaveBeenCalledOnce();
     expect(runGatewayCommand).toHaveBeenCalledOnce();
   });
 

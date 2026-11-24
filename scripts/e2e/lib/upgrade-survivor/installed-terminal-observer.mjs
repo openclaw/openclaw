@@ -39,7 +39,7 @@ const closedEntryPaths = {
   "sqlite-session": "dist/infra/sqlite-readonly-location.worker.js",
   "finalizer-check": "dist/infra/update-migrated-finalize.worker.js",
 };
-const currentProbeSha256 = "d20c4ee82bfef4b497e1608d1a4eab79f60ea69e70dc41fa625579d27f888b8e";
+const currentProbeSha256 = "a33dc77494f30fd3a3119cab4708397bd49f49829e764388ba52c98606dd0a4e";
 // Fixed 2026.10.9/SRI fixture: runtime-paths-CNOx8gw6 + node-sqlite-C2ThNhQ8
 // emit this exact Node -e script. Its no-op selector and memory probe join locally.
 const publishedProbeSha256 = "954fe0502bbd8beb9de99ca78dced72c87b9a8ebd6110dd62fc25ee19eeb61ce";

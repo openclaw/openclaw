@@ -103,7 +103,36 @@ export function placeChatInputs(
     blocks.flatMap((block) => (block.runId ? [[block.runId, block] as const] : [])),
   );
   const acceptedKeys = new Map(blocks.map((block) => [block.items[0]!.key, block]));
-  const historyKeys = new Set(items.map((item) => item.key));
+  const historyItems = new Map(items.map((item) => [item.key, item]));
+  const newLocalInput = blocks.length
+    ? items.find((item) => {
+        const identity = item.kind === "message" ? readSessionMessageIdentity(item.message) : null;
+        return (
+          identity?.role === "user" &&
+          identity.sendId &&
+          identity.id === null &&
+          identity.sequence === null &&
+          !identity.isImported &&
+          !orderState.keys.includes(item.key)
+        );
+      })
+    : undefined;
+  for (const block of blocks) {
+    const previousPosition = orderState.keys.indexOf(block.items[0]!.key);
+    if (previousPosition >= 0) {
+      // Custody can replace a steer before younger optimistic inputs settle.
+      // Keep its observed input successor without treating custody as run output.
+      block.beforeKey =
+        orderState.keys.slice(previousPosition + 1).find((key) => {
+          const item = historyItems.get(key);
+          return (
+            item?.kind === "message" && readSessionMessageIdentity(item.message)?.role === "user"
+          );
+        }) ??
+        // An ACK can arrive before the next local send has a previous position.
+        newLocalInput?.key;
+    }
+  }
   for (const queued of queue) {
     if (!shouldRenderQueuedSendInThread(queued)) {
       continue;
@@ -140,8 +169,8 @@ export function placeChatInputs(
         ? undefined
         : orderState.keys
             .slice(previousPosition + 1)
-            .find((key) => acceptedKeys.has(key) || historyKeys.has(key));
-    if (previousSuccessor && historyKeys.has(previousSuccessor)) {
+            .find((key) => acceptedKeys.has(key) || historyItems.has(key));
+    if (previousSuccessor && historyItems.has(previousSuccessor)) {
       block.beforeKey = previousSuccessor;
     }
     const nextAccepted =

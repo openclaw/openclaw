@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withWorktreeMutationLease } from "./allocation.js";
 import { commandError, listGitWorktrees, requireGit, requireGitPath, runGit } from "./git.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -43,7 +44,7 @@ type WorktreeBranchCleanupResult = {
   }[];
 };
 
-/** Caller holds allocation custody, or the expiring record's mutation lease. */
+/** Branch cleanup shares repository namespace custody with pending-name reservation. */
 export async function collectOrphanWorktreeBranches(params: {
   env: NodeJS.ProcessEnv;
   repoRoot: string;
@@ -52,6 +53,14 @@ export async function collectOrphanWorktreeBranches(params: {
   signal?: AbortSignal;
   commitGuard: () => void;
 }): Promise<WorktreeBranchCleanupResult> {
+  return withWorktreeMutationLease({ ...params, id: `branches:${params.repoRoot}` }, (guard) =>
+    collectOrphanBranches({ ...params, ...guard }),
+  );
+}
+
+async function collectOrphanBranches(
+  params: Parameters<typeof collectOrphanWorktreeBranches>[0],
+): Promise<WorktreeBranchCleanupResult> {
   const { repoRoot, retiring } = params;
   const options: NonNullable<Parameters<typeof runGit>[2]> = {
     baseEnv: branchCleanupEnvironment(),

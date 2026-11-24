@@ -158,24 +158,38 @@ test.each(["current", "revoked"] as const)(
           settlement.status === "fulfilled" ? [] : [String(settlement.reason)],
         ),
       };
-      if (authority === "revoked") {
-        expect(result).toMatchObject({
-          outcome: { error: expect.stringMatching(/operator.*authority|role.*changed/) },
-          base: { sessionId: sessionIds[2] },
-          archivedGenerations: [false, false, false],
-        });
-      } else {
-        expect(result).toMatchObject({
-          outcome: { response: { ok: true, payload: { removed: true } } },
-          base: undefined,
-          archivedGenerations: [true, true, true],
-          handlerErrors: [],
-        });
+      expect(result).toMatchObject({
+        outcome: { response: { ok: true, payload: { removed: true } } },
+        base: undefined,
+        archivedGenerations: [true, true, true],
+        handlerErrors: [],
+      });
+      for (const sessionId of sessionIds) {
+        expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual([]);
       }
-      for (const [index, sessionId] of sessionIds.entries()) {
-        expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual(
-          authority === "revoked" ? [events[index]] : [],
+      if (authority === "revoked") {
+        const nextJob = structuredClone(
+          await cron.add({
+            name: "retained after role change",
+            enabled: false,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "synthetic cleanup fixture" },
+            delivery: { mode: "none" },
+          }),
         );
+        expect(
+          await dispatchGatewayRequestInProcessRaw(
+            "cron.remove",
+            { id: nextJob.id },
+            { client, context },
+          ),
+        ).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", message: expect.stringContaining("operator role changed") },
+        });
+        expect(await cron.readJob(nextJob.id)).toEqual(nextJob);
       }
     } finally {
       vi.useRealTimers();

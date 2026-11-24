@@ -6,7 +6,7 @@ import {
   withinTest,
   withTestTimeout,
 } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
@@ -429,7 +429,7 @@ describe("question response custody through reply adoption", () => {
       run.run.config = { tools: { toolsBySender: { "*": { allow: [] } } } };
       let operatorCurrent = true;
       if (change === "operator-source") {
-        run.operatorAuthority = createAdmittedRunOperatorAuthority({
+        run.operatorAuthority = createTestOperatorAuthority({
           profileId: "guest",
           scopes: ["operator.write"],
           source: {},

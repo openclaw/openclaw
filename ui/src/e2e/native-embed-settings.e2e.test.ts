@@ -116,7 +116,7 @@ async function getLayoutPage(viewport: (typeof viewports)[number], colorScheme: 
 suite.define(() => {
   for (const destination of [
     { from: "memory", route: "memory-import", title: "Import memory", tab: "Settings" },
-    { from: "skills", route: "plugins", title: "Plugins", tab: "Plugins" },
+    { from: "skills", route: "plugins", title: "Customize", tab: "Plugins" },
     { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
     it(`returns from embedded ${destination.route} through its page link and direct entry`, async () => {

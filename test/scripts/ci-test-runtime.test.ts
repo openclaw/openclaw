@@ -7,7 +7,7 @@ import {
 } from "../../scripts/lib/ci-test-runtime.mts";
 
 const nodeOnly = "src/cli/cli-process-diagnostics.test.ts";
-const bothHosts = "src/infra/sqlite-schema-facts.native.test.ts";
+const bothHosts = "src/infra/sqlite-schema-facts.physical-cache.test.ts";
 const bunEligible = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const config = "test/vitest/vitest.unit-fast.config.ts";
 

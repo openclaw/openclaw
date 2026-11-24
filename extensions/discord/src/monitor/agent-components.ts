@@ -1,4 +1,5 @@
 import { ComponentType } from "discord-api-types/v10";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -121,8 +122,14 @@ async function handleDiscordComponentEvent(params: {
     consumed.kind === "select" && params.values?.length === 1
       ? params.values[0]?.trim()
       : undefined;
+  // A marked value is the conversation agent's, whichever presentation form produced it.
+  const agentText =
+    consumed.callbackDataKind === "command"
+      ? undefined
+      : agentControlText(consumed.callbackData ?? selectedValue);
   const pluginCallbackData =
-    consumed.callbackData ?? (consumed.callbackDataKind === "callback" ? selectedValue : undefined);
+    consumed.callbackData ??
+    (consumed.callbackDataKind === "callback" || agentText ? selectedValue : undefined);
   if (pluginCallbackData) {
     const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
       ...authorized,
@@ -146,6 +153,7 @@ async function handleDiscordComponentEvent(params: {
         ? selectedValue
         : undefined;
   const eventText =
+    agentText ||
     commandFallback ||
     (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",

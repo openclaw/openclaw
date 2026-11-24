@@ -9,6 +9,7 @@ import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
   isRuntimeTestFileIncluded,
+  type NodeTestVolumeContext,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
@@ -21,7 +22,7 @@ it("retains the original eligible denominator across selected subsets and runtim
   ];
   const siblingConfig = "test/vitest/vitest.gateway-server-isolated.config.ts";
   const sibling = "src/gateway/gateway.prompt-cache.test.ts";
-  const volumeContext = {
+  const volumeContext: NodeTestVolumeContext = {
     revision: "a".repeat(40),
     runtimePolicy: "dual-all" as const,
     eligibility: {
@@ -29,6 +30,15 @@ it("retains the original eligible denominator across selected subsets and runtim
       includeReleaseOnlyRuntimeTests: false,
       includePrExemptRuntimeTests: false,
     },
+    fullPlan: () =>
+      createNodeTestShardBundles({
+        ...volumeContext.eligibility,
+        runnerBackend: "hybrid",
+        compactMode: "pull-request",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeProofTests: false,
+      }),
   };
   const eligible = (name: string) =>
     inventoryOwner
@@ -404,6 +414,11 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     planConcurrency: 1,
   });
   expect(serial.timeoutMinutes ?? 60).toBe(60);
+  for (const group of serial.groups) {
+    expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe(
+      group.configs.includes("test/vitest/vitest.gateway-methods.config.ts") ? "4" : "2",
+    );
+  }
   expect(
     selected
       .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))

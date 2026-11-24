@@ -178,6 +178,11 @@ export async function loadSessionDiff(
       if (!entry?.sessionId || !storePath || !agentId) {
         return empty("unknown_session");
       }
+      // The first turn captures the pre-session baseline before any workspace write.
+      // A named commit does not use the baseline.
+      if (params.scope !== "commit" && entry.sessionDiffBaselineCapture?.status === "pending") {
+        return empty();
+      }
       timing?.mark("repository");
       using repository = await resolveRepositoryWorkspaceAccess(
         { ...loaded, agentId },

@@ -7,7 +7,7 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -57,7 +57,7 @@ async function requesterAuthority(
     undefined,
     { isCurrent: () => true, subscribe: () => () => {} },
   );
-  const source = await captureGatewayOperatorRunAuthority({
+  const source = await prepareGatewayOperatorRunAuthority({
     client,
     context,
     hasCurrentClientAuthority: device.isCurrent,
@@ -216,7 +216,11 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
                   requesterOrigin: origin,
                   operatorAuthority: source.authority,
                   operationalRunInstance: createOperationalRunInstanceRef("closed-invocation"),
-                  receiptAuthority: () => receiptCurrent,
+                  receiptAuthority: () => {
+                    if (!receiptCurrent) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
                   fullPermission: true,
                   personalToolParticipants: participants,
                 },
@@ -314,7 +318,7 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         }
         releasePeer.resolve();
         await returned.promise;
-        if (boundary === "revoked" || boundary === "session changed") {
+        if (boundary === "session changed") {
           expect(effects).toEqual([]);
           return;
         }

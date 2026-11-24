@@ -74,6 +74,18 @@ function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
   };
 }
 
+it("keeps a compact loading row only until the first session facts settle", () => {
+  const view = mountDetails({ sessionFactsReady: false });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).not.toBeNull();
+  view.update({ sessionFactsReady: true });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).toBeNull();
+  view.update({
+    sessionFactsReady: false,
+    cachedDetails: { locale: "en", environment: { worktree: false } },
+  });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).toBeNull();
+});
+
 it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads", async () => {
   const view = mountDetails();
   expect(view.group("outputs")).toBeNull();

@@ -15,14 +15,17 @@ import {
 } from "./update-managed-service-handoff-lease.js";
 
 /** Earlier macOS Gateways kept leases under their state's TMPDIR; repair still reads it. */
-export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(): string | undefined {
+export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(
+  currentDatabasePath?: string,
+): string | undefined {
   const uid = process.getuid?.();
   const legacy = path.join(
     resolveServiceTmpDir(process.env, "darwin"),
     uid === undefined ? "openclaw" : `openclaw-${uid}`,
     "managed-update-handoffs.sqlite",
   );
-  return process.platform === "darwin" && legacy !== resolveManagedUpdateLeaseDatabasePath()
+  return process.platform === "darwin" &&
+    legacy !== (currentDatabasePath ?? resolveManagedUpdateLeaseDatabasePath())
     ? legacy
     : undefined;
 }

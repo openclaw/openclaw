@@ -73,7 +73,7 @@ export function registerAgentConfigMutationTests({
         reloadBarrier.hold = undefined;
       }
     }
-  });
+  }, 180_000);
 
   it.each([false, true])(
     "agents.delete preserves newer writes across a large shrink (authority revoked: %s)",

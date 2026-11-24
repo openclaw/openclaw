@@ -18,6 +18,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-a
 import { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
 import type { GatewayClient, GatewayRequestOptions, RespondFn } from "./types.js";
@@ -50,7 +51,7 @@ export function installQuestionTestHooks() {
       runId: requestParams.runId,
     });
     adminRequestClient = {
-      connect: { scopes: ["operator.admin"] },
+      connect: gatewayConnect(["operator.admin"]),
       internal: {
         agentRuntimeIdentity: {
           kind: "agentRuntime",

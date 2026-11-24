@@ -5,7 +5,19 @@ import { vi } from "vitest";
 import { resolveServiceManagerEnv } from "../../src/daemon/service-process-env.js";
 import * as temporaryRoot from "../../src/infra/tmp-openclaw-dir.js";
 import * as managedHandoff from "../../src/infra/update-managed-service-handoff-lease.js";
+import * as handoffWorker from "../../src/infra/update-managed-service-handoff-worker.js";
 export { writePrivateUpdateHandoffChildGuard } from "./private-update-handoff-child-guard.js";
+
+/** Worker isolates do not inherit Vitest's temporary-directory module mocks. */
+export function installPrivateUpdateHandoffWorker(directory: string) {
+  const prepareStore = handoffWorker.prepareManagedHandoffParentStore;
+  return vi.spyOn(handoffWorker, "prepareManagedHandoffParentStore").mockImplementation((options) =>
+    prepareStore({
+      ...options,
+      databasePath: options.databasePath ?? path.join(directory, "managed-update-handoffs.sqlite"),
+    }),
+  );
+}
 
 export function installPrivateUpdateHandoffStore(directory: string) {
   const privateDirectory = fs.realpathSync(directory);
@@ -23,6 +35,12 @@ export function installPrivateUpdateHandoffStore(directory: string) {
   assertDatabasePath(databasePath);
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(privateDirectory);
   vi.spyOn(managedHandoff, "resolveManagedUpdateLeaseDatabasePath").mockReturnValue(databasePath);
+  const prepareStore = handoffWorker.prepareManagedHandoffParentStore;
+  vi.spyOn(handoffWorker, "prepareManagedHandoffParentStore").mockImplementation((options) => {
+    const selectedPath = options.databasePath ?? databasePath;
+    assertDatabasePath(selectedPath);
+    return prepareStore({ ...options, databasePath: selectedPath });
+  });
   const createStore = managedHandoff.createManagedHandoffLeaseStore;
   vi.spyOn(managedHandoff, "createManagedHandoffLeaseStore").mockImplementation(
     (options, logger) => {

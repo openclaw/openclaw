@@ -2,7 +2,7 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigrationAsync,

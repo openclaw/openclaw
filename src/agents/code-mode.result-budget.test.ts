@@ -317,7 +317,7 @@ describe("fresh producer results through persistence and model guards", () => {
         expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
         expect(rendered).not.toContain("\n[truncated]");
         const body = rendered.split("\n---\n")[1]?.split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0];
-        expect(body!.length).toBeLessThanOrEqual(20_000);
+        expect(rendered.length).toBeLessThanOrEqual(32_000);
         expect(JSON.parse(body!)).toMatchObject({ status: resultDetails(result).status });
         expect(text(toolResult(await dispatch([message(result, "exec")]), 0))).toBe(rendered);
       }

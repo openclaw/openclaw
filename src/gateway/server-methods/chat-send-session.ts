@@ -19,7 +19,6 @@ import {
   parseModelRef,
 } from "../../agents/model-selection-normalize.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   prepareSessionCapabilityRead,
   withPreparedSessionCapabilityRead,
@@ -102,9 +101,10 @@ function chatSendPreparationConfig(
       }),
     ) ?? [];
   const modelRefs = [
-    selected,
+    ...(selected ? [selected] : []),
     ...fallbacks.flatMap((model) => {
-      const parsed = parseModelRef(model, selected.provider);
+      // Without a primary no turn runs, so its fallbacks need no provider config.
+      const parsed = selected && parseModelRef(model, selected.provider);
       return parsed ? [parsed] : [];
     }),
   ];
@@ -386,9 +386,6 @@ export async function prepareChatSendSession(params: {
     }
   }
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
-  const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
-    config: cfg,
-  });
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
 
@@ -399,7 +396,6 @@ export async function prepareChatSendSession(params: {
       requestedSessionId,
       backingSessionId,
       resolvedSessionModel,
-      resolvedSessionAuthProvider,
       timeoutMs,
       now,
     },
@@ -571,7 +567,9 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
 }): Promise<ErrorShape | undefined> {
   const { request, session, client, context } = params;
   const { entry, cfg, agentId, sessionKey, resolvedSessionModel } = session;
+  // Without a configured model there is no native runtime to restrict.
   if (
+    !resolvedSessionModel ||
     request.turnKind !== "main" ||
     request.stopCommand ||
     (!entry && session.requestedSessionId) ||
@@ -598,7 +596,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   const restrictionFor = (
     config: OpenClawConfig,
     selectedEntry: Parameters<typeof resolveSessionNativeRuntimeRestriction>[0]["entry"],
-    model: typeof resolvedSessionModel,
+    model: NonNullable<typeof resolvedSessionModel>,
     persistedEntry?: SessionEntry,
   ) =>
     resolveSessionNativeRuntimeRestriction({
@@ -664,9 +662,11 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   const preparedRestriction = await prepareSessionCapabilityRead(() => {
     const currentConfig = context.getRuntimeConfig();
     const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
-    return readAgentRuntimeRestrictionErrorDetails(
-      restrictionFor(currentConfig, prepared.entry, currentModel)?.details,
-    );
+    return currentModel
+      ? readAgentRuntimeRestrictionErrorDetails(
+          restrictionFor(currentConfig, prepared.entry, currentModel)?.details,
+        )
+      : undefined;
   });
   let committed: Awaited<ReturnType<typeof commitReplySessionInitialization>>;
   try {
@@ -694,6 +694,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
           session.sessionRoutingChanged(currentConfig) ||
           currentCreation.actor?.id !== prepared.entry.createdActor?.id ||
           resolveCreatorSandbox(currentConfig, currentCreation) !== prepared.entry.sandbox ||
+          !currentModel ||
           currentModel.provider !== resolvedSessionModel.provider ||
           currentModel.model !== resolvedSessionModel.model ||
           currentRestriction?.reason !== details.reason ||

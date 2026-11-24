@@ -1,10 +1,8 @@
 // Tests how an admitted interactive run continues a turn the stale watchdog dropped.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
 import {
   createCatalogCodeModeHarness,
@@ -557,22 +555,20 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([]);
   });
 
-  it("falls back to the notice once the stalled turn's authority is revoked", async () => {
-    let revoked = false;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+  it("leaves the notice with dispatch after a recorded authority revocation", async () => {
+    const revocation = new AbortController();
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("operator authority revoked");
-        }
-      },
+      signal: revocation.signal,
+      assertCurrent: () => {},
     });
     const stalled = await createStalledRun({ operatorAuthority });
     await stallBeforeOutput(stalled);
-    revoked = true;
+    revocation.abort(new Error("operator authority revoked"));
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+    expect(operatorAuthority.signal?.aborted).toBe(true);
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
 
     await settleStalledOwner(stalled);

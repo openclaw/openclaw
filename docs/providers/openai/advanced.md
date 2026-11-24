@@ -103,6 +103,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `previous_response_id`. Otherwise it sends full history without that
     reference. Idle cached connections expire after five minutes; keeping a
     connection warm does not retain the completed run's execution context.
+    Only the run that writes the conversation keeps this connection and its
+    continuation. Background runs on the same conversation (session forks such
+    as skill reviews, memory flush, `/btw` side questions, compaction summaries)
+    share its prompt-cache key but send full history on their own connection, so
+    they never replace the conversation's continuation.
 
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an
@@ -298,8 +303,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Uses `store: true` until input contains a compaction checkpoint, then uses
       `store: false` for replay (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
-    - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
-      unavailable)
+    - Default `compact_threshold`: 85% of `contextWindow` (or `80000` when
+      unavailable), the same fraction as client compaction
 
     The same resolved route and effective threshold gate the client preflight,
     so OpenClaw does not delay local compaction unless the transport will inject
@@ -323,20 +328,36 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     replaying a request after output or tool work has started. Azure and custom
     endpoint storage policies are unchanged.
 
+    On the native OpenAI endpoint, replayed reasoning that carries encrypted
+    content is sent without its item ID, and the message and tool-call IDs that
+    depend on it are omitted too. A turn
+    sent with `store: false` (for example, one that carries a compaction
+    checkpoint) returns item IDs that name no stored record. A later stored
+    request records that reasoning under its ID, and the next stored request fails
+    with `item_conflict` after output has started. Prompt caching is unchanged.
+
     If the server rejects saved items with `item_conflict` before output starts,
     OpenClaw automatically retries once using saved conversation text and tool
     results, without the rejected item IDs, reasoning, or compaction checkpoint.
-    Opening a stream or reporting compaction progress does not count as output.
+    Opening a stream, reporting compaction progress, or receiving an un-emitted
+    text/reasoning snapshot inside a failed response does not count as output.
     Tool calls and results receive matching replacement IDs. The recovery is
     recorded in the transcript so later turns and reloads retain the repair.
-    Unaffected sessions keep their existing prompt prefix and continuation.
+    Completed tool calls retain their original argument JSON for exact replay after
+    a restart, including whitespace and large integers. Intentional argument edits
+    use the edited value. Older transcripts without those bytes use the recovery
+    above when rejected. Unaffected sessions keep their prompt prefix and continuation.
     Gateway logs record `item_conflict_recovery`, a session hash, and the outcome
-    (`started`, `recovered`, `failed`, or `deferred`). If both requests fail, the reply offers
-    retry, `/compact`, and model-switch guidance. A response that already produced
-    output is not automatically replayed, because tools may have done work; its
-    repair is saved for the next request (`deferred`), including a new run or an
-    internal session-effects fork of that history. Successful requests that apply
-    a saved repair also log `recovered`. Encrypted checkpoints remain bound to their
+    (`started`, `recovered`, `failed`, or `deferred`). If recovery fails, the reply offers
+    retry, `/compact`, and model-switch guidance. After output starts, the transport
+    saves the repair for the next request (`deferred`). The active runtime retries
+    once in the same turn only when its execution evidence proves the entire run
+    is replay-safe, with no potential tool side effects and no pending or committed delivery.
+    Otherwise the visible failure remains, and the saved repair applies to a later
+    request, including a new run or an internal session-effects fork of that history.
+    Successful requests that apply a saved repair also log `recovered`. Subagent completion deliveries with a
+    deferred repair retry automatically, up to three delivery attempts, without
+    waiting for another user message. Encrypted checkpoints remain bound to their
     original session.
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
@@ -350,12 +371,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     including after the session is restored.
 
     V2 starts when the known or projected request occupancy reaches
-    `min(context window - effective reserve, floor(0.9 × context window))`.
-    With a 500,000-token window and 20,000-token reserve, this is 450,000 tokens.
+    `min(context window - effective reserve, floor(0.85 × context window))`,
+    the same trigger as client maintenance on every other route.
+    With a 500,000-token window and 20,000-token reserve, this is 425,000 tokens.
     It uses completed-request usage when available and prices pending content at
-    the next normal request boundary. This earlier trigger leaves more room for
-    tool output; it does not lower the model's physical context limit or change
-    the public API-key route's 70% inline threshold.
+    the next normal request boundary. This earlier trigger leaves room for tool
+    output and the compaction request; it does not lower the model's physical
+    context limit or change the public API-key route's 85% inline threshold.
 
     The entire outgoing request must still fit that physical window. If one
     pending message or tool result crosses it before V2 can run, OpenClaw falls

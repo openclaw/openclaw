@@ -62,9 +62,29 @@ Under Codex, the whole call follows the initiating run's existing execution
 lifetime, covering preparation, every planned pass, and report completion.
 It is not shortened to the generic 90-second tool default or 600-second cap.
 An unlimited initiating run stays unlimited; Stop and authority revocation
-still cancel the review. The helper's timeout remains a per-pass limit, and
-an omitted timeout retains `openclaw agent exec`'s 600-second default for each
-pass. `/btw` retains its separate ten-minute parent deadline.
+still cancel the review. With an updated helper, an explicit timeout limits each
+reviewer process from launch through exit; OpenClaw owns that timer, and
+preparation and delivery of an exited reviewer's result use the parent lifetime
+instead of starting another copy of the reviewer timer. An explicit timeout also
+bounds the whole call: helper capture, prepared-pass admission, every reviewer
+pass, and delivery. When the budget is exceeded, the call ends with an error
+naming the stalled phase instead of staying pending. An omitted timeout retains
+`openclaw agent exec`'s 600-second default for each pass and adds no such
+whole-call deadline. `/btw` retains its separate ten-minute parent deadline.
+
+Older helpers remain supported with finite limits and keep their existing timeout
+behavior. Their handoff timer can still expire before launch or result delivery
+finishes; update the shared Auto Review helper to remove that race. The tool does
+not refuse an older helper merely because it lacks host-owned timeout support.
+
+Embedded runs, including nested Code Mode calls, publish the parent's finite
+execution deadline as a liveness allowance for the reply watchdog. For an
+unlimited parent, the allowance is the default 48-hour agent budget measured
+from tool execution start. The allowance itself adds no tool abort timer: the
+parent's existing timeout, an explicit `timeoutSeconds`, per-pass limits, Stop,
+and authority revocation still apply. A review that stays quiet beyond its
+allowance plus the watchdog's fifteen-minute quiet window can still be recovered
+as stalled.
 
 An allowed configured reviewer model is preserved. If the caller cannot use that
 configured preference, the Gateway selects the caller's existing permitted

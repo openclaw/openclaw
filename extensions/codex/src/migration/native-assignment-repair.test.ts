@@ -145,6 +145,30 @@ it.each(["current", "stale session", "stale connection"])(
   },
 );
 
+it.each(["assignment", "session"])(
+  "retires assignments whose %s lacks the lifecycle revision",
+  async (side) => {
+    // #197515: a reset mints a revision for the kept session ID; native recovery
+    // can never deliver the pre-reset assignment again.
+    if (side === "session") {
+      getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
+    }
+    const stale = side === "assignment" ? task({ lifecycleRevision: undefined }) : assignment;
+    const receipt = submission("child", "stale-call");
+    const submissions = { version: 1, owner: stale.owner, receipts: [receipt] };
+    const state = fixture([stale], { nativeSubagentSubmissions: submissions });
+    expect(await migration.detectLegacyState(state)).not.toBeNull();
+    const result = await migration.migrateLegacyState(state);
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    state.expectState({
+      nativeSubagentAssignments: undefined,
+      nativeSubagentSubmissions: undefined,
+    });
+    expect(await migration.migrateLegacyState(state)).toEqual(unchanged);
+  },
+);
+
 it.each(
   Object.entries({
     undecodable: () => fixture(duplicateAssignments, { binding: { ...binding, cwd: undefined } }),
@@ -152,11 +176,6 @@ it.each(
       fixture(undefined, { binding: { ...binding, authProfileId: 42 } }),
     "missing connection": () =>
       fixture(undefined, { binding: { ...binding, appServerRuntimeFingerprint: undefined } }),
-    "missing assignment lifecycle": () => fixture([task({ lifecycleRevision: undefined })]),
-    "missing session lifecycle": () => {
-      getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
-      return fixture();
-    },
     "conflicting completions": () =>
       fixture([
         { ...assignment, recordedCompletion: completion },

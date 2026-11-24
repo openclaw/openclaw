@@ -19,8 +19,8 @@ import { publicationSelectionFixture } from "./full-release-validation-state.tes
 const P = "repos/openclaw/openclaw/actions/workflows/openclaw-release-prepare.yml/dispatches";
 const Q = "repos/openclaw/openclaw/actions/workflows/full-release-validation.yml/dispatches";
 const frozenBaselines = {
-  upgradeBaseline: "openclaw@2026.7.9",
-  upgradeSurvivorBaselines: ["openclaw@2026.6.34", "openclaw@2026.7.8", "openclaw@2026.7.9"],
+  upgradeBaseline: "openclaw@2026.7.35",
+  upgradeSurvivorBaselines: ["openclaw@2026.7.35", "openclaw@2026.7.8", "openclaw@2026.7.9"],
 };
 const npmVersionsArgs = ["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"];
 
@@ -29,7 +29,7 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
-  it("admits explicit main-provenance Q without substituting the frozen candidate", () => {
+  it("admits explicit Q without substituting the frozen candidate", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainAfterAdmission: true });
     const result = f.run([
       "--workflow-sha",
@@ -75,15 +75,41 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(dispatches(f)).toEqual([P, Q]);
   });
 
-  it("rejects independent Q without main provenance before admission", () => {
-    const f = createDispatchFixture({ candidateOwned: true });
-    runGit(f.checkout, ["checkout", "--detach", f.targetSha]);
-    runGit(f.checkout, ["commit", "--allow-empty", "-m", "untrusted qualification"]);
-    const qualificationSha = runGit(f.checkout, ["rev-parse", "HEAD"]);
-    const result = f.run(["--workflow-sha", qualificationSha]);
-    expectDispatchFailure(result, "not reachable from current origin/main");
-    expect(dispatches(f)).toEqual([]);
-  });
+  it.each([true, false])(
+    "requires canonical off-main Q without changing C or P (pushed=%s)",
+    (pushed) => {
+      const f = createDispatchFixture({ candidateOwned: true });
+      runGit(f.checkout, ["checkout", "--detach", f.targetSha]);
+      runGit(f.checkout, ["commit", "--allow-empty", "-m", "qualification-only repair"]);
+      const qualificationSha = runGit(f.checkout, ["rev-parse", "HEAD"]);
+      if (pushed) {
+        runGit(f.checkout, [
+          "push",
+          "origin",
+          `${qualificationSha}:refs/heads/qualification-repair`,
+        ]);
+      }
+      const result = f.run(["--workflow-sha", qualificationSha]);
+      if (!pushed) {
+        expectDispatchFailure(result, "Qualification admission did not succeed");
+        expect(dispatches(f)).toEqual([P]);
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      expect(dispatches(f)).toEqual([P, Q]);
+      const admitted = JSON.parse(readFileSync(f.admissionReceiptPath, "utf8"));
+      expect(admitted.request).toMatchObject({
+        candidateSha: f.targetSha,
+        qualificationSha,
+        transportRef: expect.stringMatching(
+          new RegExp(`^release-ci/${qualificationSha.slice(0, 12)}-`),
+        ),
+      });
+      expect(admitted.producer.workflowSha).toBe(f.workflowSha);
+      expect(f.readPayload().body.inputs.expected_sha).toBe(f.targetSha);
+      expect(runGit(f.origin, ["rev-parse", "refs/heads/main"])).toBe(f.workflowSha);
+    },
+  );
 
   it("rejects an incompatible publication selector before qualification or registry work", () => {
     const f = createDispatchFixture({ candidateOwned: true });
@@ -295,7 +321,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(JSON.parse(envelope.laneInputs.qualification_baselines_json)).toEqual(frozenBaselines);
     expect(admitted.baselinePolicy).toMatchObject({
       candidateVersion: "2026.8.1",
-      oldestSupportedBaseline: "2026.6.34",
+      oldestSupportedBaseline: null,
     });
     expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
     expect(admitted.coverage.profile).toBe("stable");

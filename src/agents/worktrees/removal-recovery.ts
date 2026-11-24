@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
-import { withWorktreeAllocationLease, type WorktreeAllocationGuard } from "./allocation.js";
+import { withWorktreeMutationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { lockState } from "./git-lock.js";
 import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
@@ -46,7 +46,7 @@ export async function recoverManagedWorktreeRemoval(
   context: { env: NodeJS.ProcessEnv },
 ) {
   return await withGitProcessOperation("worktree.recovery", () =>
-    withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
+    withWorktreeMutationLease({ ...params, env: context.env }, async (guard) =>
       recoverRemovalWithAllocation({ ...params, ...guard, ...context }),
     ),
   );

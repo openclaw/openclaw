@@ -19,6 +19,15 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
+// New session lives in the Sessions panel header; open the panel when it is closed.
+async function openNewSession(page: Page) {
+  const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+  if (!(await create.isVisible())) {
+    await page.locator('[data-navigation-view="sessions"]').click();
+  }
+  await create.click();
+}
+
 const nativeTitlebarModule = "ui/src/components/macos-titlebar-controls.runtime-solid.tsx";
 const viewport = { height: 900, width: 1280 };
 const pageOptions = { locale: "en-US", serviceWorkers: "block", viewport } as const;
@@ -511,7 +520,7 @@ suite.define(() => {
           await expect
             .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
             .toBe(true);
-          await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+          await openNewSession(page);
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await page.locator(".new-session-page__message").waitFor({ state: "visible" });
           expect(held.requests()).toBe(1);
@@ -559,7 +568,7 @@ suite.define(() => {
       const toolbar = page.locator(".macos-titlebar-controls");
       await toolbar.waitFor({ state: "visible" });
       await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
-      await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+      await openNewSession(page);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       expect(await error.count()).toBe(0);

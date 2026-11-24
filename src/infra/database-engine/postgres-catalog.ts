@@ -1,6 +1,23 @@
 import { isDeepStrictEqual } from "node:util";
 
 export type PostgresCatalogFact = { table: string; kind: string; value: unknown };
+
+export function hasPostgresCatalogColumn(
+  catalog: readonly PostgresCatalogFact[],
+  table: string,
+  column: string,
+): boolean {
+  return catalog.some(
+    (fact) =>
+      fact.table === table &&
+      fact.kind === "column" &&
+      fact.value !== null &&
+      typeof fact.value === "object" &&
+      "name" in fact.value &&
+      fact.value.name === column,
+  );
+}
+
 type PostgresCatalogSource = {
   schema: string;
   tables: readonly {

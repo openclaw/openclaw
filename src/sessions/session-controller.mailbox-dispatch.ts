@@ -3,7 +3,7 @@ import {
   prepareNextDeliveryGroup,
   resolveFollowupDeliveryStorageKey,
 } from "../auto-reply/reply/queue/delivery-context.js";
-import { runOutsideAdmittedGenerationScopes } from "../auto-reply/reply/queue/drain-admission-scope.js";
+import { runOutsideAdmittedTurnScopes } from "../auto-reply/reply/queue/drain-admission-scope.js";
 import { requiresIndividualCollectDrain } from "../auto-reply/reply/queue/envelope.js";
 import { updateFollowupRetryHeartbeatsWithCustody } from "../auto-reply/reply/queue/pre-adoption-heartbeat.js";
 import {
@@ -215,7 +215,7 @@ async function prepareSessionControllerMailboxSelection(
       () =>
         runWithGatewayDetachedWorkContinuation(
           () =>
-            runOutsideAdmittedGenerationScopes(() =>
+            runOutsideAdmittedTurnScopes(() =>
               prepareNextDeliveryGroup(() => selection.sources, assertCurrent),
             ),
           "session:mailbox-preparation",

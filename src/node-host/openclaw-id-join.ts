@@ -69,7 +69,7 @@ export async function runNodeJoin(linkText: string, opts: NodeJoinOptions): Prom
     installedAppsSharingEnabled: saved?.installedAppsSharing,
     commands,
   });
-  const key = loadNodeTunnelKey();
+  const key = await loadNodeTunnelKey();
   const signer = await ed25519SignerFromSeed(key).finally(() => key.fill(0));
   const previous = saved?.gateway?.openclawId;
   const target = await enrollNode({

@@ -58,13 +58,7 @@ describe("requester settle watch admission", () => {
     setRuntimeConfigSnapshot(cfg);
     const receipt = createRequesterSettleReceiptAdmission({
       requester: { canonicalKey: REQUESTER_KEY, agentId: "main", storePath },
-      identity: { sessionId: "requester-session" },
-      storeSessionKey: REQUESTER_KEY,
-      storeAgentId: "main",
-      storePaths: () => [storePath],
-      isSourceCurrent: () => true,
       readCurrent: () => ({ sessionId: "requester-session" }),
-      isStoreCurrent: () => true,
     });
     const admission = prepareSystemAgentRunAdmission(
       cfg,
@@ -232,7 +226,11 @@ describe("requester settle watch admission", () => {
             admittedRunContext,
             agentId: "main",
             sessionKey: REQUESTER_KEY,
-            receiptAuthority: params.isSourceSessionEffectsAllowed,
+            receiptAuthority: () => {
+              if (params.isSourceSessionEffectsAllowed?.() === false) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             receiptAdmission: params.sourceReceiptAdmission,
           });
           const sql = writer ? undefined : observeMainThreadSql();

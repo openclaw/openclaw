@@ -25,6 +25,7 @@ import type {
   MutationTarget,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
+import type { SessionMutationAuthorization } from "./types.js";
 
 export function resolveSessionPatchExpectationError(
   patch: SessionsPatchParams,
@@ -100,6 +101,7 @@ export async function prepareSessionPatchTargets(params: {
   placementChecks: ReadonlyMap<number, { validate: () => string | undefined }>;
   outcomes: Array<MutationOutcome | undefined>;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   personalModelSelection: UserModelAccountSelection | undefined;
 }) {
   const mutationTargets = params.targets.map((target, index) => ({
@@ -138,6 +140,11 @@ export async function prepareSessionPatchTargets(params: {
         });
         operatorAuthority?.assertCurrent();
       },
+      followRegistration: (change) =>
+        params.followSharingRegistration?.(
+          { agentId: target.targetAgentId, sessionKey: target.canonicalKey },
+          change,
+        ),
     })),
     ready,
   );

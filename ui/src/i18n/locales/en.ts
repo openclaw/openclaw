@@ -5,7 +5,6 @@ import * as agentEn from "./en-agents.ts";
 
 type EnglishCatalog = TranslationMap & {
   languages: TranslationMap;
-  onboarding: TranslationMap & { memoryImport: TranslationMap };
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
@@ -247,7 +246,7 @@ type EnglishCatalog = TranslationMap & {
     failureGuidance: TranslationMap;
   };
   newSession: TranslationMap &
-    Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
+    Record<"title" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
   commandPalette: TranslationMap;
   palette: TranslationMap & {
     placeholder: string;
@@ -567,6 +566,12 @@ const startupEnglish = {
     description: "The agent is getting ready. This view will load automatically.",
     short: "Starting up…",
   },
+  routeNotFound: {
+    title: "Page not found",
+    description:
+      "This link is invalid or no longer available. Check the address or return to chat.",
+    goToChat: "Go to chat",
+  },
   lazyView: {
     errorTitle: "Couldn’t load this panel.",
     genericSubtitle: "Try again.",
@@ -682,7 +687,6 @@ const startupEnglish = {
   agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
   },
@@ -794,6 +798,7 @@ const startupEnglish = {
     deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
+    openSessionsPage: "Open Sessions",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level",
@@ -820,6 +825,7 @@ const startupEnglish = {
       notSet: {},
       inheritDefault: {},
       inheritDefaultModel: {},
+      inheritDefaultThinking: {},
       fallbacks: {},
       addFallback: {},
     },
@@ -923,6 +929,7 @@ const startupEnglish = {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     askBrand: "Ask {brand}",
+    settingsGroupPreferences: "Preferences",
     settingsGroupDevice: "This Mac",
     settingsGroupThisComputer: "This computer",
     settingsGroupThisIPhone: "This iPhone",
@@ -933,7 +940,7 @@ const startupEnglish = {
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
-    settingsSearchPlaceholder: "Search settings…",
+    settingsSearchPlaceholder: "Search",
     settingsSearchNoResults: "No settings match your search.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
@@ -945,6 +952,7 @@ const startupEnglish = {
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
+    installedPlugins: "Installed",
   },
   terminal: {
     title: "Terminal",
@@ -1024,6 +1032,7 @@ const startupEnglish = {
     cron: "Automations",
     skills: "Skills",
     plugins: "Plugins",
+    customize: "Customize",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
     templates: "Templates",
@@ -1109,11 +1118,6 @@ const startupEnglish = {
     providerConnected: {},
   },
   memoryImport: {},
-  onboarding: {
-    memoryImport: {
-      title: "Bring your agent memory with you",
-    },
-  },
   assistantPanel: {
     title: "Assistant sidebar",
     home: "Home",
@@ -1160,17 +1164,14 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
+    sectionDescription: "Changes save without restarting the Gateway.",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     usageRankedToolIndex: {},
-    codeMode: {},
 
     swarm: {},
-    toolSearch: {},
 
     hostDesktop: {},
     openclawId: {},
@@ -1194,6 +1195,7 @@ const startupEnglish = {
     },
     rosterTitle: "Online",
     usersTitle: "Users",
+    peopleTitle: "People",
     allUsers: "All users",
     directoryFailed: "Could not load all users. Retry",
     filters: {
@@ -1234,6 +1236,7 @@ const startupEnglish = {
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
+      recentSessionsUnavailable: "Recent sessions unavailable.",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -1421,21 +1424,13 @@ const startupEnglish = {
   usage: {
     common: {
       emptyValue: "—",
-      unknown: "unknown",
     },
-    loading: {
-      badge: "Loading usage…",
-    },
-    metrics: {
-      tokens: "Tokens",
-      cost: "Cost",
-    },
+    loading: {},
+    metrics: {},
+    // Settings search uses these headings before the Usage route loads.
     heatmap: {
       title: "Token activity",
       subtitle: "Daily token intensity in this range, up to one year.",
-      cellTokens: "{tokens} tokens",
-      less: "Less",
-      more: "More",
     },
     providerUsage: {},
     presets: {},
@@ -1452,9 +1447,6 @@ const startupEnglish = {
       input: "Input",
       cacheWrite: "Cache write",
       cacheRead: "Cache read",
-      total: "Total",
-      tokensByType: "Tokens by type",
-      costByType: "Cost by type",
     },
     overview: {
       title: "Usage overview",
@@ -1558,6 +1550,9 @@ const startupEnglish = {
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",
+      startNewSession: "Start a new session",
+      harnessUpdatePrompt:
+        "My last message in another session failed with this error:\n\n{summary}\n\nDo the update it asks for on this machine, confirm the installed version, and tell me if I still need to restart the OpenClaw Gateway.",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
@@ -1586,6 +1581,11 @@ const startupEnglish = {
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
+    continuationSource: {
+      exec: "Background command finished",
+      restart: "Gateway restarted",
+      subagent: "Agent finished",
+    },
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {
@@ -1787,6 +1787,7 @@ const startupEnglish = {
       menuDisplay: "Display",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
+      viewAllSessions: "View all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
@@ -1940,8 +1941,6 @@ const startupEnglish = {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
-      toolCallsOne: "1 tool call",
-      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",

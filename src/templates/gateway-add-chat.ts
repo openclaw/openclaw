@@ -18,7 +18,7 @@ import {
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
-import { withResolvedClawHubSource } from "./clawhub-source.js";
+import { withResolvedClawHubSource, type PrefetchedClawHubSource } from "./clawhub-source.js";
 import type { TemplateSetupReport } from "./conversation.js";
 import {
   templateInitializationCheckpoints,
@@ -128,6 +128,7 @@ export async function createTemplateAgentFromChat(
   admitted: AdmittedTemplateAgent | undefined,
   sessionKey: string | undefined,
   stateContext: OpenClawStateWorkerContext,
+  prefetched?: PrefetchedClawHubSource,
 ): Promise<GatewayTemplateAddApplyResult> {
   if (!admitted || !sessionKey) {
     throw new Error("Chat-based Template Add requires an agent id and a chat owner.");
@@ -167,13 +168,15 @@ export async function createTemplateAgentFromChat(
     };
     // Only the agent and its files decide whether creation proceeds, and only they
     // are bound into the retry checkpoint. Dependencies are planned once it exists.
-    const config = (await input.getPlanningContext()).config;
+    const planningContext = await input.getPlanningContext();
+    const { config } = planningContext;
     const planned = await buildGatewayTemplateAddPlan(
       {
         ...source,
         manifest: { ...source.manifest, skills: [], plugins: [], mcpServers: {}, automations: [] },
       },
       {
+        ...planningContext,
         config: withoutAgent(config, agentId),
         sourceMcpServers: {},
         agentId,
@@ -266,6 +269,7 @@ export async function createTemplateAgentFromChat(
       ...(input.token ? { token: input.token } : {}),
       ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.stateDir ? { stateDir: input.stateDir } : {}),
+      ...(prefetched ? { prefetched } : {}),
       run: async (_extracted, _trust, persistSource) =>
         await withOpenClawStateLeaseAsync(
           {
@@ -293,6 +297,8 @@ export async function createTemplateAgentFromChat(
               async () =>
                 await admitted.chat.complete?.({
                   source: input.source,
+                  requiredAutomationIds: source.manifest.automations.map(({ id }) => id),
+                  ...(admitted.deviceTimeZone ? { deviceTimeZone: admitted.deviceTimeZone } : {}),
                   report,
                   dependenciesPending: true,
                 }),

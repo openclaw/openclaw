@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "source": "Six successful PostgreSQL conformance jobs from scheduled main runs 40173153410 and 40177240126 (2026-10-25). File seconds are the median of up to two observed occupied-slot estimates from timestamped case intervals, including imports/hooks; configurations run sequentially with three file workers. Preparation is the observed median from job start to first Vitest process, split by runtime preparation; configuration overhead is the median residual after occupied file slots, clamped at zero for timestamp rounding. This is calibration, not a holdout forecast. Unobserved existing files retain prior weights; new targets retain the allocator default. Measurements price work and never select test inventory. The admission-scope.test.ts entry uses the 92.475s first-case-start to last-case-finish span from run 43840855416, job 133209836291, head e3c400d194ebad1c5312068257a5a818e54ec6b9 (2026-11-16). All nine cases passed; this single sample excludes initial import time and the later job timeout is not suite-success evidence.",
+  "source": "Six successful PostgreSQL conformance jobs from scheduled main runs 40173153410 and 40177240126 (2026-10-25). File seconds are the median of up to two observed occupied-slot estimates from timestamped case intervals, including imports/hooks; configurations run sequentially with three file workers. Preparation is the observed median from job start to first Vitest process, split by runtime preparation; configuration overhead is the median residual after occupied file slots, clamped at zero for timestamp rounding. This is calibration, not a holdout forecast. Unobserved existing files retain prior weights; new targets retain the allocator default. Measurements price work and never select test inventory. The admission-scope.test.ts entry uses the 92.475s first-case-start to last-case-finish span from run 43840855416, job 133209836291, head e3c400d194ebad1c5312068257a5a818e54ec6b9 (2026-11-16). All nine cases passed; this single sample excludes initial import time and the later job timeout is not suite-success evidence. Refreshed doctor-migration.postgres.test.ts, server-database-engine.postgres.test.ts, update-managed-service-handoff-engine.test.ts, and attempt-system-prompt.watched-sessions.postgres.test.ts from successful case spans in PR run 44047359474, job 133917219646 (2026-11-17, head e4fcd2e5f7d3e069f2b7e5b5bbb20c6a7b51c661). All 56 infra files passed before the job reached its overall timeout during commands startup; this is per-file calibration, not a successful job or holdout forecast. These single-sample first-case-start to last-case-finish spans exclude initial import time.",
   "workers": 3,
   "preparationSeconds": {
     "base": 140.089,
@@ -104,10 +104,6 @@
       "group": "extension-database-workers",
       "seconds": 6.61
     },
-    "extensions/workboard/src/dispatcher.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 62.612
-    },
     "extensions/workboard/src/gateway.sessions-board-pagination.test.ts": {
       "group": "extension-database-workers",
       "seconds": 21.983
@@ -192,6 +188,10 @@
       "group": "extension-database-workers",
       "seconds": 5.788
     },
+    "src/agents/embedded-agent-runner/run/attempt-system-prompt.watched-sessions.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 21.558
+    },
     "src/commands/doctor-database-diagnostics.postgres.test.ts": {
       "group": "commands",
       "seconds": 109.005
@@ -214,7 +214,7 @@
     },
     "src/gateway/server-database-engine.postgres.test.ts": {
       "group": "infra",
-      "seconds": 53.285
+      "seconds": 466.273
     },
     "src/infra/client-credential-migration.postgres.test.ts": {
       "group": "infra",
@@ -330,7 +330,7 @@
     },
     "src/infra/database-engine/doctor-migration.postgres.test.ts": {
       "group": "infra",
-      "seconds": 455.674
+      "seconds": 890.053
     },
     "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts": {
       "group": "infra",
@@ -723,6 +723,10 @@
     "src/infra/update-candidate-state.postgres.test.ts": {
       "group": "infra",
       "seconds": 140.659
+    },
+    "src/infra/update-managed-service-handoff-engine.test.ts": {
+      "group": "infra",
+      "seconds": 154.122
     },
     "src/state/openclaw-agent-db-engine.postgres.test.ts": {
       "group": "infra",

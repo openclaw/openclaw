@@ -91,7 +91,7 @@ suite.define(() => {
       const menuText = (await stop.textContent())?.trim();
       await stop.click();
       const workerStopConfirmation = page.locator("openclaw-modal-dialog").filter({
-        has: page.locator(".session-worker-stop"),
+        has: page.getByRole("dialog", { name: "Stop this session on the device?", exact: true }),
       });
       const dialog = await waitForConfirmModal(page, workerStopConfirmation);
       expect(menuText).toBe("Stop session on device…");

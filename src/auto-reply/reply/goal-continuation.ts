@@ -83,8 +83,6 @@ export function isGoalContinuationCurrent(
   const goal = entry && accountSessionGoalUsage(entry, Date.now());
   return Boolean(
     entry &&
-    entry.sessionId === continuation.sessionId &&
-    entry.lifecycleRevision === continuation.lifecycleRevision &&
     goal?.id === continuation.goalId &&
     goal.status === "active" &&
     !entry.abortedLastRun &&
@@ -188,7 +186,6 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     undefined,
     params.reader,
   );
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible() || !entry?.goal) {
     return false;
   }
@@ -207,7 +204,6 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   ) {
     return false;
   }
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible()) {
     return false;
   }

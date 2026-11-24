@@ -9,11 +9,11 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   RECEIPT_RECOVERY_SCHEMA,
-  receiptRecoveryChildInputs,
   receiptRecoverySourceRequest,
 } from "../../scripts/full-release-receipt-recovery.mjs";
 import {
   composeReleaseChildAttemptEvidence,
+  qualificationChildDispatchInputs,
   releaseChildSpec,
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
@@ -39,10 +39,16 @@ const artifactWorkflow = ".github/workflows/full-release-artifacts.yml";
 const childPublisher = "Seal full release child evidence / Seal child receipt";
 
 // Only external transport is replaced; validation runs through production owners.
-export function recoveryConsumptionFixture(independentQ = false) {
-  const direct = candidatePublicationFixture(
-    independentQ ? { qualificationSha: "b".repeat(40) } : {},
-  );
+export function recoveryConsumptionFixture(
+  admitted: boolean | ReturnType<typeof candidatePublicationFixture> = false,
+  fixtureOptions: { waivedFailure?: boolean } = {},
+) {
+  const direct =
+    typeof admitted === "boolean"
+      ? candidatePublicationFixture(admitted ? { qualificationSha: "b".repeat(40) } : {})
+      : admitted;
+  const version = direct.admission.receipt.baselinePolicy.candidateVersion;
+  const extended = direct.source.publicationSelection!.npmDistTag === "extended-stable";
   const { c, q, p, repository, branch } = direct;
   const metadata = new Map<string, ReturnType<typeof addArtifact>>();
   const archives = new Map<string, Buffer>();
@@ -116,8 +122,18 @@ export function recoveryConsumptionFixture(independentQ = false) {
   ) {
     return addArtifact(id, name, runId, makeStoredZip(files), sha);
   }
+  const waiverPolicy: {
+    targetVersion: string;
+    targetSha: string;
+    childRole: string;
+    jobName: string;
+    reason: string;
+    aggregates: never[];
+  }[] = [];
   const sourceFile = (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
-    readFileSync(path, "utf8");
+    path === "scripts/lib/release-validation-waivers.json"
+      ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: waiverPolicy })
+      : readFileSync(path, "utf8");
   const producer = { runId: "900", runAttempt: 1, fullRef: "refs/heads/main", sha: p };
   const source = createPublicationSourceFact(
     receiptRecoverySourceRequest(direct.admission.receipt, producer),
@@ -131,11 +147,12 @@ export function recoveryConsumptionFixture(independentQ = false) {
   const candidate = fullReleaseCandidateManifestFixture({
     targetSha: c,
     toolingSha: q,
-    releaseProfile: "beta",
-    releaseSoak: false,
+    releaseProfile: direct.admission.receipt.request.inputs.release_profile,
+    releaseSoak: direct.admission.receipt.request.inputs.run_release_soak === "true",
     upgradeSurvivorBaseline: baselines.upgradeBaseline,
     upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(" "),
   });
+  candidate.package.version = version;
   candidate.package.packageSha256 = hash(direct.npmBytes);
   candidate.sharedImage.packageSha256 = candidate.package.packageSha256;
   for (const part of [
@@ -184,7 +201,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
     const spec = releaseChildSpec(role);
     const dispatchId = "full-release-validation-" + direct.runId + "-1" + spec.suffix;
     const displayTitle = spec.displayName + " " + dispatchId;
-    const inputs = receiptRecoveryChildInputs(
+    const inputs = qualificationChildDispatchInputs(
       role,
       direct.admission.receipt,
       binding,
@@ -203,6 +220,18 @@ export function recoveryConsumptionFixture(independentQ = false) {
     const workload = coverage.requiredJobs.map((name, offset) =>
       job(10000 + index * 100 + offset, name, id),
     );
+    if (fixtureOptions.waivedFailure && role === "normalCi") {
+      workload[0]!.conclusion = "failure";
+      current.conclusion = "failure";
+      waiverPolicy.push({
+        targetVersion: version,
+        targetSha: c,
+        childRole: role,
+        jobName: workload[0]!.name,
+        reason: "Synthetic Q-only recovery grant",
+        aggregates: [],
+      });
+    }
     const publisher = job(10099 + index * 100, childPublisher, id);
     publisher.steps = [
       "Checkout trusted child evidence tooling",
@@ -244,7 +273,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
       dispatchId,
       sourceParentRunId: direct.runId,
       sourceParentAttempt: 1,
-      workloadConclusion: "success",
+      workloadConclusion: current.conclusion,
       inputs,
       publisher: { jobId: String(publisher.id), jobName: childPublisher },
       ...composite,
@@ -294,9 +323,16 @@ export function recoveryConsumptionFixture(independentQ = false) {
     parentJobs.push(dispatch);
     logs.set(
       dispatch.id,
-      "TARGET_SHA: " +
+      (coverage.key === "productPerformance" ? "-f publish_reports=false\n" : "") +
+        "TARGET_SHA: " +
         c +
-        "\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/" +
+        "\nCI_RELEASE_SCOPE: " +
+        (direct.source.coverage.coverage_policy === "npm-beta-v1"
+          ? "npm-beta"
+          : direct.source.coverage.coverage_policy === "npm-stable-v1"
+            ? "npm-stable"
+            : "full") +
+        "\nhttps://github.com/" +
         repository +
         "/actions/runs/" +
         children[coverage.key]!.runId +
@@ -333,7 +369,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
     },
     package: {
       name: "openclaw",
-      version: "2026.8.28-beta.1",
+      version,
       fileName: binding.package.fileName,
       sha256: binding.package.packageSha256,
       sourceSha: c,
@@ -414,7 +450,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
     sourceSha: c,
     toolingSha: q,
     workflowRef: branch,
-    releaseTag: "v2026.8.28-beta.1",
+    releaseTag: "v" + version,
     preflightPhase: "all",
     runId: id,
     runAttempt: "1",
@@ -451,7 +487,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
   };
   const pluginPackage = archive(
     "408",
-    "plugin-npm-package-codex-2026.8.28-beta.1-npm-oidc-92-1",
+    "plugin-npm-package-codex-" + version + "-npm-oidc-92-1",
     "92",
     { "plugin.tgz": "retained plugin" },
   );
@@ -459,7 +495,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
     schema: "openclaw.plugin-npm-prepared/v1",
     runtimeQualification: "packed-runtime-v1",
     sourceSha: c,
-    npmDistTag: "default",
+    npmDistTag: extended ? "extended-stable" : "default",
     selectionMode: "all-publishable",
     publisherPolicySha256: hash(sourceFile(q, pluginRun.path)),
     producer: pluginProducer,
@@ -468,10 +504,10 @@ export function recoveryConsumptionFixture(independentQ = false) {
         extensionId: "codex",
         packageDir: "extensions/codex",
         packageName: "@openclaw/codex",
-        version: "2026.8.28-beta.1",
-        channel: "beta",
-        publishTag: "beta",
-        installNpmSpec: "@openclaw/codex@2026.8.28-beta.1",
+        version,
+        channel: version.includes("-beta.") ? "beta" : "stable",
+        publishTag: extended ? "extended-stable" : version.includes("-beta.") ? "beta" : "latest",
+        installNpmSpec: "@openclaw/codex@" + version,
         route: "npm-oidc",
         artifact: {
           ...pluginProducer,
@@ -529,6 +565,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
   const {
     executionPlanSha256: _plan,
     qualificationCoverage: _coverage,
+    candidateBinding: _candidate,
     ...original
   } = direct.manifest;
   const manifest = {
@@ -539,6 +576,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
     workflowSha: p,
     workflowRef: "main",
     workflowFullRef: "refs/heads/main",
+    workflowRefType: "branch",
     sourceAdmission: source,
     publicationAdmission,
     trustedWorkflow: { ref: "main", fullRef: producer.fullRef, sha: p },
@@ -553,7 +591,7 @@ export function recoveryConsumptionFixture(independentQ = false) {
   };
   const recoveryRun = {
     ...run("900", RECEIPT_RECOVERY_WORKFLOW, p, "main"),
-    name: "Full Release Receipt Recovery",
+    name: "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
   };
   runs.set("900", recoveryRun);
   const sealer = job(9000, "Recover original qualification receipts", "900");
@@ -585,6 +623,21 @@ export function recoveryConsumptionFixture(independentQ = false) {
     return value;
   };
   const github = (path: string): unknown => {
+    const waiverPath = "scripts/lib/release-validation-waivers.json";
+    if (path.startsWith("contents/" + waiverPath + "?ref=")) {
+      const bytes = Buffer.from(sourceFile(q, waiverPath));
+      return {
+        path: waiverPath,
+        type: "file",
+        encoding: "base64",
+        content: bytes.toString("base64"),
+        size: bytes.length,
+        sha: createHash("sha1")
+          .update("blob " + bytes.length + "\0")
+          .update(bytes)
+          .digest("hex"),
+      };
+    }
     const artifactMatch = /^actions\/artifacts\/(\d+)$/.exec(path);
     if (artifactMatch) {
       return required(metadata.get(artifactMatch[1]!), path);
@@ -615,7 +668,10 @@ export function recoveryConsumptionFixture(independentQ = false) {
       return required(runs.get(runMatch[1]!), path);
     }
     if (path.startsWith("compare/")) {
-      return { status: "identical", merge_base_commit: { sha: p } };
+      return {
+        status: "ahead",
+        merge_base_commit: { sha: path.slice("compare/".length).split("...")[0] },
+      };
     }
     if (path === "collaborators/operator/permission") {
       return { permission: recoveryAuthority.permission, user: { id: 1, login: "operator" } };
@@ -650,6 +706,17 @@ export function recoveryConsumptionFixture(independentQ = false) {
     ...direct.client,
     getWorkflowSource: sourceFile,
     getRun: async (id: string) => required(runs.get(id), id),
+    getRunView: async (id: string) => {
+      const observed = required(runs.get(id), id);
+      return {
+        status: observed.status,
+        conclusion: observed.conclusion,
+        attempt: observed.run_attempt,
+        headSha: observed.head_sha,
+        headBranch: observed.head_branch,
+        url: observed.html_url,
+      };
+    },
     getRunAttempt: async (id: string, attempt: number | string) => {
       if (Number(attempt) !== 1) {
         throw new Error("Unexpected attempt");
@@ -704,11 +771,11 @@ export function consumptionOptions(f: ReturnType<typeof candidatePublicationFixt
     expectedRepository: f.repository,
     expectedRunId: f.runId,
     expectedRunAttempt: 1,
-    expectedTargetSha: f.q,
-    expectedReleaseTag: "v2026.8.28-beta.1",
+    expectedTargetSha: f.c,
+    expectedReleaseTag: "v" + f.admission.receipt.baselinePolicy.candidateVersion,
     expectedTrustedWorkflowFullRef: f.publisherFullRef,
     expectedTrustedWorkflowSha: f.p,
-    expectedCoreNpmPublication: { npmDistTag: "beta" },
+    expectedCoreNpmPublication: { npmDistTag: f.source.publicationSelection!.npmDistTag },
     verifierSourceSha: f.p,
     verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
   };

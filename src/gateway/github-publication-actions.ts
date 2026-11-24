@@ -30,7 +30,7 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
   params: Exclude<
     SessionGitHubActionParams,
-    { action: "refresh_base" | "inspect_pr" | "prepare_pr" }
+    { action: "refresh_base" | "inspect_pr" | "prepare_pr" | "create_issue" }
   >;
 };
 function assertPreservedPublicationFooter(before: string, after: string) {

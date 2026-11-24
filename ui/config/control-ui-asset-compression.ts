@@ -6,6 +6,25 @@ export function shouldPrecompressControlUiAsset(file: string, bytes: number, boo
   return bytes >= 16 * 1024 || file.toLowerCase().endsWith(".css") || boot;
 }
 
+/**
+ * Gzip one Control UI asset the way the build ships it: maximum effort for
+ * deferred assets, the smallest encoding for boot assets. Pinned WASM keeps
+ * gzip bytes independent of the host zlib and CPU.
+ */
+export function gzipControlUiAsset(body: Uint8Array, boot: boolean) {
+  let compressed = gzip(body, 12);
+  if (boot) {
+    // Compression levels are not monotonic. Keep the smallest first-load encoding.
+    for (const level of [10, 11]) {
+      const candidate = gzip(body, level);
+      if (candidate.byteLength < compressed.byteLength) {
+        compressed = candidate;
+      }
+    }
+  }
+  return compressed;
+}
+
 /** Keep asset identities, but remove generated hashes from budget compression. */
 export function createControlUiBudgetNormalizer(assetNames: Iterable<string>) {
   const names = new Map<string, string>();
@@ -34,7 +53,7 @@ export function measureControlUiBudgetAsset(
     return { gzipBytes: body.byteLength, brotliBytes: body.byteLength };
   }
   return {
-    gzipBytes: Math.min(body.byteLength, gzip(body, 12).byteLength),
+    gzipBytes: Math.min(body.byteLength, gzipControlUiAsset(body, compression.boot).byteLength),
     brotliBytes: Math.min(
       body.byteLength,
       brotliCompressSync(body, {

@@ -38,10 +38,10 @@ import {
   normalizeExecApprovalsInternal,
   parsePersistedExecApprovals,
   resolveExecApprovalsDisplayPath,
-  stripExecApprovalsSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
+import { stripExecApprovalsSocketCredentials } from "./exec-approvals-core.js";
 import {
   retainCronPolicyPublication,
   stageCronExecHostPolicyPublication,
@@ -79,43 +79,8 @@ const preparedSnapshots = resolveGlobalMap<
   { identity: string; path: string; snapshot: Promise<ExecApprovalsSnapshot> }
 >(Symbol.for("openclaw.execApprovalsPreparedSnapshots"), "close-and-restart");
 
-type CurrentExecPolicy = {
-  file?: ExecApprovalsFile;
-  pending: Set<string>;
-};
-const currentPolicies = resolveGlobalMap<string, CurrentExecPolicy>(
-  Symbol.for("openclaw.execApprovalsCurrentPolicies"),
-  "close-and-restart",
-);
-
 execApprovalsPublication.subscribeFacts((change) => {
   const identity = change.kind === "committed" ? change.receipt.source.identity : change.identity;
-  if (typeof identity === "string") {
-    let policy = currentPolicies.get(identity);
-    if (!policy) {
-      policy = { pending: new Set() };
-      currentPolicies.set(identity, policy);
-    }
-    if (change.kind === "pending") {
-      policy.pending.add(change.operationId);
-    } else if (change.kind === "settled") {
-      policy.pending.delete(change.operationId);
-    } else if (change.kind === "unknown") {
-      // Invalidate an in-flight seed as well as retained execution guards.
-      currentPolicies.set(identity, { pending: policy.pending });
-    } else if (change.kind === "committed") {
-      const fact = change.receipt.facts.get("current");
-      if (fact?.kind === "postimage") {
-        policy.file = freezeTrustedJsonSnapshot(fact.value.file);
-      } else if (fact?.kind === "absent") {
-        policy.file = freezeTrustedJsonSnapshot(
-          normalizeExecApprovalsInternal({ version: 1, agents: {} }),
-        );
-      } else if (fact?.kind === "unknown") {
-        currentPolicies.set(identity, { pending: policy.pending });
-      }
-    }
-  }
   for (const [key, entry] of preparedSnapshots) {
     if (entry.identity === identity) {
       preparedSnapshots.delete(key);
@@ -124,11 +89,6 @@ execApprovalsPublication.subscribeFacts((change) => {
 });
 registerOpenClawStateDatabaseLifecycleListener((event) => {
   if (event.kind !== "opened") {
-    if (event.identity) {
-      currentPolicies.delete(event.identity.key);
-    } else {
-      currentPolicies.clear();
-    }
     for (const [key, entry] of preparedSnapshots) {
       if (entry.path === (event.identity?.canonicalPath ?? event.path)) {
         preparedSnapshots.delete(key);
@@ -137,7 +97,7 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
   }
 });
 
-/** Preparation reuses policy facts; execution retains its direct current-row guard. */
+/** Preparation reuses policy facts until a publication or database lifecycle event drops them. */
 async function readPreparedExecApprovals(
   context: OpenClawStateWorkerContext,
 ): Promise<ExecApprovalsSnapshot> {
@@ -242,39 +202,12 @@ export function loadExecApprovalsReadOnly(): ExecApprovalsFile {
   }
 }
 
-/** A committed policy view keeps the final execution guard synchronous and free of SQL. */
-function retainExecApprovalsCurrentRead(context: OpenClawStateWorkerContext) {
-  const key = context.admission.identity.key;
-  let policy = currentPolicies.get(key);
-  if (!policy) {
-    policy = { pending: new Set() };
-    currentPolicies.set(key, policy);
-  }
-  return {
-    seed(file: ExecApprovalsFile) {
-      // A publication owns newer facts; an invalidated read cannot restore authority.
-      if (currentPolicies.get(key) === policy && !policy.file) {
-        policy.file = freezeTrustedJsonSnapshot(file);
-      }
-    },
-    read(): ExecApprovalsFile {
-      context.admission.assertCurrent();
-      const current = currentPolicies.get(key);
-      if (!current?.file || current.pending.size) {
-        throw new Error("Exec approval policy is unavailable or changing before execution");
-      }
-      return current.file;
-    },
-  };
-}
-
 /** Prepare node-local launch policy before invoking a synchronous plugin callback. */
 export async function prepareExecApprovalsCurrentRead(
   context: OpenClawStateWorkerContext,
 ): Promise<() => ExecApprovalsFile> {
-  const policy = retainExecApprovalsCurrentRead(context);
-  policy.seed((await readExecApprovalsSnapshotAsync(context)).file);
-  return () => policy.read();
+  const { file } = await readExecApprovalsSnapshotAsync(context);
+  return () => file;
 }
 
 /** Capture the policy owner before yielding; reads never initialize or migrate state. */
@@ -455,7 +388,6 @@ type PendingAuthorization = {
   resolve: (result: CommittedExecAuthorization) => void;
   reject: (error: unknown) => void;
   assertCurrent?: () => void;
-  policy: ReturnType<typeof retainExecApprovalsCurrentRead>;
 };
 const pendingAuthorizationBatches: [PendingAuthorization, ...PendingAuthorization[]][] = [];
 
@@ -477,7 +409,6 @@ function enqueueExecAuthorization(
   context = captureOpenClawStateWorkerContext(),
 ): Promise<CommittedExecAuthorization> {
   const completion = createDeferredCore<CommittedExecAuthorization>();
-  const policy = retainExecApprovalsCurrentRead(context);
   const request: PendingAuthorization = {
     input: structuredClone(input),
     context,
@@ -485,7 +416,6 @@ function enqueueExecAuthorization(
     resolve: completion.resolve,
     reject: completion.reject,
     assertCurrent,
-    policy,
   };
   let batch = pendingAuthorizationBatches.at(-1);
   if (batch) {
@@ -533,14 +463,13 @@ function enqueueExecAuthorization(
             return () =>
               item.reject(new Error(result?.message ?? "Missing exec authorization result"));
           }
-          item.policy.seed(result.file);
           return () =>
             item.resolve({
               file: result.file,
               readCurrent: () => {
                 item.signal?.throwIfAborted();
                 item.assertCurrent?.();
-                return item.policy.read();
+                return result.file;
               },
             });
         });

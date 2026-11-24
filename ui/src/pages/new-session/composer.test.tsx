@@ -15,6 +15,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { prepareComposerWidthEdge } from "../chat/components/chat-composer-width-ref.tsx";
+import { placeComposerDictation } from "../chat/composer-dictation-session.ts";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
@@ -837,7 +838,9 @@ describe("new-session composer dictation insertion", () => {
     const { textarea, composerTextarea } = draft("ship it", "ship it", 4);
     composerTextarea.captureSelection();
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please")).toBe(
+      "ship please it",
+    );
     expect(textarea.value).toBe("ship please it");
   });
 
@@ -846,7 +849,9 @@ describe("new-session composer dictation insertion", () => {
     composerTextarea.captureSelection();
     textarea.value = "ship it today";
     textarea.setSelectionRange(4, 4);
-    expect(composerTextarea.insertTranscript("please", true)).toBe("ship please it today");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please", true)).toBe(
+      "ship please it today",
+    );
     expect(textarea.value).toBe("ship please it today");
   });
 
@@ -861,36 +866,44 @@ describe("new-session composer dictation insertion", () => {
       if (capture) {
         composerTextarea.captureSelection();
       }
-      expect(composerTextarea.insertTranscript(transcript)).toBe(expected);
+      expect(composerTextarea.insertTranscript(placeComposerDictation, transcript)).toBe(expected);
     },
   );
 
   it("leaves the draft alone for a blank transcript", () => {
     const { textarea, composerTextarea } = draft();
     composerTextarea.captureSelection();
-    expect(composerTextarea.insertTranscript("   ")).toBeNull();
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "   ")).toBeNull();
     expect(textarea.value).toBe("ship it");
   });
 
   it("spends a captured caret once, then appends", () => {
     const { composerTextarea } = draft("ship it", "ship it", 0);
     composerTextarea.captureSelection();
-    expect(composerTextarea.insertTranscript("please")).toBe("please ship it");
-    expect(composerTextarea.insertTranscript("now")).toBe("please ship it now");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please")).toBe(
+      "please ship it",
+    );
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "now")).toBe(
+      "please ship it now",
+    );
   });
 
   it("previews without consuming or mutating the captured draft", () => {
     const { textarea, composerTextarea } = draft("ship it", "ship it", 4);
     composerTextarea.captureSelection();
-    expect(composerTextarea.previewTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.previewTranscript(placeComposerDictation, "please")).toBe(
+      "ship please it",
+    );
     expect(textarea.value).toBe("ship it");
-    expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please")).toBe(
+      "ship please it",
+    );
   });
 
   it("has nothing to insert into once the draft is gone", () => {
     const { composerTextarea } = draft();
     composerTextarea.captureSelection();
     composerTextarea.disconnect();
-    expect(composerTextarea.insertTranscript("it")).toBeNull();
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "it")).toBeNull();
   });
 });

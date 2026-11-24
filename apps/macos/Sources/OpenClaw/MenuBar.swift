@@ -414,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
         }
-        NSApplication.shared.terminate(nil)
+        Self.requestTermination()
     }
 
     private func finishLaunchingWithCredentials(launchPlan: AppLaunchRuntimePlan) {
@@ -585,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
                 mode: AppStateStore.shared.connectionMode,
                 remoteUrl: AppStateStore.shared.remoteUrl),
-            removedClaw: MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
+            removedClaw: MacOpenClawIDFeature.isEnabled && MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
             markComplete: { OnboardingController.markComplete() },
             show: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {

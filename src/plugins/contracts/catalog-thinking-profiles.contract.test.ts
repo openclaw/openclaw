@@ -22,6 +22,14 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
   "mistral/mistral-medium-3-5": mistralReasoning(),
   "mistral/mistral-small-2603": mistralReasoning(),
   "mistral/mistral-small-latest": mistralReasoning(),
+  "openai/gpt-6.2-astra": {
+    levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    defaultLevel: "medium",
+  },
+  "openai/gpt-6.2-sol": {
+    levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    defaultLevel: "medium",
+  },
   "particle/particle-ai/particle-1": deepSeekV4(),
   "moonshot/kimi-k2.7-code": { levels: ["low:on"], defaultLevel: "low" },
   "moonshot/kimi-k2.7-code-highspeed": { levels: ["low:on"], defaultLevel: "low" },
@@ -33,6 +41,14 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
     defaultLevel: "high",
   },
   "tencent-tokenplan/hy4": {
+    levels: ["off", "minimal", "low", "medium", "high"],
+    defaultLevel: "high",
+  },
+  "tencent-tokenhub/hy4-flash": {
+    levels: ["off", "minimal", "low", "medium", "high"],
+    defaultLevel: "high",
+  },
+  "tencent-tokenplan/hy4-flash": {
     levels: ["off", "minimal", "low", "medium", "high"],
     defaultLevel: "high",
   },

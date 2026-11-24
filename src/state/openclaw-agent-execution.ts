@@ -95,23 +95,29 @@ export async function prepareOpenClawAgentDatabaseExecution(
   signal?: AbortSignal,
 ): Promise<void> {
   assertCurrent();
-  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
+  let execution: OpenClawAgentDatabaseExecution | undefined;
   try {
     await runOpenClawAgentWorkerWrite(
       options,
-      () =>
-        execution.prepare(
+      async () => {
+        assertCurrent();
+        // Preparation joins the retained creator only after its writer turn begins.
+        // Ordinary borrowers cannot initialize that creator's unpublished target.
+        execution = await captureOpenClawAgentDatabaseExecutionAsync(options, {}, "inherit");
+        assertCurrent();
+        return execution.prepare(
           createSessionWorkerExecutionSource(
             assertCurrent,
             `Agent ${options.agentId} database preparation admission expired`,
           ),
           signal,
-        ),
+        );
+      },
       undefined,
       signal,
     );
   } finally {
-    await execution.release();
+    await execution?.release();
   }
 }
 
@@ -172,6 +178,7 @@ export async function captureOpenClawAgentDatabaseExecutionAsync(
   const creationClaim = creationClaims.captureAgentCreationClaim(options);
   const cleanup = getAgentDeletionDatabaseCleanup(options);
   const cleanupOwner = cleanup?.ownsDatabase ? cleanup : undefined;
+  let releaseRetained: (() => Promise<void>) | undefined;
   let retired = false;
   const unregister = registerOpenClawAgentDatabaseAsyncResource(
     {
@@ -185,6 +192,7 @@ export async function captureOpenClawAgentDatabaseExecutionAsync(
     options,
   );
   try {
+    releaseRetained = previous?.retain();
     const observed = await readDatabasePathIdentity(pathname);
     state.admission.assertCurrent();
     (cleanupOwner?.assertCurrentHost ?? assertAgentCurrent)();
@@ -203,6 +211,7 @@ export async function captureOpenClawAgentDatabaseExecutionAsync(
     return capture(observed);
   } finally {
     unregister();
+    await releaseRetained?.();
   }
 }
 

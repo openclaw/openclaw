@@ -4,20 +4,20 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DecisionRuntimeV2 } from "../decisions/runtime-types.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { ProviderPrepareRuntimeAuthContextV2 } from "../plugins/provider-runtime.types.js";
-import {
-  createColdPluginFixture,
-  createColdPluginHermeticEnv,
-} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createDecisionConsumer,
+  decisionEnv,
+  decisionOptions,
+} from "./decision-inference.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 const traceKey = Symbol.for("openclaw.test.liquid-ai-decision-path");
@@ -38,16 +38,8 @@ it.each(["profile", "environment", "missing-native", "exchange", "foreign-profil
       await resetPreparedModelRuntimeSnapshotsForTest();
       await state.cleanup();
     });
-    const consumerRoot = path.join(state.root, "consumer");
-    const emptyBundled = path.join(state.root, "bundled");
-    fs.mkdirSync(consumerRoot);
-    fs.mkdirSync(emptyBundled);
     const consumerId = "liquid-decision-consumer";
-    const consumer = createColdPluginFixture({ rootDir: consumerRoot, pluginId: consumerId });
-    fs.writeFileSync(
-      consumer.runtimeSource,
-      'const trace=globalThis[Symbol.for("openclaw.test.liquid-ai-decision-path")]; module.exports={id:"liquid-decision-consumer",register(api){trace.runtime=api.runtime.decisions;}};',
-    );
+    const { consumerRoot, trace } = createDecisionConsumer(state.root, consumerId, traceKey);
     let exchangeGate: (() => Promise<void>) | undefined;
     const exchange = vi.fn(async (context: ProviderPrepareRuntimeAuthContextV2) => {
       expect(context.capability).toBe("decision");
@@ -58,8 +50,7 @@ it.each(["profile", "environment", "missing-native", "exchange", "foreign-profil
         request: { headers: { "x-fixture-exchanged": "true" } },
       };
     });
-    const trace: { runtime?: DecisionRuntimeV2; exchange: typeof exchange } = { exchange };
-    Reflect.set(globalThis, traceKey, trace);
+    Object.assign(trace, { exchange });
     let arrivals = 0;
     const received: Array<{
       url?: string;
@@ -195,8 +186,7 @@ export default {
           },
         };
         await withEnvAsync(
-          {
-            ...createColdPluginHermeticEnv(state.root, { bundledPluginsDir: emptyBundled }),
+          decisionEnv(state.root, {
             ...state.envVars,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             LIQUID_API_KEY: "synthetic-exchange-env-key",
@@ -204,7 +194,7 @@ export default {
               authSource === "environment" || authSource === "foreign-profile"
                 ? "synthetic-native-env-key"
                 : undefined,
-          },
+          }),
           async () => {
             await state.writeAuthProfiles({
               version: 1,
@@ -246,13 +236,12 @@ export default {
               state: { type: "text" as const, text: "Synthetic evidence" },
               questions: { urgent: { type: "boolean" as const, instructions: "Is it urgent?" } },
             };
-            const options = () => ({
-              agentId: "main",
-              purpose: "liquid-ai-native-fixture",
-              rubricVersion: "1",
-              timeoutMs: 5_000,
-              signal: new AbortController().signal,
-            });
+            const options = () =>
+              decisionOptions({
+                agentId: "main",
+                purpose: "liquid-ai-native-fixture",
+                rubricVersion: "1",
+              });
             // The exchange key and profile must never authenticate a native Decision call.
             // A resolvable foreign pin must not reach exchange or HTTP, even with
             // compatible profile and environment fallbacks available.

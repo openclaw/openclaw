@@ -61,7 +61,6 @@ async function readFixture(invitation = false) {
           guest: {
             agents: "*",
             scopes: ["operator.sessions.read"],
-            // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
             sessions: { others: "invited" },
           },
         },
