@@ -76,7 +76,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
   }
 
   protected handleCatalogGatewayEvent(event: string): void {
-    if (event === "plugins.changed") {
+    if (event === "sessions.catalog.routes.changed") {
       const key = parseCatalogSessionKey(this.state?.sessionKey);
       if (key) {
         // A replacement can remove the caller's read grant. Retire the old read

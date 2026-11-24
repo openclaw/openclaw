@@ -385,7 +385,7 @@ it("retires a restricted transcript when its catalog route is withdrawn", async 
   const pane = fixture.mount(buildCatalogSessionKey(key, "main"));
   await vi.waitFor(() => expect(pane.history.catalogMessages).toHaveLength(1));
   available = false;
-  fixture.emitGatewayEvent("plugins.changed", { generation: 2 });
+  fixture.emitGatewayEvent("sessions.catalog.routes.changed", { generation: 2 });
   expect(pane.history.catalogMessages).toEqual([]);
   await vi.waitFor(() => expect(pane.state.lastError).toBeTruthy());
   expect(pane.history.catalogSession).toBeNull();
