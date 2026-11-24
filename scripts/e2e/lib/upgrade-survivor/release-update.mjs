@@ -267,16 +267,16 @@ try {
     rowCount: after.length,
   });
 } catch (error) {
-  for (const [name, source] of [
-    ["trial.json", path.join(state, "git-install", "releases", ".trial")],
-  ]) {
-    try {
-      if (fs.existsSync(source)) {
-        fs.copyFileSync(source, path.join(artifacts, name));
-      }
-    } catch (captureError) {
-      console.error(`Could not preserve ${name}: ${captureError.message}`);
+  try {
+    const source = path.join(state, "git-install", "releases", ".trial");
+    if (fs.existsSync(source)) {
+      const destination = path.join(artifacts, "trial.json");
+      fs.copyFileSync(source, destination);
+      // The isolated container owns the copy; the product's live trial stays 0600.
+      fs.chmodSync(destination, 0o644);
     }
+  } catch (captureError) {
+    console.error(`Could not preserve trial.json: ${captureError.message}`);
   }
   try {
     save(
