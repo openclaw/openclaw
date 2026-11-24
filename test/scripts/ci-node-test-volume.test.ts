@@ -355,38 +355,45 @@ describeSuite("new inventory measurement", () => {
     });
   });
 
-  it.each(["node", "bun-all", "dual-all"] as const)(
-    "measures new inventories under %s",
-    (policy) => {
-      const context = {
-        ...volumeContextFor([], policy),
-        eligibility: {
-          changedPaths: [],
-          includeReleaseOnlyRuntimeTests: false,
-          includePrExemptRuntimeTests: false,
-        },
-        fullPlan: () => full,
-      };
-      const describe = prepareNodeTestVolumes(context);
-      const repeated = prepareNodeTestVolumes({ ...context, fullPlan: () => [...full, ...full] });
-      for (const { target, selected } of selections) {
-        const entries = describe(selected, [target]).entries;
-        expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(
-          policy === "dual-all" ? ["bun", "node"] : [policy === "node" ? "node" : "bun"],
-        );
-        for (const entry of entries) {
-          expect(entry.selected?.count).toBe(1);
-          expect(entry.full?.count).toBeGreaterThan(0);
-        }
-        expect(repeated(selected, [target]).entries).toEqual(entries);
-        expect(
-          describe({ ...selected, env: { ...selected.env, SCENARIO: "other" } }, [
-            target,
-          ]).entries.map((entry) => entry.full),
-        ).toEqual(entries.map(() => null));
-      }
-    },
-  );
+  it.each(
+    (["node", "bun-all", "dual-all"] as const).flatMap((policy) =>
+      measuredConfigCases.map(({ owner, config }) => ({ policy, owner, config })),
+    ),
+  )("measures $owner inventory under $policy", ({ policy, config }) => {
+    const { target, selected } = expectDefined(
+      selections.find((selection) => selection.selected.configs.includes(config)),
+      `selected ${config} group`,
+    );
+    const census = full.flatMap((job) => {
+      const groups = job.groups.filter((group) => group.configs.includes(config));
+      return groups.length ? [{ ...job, groups }] : [];
+    });
+    const context = {
+      ...volumeContextFor([], policy),
+      eligibility: {
+        changedPaths: [],
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+      },
+      fullPlan: () => census,
+    };
+    const describe = prepareNodeTestVolumes(context);
+    const repeated = prepareNodeTestVolumes({ ...context, fullPlan: () => [...census, ...census] });
+    const entries = describe(selected, [target]).entries;
+    expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(
+      policy === "dual-all" ? ["bun", "node"] : [policy === "node" ? "node" : "bun"],
+    );
+    for (const entry of entries) {
+      expect(entry.selected?.count).toBe(1);
+      expect(entry.full?.count).toBeGreaterThan(0);
+    }
+    expect(repeated(selected, [target]).entries).toEqual(entries);
+    expect(
+      describe({ ...selected, env: { ...selected.env, SCENARIO: "other" } }, [target]).entries.map(
+        (entry) => entry.full,
+      ),
+    ).toEqual(entries.map(() => null));
+  });
 
   it("does not change executable plans", () => {
     const targets = selections.map(({ target }) => target);
