@@ -569,6 +569,11 @@ const enPluginManagement = {
     removeConfirmTitle: "Remove {name}?",
     removeConfirmMessage:
       "This removes the plugin package and all of its entries. Active work using this plugin finishes before removal.",
+    removeDefaultModelWarning:
+      "Your default model, {model}, uses this plugin and will be unavailable after removal. It stays selected until you choose another model in Models.",
+    removeModelCheckUnavailable:
+      "Could not check whether your default model uses this plugin. Removing it may make that model unavailable. Your saved model selection will not change; open Models to review it first.",
+    chooseAnotherModel: "Choose another model",
     cancel: "Cancel",
     reload: "Reload",
     installSaved: "Installation of {name} was saved. {error}",
