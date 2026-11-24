@@ -19,7 +19,6 @@ import {
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { retirePostgresUpgrade } from "../snapshot/database-backup.js";
-import type { DatabaseTarget } from "./state-upgrade-databases.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -259,7 +258,7 @@ export async function copyTree(
   skip: (absolute: string) => boolean,
   baseline: Map<string, string | undefined>,
   options: {
-    targets?: readonly DatabaseTarget[];
+    targets?: readonly { path: string }[];
     log?: { info: (message: string) => void };
     additionalCopyBytes?: number;
   } = {},
