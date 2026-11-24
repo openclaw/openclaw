@@ -242,7 +242,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: settled execution lifecycle classifiers for plugin subscribers (#192413).
       // +1: shared Decisions HTTP execution subpath (#195641), captured in the feature cut.
       // +1: read-only host resource-profile subpath (#202478).
-      164,
+      // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
+      165,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -339,7 +340,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: interactive agent control text and stamping helpers (#201764).
       // +4: provider auth failure class, reason, recovery, and OAuth failure converter (#203394).
       // +1: shipped reply session-init conflict classifier (#201363).
-      3919,
+      // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
+      3921,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -403,7 +405,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: interactive agent control text and stamping helpers (#201764).
       // +1: OAuth failure converter; ProviderAuthFailure is construct-only (#203394).
       // +1: shipped reply session-init conflict classifier (#201363).
-      2255,
+      // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
+      2256,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
