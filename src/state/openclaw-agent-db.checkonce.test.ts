@@ -19,7 +19,11 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { persistAgentSchemaMetadata as persistMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { readExistingAgentSchemaMeta as readMetadata } from "./openclaw-agent-db-metadata.js";
 import { openOpenClawAgentDatabaseReadOnly as openReader } from "./openclaw-agent-db-readonly-open.js";
-import { listOpenClawRegisteredAgentDatabases as registeredAgents } from "./openclaw-agent-db-registry.js";
+import { readRegisteredAgentDatabases } from "./openclaw-agent-db-registry-listing.js";
+import {
+  listOpenClawRegisteredAgentDatabases as registeredAgents,
+  registerOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import { ensureOpenClawAgentDatabaseSchema as ensureAgentSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync as closeAgent,
@@ -274,6 +278,23 @@ it.for(["compatible", "raised"] as const)(
             : OPENCLAW_AGENT_SCHEMA_VERSION + 1,
         );
       writer.exec("COMMIT");
+    }
+    // T+1 publishes the actual version before T performs registry-only discovery.
+    registerOpenClawAgentDatabase({
+      ...options,
+      path: first.path,
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+    });
+    for (const entries of [
+      registeredAgents({ env }),
+      readRegisteredAgentDatabases({ env }, false),
+    ]) {
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          path: first.path,
+          schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+        }),
+      );
     }
     if (floor !== "compatible") {
       expect(() => openAgent(options)).toThrow(
