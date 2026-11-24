@@ -2,6 +2,7 @@ import path from "node:path";
 import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createBeamContinuation } from "./src/continuation-v2.js";
 import { createBeamExecutableResolver } from "./src/executable.js";
 import { createBeamV2Handler } from "./src/http-v2.js";
 import { createBeamIngressLimits, createBeamRequestHandler } from "./src/http.js";
@@ -66,6 +67,7 @@ export default definePluginEntry({
         readPublication: store.readPublication,
         putSnapshot: store.putSnapshot,
         releasePublication: store.releasePublication,
+        continuation: createBeamContinuation(api.runtime, store),
         currentAuthority: getGatewayRequestAuthorityV1,
         controlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
