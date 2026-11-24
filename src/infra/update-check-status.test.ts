@@ -213,6 +213,7 @@ it.for([
         gitCallsAfterAbort.push(argv);
       }
       if (
+        argv[0] === "git" &&
         gates.length < commands &&
         (scope === "install kind" || !argv.includes("--show-toplevel"))
       ) {

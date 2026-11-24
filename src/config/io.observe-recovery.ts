@@ -91,6 +91,7 @@ function createRecoveryCommitEffect(params: {
   const options = {
     filePath: publicationPath,
     content: params.raw,
+    allowDrvfsRenameRecovery: true,
     dirMode:
       stateRootDirectoryMode(
         path.dirname(publicationPath),

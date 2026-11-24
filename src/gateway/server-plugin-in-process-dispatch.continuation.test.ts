@@ -164,7 +164,6 @@ describe("typed in-process agent continuation authorization", () => {
                 context,
                 runId: request.idempotencyKey,
               });
-              child.authority?.assertCurrent();
               io.emitAcceptance([
                 true,
                 { runId: request.idempotencyKey, status: "accepted" },
@@ -174,7 +173,6 @@ describe("typed in-process agent continuation authorization", () => {
               await resume.promise;
               // The execution boundary checks its facade binding before its admitted principal.
               assertGatewayLifetimeCurrent?.();
-              child.authority?.assertCurrent();
               effects += 1;
               io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
               outcome.resolve(undefined);
@@ -209,7 +207,6 @@ describe("typed in-process agent continuation authorization", () => {
           assert(child?.authority, "Expected independently retained child policy");
           fixture.retire();
           restored.release();
-          expect(child.authority.assertCurrent).not.toThrow();
           resume.resolve();
           expect(await outcome.promise).toBeUndefined();
           expect(effects).toBe(1);
@@ -266,7 +263,6 @@ describe("typed in-process agent continuation authorization", () => {
       assert(pending, "Expected continuation preparation");
       await expect(pending).rejects.toThrow("operator tool invocation authority expired");
       source.release();
-      expect(source.authority.assertCurrent).toThrow();
     } finally {
       resume.resolve();
       (await settled)?.release();
@@ -447,7 +443,11 @@ describe("typed in-process agent continuation authorization", () => {
           agentId: "main",
           sessionKey: "agent:main:requester",
           operationalRunInstance: createOperationalRunInstanceRef("reply-requester"),
-          receiptAuthority: () => receiptCurrent,
+          receiptAuthority: () => {
+            if (!receiptCurrent) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
           operatorAuthority: operator.authority,
           personalToolParticipants: participants,
         };
@@ -597,7 +597,9 @@ describe("typed in-process agent continuation authorization", () => {
               agentId: "main",
               sessionKey: "agent:main:requester",
               operationalRunInstance: createOperationalRunInstanceRef("finished-spawner"),
-              receiptAuthority: () => false,
+              receiptAuthority: () => {
+                throw new Error("agent tool caller authority is no longer active");
+              },
               operatorAuthority: source.authority,
             },
             () => {

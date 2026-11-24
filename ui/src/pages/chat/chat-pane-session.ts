@@ -10,6 +10,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { displaySessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import {
   summarizeSessionPullRequests,
   sessionPullRequestsForGateway,
@@ -96,6 +97,12 @@ export abstract class ChatPaneSession extends ChatPaneCatalog {
 
   protected get visibleSessionPullRequests(): ControlUiSessionPullRequest[] {
     return this.sessionPullRequests.filter(
+      (pullRequest) => !this.repository.dismissedIds.has(chatPullRequestId(pullRequest)),
+    );
+  }
+
+  protected get visibleDetailsPullRequests() {
+    return displaySessionPullRequests(this.readPullRequestSnapshot()).filter(
       (pullRequest) => !this.repository.dismissedIds.has(chatPullRequestId(pullRequest)),
     );
   }
@@ -220,7 +227,7 @@ export abstract class ChatPaneSession extends ChatPaneCatalog {
   }
 
   protected readonly dismissSessionPullRequest = (
-    pullRequest: ControlUiSessionPullRequest,
+    pullRequest: Parameters<typeof chatPullRequestId>[0],
   ): void => {
     this.dismissSessionPullRequestId(chatPullRequestId(pullRequest));
   };

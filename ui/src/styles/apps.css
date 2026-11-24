@@ -47,6 +47,16 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   gap: var(--space-4, 16px);
 }
 
+/* A native setup report belongs to Chrome, not to the neighboring Plugins card. */
+.apps-grid:has(.native-chrome-setup) {
+  align-items: start;
+}
+
+/* An ordinary browser has no native controls and needs no flex gap for them. */
+.apps-card__body > openclaw-native-chrome-setup:empty {
+  display: none;
+}
+
 .apps-card {
   display: flex;
   flex-direction: column;

@@ -523,6 +523,31 @@ it.each([false, true])(
 );
 
 it.each([true, false])("unreadable migration preserves availability (JSON: %s)", async (json) => {
+  const storePath = path.join(
+    process.env.OPENCLAW_STATE_DIR!,
+    "agents",
+    "main",
+    "sessions",
+    "sessions.json",
+  );
+  const migration = createMigration(process.env, [
+    {
+      agentId: "main",
+      storePath,
+      sqlitePath: path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      ),
+    },
+  ]);
+  migration.manifest.completedAt = migration.manifest.startedAt;
+  migration.manifest.targets[0]!.issues = [
+    { code: "entry_invalid", message: "Missing sessionId." },
+  ];
+  writeMigration(migration);
   await recordMigrations({
     pending: [
       {
@@ -542,9 +567,13 @@ it.each([true, false])("unreadable migration preserves availability (JSON: %s)",
       availability: expect.any(Object),
       migrationWarningsError: expect.any(String),
     });
-    expect(result).not.toHaveProperty("migrationWarnings");
+    expect(result.migrationWarnings).toEqual([`${storePath}: [entry_invalid] Missing sessionId.`]);
   } else {
-    expectOutput("OpenClaw update status", "Pending migration status unavailable:");
+    expectOutput(
+      "OpenClaw update status",
+      "Pending migration status unavailable:",
+      "Missing sessionId.",
+    );
   }
 });
 

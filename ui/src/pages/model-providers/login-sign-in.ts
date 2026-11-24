@@ -53,13 +53,15 @@ export function createLoginSignIn(
   const { runner } = host;
   let mode: "auth" | "activate" | "access" = "auth";
   let authProviderId: string | undefined;
+  let authProviderLabel: string | undefined;
   // The last started sign-in, so a typed failure can offer to start it again.
-  let restart: (() => void) | undefined;
+  let lastSignIn: { selectModel: boolean; restart: () => void } | undefined;
   // Who started the running sign-in. Only the same owner resumes it after a reconnect.
   let owner: { recoveryScope: string | null; agentId: string | null } | undefined;
   // The record of the running sign-in, cleared once the Gateway no longer has it.
   let record: FirstRunActivationReceipt | null = null;
   let restoring = false;
+  let resumeAdmission: object | undefined;
 
   const receiptContext = ({ context, agentId }: LoginScope) => ({
     gateway: context.gateway,
@@ -87,16 +89,20 @@ export function createLoginSignIn(
       return;
     }
     authProviderId = canonicalModelAuthProviderId(selected.authProvider);
+    authProviderLabel = kind === "secret" ? undefined : selected.groupLabel;
     // Browser and device sign-ins can select a model; a pasted secret only saves. A
     // credential-only sign-in still succeeds when its account offers no usable model.
-    const selectingModel = allowSetup && kind !== "secret";
-    mode = selected.requiresSetup ? (selectingModel ? "activate" : "access") : "auth";
+    const selectModel = allowSetup && kind !== "secret";
+    mode = selected.requiresSetup ? (selectModel ? "activate" : "access") : "auth";
     const { id, label, brandId } = selected;
-    restart = () => {
-      runner.prepareSignIn(kind, label, brandId);
-      void host.run(() =>
-        runner.start(id, "models.authLogin", selectingModel ? { selectModel: true } : {}),
-      );
+    lastSignIn = {
+      selectModel,
+      restart: () => {
+        runner.prepareSignIn(kind, label, brandId);
+        void host.run(() =>
+          runner.start(id, "models.authLogin", selectModel ? { selectModel } : {}),
+        );
+      },
     };
   }
 
@@ -111,7 +117,7 @@ export function createLoginSignIn(
     own(scope);
     record = persistFirstRunActivationReceipt(receiptContext(scope), {
       kind: intent.kind,
-      wizard: intent.wizard,
+      wizard: { ...intent.wizard, selectModel: lastSignIn?.selectModel },
     });
     return observe(record);
   }
@@ -153,13 +159,30 @@ export function createLoginSignIn(
 
   /** Any error after a resume means the Gateway no longer has the sign-in: forget it. */
   function resume(): void {
+    if (resumeAdmission) {
+      return;
+    }
+    // Admission publishes before the runner clears its suspended state. Claim it
+    // first so those publications cannot enqueue another resume of the same sign-in.
+    const admission = {};
+    resumeAdmission = admission;
+    const release = () => {
+      if (resumeAdmission === admission) {
+        resumeAdmission = undefined;
+      }
+    };
     void host
-      .run(() => runner.resume(), true)
+      .run(() => {
+        const completion = runner.resume();
+        release();
+        return completion;
+      }, true)
       .then(() => {
         if (runner.state.phase === "error" && !runner.hasAdmittedSession) {
           clearFirstRunActivationReceipt(record);
         }
-      });
+      })
+      .finally(release);
   }
 
   /** A sign-in recorded before a reload reopens once this page can continue it. */
@@ -210,7 +233,7 @@ export function createLoginSignIn(
       // The record stays; the next connection or config change tries again.
       return;
     }
-    const allowSetup = host.allowSetup();
+    const allowSetup = recovery.selectModel ?? host.allowSetup();
     const selected = host
       .loginProviders(undefined, authStatus, allowSetup)
       .flatMap((group) => group.choices)
@@ -234,9 +257,9 @@ export function createLoginSignIn(
     /** Starts the chosen sign-in. */
     choose(selected: LoginChoice, allowSetup: boolean): void {
       adopt(selected, allowSetup);
-      restart?.();
+      lastSignIn?.restart();
     },
-    restart: () => restart?.(),
+    restart: () => lastSignIn?.restart(),
     get mode() {
       return mode;
     },
@@ -246,6 +269,9 @@ export function createLoginSignIn(
     get authProviderId() {
       return authProviderId;
     },
+    get authProviderLabel() {
+      return authProviderLabel;
+    },
     /** A running sign-in its owner can still resume survives a connection or agent change. */
     get active(): boolean {
       return owner !== undefined && runner.hasAdmittedSession;
@@ -254,6 +280,7 @@ export function createLoginSignIn(
       owner = undefined;
       mode = "auth";
       authProviderId = undefined;
+      authProviderLabel = undefined;
     },
   };
 }

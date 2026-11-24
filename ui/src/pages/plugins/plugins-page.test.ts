@@ -14,6 +14,7 @@ import type {
   PluginListResult,
   PluginMutationResult,
 } from "../../lib/plugins/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
@@ -134,6 +135,50 @@ async function mountInventory(
     find: queryWithin(page),
   };
 }
+
+it.each([true, false])(
+  "limits provider sign-in to plugin settings (declared=%s)",
+  async (declared) => {
+    await import("./settings-view.tsx");
+    const plugin = createPlugin({ enabled: true, state: "enabled" });
+    const result = createResult(plugin);
+    const inspection = createInspectResult({
+      plugin: { id: plugin.id, name: plugin.name, installed: true, enabled: true },
+      ...(declared ? { providerSignIn: true } : {}),
+    });
+    const { client } = scriptedClient({
+      "plugins.inspect": () => inspection,
+      "plugins.list": () => result,
+    });
+    const harness = createGateway(client);
+    harness.emit(client, true, {
+      hello: gatewayHelloForMethods(["plugins.inspect", "plugins.list", "models.authLogin"]),
+    });
+    const detail = "/settings/plugins/workboard";
+    const context = createContext(harness.gateway);
+    const { page } = await mountPage(context, routeFor(harness.gateway, result, detail));
+    const signIn = () =>
+      Array.from(page.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.trim() === "Sign in",
+      );
+    await waitForText(page, plugin.name, "h1");
+    expect(signIn()).toBeUndefined();
+
+    page.routeData = routeFor(harness.gateway, result, `${detail}?view=settings`);
+    await waitForSolid(() =>
+      expect(page.querySelector('input[aria-label="Search settings"]')).not.toBeNull(),
+    );
+    if (declared) {
+      await waitForSolid(() => expect(signIn()).toBeDefined());
+      signIn()!.click();
+      expect(context.navigate).toHaveBeenCalledWith("model-providers", {
+        search: "?connect=1&plugin=workboard",
+      });
+    } else {
+      expect(signIn()).toBeUndefined();
+    }
+  },
+);
 
 it.each([
   { suffix: "", refreshBeforeEnable: false },

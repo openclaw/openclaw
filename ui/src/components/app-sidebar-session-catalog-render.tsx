@@ -118,6 +118,7 @@ function renderCatalogHostGroup(
       agentId: params.snapshot.newSessionAgentId,
       routeId,
       navigation: target().options,
+      profileRelation: readHost().profileRelation,
       canOpenTerminal: readSession().canOpenTerminal === true,
       canDelete: readSession().canArchive && readCatalog().capabilities.archive,
       name: readSession().name ?? readSession().threadId,
@@ -207,6 +208,11 @@ function renderCatalogHostGroup(
                     params.snapshot.newSessionAgentId,
                   );
                 } else {
+                  params.host.prepareSessionNavigation(
+                    key(),
+                    target().options.pathname,
+                    readHost().profileRelation,
+                  );
                   params.host.onNavigate?.(routeId, target().options);
                 }
               })

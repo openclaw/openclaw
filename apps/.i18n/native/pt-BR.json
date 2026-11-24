@@ -335,6 +335,7 @@
     "native.android.2ca936c17640d182": "Desativado para todos os agentes.",
     "native.android.2d208270fa6f9dfb": "Mais antigos primeiro",
     "native.android.2d2ffc024bab2296": "Milissegundos desde a época Unix (opcional)",
+    "native.android.2d32c414b2610a23": "Projeto da sessão",
     "native.android.2d3b2b540314c7c4": "Sem fase",
     "native.android.2d45445f9ff24e2e": "${line.oldLine ?: \"\"} ${line.newLine ?: \"\"} ",
     "native.android.2d4dba9cbde90bf1": "O microfone preferido não está disponível; usando o roteamento automático.",

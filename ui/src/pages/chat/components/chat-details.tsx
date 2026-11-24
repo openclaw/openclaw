@@ -67,8 +67,9 @@ let nextId = 0;
 
 const DETAILS_WIDTH = 300;
 const DETAILS_DESKTOP_INLINE_INSET = 13;
-// Preserve the 48rem reading column plus its gutters before offering automatic docking.
-const DETAILS_DOCK_MIN_WIDTH = 1200;
+// Reserve the default 48rem reading measure and its usual 30px side insets.
+// Classic scrollbars can use a little of that measure without forcing an overlay.
+const DETAILS_DOCK_MIN_WIDTH = 768 + 2 * 30 + DETAILS_WIDTH + DETAILS_DESKTOP_INLINE_INSET;
 
 /** Pane-local adaptive presentation. Data and mutations remain with the pane. */
 export function ChatDetails(props: ChatDetailsViewProps) {

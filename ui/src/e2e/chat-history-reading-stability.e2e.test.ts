@@ -1,7 +1,11 @@
 import { webkit, type Browser, type BrowserContext } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 let webkitBrowser: Browser;
 const suite = createControlUiE2eSuite({
@@ -46,6 +50,67 @@ function message(seq: number) {
 }
 
 suite.define(() => {
+  it("does not select or paint the gap between turns in WebKit", async () => {
+    const first = "Select this message without painting its image or surrounding space.";
+    const last = "Selection ends here, with only the conversation text highlighted.";
+    const context = await webkitBrowser.newContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      await installMockGateway(page, {
+        historyMessages: [chatMessage("user", first), chatMessage("assistant", last)],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const prompt = page.getByText(first, { exact: true });
+      const reply = page.getByText(last, { exact: true });
+      await reply.waitFor();
+      const gap = await prompt.evaluate((element) => {
+        const group = element.closest(".chat-group")!.getBoundingClientRect();
+        const row = element.closest(".chat-virtual-row")!.getBoundingClientRect();
+        return {
+          x: Math.floor(row.left + row.width / 2),
+          y: Math.floor((group.bottom + row.bottom) / 2),
+        };
+      });
+      const gapPixels = () => page.screenshot({ clip: { ...gap, width: 8, height: 2 } });
+      await page.mouse.move(gap.x, gap.y);
+      const neutral = await gapPixels();
+      await page.mouse.dblclick(gap.x, gap.y);
+      expect(await page.evaluate(() => document.getSelection()?.isCollapsed)).toBe(true);
+
+      // A real text drag may cross this same gap without tinting it.
+      const from = (await prompt.boundingBox())!;
+      const to = (await reply.boundingBox())!;
+      await page.mouse.move(from.x + 2, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(to.x + 20, to.y + to.height / 2, { steps: 8 });
+      await page.mouse.up();
+      const selected = await page.evaluate(() => document.getSelection()?.toString());
+      expect(selected).toContain(first.slice(2));
+      expect(selected).toContain(last.slice(0, 2));
+      expect(await gapPixels()).toEqual(neutral);
+      await page.mouse.click(gap.x, gap.y);
+      expect(await page.evaluate(() => document.getSelection()?.isCollapsed)).toBe(true);
+
+      // A drag can also start in the blank margin and extend back into text.
+      expect(
+        await page.evaluate(
+          ({ x, y }) => document.elementFromPoint(x, y)?.matches(".chat-virtual-row, .chat-group"),
+          gap,
+        ),
+      ).toBe(true);
+      await page.mouse.move(gap.x, gap.y);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 2, from.y + from.height / 2, { steps: 8 });
+      await page.mouse.up();
+      expect(await page.evaluate(() => document.getSelection()?.toString().trim())).toContain(
+        "this message without painting",
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each([
     { engine: "chromium", width: 390 },
     { engine: "webkit", width: 390 },

@@ -220,6 +220,7 @@ export async function runExecProcess({
   githubProfileDir?: string;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
+  workerMemoryBoundary?: "sandbox";
   containerWorkdir?: string | null;
   usePty: boolean;
   warnings: string[];
@@ -263,7 +264,7 @@ export async function runExecProcess({
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
   startupSignal?.throwIfAborted();
-  let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
+  const operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
@@ -559,12 +560,11 @@ export async function runExecProcess({
       target: diagnosticTarget,
     });
   const spawn = async (input: SpawnInput) => {
-    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
     const assertRuntimeCurrent = assertSandboxCurrent;
     const assertHostPolicyCurrent = assertPolicyCurrent;
     const assertCurrent = () => {
       startupSignal?.throwIfAborted();
-      assertOperatorCurrent?.();
+      operatorSignal?.throwIfAborted();
       assertRuntimeCurrent?.();
     };
     // Source authority covers construction; approval policy ends at native launch.
@@ -621,7 +621,6 @@ export async function runExecProcess({
     session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
   }
   try {
-    operatorAuthority?.assertCurrent();
     releaseOperatorAuthority = operatorAuthority?.retain?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
@@ -634,6 +633,7 @@ export async function runExecProcess({
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
+      workerMemoryBoundary: opts.workerMemoryBoundary,
       captureOutput: false,
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
@@ -692,7 +692,6 @@ export async function runExecProcess({
   } finally {
     launchLifecycle.dispose();
     assertPolicyCurrent = undefined;
-    operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
     prepareSandboxCurrent = undefined;
   }

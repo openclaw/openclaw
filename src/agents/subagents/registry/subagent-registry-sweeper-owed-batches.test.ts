@@ -108,7 +108,6 @@ it("settles ready results from overlapping yielded batches without consuming mes
         delivery: {
           status: index < 11 || !member ? "delivered" : "pending",
           ...(index >= 40 && index < 58 ? { lastDropReason: "sink_unavailable" } : {}),
-          ...(paused || killed ? { disposition: "intentional_non_delivery" } : {}),
         },
         ...(member && !killed
           ? {
@@ -191,7 +190,6 @@ it("settles ready results from overlapping yielded batches without consuming mes
         expect(["delivered", "failed"], id(index)).toContain(current?.delivery?.status);
         if (current?.delivery?.status === "failed") {
           expect(current.delivery).toMatchObject({
-            disposition: "permanent_failure",
             lastError: expect.any(String),
             payload: { childRunId: id(index) },
           });

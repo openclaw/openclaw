@@ -6,6 +6,7 @@ import {
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
+import { CRABBOX_SANDBOX_TYPES } from "./crabbox-worker-machine-types.js";
 import {
   type CrabboxMachineShape,
   type CrabboxOperatingSystem,
@@ -137,9 +138,11 @@ export function createCrabboxMachineOptionsResolver(
   return {
     async listMachineOptions(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
+      const sandbox = parsed.provider === "azure-sandbox";
+      const shapes = sandbox ? CRABBOX_SANDBOX_TYPES : catalog?.machines;
       return listCrabboxMachineOptions(
-        parsed.class,
-        catalog?.machines.filter(({ os }) => isCrabboxSetupTargetCompatible(parsed, os)),
+        parsed.type ?? (sandbox && parsed.class ? "2cpu-4gib" : parsed.class),
+        catalog && shapes?.filter(({ os }) => isCrabboxSetupTargetCompatible(parsed, os)),
       );
     },
     async listOperatingSystems(profile) {

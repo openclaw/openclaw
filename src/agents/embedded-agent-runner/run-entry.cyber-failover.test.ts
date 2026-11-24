@@ -118,7 +118,6 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
       const authority = createTestOperatorAuthority({
         profileId: "fallback-role",
         scopes: [scope],
-        assertCurrent() {},
         rolePolicy: {
           sessionAccessCap: "none",
           sandboxRequired: false,

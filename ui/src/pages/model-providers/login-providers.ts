@@ -32,11 +32,13 @@ export type LoginProvider = {
 
 export function buildLoginProviders({
   providers,
+  pluginId,
   authStatus,
   allowQuickApiKey,
   manualProviders,
 }: {
   providers?: string[];
+  pluginId?: string;
   authStatus?: ModelAuthStatusResult | null;
   allowQuickApiKey: boolean;
   manualProviders?: SystemAgentSetupDetectResult["manualProviders"];
@@ -62,6 +64,9 @@ export function buildLoginProviders({
     }
     const loginOptions = capability.loginOptions ?? [];
     for (const option of loginOptions) {
+      if (pluginId && option.pluginId !== pluginId) {
+        continue;
+      }
       const group = ensureGroup(option.brandId, capability.provider);
       group.label ||= option.groupLabel?.trim() ?? "";
       if (!choices.has(option.id)) {
@@ -74,10 +79,11 @@ export function buildLoginProviders({
     );
     // Quick-key support is independent of wizard choices. Keep the exact
     // capability owner for the key form even when its login brand is an alias.
-    if (capability.quickApiKeySetup && allowQuickApiKey) {
+    if (!pluginId && capability.quickApiKeySetup && allowQuickApiKey) {
       for (const id of brands) {
         const group = ensureGroup(id, capability.provider);
         group.apiKeyProvider ??= capability.provider;
+        group.label ||= capability.quickApiKeyGroupLabel ?? "";
       }
     }
     for (const id of brands) {
@@ -87,7 +93,7 @@ export function buildLoginProviders({
       }
     }
   }
-  for (const option of manualProviders ?? []) {
+  for (const option of (pluginId ? undefined : manualProviders) ?? []) {
     const id = option.brandId ?? option.id;
     if (choices.has(option.id) || (providers && !providers.includes(id))) {
       continue;
@@ -125,6 +131,18 @@ export function providerAccounts(group: LoginProvider, authStatus?: ModelAuthSta
         group.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
       )
     : [];
+}
+
+export function filterLoginProviders(groups: LoginProvider[], query: string): LoginProvider[] {
+  const search = query.trim().toLocaleLowerCase().normalize("NFC");
+  return groups.filter((group) =>
+    [
+      group.id,
+      group.label,
+      ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
+      ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
+    ].some((text) => text.toLocaleLowerCase().normalize("NFC").includes(search)),
+  );
 }
 
 /** One way in and nothing saved: the method step would be a single button, so skip it. */

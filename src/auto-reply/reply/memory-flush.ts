@@ -16,7 +16,7 @@ import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-export { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
+export { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 
 export function resolveProjectedPromptTokens(
   persistedPromptTokens: number | undefined,
@@ -72,7 +72,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
     contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
   };
   if (normalizedProvider === "anthropic") {
-    // The default Anthropic trigger sits below the local threshold, so only an explicit opt-in
+    // The default Anthropic trigger matches the local threshold on documented windows, so only an explicit opt-in
     // (which may target any Claude model or a raised trigger) needs local compaction held back.
     if (extraParams.anthropicServerCompaction !== true) {
       return undefined;

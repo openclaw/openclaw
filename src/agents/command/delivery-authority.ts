@@ -1,8 +1,5 @@
 // Authority checks at final platform handoff and restart-only transport cancellation.
-import {
-  CommandOwnerRevokedError,
-  type CommandOwnerAssertion,
-} from "../../auto-reply/command-owner-authority.js";
+import type { CommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
   prepareSessionSourceScope,
@@ -57,9 +54,8 @@ export function createAgentCommandDeliveryGuard(
       isAgentRunRestartAbortReason(error) ||
       (isAgentRunRestartAbortReason(params.opts.abortSignal?.reason) &&
         completion?.commandOwnerReference != null &&
-        (error instanceof CommandOwnerRevokedError ||
-          (isSessionWorkStartInvalidatedError(error) &&
-            error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE)));
+        isSessionWorkStartInvalidatedError(error) &&
+        error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE);
     throw new PlatformMessageNotDispatchedError(
       error instanceof Error ? error.message : "Agent final delivery source check failed",
       { cause: error, retryable },
