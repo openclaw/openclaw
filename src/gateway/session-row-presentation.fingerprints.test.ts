@@ -274,6 +274,9 @@ it("retains nested publication facts across real transcript writes without hidin
       );
     }
     const retained = record.materialized;
+    expect(
+      replaceSessionRowFacts(retained, { toolOverrides: { mcpToolsDeny: { b: ["b"], a: ["a"] } } }),
+    ).toBe(retained);
     const cleared = replaceSessionRowFacts(retained, {
       toolOverrides: undefined,
       lastAssistantMessage: undefined,

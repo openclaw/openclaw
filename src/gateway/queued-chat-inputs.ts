@@ -1,13 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
-import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
+import {
+  parseSessionPendingInputMessage,
+  readOwedKind,
+} from "../config/sessions/session-pending-input-value.js";
 import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -80,6 +85,22 @@ export async function continueSessionQueuedInputs(
     let dispatchAttempted = false;
     try {
       const message = parseSessionPendingInputMessage(row.message_json);
+      const owedKind = readOwedKind(row.message_json);
+      const owedText = message.content;
+      if (owedKind && typeof owedText === "string") {
+        // A result owed to this chat wakes its turn from the stored row; that turn appends it once.
+        // Like the live wake, one failed attempt gets one retry from the stored row.
+        const owed = {
+          id: row.idempotency_key,
+          to: chatRef(target),
+          kind: owedKind,
+          text: owedText,
+        };
+        withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+          wakeOwedExec(owed, {}, undefined, 1),
+        );
+        return undefined;
+      }
       if (message["__openclaw"]?.activeSteer) {
         // Native delivery may have succeeded before a crash. Never replay into any run.
         await failQueuedInput(target, row, assertCurrent, "restart-unrecoverable");

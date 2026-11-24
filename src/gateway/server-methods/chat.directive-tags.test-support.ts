@@ -4,6 +4,10 @@ import path from "node:path";
 import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES as MODES,
+  GATEWAY_CLIENT_NAMES as NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
@@ -40,6 +44,16 @@ export const handedOffDashboardSession = {
   parentSessionKey: "agent:main:main",
   spawnDepth: 1,
 } as const;
+
+/** `local: "resumed"` sends the Control UI reconnect marker; admission matches a fresh send. */
+export const lazyChatCronAuthorityCases = [
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", true],
+  [NAMES.CLI, MODES.CLI, "darwin", "operator.admin", true],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", false],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.write", true],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.cron", false],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", "resumed"],
+] as const;
 
 export const deniedChatCronAuthorityCases = [
   {

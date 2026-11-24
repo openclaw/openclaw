@@ -233,8 +233,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, 'utf8'));
     childRole: "normalCi",
     jobName: "synthetic Q-only leaf",
     reason: "Synthetic regression fixture",
-    aggregates: [],
-    evidence: { runId: "42", runAttempt: 2 },
+    step: "Synthetic failing step",
   };
   const writePolicy = (waivers: (typeof grant)[], corrupt = false) => {
     const bytes = Buffer.from(
@@ -254,7 +253,12 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, 'utf8'));
       }),
     );
   };
-  const failedJob = { name: grant.jobName, status: "completed", conclusion: "failure" };
+  const failedJob = {
+    name: grant.jobName,
+    status: "completed",
+    conclusion: "failure",
+    firstIncompleteStep: grant.step,
+  };
   const currentManifest = {
     ...manifest,
     workflowSha: q,
@@ -324,7 +328,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, 'utf8'));
     writePolicy([grant]);
     const accepted = run(args);
     expect(accepted.status, accepted.stderr).toBe(0);
-    writePolicy([{ ...grant, evidence: { runId: "42", runAttempt: 1 } }]);
+    writePolicy([{ ...grant, step: "Wrong step" }]);
     const stale = run(args);
     expect(stale.status, stale.stderr).toBe(1);
     expect(stale.stderr).toContain("failed selected job evidence");

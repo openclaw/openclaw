@@ -11,7 +11,11 @@ import {
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { verifyReceiptRecoveryAuthority } from "./lib/release-evidence-identity.mjs";
+import {
+  releaseEvidenceProducerTuple,
+  retainedPublicationArtifactSource,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
@@ -199,7 +203,7 @@ function validatePublicationEvidence(options, evidence) {
   ) {
     throw new Error("Publication consumer differs from the authenticated release run.");
   }
-  if (current.conclusion !== "success") {
+  if (current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (manifest.version !== 4) {
@@ -304,6 +308,8 @@ function validatePublicationEvidence(options, evidence) {
  * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest"> & {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
+ *   fastTrackApproval?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
  *   npmPreflightLineage?: { qualificationSha: string, producerRunId: string, producerRunAttempt: string },
@@ -316,6 +322,8 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   const evidence = await validateReleaseRunEvidence(
     {
       repository: options.expectedRepository,
+      fastTrackApproval: options.fastTrackApproval ?? process.env.FAST_TRACK_APPROVAL_JSON,
+      fastTrackPublication: options.fastTrackPublication,
       runId: String(options.expectedRunId),
       manifestPath: options.manifestPath,
       trustedWorkflowFullRef: options.expectedTrustedWorkflowFullRef,
@@ -327,7 +335,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     },
     evidenceClient,
   );
-  if (evidence.current.conclusion !== "success") {
+  if (evidence.current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (evidence.current.runAttempt !== run.runAttempt) {
@@ -453,11 +461,16 @@ export function revalidateCandidateArtifactAuthority(authority, evidenceClient) 
 
 function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence) {
   const qualification = evidence.qualification;
+  const producer = releaseEvidenceProducerTuple(manifest);
   if (
     qualification.candidateSha !== candidateSha ||
-    qualification.qualificationSha !== qualificationSha ||
-    evidence.current.runAttempt !== Number(manifest.runAttempt) ||
-    evidence.current.conclusion !== "success" ||
+    qualification.qualificationSha !==
+      (manifest.publicationArtifactSource ? manifest.workflowSha : qualificationSha) ||
+    (manifest.publicationArtifactSource &&
+      retainedPublicationArtifactSource(manifest)?.workflow.sha !== qualificationSha) ||
+    String(evidence.current.runId) !== String(producer.runId) ||
+    evidence.current.runAttempt !== Number(producer.runAttempt) ||
+    (evidence.current.conclusion !== "success" && !evidence.fastTrack) ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");
@@ -480,6 +493,7 @@ export async function authenticateCandidateOwnedArtifact({
   publisherSha,
   publisherFullRef = "refs/heads/main",
   client,
+  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
 }) {
   const recovery = manifest?.receiptRecovery;
   if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
@@ -488,10 +502,12 @@ export async function authenticateCandidateOwnedArtifact({
     );
   }
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);
+  const producer = releaseEvidenceProducerTuple(manifest);
   const evidence = await validateReleaseRunEvidence(
     {
       repository,
-      runId: String(manifest.runId),
+      fastTrackApproval,
+      runId: String(producer.runId),
       trustedWorkflowFullRef: publisherFullRef,
       trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
       trustedWorkflowSha: publisherSha,

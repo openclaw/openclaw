@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { validateReleaseManifestAdvisoryJobs } from "../full-release-validation-policy.mjs";
 import { isRecord } from "./record-shared.mjs";
+import type { bindFastTrackApproval } from "./release-fast-track-publication.mts";
 import { readReleaseManifestWaivers } from "./release-manifest-waivers.mts";
 import { resolveReleasePublishInputs } from "./release-publish-inputs.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
@@ -36,9 +37,11 @@ export function evaluateReleasePublishGates(input: {
   consumer: ReleasePublishConsumer;
   expectedSha?: string;
   expectedReleaseProfile?: string;
+  fastTrack?: ReturnType<typeof bindFastTrackApproval>;
   readWorkflowSource?: (sha: string, path: string) => string;
 }): ReleasePublishGate[] {
   const { manifest, consumer } = input;
+  const fastTrack = input.fastTrack;
   const gates: ReleasePublishGate[] = [];
   const add = (id: string, pass: boolean, message: string, remediation: string) => {
     gates.push({
@@ -98,6 +101,24 @@ export function evaluateReleasePublishGates(input: {
         "Use release_profile=from-validation or select matching validation evidence.",
       );
     }
+  }
+  // The evidence owner independently authenticates policy/admission/artifacts before these
+  // result-only gates. A packet never changes source/channel/SDK/package integrity above.
+  if (fastTrack) {
+    if (
+      fastTrack.request.releaseTag !== input.releaseTag ||
+      fastTrack.request.channel !== input.npmDistTag ||
+      (input.expectedSha && fastTrack.request.candidateSha !== input.expectedSha)
+    ) {
+      throw new Error("Fast-track approval does not cover this publication operation.");
+    }
+    gates.push({
+      id: `${consumer}.fast-track`,
+      status: "WARN",
+      message: "validation skipped by approved fast-track",
+      remediation: `Retain explicit human decision: ${fastTrack.approval.url}`,
+    });
+    return gates;
   }
   add(
     "rerun-group",
@@ -246,7 +267,7 @@ export function evaluateStableRollbackDrill(input: {
   return gates;
 }
 
-function main() {
+async function main() {
   const { values } = parseArgs({
     options: {
       consumer: { type: "string" },
@@ -267,6 +288,16 @@ function main() {
     targetSha: env.EXPECTED_SHA,
     npmDistTag: env.RELEASE_NPM_DIST_TAG,
   });
+  let fastTrack;
+  if (env.FAST_TRACK_APPROVAL_JSON) {
+    const { bindFastTrackApproval, fastTrackAdmissionTime } =
+      await import("./release-fast-track-publication.mts");
+    fastTrack = bindFastTrackApproval(
+      env.FAST_TRACK_APPROVAL_JSON,
+      manifest,
+      await fastTrackAdmissionTime(env.FAST_TRACK_APPROVAL_JSON),
+    );
+  }
   const gates = evaluateReleasePublishGates({
     manifest,
     consumer,
@@ -274,6 +305,7 @@ function main() {
     npmDistTag: env.RELEASE_NPM_DIST_TAG ?? "",
     expectedSha: env.EXPECTED_SHA,
     expectedReleaseProfile: env.EXPECTED_RELEASE_PROFILE,
+    fastTrack,
   });
   for (const gate of gates) {
     if (gate.status === "FAIL") {
@@ -296,7 +328,7 @@ function main() {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     console.error("[release-publish-gates] FAILED (exit 1)");

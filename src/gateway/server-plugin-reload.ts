@@ -29,6 +29,7 @@ import {
   getGatewayRestartDrainSignal,
   waitForGatewayRestartFenceSettlement,
 } from "../process/gateway-work-admission.js";
+import { broadcastPluginRegistryChanged } from "./events.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { preparePluginNodeCapabilityPublication } from "./plugin-node-capability.js";
 import type * as PluginBootstrap from "./server-plugin-bootstrap.js";
@@ -427,11 +428,7 @@ export async function reloadGatewayPlugins(
             },
             afterCommit: () => {
               try {
-                broadcast(
-                  "plugins.changed",
-                  { generation: getPluginRegistryVersion(nextRegistry) },
-                  { dropIfSlow: true },
-                );
+                broadcastPluginRegistryChanged(broadcast, getPluginRegistryVersion(nextRegistry));
               } catch (error) {
                 activationErrors.push(error);
               }
@@ -606,10 +603,9 @@ export async function reloadGatewayPlugins(
                 await attempt(recoveryErrors, () =>
                   services.resumeMemory(memoryReplacement, previousConfig),
                 );
-                broadcast(
-                  "plugins.changed",
-                  { generation: getPluginRegistryVersion(restoredRegistry) },
-                  { dropIfSlow: true },
+                broadcastPluginRegistryChanged(
+                  broadcast,
+                  getPluginRegistryVersion(restoredRegistry),
                 );
               } else {
                 // Restored preparation must be able to retain the still-callable instances.

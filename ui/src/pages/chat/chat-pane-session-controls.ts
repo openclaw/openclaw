@@ -160,7 +160,7 @@ export function renderChatPaneComposerControls(params: {
   contextWindowAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
-  onModelSetup: () => void;
+  onModelSetup: (provider?: string) => void;
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {

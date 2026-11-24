@@ -7,12 +7,17 @@ import type * as UpdateCliShared from "../cli/update-cli/shared.js";
 import type * as ConfigMutate from "../config/mutate.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import type { CallGatewayOptions } from "../gateway/call-options.js";
+import * as openclawRoot from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
-import { runReleaseUpdateCli } from "./cli.js";
-import { resolvePrefix, switchLink } from "./store.js";
+import {
+  runReleaseUpdateCli,
+  tryAdoptInstalledPackageForGateway,
+  waitForReleaseUpdateFailure,
+} from "./cli.js";
+import { createTrialPending, resolvePrefix, switchLink } from "./store.js";
 import type * as TargetModule from "./target.js";
 
 let home: TempHomeEnv;
@@ -90,6 +95,7 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
   getUpdateRunAsync: async () => ({
     ...localRun,
+    before: { version: "2026.11.8" },
     runId: "run-cli",
     reason: "already-current",
     steps: [],
@@ -472,4 +478,117 @@ it("prepares locally when the local Gateway has no usable credentials", async ()
   });
   expect(prepared).toEqual([expect.objectContaining({ runningRoot: root })]);
   expect(process.exitCode).toBe(0);
+});
+
+it.each([
+  { version: "2026.11.10", target: true, action: undefined, pending: false },
+  { version: "2026.11.7", target: false, action: undefined, pending: false },
+  { version: "2026.11.10", target: true, action: "restart", pending: false },
+  { version: "2026.11.10", target: false, action: "start", pending: true },
+] as const)(
+  "lets the resident update from npm $version without an implicit downgrade ($action, pending=$pending)",
+  async ({ version, target, action, pending }) => {
+    const npmPrefix = path.join(home.home, "npm");
+    const frontend = path.join(
+      npmPrefix,
+      ...(process.platform === "win32" ? [] : ["lib"]),
+      "node_modules",
+      "openclaw",
+    );
+    const npmBin = process.platform === "win32" ? npmPrefix : path.join(npmPrefix, "bin");
+    const resident = path.join(resolvePrefix(), "releases", "resident", "openclaw");
+    await fs.mkdir(frontend, { recursive: true });
+    await fs.mkdir(resident, { recursive: true });
+    await fs.mkdir(npmBin, { recursive: true });
+    await fs.writeFile(path.join(npmBin, process.platform === "win32" ? "npm.cmd" : "npm"), "");
+    await fs.writeFile(
+      path.join(frontend, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    await fs.writeFile(
+      path.join(resident, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.11.8" }),
+    );
+    await switchLink(resident);
+    const receipt = path.join(home.home, "resident-update.json");
+    await fs.writeFile(
+      path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+      `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify(process.argv.slice(2))); if (process.argv.includes("--json")) console.log(JSON.stringify({status:"running",runId:"fixture",phase:"activating"}));`,
+    );
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    if (pending) {
+      await createTrialPending({
+        runId: "prepared-without-forwarding",
+        target: "releases/prepared/openclaw",
+        previous: resident,
+        version,
+      });
+    }
+    if (action) {
+      vi.spyOn(openclawRoot, "resolveOpenClawPackageRoot").mockResolvedValue(frontend);
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      expect(await tryAdoptInstalledPackageForGateway({ json: true, action })).toBe(
+        pending ? "prepared-without-forwarding" : undefined,
+      );
+      expect(stdout).not.toHaveBeenCalled();
+    } else {
+      await runReleaseUpdateCli({ json: false, restart: true, runningRoot: frontend });
+    }
+    if (pending) {
+      await expect(fs.stat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(path.join(frontend, ".openclaw-launcher"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      return;
+    }
+    const args: string[] = JSON.parse(await fs.readFile(receipt, "utf8"));
+    expect(args).toEqual([
+      "update",
+      ...(target ? ["--tag", `file:${frontend}`] : []),
+      ...(action ? ["--json", "--no-restart"] : []),
+    ]);
+    expect(prepared).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(process.exitCode).toBe(0);
+    if (!target) {
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("It was not downgraded"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`openclaw update --tag ${version}`));
+      expect(await fs.readFile(path.join(frontend, ".openclaw-launcher"), "utf8")).toBe(
+        `${path.join(resolvePrefix(), "openclaw-launcher.mjs")}\n`,
+      );
+    }
+  },
+);
+
+it("reports the recorded rollback and serving version after native activation", async () => {
+  runsGet.push(() => ({
+    run: {
+      status: "failed",
+      steps: [
+        {
+          step: "outcome",
+          detail: "2026.11.10 failed to start. Restored 2026.11.8; Gateway ready.",
+        },
+      ],
+      origin: { nextAction: "Candidate crashed after migration." },
+      after: { version: "2026.11.8" },
+    },
+  }));
+  expect(await waitForReleaseUpdateFailure("adopted-run")).toBe(
+    "Update failed: 2026.11.10 failed to start. Restored 2026.11.8; Gateway ready.\nCandidate crashed after migration.",
+  );
+});
+
+it("leaves an unactivated trial pending and names the one activation command", async () => {
+  await createTrialPending({
+    runId: "pending-running-start",
+    target: "releases/new/openclaw",
+    previous: "releases/old/openclaw",
+    version: "2026.11.10",
+  });
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  expect(await waitForReleaseUpdateFailure("pending-running-start")).toBeUndefined();
+  expect(error).toHaveBeenCalledWith(
+    "Gateway 2026.11.8 is still running. OpenClaw 2026.11.10 is prepared. Run: openclaw gateway restart",
+  );
 });

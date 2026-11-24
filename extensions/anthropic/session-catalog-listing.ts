@@ -103,21 +103,25 @@ export async function readLocalClaudeTranscriptPage(
   value: unknown,
   homeDir?: string,
   scanOptions?: { configDir?: string; includeDesktop?: boolean },
+  sourceHomeId?: string,
 ): Promise<Omit<ClaudeSessionTranscriptPage, "hostId" | "label">> {
   const resolvedHome = homeDir ?? resolveClaudeCatalogHomeDir();
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
   const lookupOptions = { ...resolvedScanOptions, sessionId: params.threadId };
+  const matches = (record: { threadId: string; sourceHomeId?: string }) =>
+    record.threadId === params.threadId &&
+    (sourceHomeId === undefined || sourceHomeId === record.sourceHomeId);
   let filePath = (await listClaudeSessions(resolvedHome, lookupOptions)).records.find(
-    (record) => record.threadId === params.threadId,
+    matches,
   )?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
     filePath = (
       await listClaudeSessions(resolvedHome, { ...lookupOptions, forceRefresh: true })
-    ).records.find((record) => record.threadId === params.threadId)?.filePath;
+    ).records.find(matches)?.filePath;
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
@@ -374,6 +378,7 @@ export async function listClaudeSessionCatalog(params: {
 }
 
 export async function readClaudeSessionTranscript(params: {
+  sourceHomeId?: string;
   runtime: PluginRuntime;
   hostId: string;
   threadId: string;
@@ -395,6 +400,7 @@ export async function readClaudeSessionTranscript(params: {
         },
         resolveClaudeCatalogHomeDir(),
         gatewayClaudeScanOptions(params.allowProcessHomeFallback),
+        params.sourceHomeId,
       )),
     };
   }
