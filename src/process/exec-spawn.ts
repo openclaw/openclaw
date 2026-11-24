@@ -24,6 +24,7 @@ import {
   hasCommandProcessCleanupError,
   type SpawnResult,
 } from "./exec-result.js";
+import type { CommandProcessInvocationPolicy, SpawnCommandOptions } from "./exec-spawn.types.js";
 import { killProcessTree } from "./kill-tree.js";
 import { prepareAgentCoreDumpLimit } from "./linux-core-dump.js";
 import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
@@ -242,6 +243,7 @@ type CommandProcessScope = {
   cleanups: Set<Promise<void>>;
   failure?: { error: unknown };
   custody?: CommandProcessCustody;
+  invocationPolicy?: CommandProcessInvocationPolicy;
 };
 
 const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
@@ -290,6 +292,7 @@ export async function withCommandProcessScope<T>(
   run: (stop: () => void) => Promise<T>,
   signal?: AbortSignal,
   custody?: CommandProcessCustody,
+  invocationPolicy?: CommandProcessInvocationPolicy,
 ): Promise<T> {
   const parent = commandProcessScope.getStore();
   const controller = new AbortController();
@@ -299,6 +302,7 @@ export async function withCommandProcessScope<T>(
     children: new Set(),
     cleanups: new Set(),
     custody: custody ?? parent?.custody,
+    invocationPolicy: invocationPolicy ?? parent?.invocationPolicy,
   };
   const stop = () => {
     controller.abort();
@@ -585,17 +589,6 @@ export function shouldSpawnWithShell(params: {
   return false;
 }
 
-type SpawnCommandOptions = CommandSpawnOptions & {
-  executionIntent?: ProcessExecutionIntent;
-  executionScopeKey?: string;
-  baseEnv?: NodeJS.ProcessEnv;
-  /** Operation-owned output of resolveCommandEnv; no ambient environment is merged again. */
-  preparedEnv?: NodeJS.ProcessEnv;
-  executionTimeoutMs?: number;
-  /** The command runner routes scope cancellation through its termination owner. */
-  inheritScopeCancellation?: boolean;
-};
-
 function commandCreatesChildPipes(
   options: Pick<
     ExecaOptions,
@@ -663,10 +656,13 @@ export function spawnCommandWithInvocation<
     ...execaOptions
   }: SpawnCommandOptions = options;
   const commandEnv = preparedEnv ?? resolveCommandEnv({ argv, baseEnv, env });
-  const invocation = resolveSafeChildProcessInvocation({
+  const command = scope?.invocationPolicy?.({ argv, cwd: execaOptions.cwd, env: commandEnv }) ?? {
     argv,
-    cwd: execaOptions.cwd,
     env: commandEnv,
+  };
+  const invocation = resolveSafeChildProcessInvocation({
+    ...command,
+    cwd: execaOptions.cwd,
     windowsVerbatimArguments,
   });
   const commandOptions: CommandSpawnOptions = {
@@ -675,7 +671,7 @@ export function spawnCommandWithInvocation<
       ? resolveCommandProcessSignal(cancelSignal)
       : cancelSignal,
     ...(scope ? { killDescendants: true } : {}),
-    env: commandEnv,
+    env: command.env,
     extendEnv: false,
     shell: false,
     windowsHide: invocation.windowsHide,

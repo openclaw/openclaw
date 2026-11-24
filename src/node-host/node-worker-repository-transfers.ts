@@ -12,6 +12,7 @@ import {
   NODE_WORKSPACE_EMPTY_MANIFEST,
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
 } from "../worker/node-workspace-transfer-protocol.js";
+import type { NodeWorkerCommandIsolation } from "./node-worker-command-filesystem.js";
 import { withNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
 import { readWorkspaceManifest, runWorkspaceCommand } from "./node-worker-workspace-commands.js";
 
@@ -80,6 +81,7 @@ export async function withNodeRepositoryPublication<T>(
     baseCommit: string;
     baseManifestRef: string;
     signal?: AbortSignal;
+    isolation?: NodeWorkerCommandIsolation;
   },
   upload: (root: string) => Promise<T>,
 ): Promise<T> {
@@ -95,6 +97,8 @@ export async function withNodeRepositoryPublication<T>(
       await runWorkspaceCommand({
         workspaceDir: params.workspaceDir,
         homeDir: params.manifestHome,
+        isolation: params.isolation,
+        outputDirectories: [publication.dir],
         argv: [
           process.execPath,
           ...resolveRuntimeWorkerArgv(

@@ -184,6 +184,7 @@ export async function prepareNodeHostRuntime(params?: {
   const platformTrust = dedicatedNodeExecution ? captureNodeWorkerPlatformTrust(env) : undefined;
   const workspaceOptions = {
     env,
+    filesystemIsolation: config.nodeHost?.workerRuns?.isolation === "filesystem",
     ephemeral: params?.ephemeral,
     managedIdentityTransport,
     platformTrust,

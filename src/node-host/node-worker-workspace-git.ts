@@ -9,6 +9,7 @@ import {
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { runExec } from "../process/exec.js";
+import type { NodeWorkerCommandIsolation } from "./node-worker-command-filesystem.js";
 import {
   runWorkspaceCommand,
   TRANSFER_TIMEOUT_MS,
@@ -104,6 +105,7 @@ export async function prepareNodeWorkerGitResult(params: {
   baseCommit: string | null;
   packPath: string;
   signal?: AbortSignal;
+  isolation?: NodeWorkerCommandIsolation;
 }) {
   if (params.resultVersion !== 2) {
     return undefined;
@@ -116,6 +118,8 @@ export async function prepareNodeWorkerGitResult(params: {
             await runWorkspaceCommand({
               workspaceDir: params.workspaceDir,
               homeDir: params.manifestHome,
+              isolation: params.isolation,
+              outputDirectories: [path.dirname(params.packPath)],
               argv: [
                 process.execPath,
                 ...resolveRuntimeWorkerArgv(

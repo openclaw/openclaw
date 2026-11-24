@@ -91,7 +91,11 @@ class NodeWorkerSupervisor {
       : undefined;
     this.workspace =
       options.workspace ??
-      new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env: startup.workerEnv });
+      new NodeWorkerWorkspaceRuntime({
+        root: bundleRoot,
+        env: startup.workerEnv,
+        filesystemIsolation: options.filesystemIsolation,
+      });
     this.capacity = new NodeWorkerCapacity(this.store, options);
     this.recoverRunning = createNodeWorkerLaunchRecovery({
       store: this.store,

@@ -18,9 +18,8 @@ import {
 } from "../worker/node-workspace-transfer-protocol.js";
 import type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
 
-/** The editing checkout supplies objects only; all indexes, fetches and merges stay private. */
+/** Accepted blobs/history and explicit repository fetches are the only object sources. */
 async function mergeNodeRepositoryPublication(params: {
-  workspaceDir: string;
   inputRoot: string;
   inputDigest: string;
   outputRoot: string;
@@ -130,16 +129,6 @@ async function mergeNodeRepositoryPublication(params: {
       const text = async (args: string[], input?: string | Buffer) =>
         (await git(args, input)).toString("utf8").trim();
       await git(["init", "--bare", "--quiet", "--template=", "--object-format=sha1"]);
-      const objects = (
-        await git(
-          ["rev-parse", "--path-format=absolute", "--git-path", "objects"],
-          undefined,
-          params.workspaceDir,
-        )
-      )
-        .toString("utf8")
-        .trim();
-      await fs.writeFile(path.join(dir, "objects", "info", "alternates"), `${objects}\n`);
       for (const [role, url, commit] of [
         ["source-base", params.sourceUrl, snapshot.baseCommit],
         ["target-base", params.targetUrl, params.targetCommit],
@@ -300,7 +289,6 @@ export async function transferNodeRepositoryPublication(
         },
       });
       await mergeNodeRepositoryPublication({
-        workspaceDir: params.workspaceDir,
         inputRoot,
         outputRoot,
         inputDigest: transfer.inputDigest,

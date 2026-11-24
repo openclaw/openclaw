@@ -473,6 +473,12 @@ protected runtime paths or captured trust files. They must not contain the captu
 execution HOME or shared OpenClaw temporary root. Path entries and their targets
 are checked; disjoint projects beneath broad read grants such as `/usr` remain allowed.
 It cannot rename those writable roots through their ungranted parent directories.
+Node-owned commands that inspect the worker repository use the same filesystem
+boundary. Git history export ignores repository-selected commands and accepts
+only the standalone Git storage created for managed workspaces. Ordinary result
+reconciliation keeps verified file changes when history is unavailable and reports
+that commits were not adopted. Moves and forks that require complete history
+preserve the original disk and fail with a retryable explanation instead.
 The existing process owner keeps responsibility for descendants. Normal shutdown
 removes temporary storage after their extinction. An abrupt node-host exit can leave
 temporary directories; remove them only after its worker processes have exited.

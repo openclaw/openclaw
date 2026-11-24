@@ -43,6 +43,7 @@ import {
   MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
   type NodeWorkerWorkspaceTransferStage,
 } from "../worker/node-workspace-transfer-protocol.js";
+import { withNodeWorkerFilesystemCommands } from "./node-worker-command-filesystem.js";
 import { prepareNodeWorkerWorkspaceOverlay } from "./node-worker-prepared-workspace-transfer.js";
 import { transferNodeRepositoryPublication } from "./node-worker-publication-merge.js";
 import {
@@ -70,6 +71,7 @@ import {
   captureManifest,
   readWorkspaceManifest,
   runWorkspaceCommand,
+  workspaceCommandEnv,
 } from "./node-worker-workspace-commands.js";
 import {
   initializeNodeWorkerGitWorkspace,
@@ -171,6 +173,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           sourceOverlay: Boolean(params.transfer.seedKey) && !checkpointBase,
           hashMemo: params.hashMemo,
           signal: params.signal,
+          isolation: params.isolation,
         })
       : undefined;
   const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
@@ -361,6 +364,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
             referenceManifestRef: params.transfer.manifestRef,
             hashMemo: stagingHashMemo,
             signal: params.signal,
+            isolation: params.isolation,
           });
       if (observed !== params.transfer.manifestRef) {
         throw new Error(
@@ -434,12 +438,22 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           relativePath: "history.pack",
           maxBytes: MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
         });
-        gitHistoryNote = await restoreWorkerWorkspaceHistory({
-          root: params.workspaceDir,
-          gitHistory: params.transfer.checkpointGitHistory,
-          gitPackPath,
-          assertCurrent: () => params.signal?.throwIfAborted(),
-        });
+        gitHistoryNote = await withNodeWorkerFilesystemCommands(
+          {
+            isolation: params.isolation,
+            workspaceDir: params.workspaceDir,
+            homeDir: params.manifestHome,
+            env: workspaceCommandEnv(params.manifestHome),
+            signal: params.signal,
+          },
+          () =>
+            restoreWorkerWorkspaceHistory({
+              root: params.workspaceDir,
+              gitHistory: params.transfer.checkpointGitHistory,
+              gitPackPath,
+              assertCurrent: () => params.signal?.throwIfAborted(),
+            }),
+        );
       } catch (error) {
         params.signal?.throwIfAborted();
         gitHistoryNote = workerHistoryNotAdopted(boundedWorkerError(error));
@@ -463,6 +477,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
         baseCommit: publicationBaseCommit,
         baseManifestRef: transfer.baseManifestRef,
         signal: params.signal,
+        isolation: params.isolation,
       },
       (workspaceDir) =>
         uploadWorkspace({
@@ -488,6 +503,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
     baseManifestRef: params.transfer.baseManifestRef,
     ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
     signal: params.signal,
+    isolation: params.isolation,
   });
   const { raw: currentRaw, manifest: current } = await readWorkspaceManifest(
     params.manifestHome,
