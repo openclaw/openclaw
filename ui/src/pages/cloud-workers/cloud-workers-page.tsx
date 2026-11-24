@@ -333,6 +333,7 @@ export function CloudWorkersPage() {
 
     return (
       <SettingsRow
+        setting={`cloudWorkers.profiles.${profile.id}`}
         title={<code>{profile.id}</code>}
         description={profileDescription(profile)}
         control={
@@ -381,6 +382,23 @@ export function CloudWorkersPage() {
     const label = field === "id" ? "profileId" : field;
     return (
       <SettingsRow
+        setting={
+          field === "id"
+            ? "cloudWorkersPage.profile.id"
+            : field === "backend"
+              ? "cloudWorkersPage.profile.backend"
+              : field === "ttl"
+                ? "cloudWorkersPage.profile.ttl"
+                : field === "idleTimeout"
+                  ? "cloudWorkersPage.profile.idleTimeout"
+                  : field === "binary"
+                    ? "cloudWorkersPage.profile.binary"
+                    : field === "setupEnv"
+                      ? "cloudWorkersPage.profile.setupEnv"
+                      : field === "readyWorkers"
+                        ? "cloudWorkersPage.profile.readyWorkers"
+                        : "cloudWorkersPage.profile.suspendAfter"
+        }
         title={t(`cloudWorkersPage.fields.${label}`)}
         description={options.description ?? t(`cloudWorkersPage.fields.${label}Help`)}
         control={
@@ -450,6 +468,7 @@ export function CloudWorkersPage() {
       >
         <Show when={editing()} fallback={renderDraftInput("id")}>
           <SettingsRow
+            info
             title={t("cloudWorkersPage.fields.profileId")}
             description={t("cloudWorkersPage.fields.profileIdHelp")}
             control={<SettingsValue value={view.draft.id} mono />}
@@ -466,6 +485,7 @@ export function CloudWorkersPage() {
         })}
         <Show when={systems().length >= 2 || unadvertised()}>
           <SettingsRow
+            setting="cloudWorkersPage.profile.operatingSystem"
             title={t("cloudWorkersPage.fields.operatingSystem")}
             description={t("cloudWorkersPage.fields.operatingSystemHelp")}
             control={
@@ -495,6 +515,7 @@ export function CloudWorkersPage() {
           />
         </Show>
         <SettingsRow
+          setting="cloudWorkersPage.profile.machineClass"
           title={t("cloudWorkersPage.fields.machineClass")}
           description={t("cloudWorkersPage.fields.machineClassHelp")}
           control={
@@ -511,6 +532,7 @@ export function CloudWorkersPage() {
           placeholder: t("cloudWorkersPage.fields.idleTimeoutPlaceholder"),
         })}
         <SettingsRow
+          setting="cloudWorkersPage.profile.setup"
           title={t("cloudWorkersPage.fields.setup")}
           description={t("cloudWorkersPage.fields.setupHelp")}
           stacked
@@ -528,6 +550,7 @@ export function CloudWorkersPage() {
           }
         />
         <SettingsToggleRow
+          setting="cloudWorkersPage.profile.desktop"
           title={t("cloudWorkersPage.fields.desktop")}
           description={t("cloudWorkersPage.fields.desktopHelp")}
           checked={view.draft.desktop}
@@ -539,6 +562,7 @@ export function CloudWorkersPage() {
         })}
         <SettingsSection title={t("cloudWorkersPage.advanced")}>
           <SettingsSelectRow
+            setting="cloudWorkersPage.profile.warmImage"
             title={t("cloudWorkersPage.fields.warmImage")}
             description={t("cloudWorkersPage.fields.warmImageHelp")}
             value={view.draft.warmImage}
@@ -561,11 +585,13 @@ export function CloudWorkersPage() {
         </SettingsSection>
         <Show when={saveState().error}>
           <SettingsRow
+            info
             title={t("cloudWorkersPage.errors.title")}
             description={<span role="alert">{saveState().error}</span>}
           />
         </Show>
         <SettingsRow
+          info
           title={t("cloudWorkersPage.fields.actions")}
           description={t("cloudWorkersPage.fields.actionsHelp")}
           control={

@@ -250,7 +250,7 @@ function ChannelDetailFacts(params: ChannelDetailParams) {
   };
   return (
     <Show when={rows().length + connected().length > 0}>
-      <SettingsDisclosure title={t("channels.hub.details")}>
+      <SettingsDisclosure info title={t("channels.hub.details")}>
         <ChannelFacts rows={[...connected(), ...rows()]} />
       </SettingsDisclosure>
     </Show>

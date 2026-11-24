@@ -177,6 +177,7 @@ export function CloudWorkerBuildRow(props: {
   };
   return (
     <SettingsRow
+      info
       title={`${props.label ? `${props.label} · ` : ""}${stateLabel()}`}
       description={props.environment.worker?.error}
       control={

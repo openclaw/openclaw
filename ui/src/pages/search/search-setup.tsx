@@ -14,7 +14,7 @@ import { hintForPath, pathKey } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { configSettingId, type JsonSchema } from "../../lib/config-form-utils.ts";
 import type { ConfigSecretFields } from "../../lib/config/config-secret-fields.ts";
 import {
   currentConfigObject,
@@ -81,6 +81,7 @@ function SearchConfigField(props: { field: ConfigLeafField; nested?: boolean }) 
   }));
   return (
     <SettingsRow
+      setting={configSettingId(props.field.path)}
       title={props.field.label}
       description={props.field.help}
       stackedOnNarrow
@@ -130,6 +131,7 @@ export function SearchSetup(
       {/* The list row carries the status; a missing key shows as its empty field. */}
       <Show when={props.provider.credentialSource !== "missing" || !credential()}>
         <SettingsRow
+          info
           title={t("searchPage.configuration")}
           description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
           nested
@@ -138,6 +140,7 @@ export function SearchSetup(
       <Show when={credential()}>
         {(descriptor) => (
           <SettingsRow
+            setting={configSettingId(descriptor().path)}
             title={descriptor().label}
             stackedOnNarrow
             nested
@@ -171,6 +174,7 @@ export function SearchSetup(
         {(field) => <SearchConfigField field={field()} nested />}
       </For>
       <SettingsRow
+        info
         nested
         title={t("searchPage.pluginSettings")}
         description={t("searchPage.pluginSettingsHint")}
@@ -186,6 +190,7 @@ export function SearchSetup(
       <Show when={props.provider.docsUrl}>
         {(url) => (
           <SettingsRow
+            info
             nested
             title={t("searchPage.docs")}
             control={<LearnMoreLink url={url()} />}
@@ -211,6 +216,7 @@ export function SearchProviderRow(
       <button
         type="button"
         class="settings-row settings-row--nav search-provider"
+        id={`search.providers.${props.provider.id}`}
         aria-expanded={props.open ? "true" : "false"}
         onClick={() => props.onToggle()}
       >
@@ -274,7 +280,11 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
   );
   return (
     <Show when={fields().length > 0}>
-      <SettingsDisclosure class="config-advanced-disclosure" title={t("searchPage.advanced")}>
+      <SettingsDisclosure
+        class="config-advanced-disclosure"
+        setting="search.advanced"
+        title={t("searchPage.advanced")}
+      >
         <For each={fields()} keyed={(field) => JSON.stringify(field.path)}>
           {(field) => <SearchConfigField field={field()} />}
         </For>

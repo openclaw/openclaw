@@ -6,10 +6,18 @@ import {
   AGENT_TOOLS_SETTINGS,
 } from "./pages/agents.js";
 import { APPEARANCE_SETTINGS } from "./pages/appearance.js";
+import { CHANNELS_SETTINGS } from "./pages/channels.js";
+import { CLOUD_WORKERS_SETTINGS } from "./pages/cloud-workers.js";
+import { CONNECTION_SETTINGS } from "./pages/connection.js";
+import { LABS_SETTINGS } from "./pages/labs.js";
 import { MCP_SETTINGS } from "./pages/mcp.js";
 import { MODELS_SETTINGS } from "./pages/models.js";
 import { NOTIFICATIONS_SETTINGS } from "./pages/notifications.js";
+import { PLUGINS_SETTINGS } from "./pages/plugins.js";
 import { PROFILE_SETTINGS } from "./pages/profile.js";
+import { SEARCH_SETTINGS } from "./pages/search.js";
+import { SECRETS_SETTINGS } from "./pages/secrets.js";
+import { SKILLS_SETTINGS } from "./pages/skills.js";
 
 /**
  * Every setting on the hand-built Settings pages, by page. Settings the generic config form
@@ -27,6 +35,14 @@ export const CONTROL_UI_SETTINGS_PAGES = [
   APPEARANCE_SETTINGS,
   NOTIFICATIONS_SETTINGS,
   PROFILE_SETTINGS,
+  CHANNELS_SETTINGS,
+  CONNECTION_SETTINGS,
+  CLOUD_WORKERS_SETTINGS,
+  SEARCH_SETTINGS,
+  PLUGINS_SETTINGS,
+  SKILLS_SETTINGS,
+  SECRETS_SETTINGS,
+  LABS_SETTINGS,
 ] as const;
 
 type PageIds<Page> = Page extends ControlUiSettingsPage<infer Ids> ? Ids : never;

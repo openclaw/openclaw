@@ -674,7 +674,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         </Show>
       </SettingsPage>
       <SettingsPage>
-        <SettingsDisclosure sections title={t("cloudWorkersPage.environments.advanced")}>
+        <SettingsDisclosure
+          sections
+          setting="cloudWorkersPage.advanced"
+          title={t("cloudWorkersPage.environments.advanced")}
+        >
           {props.machines()}
           <CloudWorkerMachinePool inventory={view.inventory} />
           <CloudWorkerSnapshotPolicy />
@@ -713,7 +717,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
               </For>
               <For each={view.result?.legacyLeases ?? []} keyed={(lease) => lease.leaseId}>
                 {(lease) => (
-                  <SettingsRow title={lease().leaseId} description={lease().recoveryHint} />
+                  <SettingsRow info title={lease().leaseId} description={lease().recoveryHint} />
                 )}
               </For>
             </SettingsSection>

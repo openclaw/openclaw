@@ -28,6 +28,7 @@ export function CloudWorkerMachinePool(props: { inventory: EnvironmentsListResul
   return (
     <>
       <SettingsRow
+        setting="cloudWorkers.preparedPool.maxTotal"
         title={t("cloudWorkersPage.environments.pool", { count: String(ready()) })}
         control={
           <>

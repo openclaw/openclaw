@@ -67,6 +67,7 @@ export function LibraryPinRead(props: {
             </label>
           </Show>
           <SettingsDisclosure
+            info
             quiet
             class="skill-library-details"
             title={t("skillLibrary.technicalDetails")}

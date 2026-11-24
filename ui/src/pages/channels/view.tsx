@@ -258,6 +258,7 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
     <button
       type="button"
       class="settings-row settings-row--nav channels-item"
+      id={`channels.${params.channelId}`}
       onClick={() => params.props.onShowDetail(params.channelId)}
     >
       <ChannelIcon
@@ -291,7 +292,7 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         t("channels.hub.guidedSetup")),
   );
   return (
-    <div class="settings-row channels-item">
+    <div class="settings-row channels-item" id={`channelsPage.setup.${params.channelId}`}>
       <button
         type="button"
         class="channels-item__detail"
@@ -329,6 +330,7 @@ function renderBrowseAllRow(props: ChannelsProps) {
     <button
       type="button"
       class="settings-row settings-row--nav channels-item"
+      id="channelsPage.browseAll"
       disabled={!props.channels.connected}
       onClick={() => props.onStartSetup(null)}
     >

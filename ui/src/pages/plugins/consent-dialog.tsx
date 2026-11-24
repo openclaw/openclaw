@@ -69,6 +69,7 @@ type PluginConsentDialogProps = {
 function renderPluginMetaRow(label: string, value: JSX.Element | string, warning = false) {
   return (
     <SettingsRow
+      info
       title={label}
       control={<span class={{ "plugins-consent__row--warning": warning }}> {value}</span>}
       stackedOnNarrow
@@ -117,7 +118,7 @@ function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): JSX.
       description={t("pluginConsent.declaredDescription")}
       carapace
     >
-      {rows.length ? rows : <SettingsRow title={t("pluginConsent.declaredEmpty")} carapace />}
+      {rows.length ? rows : <SettingsRow info title={t("pluginConsent.declaredEmpty")} carapace />}
       {declared.hooks.length === 0
         ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
         : undefined}
@@ -198,6 +199,7 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
       carapace
     >
       <SettingsRow
+        info
         title={t("pluginConsent.promptInjection")}
         description={t("pluginConsent.promptInjectionDescription")}
         control={

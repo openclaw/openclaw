@@ -518,7 +518,7 @@ export function renderPluginCapabilitySection(
             );
             return value.details ? (
               <details class="plugin-capability__disclosure">
-                <summary class="settings-row settings-row--nav oc-settings-row">
+                <summary class="settings-row settings-row--nav oc-settings-row" data-settings-info>
                   {content(true)}
                 </summary>
                 <div class="plugin-capability__details">{value.details}</div>
@@ -527,12 +527,15 @@ export function renderPluginCapabilitySection(
               <button
                 type="button"
                 class="settings-row settings-row--nav oc-settings-row"
+                data-settings-info
                 onClick={value.onOpen}
               >
                 {content(true)}
               </button>
             ) : (
-              <div class="settings-row oc-settings-row">{content(false)}</div>
+              <div class="settings-row oc-settings-row" data-settings-info>
+                {content(false)}
+              </div>
             );
           }}
         </For>

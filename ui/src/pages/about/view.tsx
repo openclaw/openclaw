@@ -100,7 +100,7 @@ function BuildRow(props: { title: string; label: string; build: AboutBuild }) {
     formatDateTimeMs(Date.parse(props.build.builtAt ?? ""), BUILT_AT_FORMAT, ""),
   );
   return (
-    <div class="settings-row about-build">
+    <div class="settings-row about-build" data-settings-info>
       <div class="settings-row__text">
         <span class="settings-row__title">{props.title}</span>
         <dl class="about-build__facts" aria-label={props.label}>
@@ -224,6 +224,7 @@ export function AboutView(props: AboutProps) {
               {(link) => (
                 <a
                   class="settings-row settings-row--nav about-link"
+                  data-settings-info
                   href={link.href}
                   target={EXTERNAL_LINK_TARGET}
                   rel={buildExternalLinkRel()}

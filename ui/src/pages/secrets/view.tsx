@@ -176,6 +176,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
                 return (
                   <div
                     class="settings-row secrets-store__row"
+                    id={`secretsPage.entries.${entry().name}`}
                     role="listitem"
                     aria-label={entry().name}
                   >

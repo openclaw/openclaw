@@ -75,7 +75,7 @@ export function SkillLibrary(props: {
         >
           <For each={entries()} keyed={(entry) => entry.skillId}>
             {(entry) => (
-              <div class="settings-row">
+              <div class="settings-row" id={`skillSettings.library.${entry().skillId}`}>
                 <button
                   type="button"
                   class="settings-row__text plugins-item__detail-button"

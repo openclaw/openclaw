@@ -83,6 +83,7 @@ function SecurityRow(props: { status: DebugData["status"]; pending: boolean }) {
   };
   return (
     <Row
+      info
       title={t("debug.security.audit")}
       description={
         <>
@@ -361,6 +362,7 @@ export function DebugPage() {
             }
           >
             <Row
+              info
               title={<Status kind="muted" label={t("common.offline")} />}
               description={t("debug.offlineSnapshots")}
             />
@@ -378,6 +380,7 @@ export function DebugPage() {
               const title = () => t(key === "heartbeat" ? "debug.lastHeartbeat" : `debug.${key}`);
               return (
                 <Row
+                  info
                   title={title()}
                   stacked
                   control={
@@ -424,6 +427,7 @@ export function DebugPage() {
         </Section>
         <Section title={t("debug.manualRpcTitle")} description={t("debug.manualRpcSubtitle")}>
           <Row
+            info
             title={t("debug.method")}
             control={
               <>
@@ -449,6 +453,7 @@ export function DebugPage() {
             }
           />
           <Row
+            info
             title={t("debug.paramsJson")}
             stacked
             control={
@@ -467,6 +472,7 @@ export function DebugPage() {
             }
           />
           <Row
+            info
             title={t("common.call")}
             control={
               <>
@@ -483,7 +489,7 @@ export function DebugPage() {
             }
           />
           <Show when={read("callError")}>
-            <div class="settings-row settings-row--stacked" role="alert">
+            <div class="settings-row settings-row--stacked" role="alert" data-settings-info>
               <span class="settings-row__title mono">{read("callOutcomeMethod")}</span>
               <Status kind="danger" label={t("debug.callFailed")} />
               <pre
@@ -497,7 +503,7 @@ export function DebugPage() {
             </div>
           </Show>
           <Show when={read("callResult")}>
-            <div class="settings-row settings-row--stacked">
+            <div class="settings-row settings-row--stacked" data-settings-info>
               <span class="settings-row__title mono">{read("callOutcomeMethod")}</span>
               <Status kind="ok" label={t("common.ok")} />
               <CodeBlock
@@ -509,7 +515,7 @@ export function DebugPage() {
           </Show>
         </Section>
         <Section title={t("debug.modelsTitle")} description={t("debug.modelsSubtitle")}>
-          <div class="settings-row settings-row--stacked">
+          <div class="settings-row settings-row--stacked" data-settings-info>
             <CodeBlock title={t("debug.modelsTitle")} value={read("data").models} />
           </div>
         </Section>
@@ -520,6 +526,7 @@ export function DebugPage() {
           >
             {(event) => (
               <Row
+                info
                 title={event.event}
                 description={formatTimeMs(event.ts, undefined, "")}
                 stacked
