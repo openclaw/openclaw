@@ -240,7 +240,22 @@ export async function openBeamMirrorEnrollment(params: {
       }
       return { state: "published", beamId: initial.beamId, head: result.head };
     },
-    async publish(beamId: string, raw: Buffer): Promise<boolean | "retired"> {
+    async isAcknowledged(head: BeamMirrorV2Head) {
+      // A catalog read can overlap a different writer or an operator reauthorization.
+      // Only the current, settled local receipt can suppress a native clean.
+      const { value } = await store.observe(key);
+      params.assertCurrent();
+      return (
+        value?.credential === credential &&
+        value.sourceSalt === binding.sourceSalt &&
+        !value.pending &&
+        !value.fenced &&
+        value.head?.publicationId === head.publicationId &&
+        value.head.revision === head.revision &&
+        value.head.sha256 === head.sha256
+      );
+    },
+    async publish(beamId: string, raw: Buffer): Promise<BeamMirrorV2Head | false | "retired"> {
       let observed = await store.observe(key);
       let current = observed.value;
       if (
@@ -257,7 +272,7 @@ export async function openBeamMirrorEnrollment(params: {
       if (!current.pending) {
         const intent = prepareBeamMirrorV2Intent(raw, current.head);
         if (current.head.sha256 === intent.sha256) {
-          return true;
+          return current.head;
         }
         params.assertCurrent();
         const next = { ...current, pending: { beamId, raw: raw.toString("base64"), intent } };
@@ -307,7 +322,9 @@ export async function openBeamMirrorEnrollment(params: {
         return "retired";
       }
       // Replaying an older pending write cannot acknowledge a later candidate.
-      return pending.beamId === beamId && pending.raw === raw.toString("base64");
+      return pending.beamId === beamId && pending.raw === raw.toString("base64")
+        ? result.head
+        : false;
     },
   };
 }

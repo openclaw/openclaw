@@ -1230,6 +1230,7 @@ describe("frozen admission workflow barriers", () => {
       const files = Object.fromEntries(
         [
           "scripts/runtime-postbuild.mts",
+          "src/cli/update-cli/update-command-git.ts",
           "src/cli/update-cli/update-command-plugin-preflight.ts",
           "src/cli/update-cli/update-command-target.ts",
           "src/infra/update-global.ts",
@@ -9208,6 +9209,17 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(manifestStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expect(manifestStep.env?.GH_TOKEN).toBe("${{ github.token }}");
     expect(manifestStep.run).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
+    const validation = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
+      "Validate release validation manifest",
+    );
+    for (const key of [
+      "GH_TOKEN",
+      "OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR",
+      "OPENCLAW_RELEASE_WAIVERS_PATH",
+    ]) {
+      expect(validation.env?.[key]).toBe(manifestStep.env?.[key]);
+    }
   });
 
   it("routes publication controls through the trusted shared gate", () => {

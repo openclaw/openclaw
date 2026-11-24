@@ -163,10 +163,10 @@ export function buildChatItems(
     }
     return matches;
   };
-  const hiddenHistoryKeys = new Set<string>();
-  const hideSearchMiss = (item: Extract<ChatItem, { kind: "message" }>) => {
-    if (!matchesSearch(item.message)) {
-      hiddenHistoryKeys.add(item.key);
+  const hiddenKeys = new Set<string>();
+  const hideSearchMiss = (message: unknown, key: string) => {
+    if (!matchesSearch(message)) {
+      hiddenKeys.add(key);
     }
   };
   const canvasIdentities = new Set<string>();
@@ -192,7 +192,7 @@ export function buildChatItems(
     const msg = item.message;
     const itemKey = item.key;
     for (const card of automation?.cards.get(msg) ?? []) {
-      hideSearchMiss(card);
+      hideSearchMiss(card.message, card.key);
       items.push(card);
     }
     if (automation?.consumed.has(msg)) {
@@ -282,7 +282,7 @@ export function buildChatItems(
 
     for (const inline of pluginInlineViewItems(item, inlineInvocations)) {
       facts?.firsts.set(inline.key, msg);
-      hideSearchMiss(inline);
+      hideSearchMiss(inline.message, inline.key);
       items.push(inline);
     }
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
@@ -340,7 +340,7 @@ export function buildChatItems(
       continue;
     }
 
-    hideSearchMiss(item);
+    hideSearchMiss(msg, itemKey);
     if (
       !hasRenderableNormalizedMessage(msg, normalized) &&
       normalized.role.toLowerCase() !== "assistant"
@@ -353,7 +353,7 @@ export function buildChatItems(
   let streamOnset: Extract<ChatItem, { kind: "stream" }> | undefined;
   // History probes must not adopt inputs, resolve timing, or retire live progress.
   if (mode === "history") {
-    const hidden = hiddenHistoryKeys.size > 0 ? hiddenHistoryKeys : undefined;
+    const hidden = hiddenKeys.size > 0 ? hiddenKeys : undefined;
     return groupChatDisplayItems(props, items, hidden, facts);
   }
   const currentRunId =
@@ -362,12 +362,13 @@ export function buildChatItems(
       ? resolveProgress().runId
       : null);
   const historyTurnBounds = findCurrentTurnBounds(items);
-  const { pendingKeys, historicalKeys, hiddenKeys, activeInputKey } = placeChatInputs(
+  const { pendingKeys, historicalKeys, activeInputKey } = placeChatInputs(
     items,
     history,
     props,
     inputOrder,
     currentRunId,
+    hideSearchMiss,
   );
   const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
   const canvasRunBounds = createRunTurnLookup(executionItems());
@@ -380,7 +381,7 @@ export function buildChatItems(
     afterUserSendId?: string,
   ) =>
     (typeof runId === "string" && afterUserSendId ? lookup(runId, afterUserSendId) : null) ??
-    resolveRunInsertionBounds(lookup, runId, currentRunId, currentTurnBounds) ??
+    resolveRunInsertionBounds(lookup, runId, currentRunId, currentTurnBounds, historyItems[0]) ??
     (!runId && activeInputKey ? currentTurnBounds : undefined);
   const boundToPendingInputs = (
     bounds: TurnInsertionBounds | null | undefined,
@@ -636,7 +637,7 @@ export function buildChatItems(
       ...(automation?.cards.get(tool.projection.item.message) ?? []),
       ...pluginInlineViewItems(tool.projection.item, inlineInvocations),
     ]) {
-      hideSearchMiss(item);
+      hideSearchMiss(item.message, item.key);
       projections.push({
         ...tool.projection,
         bounds:
@@ -732,10 +733,7 @@ export function buildChatItems(
   // Place output against the complete transcript before search hides any rows.
   // Pending/local inputs contribute people and turn boundaries just like history;
   // queued future inputs must remain after the live output they do not own.
-  const hidden =
-    hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
-      ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
-      : undefined;
-  items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
+  const hidden = hiddenKeys.size > 0 ? hiddenKeys : undefined;
+  items = reconcileLiveCanvasPreviews(items, hiddenKeys);
   return groupChatDisplayItems(props, items, hidden, facts, streamOnset);
 }
