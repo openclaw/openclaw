@@ -230,6 +230,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
         if (!Array.isArray(result)) {
           throw new Error("Telegram getUpdates returned a non-array result.");
         }
+        let responseUpdateId: number | undefined;
         for (const update of result) {
           if (stopController.signal.aborted) {
             break;
@@ -239,9 +240,10 @@ export async function runTelegramIngressWorkerRuntime(params: {
             pendingSpoolRequest = { requestId, resolve, reject };
             port.postMessage({ type: "update", requestId, update, queued: result.length });
           });
-          if (lastUpdateId === null || updateId > lastUpdateId) {
-            lastUpdateId = updateId;
-          }
+          // Telegram can reset update IDs below a stale cursor. Confirm only
+          // IDs durably enqueued from the current response, even after a partial failure.
+          responseUpdateId = Math.max(responseUpdateId ?? updateId, updateId);
+          lastUpdateId = responseUpdateId;
           port.postMessage({ type: "spooled", updateId, queued: result.length });
         }
         pollingConfirmed = true;

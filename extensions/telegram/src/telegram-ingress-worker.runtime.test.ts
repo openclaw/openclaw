@@ -25,7 +25,12 @@ function htmlResponse(status: number, body: string): Response {
 
 function createRuntime(
   responses: Response[],
-  options: { stopAfterPollSuccesses?: number; timeoutSeconds?: number } = {},
+  options: {
+    stopAfterPollSuccesses?: number;
+    timeoutSeconds?: number;
+    initialUpdateId?: number;
+    ackUpdateId?: number;
+  } = {},
 ): {
   calls: number[];
   pollBodies: Array<Record<string, unknown>>;
@@ -49,7 +54,7 @@ function createRuntime(
         sendCommand({
           type: "spool-ack",
           requestId: message.requestId,
-          result: { ok: true, updateId: 42 },
+          result: { ok: true, updateId: options.ackUpdateId ?? 42 },
         });
       }
       if (message.type === "poll-success") {
@@ -76,7 +81,7 @@ function createRuntime(
     options: {
       token: "test-auth-token",
       accountId: "acct",
-      initialUpdateId: null,
+      initialUpdateId: options.initialUpdateId ?? null,
       apiRoot: "https://api.telegram.test",
       timeoutSeconds: options.timeoutSeconds ?? 1,
     },
@@ -98,6 +103,19 @@ afterEach(() => {
 });
 
 describe("telegram ingress worker poll cadence", () => {
+  it("confirms a durably enqueued response below the previous offset", async () => {
+    vi.useFakeTimers();
+    const { pollBodies, done } = createRuntime(
+      [
+        jsonResponse(200, { ok: true, result: [{ update_id: 30_739_880 }] }),
+        jsonResponse(200, { ok: true, result: [] }),
+      ],
+      { stopAfterPollSuccesses: 2, initialUpdateId: 879_582_717, ackUpdateId: 30_739_880 },
+    );
+    await flushRuntime();
+    await done;
+    expect(pollBodies.map((body) => body.offset)).toEqual([879_582_718, 30_739_881]);
+  });
   it("keeps short polling until a getUpdates request succeeds", async () => {
     vi.useFakeTimers();
     const runtime = createRuntime(

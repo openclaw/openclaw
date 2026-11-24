@@ -39,12 +39,12 @@ describe("createTelegramUpdateOffsetPersistence", () => {
 
     await flushMicrotasks();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ updateId: 101 }));
-    expect(writes).toEqual([101, 103]);
-    expect(persistence.getCommittedUpdateId()).toBe(103);
+    expect(writes).toEqual([101, 103, 102]);
+    expect(persistence.getCommittedUpdateId()).toBe(102);
     await persistence.stop();
   });
 
-  it("never regresses when a lower update arrives during a higher write", async () => {
+  it("checkpoints a lower confirmed offset that arrives during an earlier write", async () => {
     const write = createDeferred<void>();
     const writes: number[] = [];
     const persistence = createTelegramUpdateOffsetPersistence({
@@ -58,14 +58,14 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     });
 
     persistence.persistUpdateId(103);
-    persistence.persistUpdateId(102);
     await flushMicrotasks();
+    persistence.persistUpdateId(102);
     write.resolve();
     await flushMicrotasks();
 
-    expect(writes).toEqual([103]);
-    expect(persistence.getCommittedUpdateId()).toBe(103);
+    expect(writes).toEqual([103, 102]);
     await persistence.stop();
+    expect(persistence.getCommittedUpdateId()).toBe(102);
   });
 
   it("restarts the drain when a higher update arrives during teardown", async () => {

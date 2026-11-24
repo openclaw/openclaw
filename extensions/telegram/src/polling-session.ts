@@ -405,7 +405,7 @@ export class TelegramPollingSession {
         );
         // The worker waits for this request's ACK before emitting the next update.
         // The committed spool enqueue is the ACK boundary; offset persistence is
-        // monotonic catch-up and must not stall intake during a state-store outage.
+        // catch-up and must not stall intake during a state-store outage.
         void (async () => {
           const updateId = resolveTelegramUpdateId(message.update);
           if (updateId === null) {
