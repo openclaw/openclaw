@@ -790,6 +790,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "Binding updated.",
       response_type: "ephemeral",
+      replace_original: false,
     });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
@@ -1001,6 +1002,7 @@ describe("registerSlackInteractionEvents", () => {
       expect(respond).toHaveBeenCalledWith({
         text: "Approval resolved: Allowed once.",
         response_type: "ephemeral",
+        replace_original: false,
       });
     },
   );
@@ -1052,6 +1054,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "You are not authorized to approve this request.",
       response_type: "ephemeral",
+      replace_original: false,
     });
   });
 
@@ -1115,6 +1118,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "You are not authorized to approve this request.",
       response_type: "ephemeral",
+      replace_original: false,
     });
   });
 
@@ -1148,6 +1152,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "Answer submitted.",
       response_type: "ephemeral",
+      replace_original: false,
     });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
@@ -1234,6 +1239,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "This approval was already resolved: Denied.",
       response_type: "ephemeral",
+      replace_original: false,
     });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
@@ -1265,6 +1271,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "Approval resolved: Allowed once.",
       response_type: "ephemeral",
+      replace_original: false,
     });
   });
 
@@ -1293,6 +1300,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "This approval is no longer pending.",
       response_type: "ephemeral",
+      replace_original: false,
     });
   });
 
@@ -1319,6 +1327,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "This approval action is invalid or expired.",
       response_type: "ephemeral",
+      replace_original: false,
     });
   });
 
@@ -1547,6 +1556,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "You are not authorized to approve this request.",
       response_type: "ephemeral",
+      replace_original: false,
     });
   });
 
@@ -1739,6 +1749,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "You are not authorized to use this control.",
       response_type: "ephemeral",
+      replace_original: false,
     });
   });
 
