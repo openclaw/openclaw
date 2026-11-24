@@ -582,6 +582,10 @@ export async function convergePostCoreUpdatePlugins(params: {
         workTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? null,
         pluginInstallRecords,
         assertCurrent,
+        // An unchanged core copies its originals once plugins changed, before records publish.
+        ...(params.opts.run?.captureOriginal
+          ? { beforeRecordPublication: params.opts.run.captureOriginal }
+          : {}),
         // Shipped post-core markers predate cohort capture. A real retained pair
         // still selects its owner; only the originating outer caller requires one.
         ...(params.opts.run?.executorFence &&

@@ -3,6 +3,7 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -110,7 +111,7 @@ function copyParams(
     agentId: "main",
     clientScopes: ["operator.read", "operator.write"],
     client: {
-      connect: { scopes: ["operator.read", "operator.write"] },
+      connect: gatewayConnect(["operator.read", "operator.write"]),
     } as never,
     context: {
       getRuntimeConfig: () => ({
@@ -277,7 +278,7 @@ describe("copySessionCatalogToGateway", () => {
           ? { signal: controller.signal }
           : {
               client: {
-                connect: { scopes: ["operator.read", "operator.write"] },
+                connect: gatewayConnect(["operator.read", "operator.write"]),
                 connectionSignal: controller.signal,
               } as never,
             },

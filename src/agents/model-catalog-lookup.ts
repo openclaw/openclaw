@@ -166,6 +166,10 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
 ): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
+  // A session with no model has nothing to look up, and no provider policy to load.
+  if (!normalizedProvider || !trimmedModelId) {
+    return undefined;
+  }
   const providerCatalog: T[] = [];
   let literal: T | undefined;
   catalog.some((entry) => {

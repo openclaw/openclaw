@@ -133,12 +133,14 @@ manually. `--dry-run` previews the tuple, not hosted admission or success.
 
 5. Record new admission and parent run/attempt; require fresh parent success and
    strict verification before publication. Whole-parent reuse keeps exact Q/P.
-   Cross-Q child reuse requires authenticated identical workload closure (excluding
-   only the Q grant ledger, whose current grants are reevaluated) and exact
-   C, role, effective inputs, candidate descriptor, receipt, artifact, and live-attempt
-   checks; retain producer Q. Plan-cache-only repairs may qualify; filenames,
-   green jobs, or fix SHAs alone prove neither closure nor eligibility. Missing
-   evidence/changed closure requires fresh work, never relabeling.
+   Cross-Q child reuse requires authenticated identical workload closure or a complete
+   ancestor-to-descendant delta confined to the explicit [orchestration-only paths](/reference/full-release-validation/stages).
+   Both routes retain exact C, role, effective inputs, candidate descriptor, receipt,
+   artifact, live-attempt, and producer-Q checks. Current Q grants are reevaluated.
+   Parent workflow and reuse-policy repairs can be combined with ledger updates
+   without repeating unchanged execution. Child workflow, harness, and dependency
+   changes remain subject to workload comparison. Missing evidence or a changed
+   workload requires fresh work, never relabeling.
 
 ### November 2026 plan-cache restoration incident
 

@@ -61,6 +61,33 @@ the session.
   </Step>
 </Steps>
 
+### No model configured
+
+OpenClaw does not pick a model for you. When no primary is set and no
+configured provider lists a model, the agent has no model:
+
+- Agent turns stop before any model call and reply with how to choose one:
+  pick a model in **Settings → Models**, send `/model <provider/model>` in
+  chat, or run `openclaw models set <provider/model>`. Attachment
+  preprocessing, such as audio transcription with a configured or detected
+  media provider, runs earlier in the turn and can still run.
+- Chat commands that need no model, such as `/help`, `/status`, `/models`,
+  `/model` and `/new`, still run. `/status` shows the model as not configured.
+  Commands that change model settings, such as `/think` and `/fast`, reply with
+  the setup message.
+- `openclaw models status` and the Gateway startup log report the model as not
+  configured.
+- No utility model is derived and no provider catalog is loaded on behalf of
+  an unconfigured primary.
+
+Signing in to a provider during onboarding writes its default model as the
+primary. Releases through 2026.11.6 picked a model when none was configured:
+`openai/gpt-6-astra`, or the first configured provider model when OpenAI did
+not list it. On update from those releases, `openclaw doctor --fix` writes the
+model the install was running as `agents.defaults.model.primary`, so it keeps
+working unchanged. The OpenAI model is written only when OpenAI credentials are
+available.
+
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. After legacy-policy migration, adding an entry does not restrict model overrides.

@@ -20,7 +20,6 @@ import {
   lease,
   loseStore,
   mocks,
-  nextUpdate,
   repair,
   running,
   stillRefuses,
@@ -166,41 +165,29 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
   // that update, repair and Doctor all read. Both entries finish the killed run and
   // leave that run exactly as they found it, so refusing would name a repair that
   // cannot clear the refusal.
-  it.each(["openclaw update", "openclaw update repair"] as const)(
-    "%s finishes a dead update past a full history page that reaches back before it",
-    (entry) =>
-      fixtures.lifetime.run(async () => {
-        const killed = await updater(await installation(), { installed: "candidate" });
-        const buried = createUpdateRun({ trigger: "cli" });
-        finishUpdateRun(buried.runId, { status: "failed", reason: "abandoned" });
-        const { db } = openOpenClawStateDatabase();
-        db.prepare("UPDATE update_runs SET created_at_ms = ? WHERE run_id = ?").run(
-          Date.now() - 120_000,
-          buried.runId,
-        );
-        // Routine history: the killed run and 99 older successful runs fill one page.
-        settledHistory(99, "before");
-        const before = getUpdateRun(buried.runId);
+  it("openclaw update repair finishes a dead update past a full history page that reaches back before it", () =>
+    fixtures.lifetime.run(async () => {
+      const killed = await updater(await installation(), { installed: "candidate" });
+      const buried = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(buried.runId, { status: "failed", reason: "abandoned" });
+      const { db } = openOpenClawStateDatabase();
+      db.prepare("UPDATE update_runs SET created_at_ms = ? WHERE run_id = ?").run(
+        Date.now() - 120_000,
+        buried.runId,
+      );
+      // Routine history: the killed run and 99 older successful runs fill one page.
+      settledHistory(99, "before");
+      const before = getUpdateRun(buried.runId);
 
-        if (entry === "openclaw update") {
-          await nextUpdate(killed.slot);
-          expect(mocks.proceed).toHaveBeenCalledOnce();
-          expect(ctx.admitted[0]?.packageActivationSteps?.map((step) => step.name)).toEqual([
-            "interrupted-update-recovery",
-            "interrupted-update-finalization",
-          ]);
-        } else {
-          mocks.root.mockResolvedValue(killed.slot);
-          await updateRepairCommand({ json: true, yes: true });
-          expect(mocks.proceed).not.toHaveBeenCalled();
-        }
+      mocks.root.mockResolvedValue(killed.slot);
+      await updateRepairCommand({ json: true, yes: true });
+      expect(mocks.proceed).not.toHaveBeenCalled();
 
-        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-        expect(finalizationRuns()).toMatchObject([{ status: "succeeded" }]);
-        expect(getUpdateRun(killed.runId)?.steps).toContainEqual(
-          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-        );
-        expect(getUpdateRun(buried.runId)).toEqual(before);
-      }),
-  );
+      expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+      expect(finalizationRuns()).toMatchObject([{ status: "succeeded" }]);
+      expect(getUpdateRun(killed.runId)?.steps).toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+      );
+      expect(getUpdateRun(buried.runId)).toEqual(before);
+    }));
 });

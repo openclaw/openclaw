@@ -48,10 +48,13 @@ export function startSessionsSendReplyFlow(
   const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
     params.replyMode === "peer"
-      ? runWithGatewayToolContinuationContext(run, { retainRequester: true })
+      ? runWithGatewayToolContinuationContext(run, {
+          retainRequester: true,
+          agentId: params.requesterAgentId,
+        })
       : completion
         ? completion.request.custody.run(run)
-        : runWithGatewayToolContinuationContext(run);
+        : runWithGatewayToolContinuationContext(run, { agentId: params.requesterAgentId });
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
     const requesterCompletion = params.replyMode === "peer" ? undefined : completion;

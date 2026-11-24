@@ -33,6 +33,19 @@ describe("orderSessionFiles", () => {
   ];
   const attachments = [image("Image", 2_000), image("alpha.png", 4_000)];
 
+  it("shows the native thumbnail instead of the same artifact twice, not homonymous files", () => {
+    const preview = {
+      ...image("Image"),
+      kind: "image" as const,
+      image: { artifactId: "stored-1" },
+    };
+    const generic = { ...file("image 1"), artifactId: "stored-1" };
+    expect(names(orderSessionFiles([generic, file("Image")], [preview], "default"))).toEqual([
+      "Image",
+      "Image",
+    ]);
+  });
+
   it("dates by modification or message time across sources, undated last", () => {
     expect(names(orderSessionFiles([...files, file("artifact.zip")], attachments, "date"))).toEqual(
       ["report-2.pdf", "alpha.png", "zeta.txt", "Image", "report-10.pdf", "artifact.zip"],

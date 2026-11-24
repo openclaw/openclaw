@@ -104,6 +104,102 @@ function render(patch: Partial<ReportRecord>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("gives a restored update one next step without claiming an unknown cause", () => {
+  const report = render({
+    status: "failed",
+    reason: "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
+    origin: { cause: "unknown", doctorHint: "Run openclaw doctor" },
+    verification: {
+      runningVersion: "2026.9.1",
+      serviceRunning: true,
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "startup timed out" },
+    },
+  });
+  expectText(
+    report.markdown,
+    [
+      "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
+      "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+    ],
+    ["Cause: unknown", "triage", "Diagnose", "Run openclaw doctor"],
+  );
+});
+
+it.each([
+  "Failed: restarting",
+  "Failing check update (update-failed)",
+  "Current health unavailable; saved verification describes the update attempt only.",
+])("omits redundant rollback text: %s", (line) => {
+  const record = failed({
+    reason: "The new version did not start; v2026.9.1 is still running",
+    steps: [
+      failedStep("restarting", {
+        failureFacts: [{ check: "update", code: "update-failed" }],
+      }),
+    ],
+    verification: {
+      booted: true,
+      runningVersion: "2026.9.1",
+      serviceRunning: true,
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "The new version did not start" },
+    },
+  });
+  const report = renderRecord(record, { currentHealth: { kind: "unavailable" } });
+  expect(report.lines.join("\n")).not.toContain(line);
+  expect(report.markdown).not.toContain(line);
+  expect(report.lines).toContain(
+    "Recorded verification: gateway booted; service running (2026.9.1); core ready.",
+  );
+});
+
+it.each<Partial<ReportRecord>>([
+  { reason: "staging failed", verification: {} },
+  {
+    reason: null,
+    verification: { rollbackOutcome: { status: "succeeded", reason: "startup failed" } },
+  },
+])("keeps failed-phase details without a recorded rollback cause (%j)", (patch) => {
+  const report = render({
+    status: "failed",
+    ...patch,
+    steps: [failedStep("staging", { detail: "Package download failed." })],
+  });
+  expect(report.lines).toContain("Failed: staging — Package download failed.");
+});
+
+it("keeps a downgrade's plugin failure below the rollback cause and next step", () => {
+  const report = render({
+    status: "failed",
+    reason: "The new version did not start; v2026.9.2 is still running",
+    target: { kind: "package", version: "2026.9.1" },
+    steps: [
+      failedStep("plugins", {
+        detail: "Plugin update failed. Run `openclaw plugins update --all` to retry.",
+      }),
+      failedStep("restarting", {
+        failureFacts: [{ check: "update", code: "update-failed" }],
+      }),
+      { step: "diagnostic:startup", status: "completed", detail: "private startup output" },
+    ],
+    verification: {
+      runningVersion: "2026.9.2",
+      serviceRunning: true,
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "The new version did not start" },
+    },
+  });
+  expect(report.headline).toContain("The new version did not start; v2026.9.2 is still running");
+  expect(report.lines[0]).toBe(
+    "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+  );
+  expect(report.lines.slice(1)).toContain(
+    "Failed: plugins — Plugin update failed. Run `openclaw plugins update --all` to retry.",
+  );
+  expect(report.markdown).not.toContain("private startup output");
+});
+
 it("labels standalone repair and leads with the update it repaired", () => {
   const detail =
     "Update 2b6f7c1e-9a41-4c2d-8f3e-5d6a7b8c9d0e to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: database is locked";
@@ -704,8 +800,21 @@ it.each<[string | null, string[], string]>([
   expectChatBudget(report.markdown);
 });
 
-it.each<[UpdateRunRecord["status"], string | null, string]>([
-  ["succeeded", null, "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1)."],
+it.each<[UpdateRunRecord["status"], string | null, string, Step[]?]>([
+  [
+    "succeeded",
+    null,
+    "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+  ],
+  [
+    "succeeded",
+    null,
+    "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+    [
+      failedStep("plugins"),
+      { step: "warning:plugins", status: "completed", detail: "Plugin maintenance needs a retry." },
+    ],
+  ],
   ["running", null, "⬆️ OpenClaw update in progress: verifying."],
   ["skipped", null, "ℹ️ OpenClaw update skipped: unknown reason."],
   ["rolled-back", null, "↩️ OpenClaw update rolled back to 2026.9.2: unknown reason."],
@@ -719,12 +828,15 @@ it.each<[UpdateRunRecord["status"], string | null, string]>([
     "still-starting",
     "ℹ️ OpenClaw 2026.9.2 installed; Gateway still starting; readiness unverified; recovery backups retained.",
   ],
-])("keeps %s headline despite failed children (%s)", (status, reason, headline) => {
-  const report = render({
-    status,
-    reason,
-    phase: "verifying",
-    steps: [failedStep("finalize:doctor")],
-  });
-  expect(report.headline).toBe(headline);
-});
+])(
+  "keeps the %s outcome when plugin maintenance fails (%s, case %#)",
+  (status, reason, headline, steps = [failedStep("plugins")]) => {
+    const report = render({
+      status,
+      reason,
+      phase: "verifying",
+      steps,
+    });
+    expect(report.headline).toBe(headline);
+  },
+);

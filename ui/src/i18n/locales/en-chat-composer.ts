@@ -349,6 +349,7 @@ const catalog = {
       failureFileTooLarge: "Too large to attach. Look for this file in Files.",
       findInFiles: "Find in Files",
       findInFilesFor: "Find {name} in Files",
+      showInChatFor: "Show {name} in chat",
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",

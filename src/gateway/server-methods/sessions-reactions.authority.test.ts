@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -125,7 +125,7 @@ it("rechecks current membership, policy, source, and caller after message prepar
         reactor.internal = {
           syntheticClient: true,
           operatorRoleActor: { kind: "operator", profileId: "alice" },
-          operatorRunAuthority: createAdmittedRunOperatorAuthority({
+          operatorRunAuthority: createTestOperatorAuthority({
             profileId: "alice",
             scopes: ["operator.read", "operator.write"],
             assertCurrent: () => {
@@ -136,23 +136,18 @@ it("rechecks current membership, policy, source, and caller after message prepar
           }),
         };
       }
-      let invalidateOnCheck = false;
-      const pending = setReaction(messageId, { sessionKey: key }, reactor, requestContext, () => {
-        if (invalidateOnCheck) {
-          invalidateOnCheck = false;
-          const target = projection.sharingTarget({ key, agentId: "main" })!;
-          sessionChanges.emit({ all: true, scope: "stores" });
-          expect(projection.hasMembership(target.storePath, target.storeKey, "alice")).toBe(true);
-          expect(projection.sharingTargetState({ key, agentId: "main" }).status).toBe("pending");
-        }
-        return true;
-      });
+      const pending = setReaction(messageId, { sessionKey: key }, reactor, requestContext);
       try {
         await awaitGateBeforeSettlement(gate.entered, pending, "reaction did not read its message");
         if (change === "member") {
           removeSessionMember(scope, "alice");
         }
-        invalidateOnCheck = change === "dirty";
+        if (change === "dirty") {
+          const target = projection.sharingTarget({ key, agentId: "main" })!;
+          sessionChanges.emit({ all: true, scope: "stores" });
+          expect(projection.hasMembership(target.storePath, target.storeKey, "alice")).toBe(true);
+          expect(projection.sharingTargetState({ key, agentId: "main" }).status).toBe("pending");
+        }
         if (change === "profile") {
           reactor.authenticatedUserProfile!.profileId = "bob";
         }

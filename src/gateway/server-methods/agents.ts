@@ -50,7 +50,7 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveOperatorRolePolicy,
 } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { resolveAttendedSessionPermissionDefault } from "../session-create-permission-default.js";
@@ -377,11 +377,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
           : await completeAgentOnboarding(options, result.agentId)
         : undefined;
       let onboardingOperatorAuthority:
-        | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        | Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>
         | undefined;
       if (onboarding?.status === "completed" && client) {
         try {
-          onboardingOperatorAuthority = await captureGatewayOperatorRunAuthority({
+          onboardingOperatorAuthority = await prepareGatewayOperatorRunAuthority({
             client,
             context,
             hasCurrentClientAuthority: options.hasCurrentClientAuthority,

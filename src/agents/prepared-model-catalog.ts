@@ -617,7 +617,11 @@ export async function prewarmDefaultNativeModelCatalog(config: OpenClawConfig): 
   if (!agentId) {
     return;
   }
-  const { provider, model } = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const defaultModel = resolveDefaultModelForAgent({ cfg: config, agentId });
+  if (!defaultModel) {
+    return;
+  }
+  const { provider, model } = defaultModel;
   const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
   // A built-in fallback is not startup demand. Keep warmup for configured models/runtimes and
   // signed-in defaults, without probing native auth or starting discovery to decide.

@@ -13,6 +13,7 @@ import {
 } from "../../agents/run-termination.js";
 import { isWorkspaceAccessUnavailableError } from "../../agents/workspace-access.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { claimSystemEventTurn } from "../../infra/system-events.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
@@ -158,7 +159,7 @@ function resolveSessionEventReadmissionKind(
 }
 
 /** Wait before fresh authority, then return the next attempt's state if it may still run. */
-export async function prepareSessionEventReadmission(
+async function prepareSessionEventReadmission(
   readmission: SessionEventReadmission,
   signal: AbortSignal,
   facts: () => SessionEventReadmissionFacts,
@@ -187,7 +188,7 @@ export async function prepareSessionEventReadmission(
     : undefined;
 }
 
-export function readmitSessionEventOccurrence(params: {
+function readmitSessionEventOccurrence(params: {
   text: string;
   options: SessionEventOptions &
     Required<Pick<SessionEventOptions, "agentId" | "sessionKey" | "occurrences">>;
@@ -227,4 +228,105 @@ export function readmitSessionEventOccurrence(params: {
     });
     return { failure };
   }
+}
+
+/** A policy or provider wait can retain only an occurrence that has done no work. */
+type SessionEventTerminal = ReturnType<typeof resolveSessionEventTerminalOutcome>;
+
+export async function settleSessionEventAttempt(params: {
+  text: string;
+  options: SessionEventOptions &
+    Required<Pick<SessionEventOptions, "agentId" | "sessionKey" | "occurrences">>;
+  signal: AbortSignal;
+  occurrenceId: string;
+  ownership: { release: () => void; cancel: () => void };
+  retry: SessionEventReadmission;
+  facts: () => SessionEventReadmissionFacts;
+  waitingProvider?: string;
+  onSettling: (error?: Error | string) => SessionEventTerminal;
+  enqueue: (
+    text: string,
+    options: SessionEventOptions,
+    readmission: SessionEventReadmission,
+  ) => SessionEventReceipt;
+  log: Pick<SubsystemLogger, "error">;
+}): Promise<{
+  terminal: SessionEventTerminal;
+  receipt?: SessionEventReceipt;
+  failure?: Error | string;
+}> {
+  const { signal, ownership, options } = params;
+  const finish = (terminal: SessionEventTerminal) => {
+    if (terminal.status === "failed") {
+      params.log.error("session event execution failed", {
+        source: options.source,
+        agentId: options.agentId,
+        sessionKey: options.sessionKey,
+        eventId: params.occurrenceId,
+        error: String(terminal.failure),
+      });
+    }
+    return { terminal };
+  };
+  const next = await prepareSessionEventReadmission(params.retry, signal, params.facts);
+  const facts = params.facts();
+  const provider =
+    !next &&
+    facts.inputSettled &&
+    !facts.started &&
+    !facts.conversationResultCommitted &&
+    !facts.delivery.delivered &&
+    !facts.delivery.deliveryAttempted &&
+    !facts.delivery.deliveryAmbiguous &&
+    !facts.abandoned &&
+    !signal.aborted
+      ? params.waitingProvider
+      : undefined;
+  const terminal = params.onSettling();
+  if (next || provider !== undefined) {
+    try {
+      const automation = options.scheduledAutomation;
+      if (provider !== undefined) {
+        // The reply owner has settled. Keep the event claimed while other turns use the session.
+        await automation?.providerRunSlot?.wait(provider, signal);
+      }
+      if (automation?.readmitOperator) {
+        const admission = await automation.readmitOperator(signal);
+        options.scheduledAutomation = { ...automation, ...admission };
+      }
+      signal.throwIfAborted();
+    } catch (error) {
+      const stopped = params.onSettling(error instanceof Error ? error : String(error));
+      ownership.cancel();
+      return finish(stopped);
+    }
+    ownership.release();
+    const readmitted = readmitSessionEventOccurrence({
+      text: params.text,
+      options,
+      readmission: next ?? { ...params.retry, attempt: params.retry.attempt + 1 },
+      occurrenceId: params.occurrenceId,
+      adopted: facts.adopted,
+      enqueue: params.enqueue,
+      log: params.log,
+    });
+    return {
+      ...readmitted,
+      terminal:
+        provider !== undefined && readmitted.failure !== undefined
+          ? params.onSettling(readmitted.failure)
+          : terminal,
+    };
+  }
+  if (
+    (options.preserveOccurrenceOnRejection ||
+      (!signal.aborted && isOperatorAuthorityUnavailable(terminal.failure))) &&
+    !facts.adopted &&
+    !facts.started
+  ) {
+    ownership.release();
+  } else {
+    ownership.cancel();
+  }
+  return finish(terminal);
 }

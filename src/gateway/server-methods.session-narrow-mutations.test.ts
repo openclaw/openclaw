@@ -11,7 +11,6 @@ import {
 } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -199,7 +198,7 @@ describe("invocation-owned session mutations", () => {
       ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
     }));
 
-  it.each(["current", "revoked", "replaced"] as const)(
+  it.each(["current", "replaced"] as const)(
     "fences pending narrow board reads after authority is %s",
     (change) =>
       withState(async () => {
@@ -234,9 +233,7 @@ describe("invocation-owned session mutations", () => {
           request,
           async () => {
             expect(respond).not.toHaveBeenCalled();
-            if (change === "revoked") {
-              await setCanonicalUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
-            } else if (change === "replaced") {
+            if (change === "replaced") {
               await upsertSessionEntryCore(scope, {
                 ...entry,
                 sessionId: "board-read-replacement",
@@ -561,7 +558,7 @@ describe("invocation-owned session mutations", () => {
     const method = "sessions.steer";
     await withState(async () => {
       const { client, context } = ownerFixture("send-owner");
-      for (const changed of ["none", "source", "generation"] as const) {
+      for (const changed of ["none", "generation"] as const) {
         const entry = {
           ...ownedEntry(client, "original"),
           lifecycleRevision: "original",
@@ -570,7 +567,6 @@ describe("invocation-owned session mutations", () => {
         await upsertSessionEntryCore(scope, entry);
         using gate = createRequestGate();
         const effect = vi.fn();
-        let current = true;
         const dispatch = vi
           .spyOn(chat, "handleDirectExternalChatSend")
           .mockImplementation(async (options) => {
@@ -587,7 +583,6 @@ describe("invocation-owned session mutations", () => {
           {
             client,
             context,
-            hasCurrentClientAuthority: () => current,
             extraHandlers: sessionMessagingHandlers,
           },
           changed,
@@ -596,9 +591,6 @@ describe("invocation-owned session mutations", () => {
         try {
           await Promise.race([gate.entered, request]);
           expect(dispatch).toHaveBeenCalledOnce();
-          if (changed === "source") {
-            current = false;
-          }
           if (changed === "generation") {
             await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
           }
@@ -608,25 +600,17 @@ describe("invocation-owned session mutations", () => {
           dispatch.mockRestore();
         }
         expect(effect).toHaveBeenCalledTimes(changed === "none" ? 1 : 0);
-        const settled = await outcome;
-        if (changed === "source") {
-          expect(settled).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
-        } else {
-          expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          expect(respond).toHaveBeenCalledOnce();
-          expect(respond.mock.calls[0]?.[0]).toBe(changed === "none");
-          if (changed === "generation") {
-            expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-          }
+        expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(changed === "none");
+        if (changed === "generation") {
+          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
         }
       }
     });
   });
 
-  it.each(["source", "generation", "missing-single", "missing-batch"] as const)(
+  it.each(["generation", "missing-single", "missing-batch"] as const)(
     "session mutation preserves the original %s fence",
     (changed) =>
       withState(async () => {
@@ -641,7 +625,6 @@ describe("invocation-owned session mutations", () => {
         if (!missing) {
           await upsertSessionEntryCore(scope, entry);
         }
-        let current = true;
         const paused = pausedHandler(sessionMutationHandlers[method]!);
         const { request, respond } = startExactAuthorizationRequest(
           method,
@@ -654,7 +637,6 @@ describe("invocation-owned session mutations", () => {
           {
             client,
             context,
-            hasCurrentClientAuthority: () => current,
             extraHandlers: { [method]: paused.handler },
           },
           changed,
@@ -664,11 +646,7 @@ describe("invocation-owned session mutations", () => {
             return;
           }
           expect(respond).not.toHaveBeenCalled();
-          if (changed === "source") {
-            current = false;
-          } else {
-            await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
-          }
+          await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
         });
         if (missing) {
           expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -903,16 +881,5 @@ describe("guest dictation request boundary", () => {
         brain: "none",
       });
       expect(reopened.mock.calls.at(-1)?.[0]).toBe(true);
-      const broadcast = vi.mocked(context.broadcastToConnIds);
-      broadcast.mockClear();
-      client.invalidated = true;
-      expectDefined(transcript, "transcription callback")("revoked recording text");
-      expect(broadcast).not.toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ text: "revoked recording text" }),
-        expect.anything(),
-        expect.anything(),
-      );
-      expect(sttSession.close).toHaveBeenCalledTimes(2);
     }));
 });

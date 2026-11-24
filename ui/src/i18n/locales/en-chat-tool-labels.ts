@@ -26,6 +26,10 @@ const enChatToolLabels = {
           running: "Launching",
           succeeded: "Launched",
           failed: "Couldn't launch subagent",
+          limitReached:
+            "Couldn't start a subagent. This session has {active} of {limit} active subagents. Wait for one to finish, then retry.",
+          namedLimitReached:
+            "{name} couldn't start. This session has {active} of {limit} active subagents. Wait for one to finish, then retry.",
           interrupted: "Subagent launch interrupted",
           unknown: "Subagent launch outcome unknown",
         },

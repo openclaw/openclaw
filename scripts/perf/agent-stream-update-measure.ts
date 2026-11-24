@@ -229,7 +229,6 @@ async function createSession() {
     resourceLoader,
     modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     allowedToolNames: [],
-    cleanupProviderSessionResourcesOnDispose: false,
   });
   agent.state.tools = tools;
   result.subscribe(onEvent);

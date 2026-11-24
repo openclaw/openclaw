@@ -20,6 +20,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { mapArrayIfChanged } from "../shared/map-array-if-changed.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 export function resolveProviderMatch(
@@ -41,19 +42,68 @@ export function resolveProviderMatch(
   );
 }
 
-export function pickAuthMethod(
-  provider: ProviderPlugin,
-  rawMethod?: string,
-): ProviderAuthMethod | null {
-  const normalized = normalizeOptionalLowercaseString(rawMethod);
-  if (!normalized) {
-    return null;
+/**
+ * The one auth method matcher for CLI, Gateway and chat sign-in: id, then label, then
+ * `device-code` (the shipped `--device-code` flag, v2026.5.18) as a declared device-code
+ * sign-in under another method id. Without a requested method, picks the preferred one.
+ */
+export async function pickAuthMethod(params: {
+  provider: ProviderPlugin;
+  requestedMethod?: string;
+  prompter: WizardPrompter;
+  tokenOnly?: boolean;
+  config?: OpenClawConfig;
+}): Promise<ProviderAuthMethod | null> {
+  const { provider } = params;
+  const requested = normalizeOptionalLowercaseString(params.requestedMethod);
+  if (requested) {
+    const method =
+      provider.auth.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === requested) ??
+      provider.auth.find((entry) => normalizeLowercaseStringOrEmpty(entry.label) === requested);
+    if (method || requested !== "device-code") {
+      return method ?? null;
+    }
+    // Manifest metadata names the device-code sign-in; load it only for this alias.
+    const [{ resolveManifestDeclaredProviderAuthChoices }, { matchesProviderLoginMethod }] =
+      await Promise.all([
+        import("./provider-auth-choices.js"),
+        import("./provider-login-options.js"),
+      ]);
+    const methodIds = new Set(
+      resolveManifestDeclaredProviderAuthChoices({
+        config: params.config,
+        includeUntrustedWorkspacePlugins: false,
+        includeWorkspacePlugins: false,
+      })
+        .filter(
+          (choice) =>
+            normalizeProviderId(choice.providerId) === normalizeProviderId(provider.id) &&
+            matchesProviderLoginMethod(choice, requested),
+        )
+        .map((choice) => choice.methodId),
+    );
+    const matches = provider.auth.filter((entry) => methodIds.has(entry.id));
+    return matches.length === 1 ? (matches[0] ?? null) : null;
   }
-  return (
-    provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.id) === normalized) ??
-    provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.label) === normalized) ??
-    null
+  const methods = params.tokenOnly
+    ? provider.auth.filter((method) => method.kind === "token")
+    : provider.auth;
+  const preferred = methods.find((method) =>
+    params.tokenOnly ? method.id === "setup-token" : method.kind === "oauth",
   );
+  if (preferred || methods.length <= 1) {
+    return preferred ?? methods[0] ?? null;
+  }
+  return params.prompter
+    .select({
+      message: `${params.tokenOnly ? "Token" : "Auth"} method for ${provider.label}`,
+      options: methods.map((method) => ({
+        value: method.id,
+        label: method.label,
+        hint: method.hint,
+      })),
+    })
+    .then((id) => methods.find((method) => method.id === id) ?? null);
 }
 
 function isProviderModelRow(value: unknown): value is Record<string, unknown> & { id: string } {
@@ -234,10 +284,7 @@ function normalizeProviderCatalogModelIdsForWrite(
   return nextModels === models ? providerConfig : { ...providerConfig, models: nextModels };
 }
 
-function normalizeModelProviderConfigsForWrite(
-  cfg: OpenClawConfig,
-  providerConfigNormalizer: typeof normalizeProviderConfigForConfigDefaults,
-): OpenClawConfig {
+function normalizeModelProviderConfigsForWrite(cfg: OpenClawConfig): OpenClawConfig {
   const providers = cfg.models?.providers;
   if (!providers) {
     return cfg;
@@ -248,10 +295,7 @@ function normalizeModelProviderConfigsForWrite(
   for (const [provider, providerConfig] of Object.entries(providers)) {
     const normalizedProviderConfig = normalizeProviderCatalogModelIdsForWrite(
       provider,
-      providerConfigNormalizer({
-        provider,
-        providerConfig,
-      }),
+      normalizeProviderConfigForConfigDefaults({ provider, providerConfig }),
     );
     if (normalizedProviderConfig === providerConfig) {
       continue;
@@ -298,11 +342,8 @@ function normalizeAgentModelFields<
   return next;
 }
 
-function normalizeConfigModelRefsForWrite(
-  cfg: OpenClawConfig,
-  providerConfigNormalizer: typeof normalizeProviderConfigForConfigDefaults,
-): OpenClawConfig {
-  const providerNormalized = normalizeModelProviderConfigsForWrite(cfg, providerConfigNormalizer);
+function normalizeConfigModelRefsForWrite(cfg: OpenClawConfig): OpenClawConfig {
+  const providerNormalized = normalizeModelProviderConfigsForWrite(cfg);
   const defaults = providerNormalized.agents?.defaults;
   const agentsList = listAgentEntries(providerNormalized);
 
@@ -328,16 +369,10 @@ function normalizeConfigModelRefsForWrite(
 export function applyProviderAuthConfigPatchWithNormalization(
   cfg: OpenClawConfig,
   patch: unknown,
-  options?: {
-    replaceDefaultModels?: boolean;
-    providerConfigNormalizer?: typeof normalizeProviderConfigForConfigDefaults;
-  },
+  options?: { replaceDefaultModels?: boolean },
 ): OpenClawConfig {
-  const providerConfigNormalizer =
-    options?.providerConfigNormalizer ?? normalizeProviderConfigForConfigDefaults;
   const merged = normalizeConfigModelRefsForWrite(
     mergeConfigPatch(normalizeProviderAuthRows(cfg), normalizeProviderAuthRows(patch, cfg)),
-    providerConfigNormalizer,
   );
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
     return merged;
@@ -349,22 +384,19 @@ export function applyProviderAuthConfigPatchWithNormalization(
     return merged;
   }
 
-  return normalizeConfigModelRefsForWrite(
-    {
-      ...merged,
-      agents: {
-        ...merged.agents,
-        defaults: {
-          ...merged.agents?.defaults,
-          // Opt-in replacement for migrations that rename/remove model keys.
-          models: mergeConfigPatch({}, patchModels, false) as NonNullable<
-            NonNullable<OpenClawConfig["agents"]>["defaults"]
-          >["models"],
-        },
+  return normalizeConfigModelRefsForWrite({
+    ...merged,
+    agents: {
+      ...merged.agents,
+      defaults: {
+        ...merged.agents?.defaults,
+        // Opt-in replacement for migrations that rename/remove model keys.
+        models: mergeConfigPatch({}, patchModels, false) as NonNullable<
+          NonNullable<OpenClawConfig["agents"]>["defaults"]
+        >["models"],
       },
     },
-    providerConfigNormalizer,
-  );
+  });
 }
 
 export function restoreAgentsDefaultsModel(

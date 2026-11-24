@@ -20,6 +20,7 @@ import {
   withPluginSetupPreparation,
 } from "./plugin-setup-module.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { prepareProviderModelPolicySurfaces } from "./provider-model-routes.js";
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
@@ -77,6 +78,9 @@ export async function preparePluginDoctorContractModules(
           includePersistedAuthState: false,
           includeSetupFallbackPlugins: true,
         });
+        assertCurrent();
+        // ...and installed provider policies through model identity checks.
+        await prepareProviderModelPolicySurfaces();
         assertCurrent();
       }
     }

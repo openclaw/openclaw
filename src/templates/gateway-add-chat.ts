@@ -297,6 +297,8 @@ export async function createTemplateAgentFromChat(
               async () =>
                 await admitted.chat.complete?.({
                   source: input.source,
+                  requiredAutomationIds: source.manifest.automations.map(({ id }) => id),
+                  ...(admitted.deviceTimeZone ? { deviceTimeZone: admitted.deviceTimeZone } : {}),
                   report,
                   dependenciesPending: true,
                 }),

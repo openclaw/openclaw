@@ -104,8 +104,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   gateway:
     "Gateway runtime surface for bind mode, auth, web app, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.resources": "Gateway resource profile selection. Changes require a Gateway restart.",
+  "gateway.resources.memoryBudgetMiB":
+    "Lean only: worker memory budget in MiB. Extra workers beyond each pool's minimum start only while measured memory stays under it. Overrides the default of 85% of a cgroup-v2 memory.max, or 40% of host RAM without a container limit. Changes require a Gateway restart.",
   "gateway.resources.profile":
-    "Resource profile: auto (default), standard, or lean. Auto selects lean below 8 GiB effective memory (the minimum of host RAM and visible cgroup-v2 memory.max limits); exactly 8 GiB selects standard. CPU count does not affect selection. Cgroup v1 limits are not detected; host RAM is used. Explicit profiles override detection. Both profiles currently use identical worker behavior.",
+    "Resource profile: auto (default), standard, or lean. Auto selects lean below 8 GiB effective memory (the minimum of host RAM and visible cgroup-v2 memory.max limits); exactly 8 GiB selects standard. CPU count does not affect selection. Cgroup v1 limits are not detected; host RAM is used. Explicit profiles override detection. Lean starts extra workers only within a memory budget (gateway.resources.memoryBudgetMiB).",
   "gateway.port":
     "TCP port used by the gateway listener for API, web app, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
   "gateway.mode":
@@ -231,7 +233,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.definitions.*.agents":
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
   "gateway.roles.definitions.*.modelPolicy":
-    "Optional model ceiling for this role's requests and descendants. An empty object allows only the source agent's configured primary and fallback models; omitting the policy leaves model access unchanged. Model aliases resolve before enforcement, and denied models cannot be used by retries or fallbacks. With config reload enabled, changes confined to existing roles' model policies apply when committed without restarting permitted work. Other role changes hot-apply and reconnect clients with current authority.",
+    "Optional model ceiling for this role's requests and descendants. An empty object allows only the source agent's configured primary and fallback models; omitting the policy leaves model access unchanged. Model aliases resolve before enforcement, and denied models cannot be used by retries or fallbacks. With config reload enabled, changes confined to existing roles' model policies or project grants apply when committed without restarting permitted work. Other role changes hot-apply and reconnect clients with current authority.",
   "gateway.roles.definitions.*.modelPolicy.sourceAgent":
     "Agent whose primary, fallbacks, and model aliases supply this role's model policy. Defaults to the configured system/default agent or the sole agent. Set this explicitly when a multi-agent Gateway has no ambient owner.",
   "gateway.roles.definitions.*.modelPolicy.allow":
@@ -240,6 +242,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Model references, source-agent aliases, or trailing prefix wildcards excluded from this role. A pattern such as "provider/family-*" excludes future members of that family too. Exclusions match resolved model identities and take precedence over allowed and source-agent models.',
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
+  "gateway.roles.definitions.*.projects":
+    'Registered projects this role may discover and open in addition to public GitHub repositories: set "*" for every registered project or list project IDs. Callers with operator.write already reach every project. Sessions and spawns reach a project granted only this way through an isolated managed worktree. Unknown IDs are ignored; folder browsing, repository URLs, and remote search stay unchanged. Grant edits apply to the next request without reconnecting clients or stopping runs.',
   "gateway.roles.definitions.*.workerProfiles":
     "Cloud worker profiles this role may explicitly dispatch its own sessions to. Omitted or empty denies cloud dispatch; administrators retain access. Setup and moves to cloud profiles remain administrator-only.",
   "gateway.roles.definitions.*.accessPolicyPlugin":

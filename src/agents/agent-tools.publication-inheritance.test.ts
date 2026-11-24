@@ -6,7 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
@@ -70,7 +70,7 @@ describe("publication policy inherited by a managed child", () => {
       {
         agentId: "main",
         sessionKey: parentKey,
-        operatorAuthority: createAdmittedRunOperatorAuthority({
+        operatorAuthority: createTestOperatorAuthority({
           profileId: "publication-policy-test",
           scopes: ["operator.write"],
           signal: new AbortController().signal,

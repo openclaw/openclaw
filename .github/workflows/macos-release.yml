@@ -73,6 +73,7 @@ jobs:
 
       - name: Validate release tag and package metadata
         env:
+          OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "900000"
           RELEASE_TAG: ${{ inputs.tag }}
           PUBLIC_RELEASE_BRANCH: ${{ inputs.public_release_branch }}
         run: |

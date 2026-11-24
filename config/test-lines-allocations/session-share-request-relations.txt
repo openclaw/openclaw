@@ -1,0 +1,7 @@
+# Request-scoped catalog consolidation: real registrar/default invoke policy,
+# source relation, cursor and transport boundaries, partial-row retention,
+# older-Gateway capability checks, and both browser navigation/links fixtures.
+# Maintainer review added regressions for the typed unresolved-relation page through
+# the real source handler, relation snapshot eviction, and partial-catalog visibility.
+# Exact measured net test-line growth minus the standard 400-line allowance.
+804

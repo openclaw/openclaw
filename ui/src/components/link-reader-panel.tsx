@@ -35,8 +35,6 @@ import { Menu } from "./solid/menu.tsx";
 import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
-const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
-
 function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?: boolean }) {
   const label = () => t("linkReader.newTab");
   return (
@@ -314,7 +312,7 @@ function PanelView(
   );
   return (
     <>
-      <style>{panelStyles}</style>
+      <style>{linkReaderViewStyles}</style>
       {tab() && !props.suppressed && (props.embedded || view().dockLayout.open) ? (
         <section
           class={["bp", props.embedded ? "bp--embedded" : "bp--right", "link-reader-panel"]}

@@ -61,7 +61,10 @@ export function resolveDefaultProactiveCadenceMs(
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): number | undefined {
-  const provider = resolveDefaultModelForAgent({ cfg, agentId }).provider;
+  const provider = resolveDefaultModelForAgent({ cfg, agentId })?.provider;
+  if (!provider) {
+    return undefined;
+  }
   return resolveBundledProviderPolicySurface(provider)?.resolveProactiveCadenceMs?.({
     provider,
     config: cfg,

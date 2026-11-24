@@ -253,9 +253,7 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
       let response: Response | undefined;
       try {
         if (!options?.apiKey) {
-          throw new Error(
-            "No Radius access token configured. Run openclaw models auth login --provider radius.",
-          );
+          throw new Error("No Radius access token configured.");
         }
         options.signal?.throwIfAborted();
         let payload: unknown = {

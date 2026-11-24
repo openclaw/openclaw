@@ -118,7 +118,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             expectedAuthority.workspaceAccess,
           ))
       ) {
-        throw new Error("card workspace authority changed before claim.");
+        throw new Error("card workspace or placement changed. Retry the claim.");
       }
       const existingClaim = guarded.metadata?.claim;
       const activeClaim =
