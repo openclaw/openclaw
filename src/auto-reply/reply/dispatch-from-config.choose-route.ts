@@ -181,6 +181,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       state.hookState.inboundClaimContext,
     );
     if (
+      state.isInternalWebchatTurn ||
       ctx.CommandInterpretationSuppressed ||
       !commandText?.startsWith("/") ||
       !commandId ||
@@ -456,7 +457,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const commandText = ctx.CommandInterpretationSuppressed
       ? undefined
       : normalizeOptionalString(resolveCommandContextText(ctx));
-    const isCommandReply = !hasTranscriptOwner && commandText?.startsWith("/");
+    const isCommandReply =
+      !state.isInternalWebchatTurn && !hasTranscriptOwner && commandText?.startsWith("/");
     const commandId = isCommandReply
       ? scopeCommandTranscriptId(transcriptMirrorSourceId, state.hookState.inboundClaimContext)
       : undefined;

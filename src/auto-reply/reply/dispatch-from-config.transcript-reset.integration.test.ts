@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -26,6 +27,78 @@ const text = "Accepted reply must survive its reset boundary.";
 
 describe("accepted dispatch reply transcript custody", () => {
   const fixture = useTempSessionsFixture("dispatch-transcript-reset-");
+
+  it.each(["webchat", "telegram"] as const)(
+    "leaves %s command transcript persistence with its delivery owner",
+    async (channel) => {
+      const storePath = fixture.storePath();
+      const target = {
+        agentId: "main",
+        storePath,
+        sessionKey: `agent:main:${channel}:direct:1001`,
+        sessionId: "login-session",
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+          return { visibleReplySent: true };
+        },
+      });
+      const notes = ["Provider sign-in", "Audit Provider sign-in started"];
+      await withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            cfg: {
+              agents: {
+                ownership: "explicit",
+                entries: { main: {} },
+                defaults: { workspace: path.dirname(storePath) },
+              },
+              session: { store: storePath },
+              plugins: { enabled: false },
+              messages: { visibleReplies: "automatic" },
+            },
+            dispatcher,
+            ctx: {
+              AgentId: "main",
+              InboundAccessAuthorized: true,
+              Body: "/login audit-provider/device",
+              CommandBody: "/login audit-provider/device",
+              CommandAuthorized: true,
+              Provider: channel,
+              Surface: channel,
+              ChatType: "direct",
+              From: `${channel}:1001`,
+              To: `${channel}:2002`,
+              SessionKey: target.sessionKey,
+              MessageSid: "single-login",
+            },
+            replyResolver: async (_ctx, opts) => {
+              for (const note of notes) {
+                await opts?.onBlockReply?.({ text: note });
+              }
+              return { text: "Audit Provider login complete" };
+            },
+          }),
+      });
+      expect(delivered).toEqual([...notes, "Audit Provider login complete"]);
+      const entries = await readVisibleSessionTranscriptMessageEntries(target);
+      expect(entries.map(({ message }) => message)).toMatchObject(
+        channel === "webchat"
+          ? []
+          : [
+              { role: "user", content: [{ type: "text", text: "/login audit-provider/device" }] },
+              ...[...notes, "Audit Provider login complete"].map((replyText) => ({
+                role: "assistant",
+                content: [{ type: "text", text: replyText }],
+              })),
+            ],
+      );
+    },
+  );
 
   it.for([false, true])("records the accepted reply before reset=%s", async (reset, { signal }) => {
     const storePath = fixture.storePath();
