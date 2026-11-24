@@ -2,6 +2,7 @@ import { createMemo, type Accessor } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { t as translate } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import { resolveDaybreakAccessProgram } from "../../../lib/chat/daybreak-access-program.ts";
 import { resolvePreferredServerChatModelValue } from "../../../lib/chat/model-ref.ts";
 import {
   hasNoConnectedChatModel,
@@ -537,11 +538,11 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       !props.modelSwitching
         ? accessProgramModel?.availableAccessPrograms?.cyber
         : undefined;
-    const hasAccessSelection =
-      props.requestedAccessProgram !== undefined || effectiveAccessProgram !== undefined;
+    const accessSelection = props.requestedAccessProgram ?? effectiveAccessProgram;
+    const hasAccessSelection = accessSelection !== undefined;
     const showAccessProgram =
       Boolean(props.onAccessProgramSelect) &&
-      (hasAccessSelection || accessPrograms?.some((program) => program !== "standard"));
+      (hasAccessSelection || resolveDaybreakAccessProgram(accessPrograms, accessSelection).visible);
     const accessProgramDisabled =
       commonDisabled || !hasResolvableModel || Boolean(props.accessProgramMutationDisabledReason);
     const effortDisabled =
@@ -558,8 +559,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
       showEffort:
-        !setupRequired &&
-        (!confirmedEmptyCatalog || Boolean(showAccessProgram && hasAccessSelection)),
+        !setupRequired && (!confirmedEmptyCatalog || (showAccessProgram && hasAccessSelection)),
       model: {
         modelAuthStatusResult: props.modelAuthStatusResult,
         authProfileId:
@@ -631,7 +631,6 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           showAccessProgram && props.onAccessProgramSelect
             ? {
                 requested: props.requestedAccessProgram,
-                previous: props.daybreakAccessProgram,
                 effectiveAccessProgram,
                 programs: accessPrograms,
                 disabled: accessProgramDisabled,

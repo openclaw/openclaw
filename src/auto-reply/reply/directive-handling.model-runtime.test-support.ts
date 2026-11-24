@@ -46,7 +46,6 @@ export function registerModelRuntimeDirectiveTests({
           operatorAuthority: createTestOperatorAuthority({
             profileId: "runtime-policy-fixture",
             scopes: ["operator.write"],
-            assertCurrent() {},
             rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
           }),
         });

@@ -59,10 +59,7 @@ import {
 } from "./subagent-registry.native-settlement.test-support.js";
 import { registerSupersededNativeTimingTest } from "./subagent-registry.native-termination.test-support.js";
 import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
-import {
-  makeCompletedCollectorRun,
-  makeSuspendedDeliveryRun,
-} from "./subagent-registry.run-fixtures.test-support.js";
+import { makeCompletedCollectorRun } from "./subagent-registry.run-fixtures.test-support.js";
 import { resetSubagentRegistrySessionMocks } from "./subagent-registry.session-mocks.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -760,7 +757,7 @@ describe("subagent registry seam flow", () => {
   it("refreshes unpublished timeout delivery payloads after lifecycle correction", async () => {
     const createdAt = Date.parse("2026-03-24T11:59:00Z");
     mockPendingAgentWait();
-    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("retryable");
+    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("undelivered");
     await mod.registerSubagentRun({
       runId: "run-refresh-pending-timeout-payload",
       task: "pending timeout payload should refresh",
@@ -1324,110 +1321,6 @@ describe("subagent registry seam flow", () => {
     settleLifecycle,
   });
 
-  it("retains delete-mode successful completions through the delivery deadline", async () => {
-    const persist = (runs: Map<string, SubagentRunRecord>, runIds?: readonly string[]) =>
-      saveSubagentRegistryChangesToSqlite(runs, runIds ?? [...runs.keys()]);
-    mocks.persistRegistryRows.mockImplementation(persist);
-    mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
-    const endedAt = Date.parse("2026-03-24T12:00:00Z");
-    mocks.callGateway.mockResolvedValueOnce({
-      status: "ok",
-      startedAt: endedAt - 500,
-      endedAt,
-      terminalReply: { disposition: "visible", text: "final completion reply" },
-    });
-
-    const settleRootWork = observeRootWork();
-    await mod.registerSubagentRun({
-      runId: "run-delete-give-up",
-      cleanup: "delete",
-      expectsCompletionMessage: true,
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    await settleRootWork(true);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(findRequesterRun("run-delete-give-up")).toMatchObject({
-      runId: "run-delete-give-up",
-      cleanup: "delete",
-    });
-
-    const retryWindowEnd = endedAt + 5 * 60_000;
-    while (Date.now() < retryWindowEnd) {
-      await vi.advanceTimersToNextTimerAsync();
-      await settleRootWork(true);
-    }
-    expect(mocks.runSubagentAnnounceFlow.mock.calls.length).toBeGreaterThan(3);
-    expect(findRequesterRun("run-delete-give-up")?.delivery?.status).not.toBe("suspended");
-
-    const deadlineAt = findRequesterRun("run-delete-give-up")?.delivery?.deadlineAt;
-    expect(deadlineAt).toBeTypeOf("number");
-    vi.setSystemTime((deadlineAt ?? Date.now()) + 1);
-    mod.resumeSubagentRun("run-delete-give-up");
-    await vi.advanceTimersByTimeAsync(0);
-    await settleRootWork();
-    expect(findRequesterRun("run-delete-give-up")?.delivery).toMatchObject({
-      status: "suspended",
-      suspendedReason: "expiry",
-    });
-  });
-
-  it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
-    mocks.entries = sessionEntries(
-      {
-        "agent:main:subagent:parent": ["sess-parent", "revision-parent"],
-        "agent:main:subagent:child": ["sess-child", "revision-child"],
-      },
-      1,
-    );
-
-    await mod.addSubagentRunForTests({
-      runId: "run-parent-expired",
-      childSessionKey: "agent:main:subagent:parent",
-      childSessionIdentity: {
-        sessionId: "sess-parent",
-        lifecycleRevision: "revision-parent",
-      },
-      cleanup: "delete",
-      createdAt: Date.parse("2026-03-24T11:50:00Z"),
-      startedAt: Date.parse("2026-03-24T11:50:30Z"),
-      endedAt: Date.parse("2026-03-24T11:51:00Z"),
-      cleanupHandled: false,
-      cleanupCompletedAt: undefined,
-    });
-
-    const announceEntered = createDeferred();
-    mocks.runSubagentAnnounceFlow.mockImplementationOnce(async () => {
-      announceEntered.resolve();
-      return "delivered";
-    });
-    const settleRootWork = observeRootWork();
-    try {
-      await mod.registerSubagentRun({
-        runId: "run-child-finished",
-        requesterSessionKey: "agent:main:subagent:parent",
-        requesterDisplayKey: "parent",
-      });
-      await announceEntered.promise;
-    } finally {
-      await settleRootWork();
-    }
-
-    expect(findRequesterRun("run-parent-expired")).toBeUndefined();
-
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({ childRunId: "run-child-finished" }),
-    );
-    await waitForFast(() => {
-      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
-        childSessionKey: "agent:main:subagent:parent",
-        reason: "deleted",
-        workspaceDir: undefined,
-      });
-    });
-  });
-
   registerYieldedParentCleanupCase({ getRegistry: () => mod, mocks });
 
   it("defers the killed hook until the provisional result reconciles", async () => {
@@ -1555,57 +1448,5 @@ describe("subagent registry seam flow", () => {
       });
     }
   });
-
-  it.each(["main", "cron"] as const)(
-    "does not emit ended hooks before suspended %s delete retirement is durable",
-    async (requester) => {
-      const now = Date.parse("2026-03-24T12:00:00Z");
-      const requesterSessionKey =
-        requester === "cron" ? "agent:main:cron:cron-1:run:parent" : "agent:main:main";
-      const runId = "run-suspended-delete-persist-failure";
-      const childSessionKey = "agent:main:subagent:suspended-delete-persist-failure";
-      mockEndedHooks();
-      await mod.addSubagentRunForTests(
-        makeSuspendedDeliveryRun({
-          runId,
-          childSessionKey,
-          childSessionIdentity: {
-            sessionId: "sess-suspended-delete-persist-failure",
-            lifecycleRevision: "revision-suspended-delete-persist-failure",
-          },
-          controllerSessionKey: requesterSessionKey,
-          requesterSessionKey,
-          requesterDisplayKey: "main",
-          task: "discard suspended delete delivery",
-          cleanup: "delete",
-          spawnMode: "run",
-          createdAt: now - 8 * 24 * 60 * 60_000,
-          endedAt: now - 8 * 24 * 60 * 60_000,
-          delivery: {
-            suspendedAt: now - 7 * 24 * 60 * 60_000 - 1,
-          },
-        }),
-      );
-      const original = structuredClone(await mod.getSubagentRunByChildSessionKey(childSessionKey));
-      mocks.persistRegistryRows.mockImplementationOnce(() => {
-        throw new Error("registry deletion failed");
-      });
-
-      await expect(mod.testing.sweepOnceForTests()).rejects.toThrow("registry deletion failed");
-
-      expect(await mod.getSubagentRunByChildSessionKey(childSessionKey)).toEqual(original);
-      expect(mocks.runSubagentEnded).not.toHaveBeenCalled();
-      expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
-      expect(mocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
-
-      await mod.testing.sweepOnceForTests();
-
-      expect(await mod.getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
-      expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-      await waitForFast(() => {
-        expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalledTimes(1);
-      });
-    },
-  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,7 +4,9 @@ import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { readWindowsTaskSupervisorRestartExitCode as readRestartExitCode } from "../../daemon/windows-task-supervisor-contract.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { runWindowsGatewayTaskSupervisor as runSupervisor } from "./task-supervisor.js";
+import { tryRunWindowsGatewayTaskSupervisor } from "./task-supervisor.js";
+
+const runSupervisor = () => tryRunWindowsGatewayTaskSupervisor(process.argv);
 
 const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   spawn: vi.fn(),

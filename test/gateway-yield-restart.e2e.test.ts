@@ -739,7 +739,7 @@ it
         }
         if (action === "policy-unavailable") {
           expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
-          expect(instance.logs()).not.toContain("Restart recovery operator authority changed");
+          expect(instance.logs()).not.toContain("Restart recovery could not admit this input");
         }
       },
       async () => {

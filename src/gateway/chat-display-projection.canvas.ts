@@ -10,7 +10,10 @@ import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
 } from "../shared/tool-approval-reviews.js";
-import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
+import {
+  isAssistantInternalReasoningContentType,
+  truncateChatHistoryText,
+} from "./chat-display-projection.helpers.js";
 import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 
 function isDisplayRouteIdentifier(value: unknown, maxChars: number): value is string {
@@ -279,6 +282,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   let changed = false;
   let lastAssistantIndex = -1;
   let lastRenderableAssistantIndex = -1;
+  let thinkingFallbackIndex = -1;
   const pending: ChatCanvasPreview[] = [];
   for (let index = 0; index < next.length; index++) {
     const entry = readObjectRecord(next[index]);
@@ -301,15 +305,37 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
         }
       } else {
         lastRenderableAssistantIndex = index;
-        if (pending.length > 0) {
+        // Claude CLI history records thinking as its own row before the visible reply.
+        // Only the reply consumes previews; a thinking row stays the fallback for an unanswered turn.
+        const reasoningOnly =
+          Array.isArray(entry.content) &&
+          entry.content.length > 0 &&
+          entry.content.every((block) =>
+            isAssistantInternalReasoningContentType(readObjectRecord(block)?.type),
+          );
+        if (pending.length > 0 && !reasoningOnly) {
           next[index] = appendChatCanvasBlocksToMessage(entry, pending);
           pending.length = 0;
+          thinkingFallbackIndex = -1;
           changed = true;
+        } else if (pending.length > 0 && thinkingFallbackIndex < 0) {
+          thinkingFallbackIndex = index;
         }
       }
       continue;
     }
     if (!messageContainsToolHistoryContent(entry)) {
+      // A turn interrupted before its reply keeps its widgets; the next prompt's answer must not
+      // take them. Tool result rows (parallel calls are not coalesced) still belong to this turn.
+      if (role === "user" && thinkingFallbackIndex >= 0) {
+        next[thinkingFallbackIndex] = appendChatCanvasBlocksToMessage(
+          readRecord(next[thinkingFallbackIndex]),
+          pending,
+        );
+        pending.length = 0;
+        thinkingFallbackIndex = -1;
+        changed = true;
+      }
       continue;
     }
     const preview = extractChatToolResultCanvasPreview(entry);

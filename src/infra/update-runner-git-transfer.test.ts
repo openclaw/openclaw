@@ -231,8 +231,8 @@ it
     }
     if (argv.includes("index-pack")) {
       expect(options.input).toBeUndefined();
-      expect(options.stdinFileDescriptor).toBeTypeOf("number");
-      packBytes = fs.fstatSync(options.stdinFileDescriptor!).size;
+      expect(options.stdinFile).toBeDefined();
+      packBytes = fs.fstatSync(options.stdinFile!.fd).size;
     }
     const result = await runCommandWithTimeout(argv, { ...options, env });
     if (missingPack && argv.includes("pack-objects") && result.code === 0) {

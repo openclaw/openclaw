@@ -1,5 +1,6 @@
 import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { TSchema } from "typebox";
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   ModelApi,
   ProviderModelRouteRuntimePolicy,
@@ -269,6 +270,8 @@ export type BuildAgentRuntimePlanParams = BuildAgentRuntimeDeliveryPlanParams & 
   agentId?: string;
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;
+  /** Programs the selected account advertises for this model, route, and runtime; omit when unknown. */
+  cyberAccessPrograms?: readonly CyberAccessProgram[];
   resolvedTransport?: AgentRuntimeTransport;
   /** Omit only when a standalone caller intentionally resolves provider hooks lazily. */
   providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;

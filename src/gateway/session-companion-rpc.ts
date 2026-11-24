@@ -328,7 +328,6 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         });
         retainedSource?.assertCurrent();
         assertSourceCurrent();
-        capturedOperator?.authority.assertCurrent();
         respond(true, result);
       } catch (error) {
         if (error instanceof SessionMutationAuthorizationChangedError) {

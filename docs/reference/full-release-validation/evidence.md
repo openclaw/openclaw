@@ -49,7 +49,9 @@ artifact limits: fail sealing, never truncate evidence.
 A nonempty plugin subset may consume authenticated all-publishable admission, retaining
 original release/channel/route, Windows operands, and sealed artifact identities. No
 replacement admission, qualification change, or broader authorization results. Each
-batch needs new parent authorization and final-effect current authority checks.
+batch needs publication authorization and final-effect current authority checks:
+parent-backed npm uses its parent receipt; direct human npm recovery keeps its own
+`npm-release` approval and protected `npm-publish` tooling tag.
 
 | Path         | Required evidence and completion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -76,15 +78,22 @@ authorization owner.
 **Prepared npm quota:** preview checks current workflow token's REST core allowance
 before emitting matrix/evidence handoff:
 
-- Budget 512 requests/package: 256 `consume` + 256 `authorize`; leave 1,024 headroom
-  for final authority/surrounding work. Preview itself: 1,024 requests maximum.
+- FRV-backed preview creates an authenticated evidence handoff for both direct and
+  parent-backed npm publication. It binds the exact FRV, publication attempt,
+  source/tooling, artifact, selection, and parent tuple when present. The handoff
+  reuses immutable evidence, not approval: every consumer authenticates its successful
+  preview and refreshes live authority and artifact identities.
+- With that current-attempt handoff, budget 108 requests/package: 54 `consume` +
+  54 `authorize`. Without it (including a failed-job rerun retaining an older
+  preview), budget 512: 256 per command. Leave 1,024 headroom for surrounding work.
+  Preview itself is capped at 1,024 requests; admission uses the enforced worker cap.
 - Commands enforce ceilings across `gh`/artifact HTTP, pagination, retries, archive
   requests; exhaustion fails closed, never skipping authority/bytes. Accounting counts
   actual attempted requests; old `fetch-metadata-only` telemetry is partial.
 - Oversized selection reports supported smaller selection/reset time before outputs.
-  Example: 98 packages need 51,200 allowance; 5,000 remaining admits at most seven.
-  This does not reduce per-package authentication or promise 98 completions/hour.
-  Resume smaller batches after observed reset with fresh parent authorization; bytes
+  Example: 101 packages with a current handoff need 11,932 allowance; without it,
+  52,736. This is not a promise of completions per hour. Resume smaller batches
+  after observed reset with fresh publication authorization; bytes
   and per-package receipts stay unchanged.
 - Allowance is observation, not global reservation. Other workflows, parent/ClawHub,
   action-internal requests, and manual retries share quota; coordinate separately.
@@ -147,15 +156,13 @@ without that framing remain incomplete; never synthesize receipts or infer missi
 signatures from a later replay. Blank lines between a native failure header and
 its error are accepted, but unrelated errors and inconsistent counts still block.
 
-A Q change limited to the grant ledger does not change workload identity. With
+Child receipts record execution at their producer Q, not at the current Q. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be
-reused after authentication and reevaluation under the new Q grants. Preserve
-original producer Q, run/attempt, candidate, inputs, artifact digests, and raw
-conclusions; a prior accepted verdict is not a substitute for reevaluation.
-Removing or narrowing a grant can make retained failures blocking again. Broad
-Q changes to executable scripts, workflows, actions, dependencies, or other
-workload inputs still invalidate affected workload evidence; the ledger exception
-is not a general control-only exemption.
+reused across Q after authenticating the producer and reevaluating the raw results
+under current Q grants. Preserve original producer Q, run/attempt, candidate,
+inputs, artifact digests, and raw conclusions. A prior accepted verdict is not a
+substitute for reevaluation: removing or narrowing a grant can make retained
+failures blocking again.
 
 Accepted receipts return before another child is dispatched; the required initial
 run cannot be skipped. Failed parents without final manifests can supply eligible
@@ -191,8 +198,8 @@ separate **not run** records.
 
 ## Receipt-backed aggregate recovery
 
-After a reviewed tooling-only repair, recover the original qualification receipts without
-rerunning tests or rebuilding publication artifacts:
+Use receipt recovery to reseal a drained qualification. It reads the original receipts
+without rerunning jobs or rebuilding publication artifacts:
 
 ```bash
 pnpm frv recover --run <original-parent-run-id> --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
@@ -203,9 +210,42 @@ The new aggregate authenticates the original admission, C/Q, complete child rece
 and unchanged npm/SDK/plugin/Docker bytes under current P policy. It never changes the
 original parent result. Qualification retains attempt 1; the request separately pins
 the latest terminal parent attempt. Missing evidence, changed attempts, or lost authority
-fail closed. Keep the private request: reconciliation never redispatches an uncertain
-request. Recovery supports the originally admitted beta, stable, full, or extended-stable
-publication selection; ordinary qualification remains unchanged.
+fail closed: recovery never dispatches qualification jobs as a fallback. Keep the private
+request: reconciliation never redispatches an uncertain request. Recovery preserves the
+original publication selection. Fresh qualification is a separate, explicit operation.
+
+### Recover with a later waiver ledger
+
+Use a separately admitted policy Q only when an authorized operator approved new
+waivers for the original candidate. It must be a signed direct child of the
+original Q that modifies only the waiver ledger, preserves existing entries, and
+appends grants bound to the original candidate, version, and selected receipt attempts.
+It cannot change coverage or excuse missing receipts.
+
+1. Generate the exact admission request without dispatching anything:
+
+   ```bash
+   pnpm frv recover --run <original> --workflow-sha <P> \
+     --prepare-policy-admission --policy-sha <policy-Q> --json
+   ```
+
+2. Review the emitted `qualificationRequest`. An authorized release operator
+   sends that object unchanged as `qualification_request` to the existing
+   Release Prepare workflow at trusted P with `operation=admit-qualification`.
+   Retain the successful admission run ID. The policy transport ref in this
+   request is a locator only; do not create it or dispatch validation at it.
+3. Pass both pins to receipt recovery:
+
+   ```bash
+   pnpm frv recover --run <original> --workflow-sha <P> \
+     --policy-sha <policy-Q> --policy-admission-run <admission-run> \
+     --request-file <private-request-path>
+   ```
+
+Recovery and publisher verification both authenticate the separate admission and
+reevaluate the original raw jobs and aggregate logs against exactly that ledger.
+Child attempts, workflow provenance, artifacts, and the failed original run
+remain unchanged. A missing, changed, or unwaived receipt still blocks recovery.
 
 ## Workflow files
 

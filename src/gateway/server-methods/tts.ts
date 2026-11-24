@@ -195,7 +195,21 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const result = await synthesizeSpeech({ text, cfg });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
-        respondError(respond, ErrorCodes.UNAVAILABLE, result.error ?? "TTS synthesis failed");
+        const primary = result.attempts?.[0];
+        const unconfiguredProvider =
+          primary?.reasonCode === "not_configured" &&
+          primary.personaBinding !== "missing" &&
+          !result.attempts?.some((attempt) => attempt.outcome === "failed")
+            ? primary.provider
+            : undefined;
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          result.error ?? "TTS synthesis failed",
+          unconfiguredProvider
+            ? { details: { unconfiguredSpeechProvider: unconfiguredProvider } }
+            : undefined,
+        );
         return;
       }
       respond(true, {

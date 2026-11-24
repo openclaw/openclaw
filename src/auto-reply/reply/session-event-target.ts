@@ -143,7 +143,6 @@ export async function captureSessionEventTargetForHost(
   const operatorAuthority = options.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   options.assertCaptureCurrent?.();
   options.assertCurrent?.();
@@ -172,7 +171,6 @@ export async function captureSessionEventTargetForHost(
       ? await prepareGatewayToolCallerAssertion()
       : undefined;
   const assertCaptureCurrent = () => {
-    operatorAuthority?.assertCurrent();
     options.assertCaptureCurrent?.();
     options.assertCurrent?.();
     if (!callerAgentMatches || !caller) {

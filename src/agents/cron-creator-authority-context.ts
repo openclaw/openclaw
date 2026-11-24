@@ -78,13 +78,7 @@ export function bindCronManagementToolConstruction(
     return undefined;
   }
   return <T>(run: () => T): T => {
-    if (
-      !scope.active ||
-      scope.signal.aborted ||
-      scope.isCurrent?.() === false ||
-      (scope.managementEntitlement?.source === "channel-owner" &&
-        !scope.managementEntitlement.isCurrent())
-    ) {
+    if (!scope.active || scope.signal.aborted || scope.isCurrent?.() === false) {
       return activeCronCreatorAuthority.exit(run);
     }
     return activeCronCreatorAuthority.run(scope, run);
@@ -158,8 +152,6 @@ export function captureActiveCronManagementAuthority(params: {
         scope.active &&
         !scope.signal.aborted &&
         scope.isCurrent?.() !== false &&
-        (scope.managementEntitlement?.source !== "channel-owner" ||
-          scope.managementEntitlement.isCurrent()) &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
         getAgentRunContext(params.runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
@@ -227,7 +219,6 @@ export function bindRequesterOwnerIdentity(params: {
         scope.active &&
         !scope.signal.aborted &&
         scope.isCurrent?.() === true &&
-        owner.isCurrent() &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
         getAgentRunContext(runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
@@ -261,8 +252,6 @@ export function bindCronManagementGrant(runId: string | undefined, config?: Open
     !scope.active ||
     scope.signal.aborted ||
     scope.isCurrent?.() === false ||
-    (scope.managementEntitlement.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent()) ||
     scope.runId !== runId ||
     !authority ||
     authority.operationalRunInstance.runId !== runId ||
@@ -436,7 +425,7 @@ export function bindActiveCronCreatorAuthorityResolver(
     authority.signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     if (authority.isCurrent?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
+      throw new Error("This agent run is no longer active. Start a new turn to retry.");
     }
     const signal = operationSignal
       ? AbortSignal.any([authority.signal, operationSignal])
@@ -488,12 +477,10 @@ export function bindActiveOperatorTurnAuthority(runId: string | undefined):
       if (
         !authority.active ||
         authority.runId !== normalizedRunId ||
-        authority.isCurrent?.() === false ||
-        (authority.managementEntitlement?.source === "channel-owner" &&
-          !authority.managementEntitlement.isCurrent())
+        authority.isCurrent?.() === false
       ) {
         authority.signal.throwIfAborted();
-        throw new Error("operator turn authority is no longer active");
+        throw new Error("The message turn has ended. Start a new turn to retry.");
       }
     },
   };

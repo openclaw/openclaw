@@ -168,7 +168,6 @@ export async function createModelSelectionState(params: {
   const operatorAuthority = params.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", params.cfg);
   const startMs = timingEnabled ? Date.now() : 0;
@@ -387,7 +386,6 @@ export async function createModelSelectionState(params: {
             sessionKey,
             initialEntry: initialSessionEntry,
             entry: nextSessionEntry,
-            commitGuard: operatorAuthority?.assertCurrent,
           });
           if (
             persistence.status === "lifecycle-invalidated" ||
@@ -545,7 +543,6 @@ export async function createModelSelectionState(params: {
         credential: profile,
       });
     const assertSelectionCurrent = () => {
-      operatorAuthority?.assertCurrent();
       if (
         sessionStore[sessionKey] !== sessionEntry ||
         sessionEntry.sessionId !== selection.sessionId ||
