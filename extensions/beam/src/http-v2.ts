@@ -93,7 +93,7 @@ export function createBeamV2Handler(options: {
     if (
       !row ||
       !(shared || (owned && row.publisherProfileId === authority.personProfileId)) ||
-      (publication && row.publicationId !== publication.generation)
+      (publication && row.publicationId !== publication.publicationGeneration)
     ) {
       unavailable();
       return true;

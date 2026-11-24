@@ -5,11 +5,12 @@ import { BEAM_SESSION_SHARE_ROUTE, type BeamHandoff, type BeamStoredSession } fr
 
 export const BEAM_V2_API = "/api/v2/beam";
 
+/** The second segment identifies a Beam publication independently of its destination chat. */
 export function parsePublicationId(
   value: string,
-): { beamId: string; generation: string } | undefined {
+): { beamId: string; publicationGeneration: string } | undefined {
   const match = /^([a-f0-9]{32})\.([a-f0-9]{32})$/.exec(value);
-  return match ? { beamId: match[1]!, generation: match[2]! } : undefined;
+  return match ? { beamId: match[1]!, publicationGeneration: match[2]! } : undefined;
 }
 
 /** V1 control fields and host identities never enter a portable representation. */
