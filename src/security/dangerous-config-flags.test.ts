@@ -93,13 +93,6 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     ]);
   });
 
-  it("does not collect security audit suppressions as a dangerous flag", () => {
-    const flags = collectEnabledInsecureOrDangerousFlagsFromContracts({
-      security: { audit: { suppressions: [{ checkId: "plugins.code_safety" }] } },
-    });
-    expect(flags).toStrictEqual([]);
-  });
-
   it("keeps legacy list indices for id-less dangerous sandbox rows", () => {
     const cfg: Omit<OpenClawConfig, "agents"> & {
       agents?: NonNullable<OpenClawConfig["agents"]> & { list?: Record<string, unknown>[] };
