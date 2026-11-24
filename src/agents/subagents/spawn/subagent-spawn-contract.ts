@@ -48,8 +48,30 @@ export type SpawnSubagentParams = {
     encoding?: "utf8" | "base64";
     mimeType?: string;
   }>;
+  /** Host-managed attachment handles; bytes never cross the model/tool boundary. */
+  attachmentRefs?: Array<SubagentAttachmentReference>;
   attachMountPath?: string;
 };
+
+export type SubagentAttachmentReference = {
+  id: string;
+  name: string;
+  mimeType: string;
+  sha256: string;
+  sizeBytes: number;
+};
+
+export type ResolvedSubagentAttachmentReference = SubagentAttachmentReference & {
+  data: Buffer;
+  /** Optional provenance retained in the child receipt, never rendered into its prompt. */
+  metadata?: Record<string, string>;
+};
+
+export type ResolveSubagentAttachmentReference = (params: {
+  reference: SubagentAttachmentReference;
+  requesterSessionKey?: string;
+  targetAgentId?: string;
+}) => Promise<ResolvedSubagentAttachmentReference | null>;
 
 export type SpawnSubagentContext = SpawnedToolContext &
   SpawnRequesterConversationSource & {
@@ -77,6 +99,8 @@ export type SpawnSubagentContext = SpawnedToolContext &
     assertActive?: SessionSourceAssertion;
     /** Cancels initial preparation only; accepted children own their execution lifetime. */
     signal?: AbortSignal;
+    /** Gateway-owned resolver for references issued by a multimodal tool result. */
+    resolveAttachmentReference?: ResolveSubagentAttachmentReference;
   };
 
 export type SpawnSubagentResult = {

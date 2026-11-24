@@ -15,6 +15,10 @@ it("distinguishes cwd binding from inherited roots in the advertised spawn contr
           /configuration-only.*cwd.*explicit restricted permission.*inherited recorded root.*Required roots.*sender.*sandbox/,
         ),
       },
+      attachmentRefs: {
+        type: "array",
+        maxItems: 50,
+      },
     },
   });
 });

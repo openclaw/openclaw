@@ -347,6 +347,9 @@ export async function spawnSubagentDirect(
         targetAgentId,
         sandboxed: childRuntimeSandboxed,
         attachments: params.attachments,
+        attachmentRefs: params.attachmentRefs,
+        resolveAttachmentReference: ctx.resolveAttachmentReference,
+        requesterSessionKey: ctx.agentSessionKey,
         mountPathHint: params.attachMountPath,
       }),
     );

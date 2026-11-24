@@ -401,6 +401,9 @@ export function createSessionsSpawnTool(
         const attachments = Array.isArray(params.attachments)
           ? (params.attachments as SpawnSubagentParams["attachments"])
           : undefined;
+        const attachmentRefs = Array.isArray(params.attachmentRefs)
+          ? (params.attachmentRefs as SpawnSubagentParams["attachmentRefs"])
+          : undefined;
         const parentExecutionIdentityToken = getGatewayToolCallerIdentity()?.executionIdentityToken;
         const spawnParams = {
           task,
@@ -450,6 +453,7 @@ export function createSessionsSpawnTool(
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
           workspaceDir: opts?.workspaceDir,
           sessionPermissionPolicy: opts?.sessionPermissionPolicy,
+          resolveAttachmentReference: opts?.resolveAttachmentReference,
         });
 
         if (runtime === "acp") {
@@ -457,11 +461,19 @@ export function createSessionsSpawnTool(
           const acpAttachments = resolveAcpSessionsSpawnImageAttachments({
             config: opts?.config ?? getRuntimeConfig(),
             attachments,
+            attachmentRefs,
+            resolveAttachmentReference: opts?.resolveAttachmentReference,
+            requesterSessionKey: opts?.agentSessionKey,
+            targetAgentId: requestedAgentId,
           });
-          if (acpAttachments?.status === "forbidden" || acpAttachments?.status === "error") {
+          const resolvedAcpAttachments = await acpAttachments;
+          if (
+            resolvedAcpAttachments?.status === "forbidden" ||
+            resolvedAcpAttachments?.status === "error"
+          ) {
             return spawnResult({
-              status: acpAttachments.status,
-              error: acpAttachments.error,
+              status: resolvedAcpAttachments.status,
+              error: resolvedAcpAttachments.error,
             });
           }
           const result = await spawnAcpDirect(
@@ -469,7 +481,7 @@ export function createSessionsSpawnTool(
               ...spawnParams,
               resumeSessionId,
               streamTo,
-              attachments: acpAttachments?.attachments,
+              attachments: resolvedAcpAttachments?.attachments,
             },
             withParentExecutionIdentity(
               {
@@ -521,6 +533,7 @@ export function createSessionsSpawnTool(
             ...(params.blind === true ? { blind: true } : {}),
             completionTarget,
             attachments,
+            attachmentRefs,
             attachMountPath:
               params.attachAs && typeof params.attachAs === "object"
                 ? readToolStringParam(params.attachAs as Record<string, unknown>, "mountPath")
