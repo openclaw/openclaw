@@ -89,13 +89,15 @@ export async function continueSessionQueuedInputs(
       const owedText = message.content;
       if (owedKind && typeof owedText === "string") {
         // A result owed to this chat wakes its turn from the stored row; that turn appends it once.
+        // Like the live wake, one failed attempt gets one retry from the stored row.
+        const owed = {
+          id: row.idempotency_key,
+          to: chatRef(target),
+          kind: owedKind,
+          text: owedText,
+        };
         withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-          wakeOwedExec({
-            id: row.idempotency_key,
-            to: chatRef(target),
-            kind: owedKind,
-            text: owedText,
-          }),
+          wakeOwedExec(owed, {}, undefined, 1),
         );
         return undefined;
       }
