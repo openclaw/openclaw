@@ -23,7 +23,7 @@ import { logWarn } from "../logger.js";
 import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
-import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
+import { isOwedPending, owe, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
   listFinishedSessions,
