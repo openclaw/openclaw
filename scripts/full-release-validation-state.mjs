@@ -1106,7 +1106,10 @@ async function writeManifestMode() {
     context: manifestContextFromEnvironment(plan.sourceAdmission),
     reusedManifest,
   });
-  if (manifest.sourceAdmission?.validationPurpose === "publish" && manifest.rerunGroup === "all") {
+  if (
+    manifest.sourceAdmission?.validationPurpose === "publish" &&
+    ["all", "build-only"].includes(manifest.rerunGroup)
+  ) {
     const outputDir = mkdtempSync(
       join(
         requiredString(process.env.RUNNER_TEMP, "runner temporary directory"),

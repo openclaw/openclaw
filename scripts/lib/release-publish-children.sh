@@ -1134,6 +1134,30 @@ upload_dependency_evidence_release_asset() {
     --name "${artifact_name}" \
     --dir "${download_dir}"
 
+  if [[ ! -d "${download_dir}/dependency-evidence" ]] &&
+    [[ "$(jq -r '.version' "${download_dir}/preflight-manifest.json")" == "4" ]]; then
+    # Reauthenticate the exact approved build-only artifact, not just packet presence.
+    BUILD_ONLY_NPM_DIR="$download_dir" node --input-type=module <<'NODE' || return 1
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { isBuildOnlyNpmPreflight, SEALED_NPM_PREFLIGHT_SCHEMA } from './.release-harness/scripts/npm-prepared-bundle.mjs';
+import { verifyNpmPreflightPublicationLineage } from './.release-harness/scripts/npm-preflight-tooling-identity.mjs';
+const env = process.env;
+const manifest = JSON.parse(readFileSync(`${env.FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json`, 'utf8'));
+const bytes = readFileSync(`${env.BUILD_ONLY_NPM_DIR}/preflight-manifest.json`);
+const npm = JSON.parse(bytes);
+const descriptor = manifest.publicationArtifacts?.npmPreflight;
+if (!isBuildOnlyNpmPreflight(npm) || descriptor?.schema !== SEALED_NPM_PREFLIGHT_SCHEMA ||
+    createHash('sha256').update(bytes).digest('hex') !== descriptor.manifestSha256 ||
+    npm.npmDistTag !== env.RELEASE_NPM_DIST_TAG) throw new Error('Invalid build-only dependency-evidence exemption.');
+await verifyNpmPreflightPublicationLineage({ manifest, fastTrackApproval: env.FAST_TRACK_APPROVAL_JSON,
+  repository: env.GITHUB_REPOSITORY, sourceSha: env.TARGET_SHA, toolingSha: npm.producer.workflowSha,
+  publisherSha: env.PARENT_WORKFLOW_SHA, publisherFullRef: env.PARENT_WORKFLOW_FULL_REF,
+  producerRunId: npm.producer.runId, producerRunAttempt: npm.producer.runAttempt });
+NODE
+    echo "- Dependency validation evidence: skipped by the exact approved build-only release" >> "$GITHUB_STEP_SUMMARY"
+    return 0
+  fi
   if [[ ! -d "${download_dir}/dependency-evidence" ]]; then
     echo "Dependency evidence is missing from OpenClaw npm preflight artifact." >&2
     find "${download_dir}" -maxdepth 2 -type f -print >&2 || true

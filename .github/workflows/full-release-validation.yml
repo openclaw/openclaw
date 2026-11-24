@@ -77,6 +77,7 @@ on:
         type: choice
         options:
           - all
+          - build-only
           - ci
           - plugin-prerelease
           - install-smoke
@@ -461,7 +462,9 @@ jobs:
           plugin_required=false
           [[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true
           release_artifact_required=false
-          if [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
+          if [[ "$RERUN_GROUP" == "build-only" ]]; then
+            release_artifact_required=true
+          elif [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
                 -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
           elif [[ "$RERUN_GROUP" =~ ^(all|package|qualified-package)$ &&
@@ -982,6 +985,7 @@ jobs:
 
   plugin_compatibility_readiness:
     name: Check release source readiness
+    if: inputs.rerun_group != 'build-only'
     needs: [resolve_target]
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
@@ -1959,7 +1963,7 @@ jobs:
   prepare_npm_package:
     name: Prepare release npm artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.plugin_compatibility_readiness.result == 'success' || (inputs.rerun_group == 'build-only' && needs.plugin_compatibility_readiness.result == 'skipped')) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (contains(fromJSON('["all","build-only"]'), inputs.rerun_group) || needs.resolve_target.outputs.candidate_required == 'true') }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -1978,7 +1982,7 @@ jobs:
       NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
       RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
       NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
-      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || (inputs.rerun_group == 'all' && 'all' || 'prepare') }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
@@ -2031,7 +2035,7 @@ jobs:
   qualify_npm_package:
     name: Qualify release npm artifacts
     needs: [resolve_target, evidence_reuse, prepare_npm_package]
-    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","build-only"]'), inputs.rerun_group) && needs.prepare_npm_package.result == 'success' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -2046,7 +2050,7 @@ jobs:
       ARTIFACT_OUTPUT: receipt
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      PREFLIGHT_PHASE: all
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || 'all' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
@@ -2072,7 +2076,7 @@ jobs:
   prepare_plugin_npm:
     name: Prepare exact plugin npm artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
+    if: ${{ always() && contains(fromJSON('["all","build-only"]'), inputs.rerun_group) && needs.resolve_target.result == 'success' && (needs.plugin_compatibility_readiness.result == 'success' || (inputs.rerun_group == 'build-only' && needs.plugin_compatibility_readiness.result == 'skipped')) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 150
     outputs:
@@ -2231,7 +2235,7 @@ jobs:
   prepare_docker_release:
     name: Prepare release Docker artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
+    if: ${{ always() && contains(fromJSON('["all","build-only"]'), inputs.rerun_group) && needs.resolve_target.result == 'success' && (needs.plugin_compatibility_readiness.result == 'success' || (inputs.rerun_group == 'build-only' && needs.plugin_compatibility_readiness.result == 'skipped')) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -2247,7 +2251,7 @@ jobs:
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-docker
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      PREFLIGHT_PHASE: all
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || 'all' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
@@ -2301,7 +2305,7 @@ jobs:
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-candidate
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      PREFLIGHT_PHASE: all
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || 'all' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
       CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}

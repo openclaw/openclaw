@@ -728,9 +728,13 @@ jobs:
             download_named_artifact "${fallback_name}" preflight-tarball
             echo "Downloaded fallback preflight artifact ${fallback_name}."
           fi
-          download_named_artifact \
-            "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}" \
-            plugin-sdk-api-evidence
+          # Full evidence admission above authenticates fast-track authorization.
+          # A sealed build-only archive honestly has no SDK validation artifact.
+          if [[ "$(jq -r '.version' preflight-tarball/preflight-manifest.json)" != "4" ]]; then
+            download_named_artifact \
+              "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}" \
+              plugin-sdk-api-evidence
+          fi
 
       - name: Validate release tag and package metadata
         if: ${{ inputs.preflight_run_id == '' }}
@@ -806,25 +810,29 @@ jobs:
             exit 1
           fi
           node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-preflight-channel < "$MANIFEST_FILE"
-          IMMUTABLE_PLUGIN_SDK_API_EVIDENCE="plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
-          if [[ ! -f "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE" ]] || ! cmp -s \
-            <(jq -S '.pluginSdkApi' "$MANIFEST_FILE") \
-            <(jq -S '.' "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE"); then
-            echo "Prepared Plugin SDK API evidence does not match its immutable artifact." >&2
-            exit 1
+          # Provenance verification above rejects malformed build-only metadata;
+          # authenticated full evidence, not this marker, permits skipped validation.
+          if [[ "$(jq -r '.version' "$MANIFEST_FILE")" != "4" ]]; then
+            IMMUTABLE_PLUGIN_SDK_API_EVIDENCE="plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
+            if [[ ! -f "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE" ]] || ! cmp -s \
+              <(jq -S '.pluginSdkApi' "$MANIFEST_FILE") \
+              <(jq -S '.' "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE"); then
+              echo "Prepared Plugin SDK API evidence does not match its immutable artifact." >&2
+              exit 1
+            fi
+            current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+            current_selector_ref="v${current_selector_version}"
+            current_selector_sha="$(git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}")"
+            node trusted-workflow/scripts/plugin-sdk-api-release-evidence.mjs \
+              --manifest "$MANIFEST_FILE" \
+              --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+              --head "$EXPECTED_RELEASE_SHA" \
+              --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+              --current-selector-ref "$current_selector_ref" \
+              --current-selector-sha "$current_selector_sha" \
+              --target-ref "$RELEASE_TAG" \
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
           fi
-          current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
-          current_selector_ref="v${current_selector_version}"
-          current_selector_sha="$(git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}")"
-          node trusted-workflow/scripts/plugin-sdk-api-release-evidence.mjs \
-            --manifest "$MANIFEST_FILE" \
-            --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
-            --head "$EXPECTED_RELEASE_SHA" \
-            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
-            --current-selector-ref "$current_selector_ref" \
-            --current-selector-sha "$current_selector_sha" \
-            --target-ref "$RELEASE_TAG" \
-            --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
           if [[ ! -f "$ARTIFACT_TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball named in manifest is missing: $ARTIFACT_TARBALL_NAME" >&2
             exit 1
