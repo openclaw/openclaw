@@ -1,6 +1,13 @@
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
@@ -210,4 +217,55 @@ it("rejects retained runtime staging at the channel update success boundary", ()
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("successful update retained runtime staging entries");
   expect(readFileSync(join(staging, "previous"), "utf8")).toBe("recoverable original");
+});
+
+it("checks that a detached release uses the selected commit, not local checkout input", () => {
+  const { file, write } = fixtureFiles(tempDirs.make("update-channel-detached-"));
+  const source = file("source");
+  const release = file("git-install/releases/fixture/openclaw");
+  const slot = file("git-install/openclaw");
+  mkdirSync(source);
+  mkdirSync(join(release, ".."), { recursive: true });
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q");
+  write("source/operator-update-tracked.txt", "committed content\n");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "fixture",
+  );
+  const sha = git("rev-parse", "HEAD");
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  git("worktree", "add", "--detach", release, sha);
+  symlinkSync(release, slot, "junction");
+  const check = (...args: string[]) =>
+    spawnSync(testNodeExecPath, [assertionScript, ...args], { encoding: "utf8" });
+  const preserved = check("assert-detached-source", source, sha);
+  expect(preserved.status, preserved.stderr).toBe(0);
+  const installed = check("assert-detached-release", slot, sha);
+  expect(installed.status, installed.stderr).toBe(0);
+  expect(check("assert-detached-release", slot, "a".repeat(40)).stderr).toContain(
+    "installed release did not select the fixture commit",
+  );
+  write(
+    "git-install/releases/fixture/openclaw/operator-update-tracked.txt",
+    "retain tracked edit\n",
+  );
+  expect(check("assert-detached-release", slot, sha).stderr).toContain("tracked edit leaked");
+  write("git-install/releases/fixture/openclaw/operator-update-tracked.txt", "committed content\n");
+  write("git-install/releases/fixture/openclaw/operator-update-notes.tmp", "retain user notes\n");
+  expect(check("assert-detached-release", slot, sha).stderr).toContain("untracked input leaked");
+  write("source/operator-update-tracked.txt", "overwritten\n");
+  expect(check("assert-detached-source", source, sha).stderr).toContain(
+    "source tracked edit changed",
+  );
 });

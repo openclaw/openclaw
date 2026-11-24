@@ -10,7 +10,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-beta-registry|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-beta-registry|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-source|assert-detached-release> [...]",
   );
   process.exit(2);
 }
@@ -275,6 +275,69 @@ function assertConfigChannel(channel) {
   );
 }
 
+function assertDetachedSource(root, expectedHead) {
+  assert.equal(
+    execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    expectedHead,
+    "source checkout HEAD changed",
+  );
+  assert.deepEqual(
+    fs.readFileSync(path.join(root, "operator-update-tracked.txt")),
+    Buffer.from("retain tracked edit\n"),
+    "source tracked edit changed",
+  );
+  assert.deepEqual(
+    fs.readFileSync(path.join(root, "operator-update-notes.tmp")),
+    Buffer.from("retain user notes\n"),
+    "source untracked file changed",
+  );
+  assert.equal(
+    execFileSync(
+      "git",
+      [
+        "-C",
+        root,
+        "status",
+        "--porcelain",
+        "--",
+        "operator-update-tracked.txt",
+        "operator-update-notes.tmp",
+      ],
+      { encoding: "utf8" },
+    ),
+    " M operator-update-tracked.txt\n?? operator-update-notes.tmp\n",
+    "source edits no longer have their original Git status",
+  );
+}
+
+function assertDetachedRelease(slot, expectedHead) {
+  const release = fs.realpathSync(slot);
+  const releases = fs.realpathSync(path.join(path.dirname(slot), "releases"));
+  assert(release.startsWith(releases + path.sep), "Git slot did not select a managed release");
+  assert.equal(
+    execFileSync("git", ["-C", release, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    expectedHead,
+    "installed release did not select the fixture commit",
+  );
+  assert.equal(
+    execFileSync("git", ["-C", release, "rev-parse", "--abbrev-ref", "HEAD"], {
+      encoding: "utf8",
+    }).trim(),
+    "HEAD",
+    "installed release is not detached",
+  );
+  assert.deepEqual(
+    fs.readFileSync(path.join(release, "operator-update-tracked.txt")),
+    execFileSync("git", ["-C", release, "show", "HEAD:operator-update-tracked.txt"]),
+    "tracked edit leaked into the release",
+  );
+  assert.equal(
+    fs.lstatSync(path.join(release, "operator-update-notes.tmp"), { throwIfNoEntry: false }),
+    undefined,
+    "untracked input leaked into the release",
+  );
+}
+
 function assertDryRun(kind, channel) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
   assert.equal(preview.dryRun, true);
@@ -320,6 +383,8 @@ const commands = {
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
   "assert-dirty-exit": assertDirtyExit,
+  "assert-detached-source": assertDetachedSource,
+  "assert-detached-release": assertDetachedRelease,
   "assert-config-channel": assertConfigChannel,
   "assert-dry-run": assertDryRun,
   "assert-status-kind": assertStatusKind,
