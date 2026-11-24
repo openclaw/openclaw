@@ -19,7 +19,8 @@ import {
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
 
-vi.mock("../../components/confirm-dialog.ts", () => ({
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
   showConfirmDialog: vi.fn(),
   showConfirmChoiceDialog: vi.fn(),
 }));
