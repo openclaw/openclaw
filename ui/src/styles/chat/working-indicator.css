@@ -748,12 +748,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   font-family: inherit;
 }
 
-.chat-handoff-sessions,
-.chat-handoff-resume__rule {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 /* The chat group shrink-wraps this block to its content, and the list's fixed
    width is that content's minimum, so cap the block at the group's width. */
 .chat-handoff-resume {
@@ -762,6 +756,8 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
 
 /* One width for both lists, so the status chips line up. */
 .chat-handoff-sessions {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
   width: 560px;
   max-width: calc(100% - 8px);
   margin: 4px 0 2px 7px;
@@ -792,6 +788,7 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
 }
 
 .chat-handoff-resume__rule {
+  color: var(--muted);
   display: flex;
   align-items: center;
   gap: 8px;
