@@ -21,11 +21,14 @@ describe("ingress claim owner", () => {
     expect(processPidFromOwnerId("")).toBe(-1);
   });
 
-  it("does not treat stale claims with reused pids as live-owned", () => {
+  it("does not treat expired claims from live foreign processes as live-owned", () => {
+    vi.spyOn(process, "kill").mockReturnValue(true);
+    vi.spyOn(pidAlive, "getProcessStartTime").mockReturnValue(5555);
+    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(5555);
     expect(
-      isIngressClaimOwnedByOtherLiveProcess(
-        claim(`${process.pid}:1:other-process`, Date.now() - INGRESS_CLAIM_LEASE_MS - 1),
-      ),
+      isIngressClaimOwnedByOtherLiveProcess(claim(`${liveOwnerPid}:5555:other-process`, 1000), {
+        now: 1000 + INGRESS_CLAIM_LEASE_MS + 1,
+      }),
     ).toBe(false);
   });
 

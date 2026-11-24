@@ -5,10 +5,6 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { isMissingPathError } from "../../../infra/errors.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import {
@@ -171,17 +167,13 @@ export function createWriteTool(
     parameters: writeSchema,
     outputSchema: WriteToolOutputSchema,
     async execute(_toolCallId, { path, content }, signal, _onUpdate, _ctx) {
-      const assertCurrent = captureAgentToolSourceExecutionGuard();
       const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
       return withFileMutationQueueKeyResolution(
         queueKey,
         async () => {
-          const precheck = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            return readOriginalWriteState(absolutePath, content, ops, signal);
-          });
+          const precheck = await readOriginalWriteState(absolutePath, content, ops, signal);
           assertFileToolNotAborted(signal);
           // No-op: file already has identical content. Not terminal — the model
           // may still be mid-task and needs a continuation, not an ended turn.
@@ -193,64 +185,48 @@ export function createWriteTool(
               } satisfies WriteToolDetails,
             );
           }
-          const details = await runWithAgentToolSourceExecutionScope(
-            assertCurrent,
-            async (): Promise<WriteToolDetails> => {
-              assertCurrent();
-              if (Buffer.byteLength(content, "utf8") > WRITE_DIFF_MAX_BYTES) {
-                // Keep diff work bounded; a partial patch would misrepresent the write.
-                if (precheck.beforeStat === null) {
-                  return { changed: true, created: true };
-                }
-                return precheck.beforeStat ? { changed: true, created: false } : { changed: true };
-              }
-              const beforeStat = precheck.beforeStat;
-              let beforeText = precheck.beforeText;
+          let details: WriteToolDetails;
+          if (Buffer.byteLength(content, "utf8") > WRITE_DIFF_MAX_BYTES) {
+            // Keep diff work bounded; a partial patch would misrepresent the write.
+            details =
+              precheck.beforeStat === null
+                ? { changed: true, created: true }
+                : precheck.beforeStat
+                  ? { changed: true, created: false }
+                  : { changed: true };
+          } else {
+            const beforeStat = precheck.beforeStat;
+            let beforeText = precheck.beforeText;
+            if (
+              beforeText === undefined &&
+              !precheck.readAttempted &&
+              beforeStat?.type === "file" &&
+              beforeStat.size <= WRITE_DIFF_MAX_BYTES
+            ) {
+              const originalContent = await ops
+                .readFile(absolutePath, signal)
+                .catch(() => undefined);
+              const candidate = Buffer.isBuffer(originalContent)
+                ? originalContent.toString("utf8")
+                : originalContent;
               if (
-                beforeText === undefined &&
-                !precheck.readAttempted &&
-                beforeStat?.type === "file" &&
-                beforeStat.size <= WRITE_DIFF_MAX_BYTES
+                candidate !== undefined &&
+                Buffer.byteLength(candidate, "utf8") <= WRITE_DIFF_MAX_BYTES
               ) {
-                const originalContent = await ops
-                  .readFile(absolutePath, signal)
-                  .catch(() => undefined);
-                const candidate = Buffer.isBuffer(originalContent)
-                  ? originalContent.toString("utf8")
-                  : originalContent;
-                if (
-                  candidate !== undefined &&
-                  Buffer.byteLength(candidate, "utf8") <= WRITE_DIFF_MAX_BYTES
-                ) {
-                  beforeText = candidate;
-                }
+                beforeText = candidate;
               }
-              const created = beforeStat === null ? true : beforeStat ? false : undefined;
-              const receipt = await planFileWriteDiff(
-                { path, content, beforeText, created },
-                signal,
-              );
-              return { changed: true, ...(created === undefined ? {} : { created }), ...receipt };
-            },
-          );
+            }
+            const created = beforeStat === null ? true : beforeStat ? false : undefined;
+            const receipt = await planFileWriteDiff({ path, content, beforeText, created }, signal);
+            details = { changed: true, ...(created === undefined ? {} : { created }), ...receipt };
+          }
           assertFileToolNotAborted(signal);
           try {
-            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-              assertCurrent();
-              await ops.mkdir?.(dir);
-            });
+            await ops.mkdir?.(dir);
             assertFileToolNotAborted(signal);
-            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-              assertCurrent();
-              await ops.writeFile(absolutePath, content, signal);
-            });
+            await ops.writeFile(absolutePath, content, signal);
             assertFileToolNotAborted(signal);
-            if (
-              !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-                assertCurrent();
-                return verifyPersistedUtf8File(absolutePath, content, ops, signal);
-              }))
-            ) {
+            if (!(await verifyPersistedUtf8File(absolutePath, content, ops, signal))) {
               throw new Error(
                 `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
               );
@@ -258,29 +234,12 @@ export function createWriteTool(
             return successfulWriteResult(path, content, details);
           } catch (error: unknown) {
             if (isWriteRecoveryCandidate(error, signal)) {
-              const recovered = await runWithAgentToolSourceExecutionScope(
-                assertCurrent,
-                async () => {
-                  assertCurrent();
-                  const verified = await verifyPersistedUtf8File(
-                    absolutePath,
-                    content,
-                    ops,
-                    signal,
-                  );
-                  const changed =
-                    precheck.state === "different" ||
-                    (precheck.state === "unknown" &&
-                      (await didWriteMetadataChange(
-                        absolutePath,
-                        precheck.beforeStat,
-                        ops,
-                        signal,
-                      )));
-                  return { verified, changed };
-                },
-              );
-              if (recovered.verified && recovered.changed) {
+              const verified = await verifyPersistedUtf8File(absolutePath, content, ops, signal);
+              const changed =
+                precheck.state === "different" ||
+                (precheck.state === "unknown" &&
+                  (await didWriteMetadataChange(absolutePath, precheck.beforeStat, ops, signal)));
+              if (verified && changed) {
                 return successfulWriteResult(path, content, details);
               }
             }

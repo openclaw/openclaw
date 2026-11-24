@@ -114,7 +114,7 @@ Validation SHA = Code SHA (possibly Release SHA) or changelog-only Release SHA,
 not a third identity. Reject malformed/mismatched expected SHAs before children;
 all report Q. `-f reuse_evidence=false` forces fresh work. New publish defaults
 Q=C; admission-workflow arguments select P; candidate `--workflow-sha <Q>` selects
-reviewed main-ancestor Q. Missing contracts need Q repair/candidate backport;
+reviewed exact Q. Missing contracts need Q repair/candidate backport;
 new Q requires new request/admission, never continuation/plan edits/substitution.
 Historical identities stay frozen; workflows never create/update refs.
 
@@ -164,7 +164,7 @@ Readers preserve original plan digests and accept only empty `knownFlakyJobs`/
 [release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers).
 Older campaigns retain immutable tooling; strict tooling rejects retained
 `windows-node-ci` advisory evidence and retired candidate omissions/advisory
-allowances. Start fresh qualifying work: admit reviewed main-ancestor Q with C
+allowances. Start fresh qualifying work: admit reviewed exact Q with C
 unchanged, or backport/freeze new C. Never retarget old runs or silently use newer main.
 
 ### Read publication observations

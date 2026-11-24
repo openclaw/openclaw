@@ -1,4 +1,3 @@
-import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -224,9 +223,7 @@ export async function runPreparedCliAgent(
     },
     () =>
       settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle, (complete) =>
-        runWithCliHistoryWriter(context.cliHistoryWriter, () =>
-          runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
-        ),
+        runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
       ),
   );
 }

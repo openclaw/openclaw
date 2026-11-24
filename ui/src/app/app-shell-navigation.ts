@@ -8,6 +8,7 @@ import {
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { enterCommunityInviteVisit } from "../components/community-invite-state.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import {
@@ -23,6 +24,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
+import { canonicalModelSetupLocation } from "../pages/model-setup/route.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -36,6 +38,7 @@ import {
   isNativeWebChromeHost,
 } from "./native-web-chrome.ts";
 import type { NavDrawerCloseOptions } from "./navigation-surface.ts";
+import { resolveOnboardingMode } from "./onboarding-mode.ts";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;
@@ -43,6 +46,8 @@ export interface ShellNavigationHost {
   routeState: ShellRouteState;
   lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
   custodianMinimizeRequestId: number;
+  /** This page showed first-use setup; its automatic panels and promotions stay quiet. */
+  firstUse: boolean;
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
   settingsSearchQuery: string;
@@ -54,7 +59,13 @@ export interface ShellNavigationHost {
 }
 
 export class ShellNavigationOwner {
+  private communityInviteVisitAllowed: boolean | undefined;
+
   constructor(private readonly host: ShellNavigationHost) {}
+
+  get communityInviteAllowed(): boolean {
+    return this.communityInviteVisitAllowed === true;
+  }
 
   selectChatSession(sessionKey: string, agentId?: string | null): void {
     const context = this.host.context;
@@ -261,6 +272,20 @@ export class ShellNavigationOwner {
         this.host.custodianMinimizeRequestId += 1;
       }
       this.host.lastConcreteRouteId = routeState.routeId;
+    }
+    const location = routeState.location;
+    if (
+      !this.host.firstUse &&
+      location &&
+      (routeState.routeId === "custodian"
+        ? resolveOnboardingMode(location.search)
+        : routeState.routeId === "model-setup" &&
+          canonicalModelSetupLocation(location, this.host.context?.basePath ?? "") === location)
+    ) {
+      this.host.firstUse = true;
+      this.communityInviteVisitAllowed = enterCommunityInviteVisit(true);
+    } else if (routeState.routeId && this.communityInviteVisitAllowed === undefined) {
+      this.communityInviteVisitAllowed = enterCommunityInviteVisit(this.host.firstUse);
     }
     const committedRouteId = routeState.committedRouteId;
     const committedPathname = routeState.committedLocation?.pathname ?? "";

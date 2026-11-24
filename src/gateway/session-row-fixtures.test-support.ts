@@ -5,8 +5,9 @@ import {
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import { projectSessionEntryUsageUpdate } from "../config/sessions/session-entry-usage.js";
+import { resolveModelCostConfig } from "../model-catalog/usage-pricing.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync } from "../utils/usage-format.js";
 import { clearStoredSessionRowTranscriptForTest } from "./session-row-backfill.test-support.js";
 import { writeSessionStore } from "./test-helpers.server.js";
 

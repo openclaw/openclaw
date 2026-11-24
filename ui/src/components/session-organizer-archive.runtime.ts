@@ -25,7 +25,7 @@ import { holdArchive } from "./session-archive-hold.ts";
 import {
   confirmWithBoundAutomations,
   withBoundAutomationNotice,
-} from "./session-automation-confirm.ts";
+} from "./session-automation-confirm.tsx";
 import { isSessionMutationScopeCurrent } from "./session-mutation-scope.ts";
 import {
   patchSessionRows,
@@ -465,12 +465,12 @@ export function archiveConfirmedSessionsWithUndo(
   // The commit outlives the initiating pane; online work stays connection-scoped and
   // offline work follows its recovery owner.
   const outcomeHost = sessionUndoHost(host, scope);
-  const stopExit = exitFrom ? startSidebarArchiveExit(exitFrom) : undefined;
+  const exit = exitFrom ? startSidebarArchiveExit(exitFrom) : undefined;
   const pending = rows.flatMap((row) => {
     const finish = scope.sessions.beginArchive(row.key, row.sessionId);
     return finish ? [{ row, finish }] : [];
   });
-  stopExit?.();
+  exit?.finishObserving();
   if (pending.length === 0) {
     return;
   }
@@ -486,6 +486,7 @@ export function archiveConfirmedSessionsWithUndo(
           }),
     publishError: (error) => outcomeHost.sessionData.publishSessionMutationError(scope, error),
     release: () => {
+      exit?.cancel();
       for (const { finish } of pending) {
         finish();
       }

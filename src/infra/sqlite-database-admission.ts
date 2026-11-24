@@ -75,7 +75,6 @@ const descriptors = createSqliteDatabaseDescriptorOwner(seals);
 export const {
   prepareOwnedSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmissionAsync,
-  retainSqliteDatabaseAdmissionLocation,
   retainPreparedSqliteDatabaseAdmissionLocation,
   prepareSqliteDatabaseAdmission,
 } = descriptors;

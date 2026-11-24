@@ -558,54 +558,36 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(json.error.message).not.toContain(credential);
   });
 
-  it.each(["provider acquisition", "embedding"] as const)(
-    "revalidates admission without canceling accepted work when policy changes during %s",
-    async (phase) => {
-      const operationStarted = createDeferred();
-      const releaseOperation = createDeferred();
-      const waitForPolicyChange = async () => {
-        operationStarted.resolve();
-        await releaseOperation.promise;
-      };
-      const embed = vi.fn(async () => {
-        if (phase === "embedding") {
-          await waitForPolicyChange();
-        }
-        return [[0.1, 0.2]];
+  it("does not cancel accepted embedding work when policy changes during it", async () => {
+    const operationStarted = createDeferred();
+    const releaseOperation = createDeferred();
+    const embed = vi.fn(async () => {
+      operationStarted.resolve();
+      await releaseOperation.promise;
+      return [[0.1, 0.2]];
+    });
+    const closed = createDeferred();
+    const close = vi.fn(() => closed.resolve());
+    createProvider.mockImplementationOnce(async () => makeProvider({ embedBatch: embed, close }));
+    const cfg = await captureRuntimeConfigAsyncReader()();
+    const pending = post();
+    try {
+      await operationStarted.promise;
+      setRuntimeConfigSnapshot({
+        ...cfg,
+        gateway: { ...cfg.gateway, allowRealIpFallback: !cfg.gateway?.allowRealIpFallback },
       });
-      const closed = createDeferred();
-      const close = vi.fn(() => closed.resolve());
-      createProvider.mockImplementationOnce(async () => {
-        if (phase === "provider acquisition") {
-          await waitForPolicyChange();
-        }
-        return makeProvider({ embedBatch: embed, close });
-      });
-      const cfg = await captureRuntimeConfigAsyncReader()();
-      const pending = post();
-      try {
-        await operationStarted.promise;
-        setRuntimeConfigSnapshot({
-          ...cfg,
-          gateway: { ...cfg.gateway, allowRealIpFallback: !cfg.gateway?.allowRealIpFallback },
-        });
-        releaseOperation.resolve();
-        const response = await pending;
-        if (phase === "provider acquisition") {
-          expect(response.status).toBe(401);
-          expect(embed).not.toHaveBeenCalled();
-        } else {
-          await expectDefaultResponse(response);
-        }
-        await closed.promise;
-        expect(close).toHaveBeenCalledTimes(1);
-      } finally {
-        releaseOperation.resolve();
-        await pending;
-        setRuntimeConfigSnapshot(cfg);
-      }
-    },
-  );
+      releaseOperation.resolve();
+      const response = await pending;
+      await expectDefaultResponse(response);
+      await closed.promise;
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseOperation.resolve();
+      await pending;
+      setRuntimeConfigSnapshot(cfg);
+    }
+  });
 
   it("aborts provider work when the HTTP client disconnects", async () => {
     let receivedSignal: AbortSignal | undefined;

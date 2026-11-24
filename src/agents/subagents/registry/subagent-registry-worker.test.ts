@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
@@ -68,7 +67,6 @@ import {
   useSubagentRegistryWorkerFixture,
 } from "./subagent-registry-worker.test-support.js";
 import * as codec from "./subagent-registry.store.codec.js";
-import { streamSubagentRegistryInWorker } from "./subagent-registry.store.restore.worker.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -101,34 +99,6 @@ function interceptChunks(
       }),
     );
 }
-
-it("restores rows without an explicit read transaction", async () => {
-  seed(entry("autocommit-restore"));
-  const databasePath = openOpenClawStateDatabase().path;
-  const context = captureOpenClawStateWorkerContext();
-  const execute = vi.spyOn(DatabaseSync.prototype, "exec");
-  const request = vi.fn(async () => ({ input: undefined, consumed: () => {} }));
-  const count = await streamSubagentRegistryInWorker(
-    {
-      context,
-      databasePath,
-      location: databasePath,
-      checkFreshAdmission: true,
-      command: { type: "subagents.restore" },
-    },
-    { consumeInput: () => {}, notify: () => {}, request },
-    () => {},
-  );
-  expect(count).toBe(1);
-  expect(request).toHaveBeenCalledWith([
-    expect.objectContaining({ entry: expect.objectContaining({ runId: "autocommit-restore" }) }),
-  ]);
-  expect(
-    execute.mock.calls
-      .map(([sql]) => sql)
-      .filter((sql) => /^(BEGIN|COMMIT|ROLLBACK)\b/iu.test(sql)),
-  ).toEqual([]);
-});
 
 it("streams bounded restore batches in one read and retains one snapshot", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>

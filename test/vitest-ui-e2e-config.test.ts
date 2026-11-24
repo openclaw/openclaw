@@ -34,14 +34,19 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-send-leaf-ancestor chat-steer-deferred-custody chat-steer-send-now chat-yield-pending-reply deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter plugin-inline-view session-management.new-nested theme-startup template-upload`
+  `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-send-leaf-ancestor chat-steer-deferred-custody chat-steer-send-now chat-yield-pending-reply deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter labs-graduation plugin-inline-view session-management.new-nested theme-startup template-upload`
     .split(/\s+/u)
-    .concat("required-human-action", "model-provider-remove-offline")
+    .concat(
+      "required-human-action",
+      "model-provider-remove-offline",
+      "provider-browser-login-first-model",
+      "provider-browser-login-leave",
+    )
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
   "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts",
-  "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-sidebar-pins.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
 ];
@@ -56,7 +61,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   chat-reconnect-continuity.real-gateway chat-stop-finished-run.real-gateway
   chat-stop-long-turn.real-gateway
   chat-thinking-metadata.real-gateway chat-widget-sandbox.real-gateway
-  chat-incognito-send.real-gateway
+  chat-incognito-send.real-gateway chat-new-session-readers.real-gateway
   chat-stop-owned-exec.real-gateway chat-wait-clock.real-gateway
   command-palette-catalog.real-gateway command-palette-search.real-gateway
   control-ui-auth-transports cron-duration-save.real-gateway cron-human-owner.real-gateway
@@ -412,6 +417,16 @@ describe("Control UI E2E resource ownership", () => {
       )
       .toSorted();
     expectInventory(result, inventory);
+    // These HTTP/plugin fixtures share the invocation's native worker build.
+    const workerBorrowers = new Set([
+      "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+      "ui/src/e2e/plugin-panel-icons.e2e.test.ts",
+      "ui/src/e2e/route-asset-requests.e2e.test.ts",
+      "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
+    ]);
+    expect(
+      result.shards.filter((shard) => shard.some((file) => workerBorrowers.has(file))),
+    ).toHaveLength(1);
     const reused = probeOwnership({ reuseProductionArtifact: true });
     expect(reused.files).toEqual(result.files);
     expect(reused.shards).toEqual(result.shards);
@@ -529,7 +544,7 @@ describe("Control UI E2E resource ownership", () => {
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(61);
+      expect(parallel).toHaveLength(62);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

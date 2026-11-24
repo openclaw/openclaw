@@ -24,6 +24,7 @@ registerSessionOrganizationEnglish();
 export class WorktreesModel {
   records: WorktreeRecord[] = [];
   listLoaded = false;
+  listFailed = false;
   listRead: { result: Promise<void> } = { result: Promise.resolve() };
   private presentationLifetime = Promise.withResolvers<void>();
   error: string | null = null;
@@ -45,6 +46,7 @@ export class WorktreesModel {
       this.listLoaded = true;
     },
     onError: (error) => {
+      this.listFailed = true;
       this.error = formatUiError(error);
     },
   });
@@ -91,6 +93,10 @@ export class WorktreesModel {
       >
     >,
   ) {
+    // Replacing the error also replaces its failed-read provenance.
+    if ("error" in values) {
+      this.listFailed = false;
+    }
     Object.assign(this, values);
     this.publish();
   }
@@ -101,6 +107,7 @@ export class WorktreesModel {
     this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
     this.branchesRequest.cancel();
+    this.listFailed = false;
     this.update({ operation: null });
   }
 
@@ -125,6 +132,7 @@ export class WorktreesModel {
     if (!scope || this.operation !== null || this.listRequest.pending) {
       return;
     }
+    this.listFailed = false;
     if (!options.preserveError) {
       this.error = null;
     }

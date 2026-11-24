@@ -88,7 +88,11 @@ function createOriginatingRun(
         agentId: "main",
         sessionKey,
         operationalRunInstance,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       }),
     toolOptions: {
       agentId: "main",
@@ -213,10 +217,8 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
           ["tool-allowed", 1],
           ["tool-run-preparation-revoked", 0, 0],
           ["tool-run-revoked", 0, 1],
-          ["tool-run-claim-revoked", 0, 1],
           ["tool-run-result-revoked", 1],
           ["tool-run-retry-revoked", 0, 1],
-          ["bundled-tool-run-claim-revoked", 0, 1],
         ];
   async function exerciseRead(...[mode, content, total, minimumLookups]: ReadCase) {
     const record = registerProvider(channel, mode.startsWith("bundled-") ? "bundled" : "official");
@@ -359,7 +361,13 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         expect(await invocation).not.toBeNull();
       } else {
         await expect(invocation).rejects.toThrow(
-          mode === "denied" ? "not allowed" : "no longer active",
+          mode === "denied"
+            ? "not allowed"
+            : runRevocation
+              ? usesMessageTool
+                ? "message action turn capability is no longer active"
+                : "Message-read turn authority is no longer active"
+              : `Plugin ${channel} was reloaded during the read. Retry the action.`,
         );
       }
       expect(requests.filter(isContent)).toHaveLength(content);
@@ -657,35 +665,31 @@ describe("official Slack metadata read boundary", () => {
     await withSlackMetadataHarness(async (harness) => {
       const invocation = dispatchChannelMessageAction(harness.context);
       harness.record.enabled = false;
-      await expect(invocation).rejects.toThrow("read authority is no longer active");
+      await expect(invocation).rejects.toThrow(
+        "Plugin slack was reloaded during the read. Retry the action.",
+      );
       expect(harness.requests).toEqual([]);
     });
   });
 
   it.each([
-    { action: "emoji-list", owner: "plugin", error: false },
-    { action: "member-info", owner: "plugin", error: true },
-    { action: "emoji-list", owner: "caller", error: false },
+    { action: "emoji-list", error: false },
+    { action: "member-info", error: true },
   ] as const)(
-    "suppresses late $action data after $owner revocation (error=$error)",
-    async ({ action, owner, error }) => {
-      await withSlackMetadataHarness(
-        async (harness) => {
-          harness.response.beforeReply = () => {
-            if (owner === "plugin") {
-              harness.record.enabled = false;
-            } else {
-              harness.run.revoke();
-            }
-          };
-          if (error) {
-            harness.response.error = "sensitive_stale_provider_error";
-          }
-          await expect(invokeSlackMetadata(harness, action)).rejects.toThrow("no longer active");
-          expect(harness.requests).toHaveLength(1);
-        },
-        { claim: owner === "caller" },
-      );
+    "suppresses late $action data after plugin revocation (error=$error)",
+    async ({ action, error }) => {
+      await withSlackMetadataHarness(async (harness) => {
+        harness.response.beforeReply = () => {
+          harness.record.enabled = false;
+        };
+        if (error) {
+          harness.response.error = "sensitive_stale_provider_error";
+        }
+        await expect(invokeSlackMetadata(harness, action)).rejects.toThrow(
+          "Plugin slack was reloaded during the read. Retry the action.",
+        );
+        expect(harness.requests).toHaveLength(1);
+      });
     },
   );
 });

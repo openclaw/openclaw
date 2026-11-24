@@ -66,6 +66,7 @@ import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
+import { canonicalSkillsRouteLocation } from "./pages/skills/route-location.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
 import { page as clawsPage } from "./pages/templates/route.ts";
@@ -182,7 +183,9 @@ function canonicalRouteLocation(
           ? canonicalPluginTabLocation(location, basePath)
           : routeId === "plugins" || routeId === "plugin-settings"
             ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-            : location)
+            : routeId === "skills"
+              ? (canonicalSkillsRouteLocation(location, basePath) ?? location)
+              : location)
   );
 }
 

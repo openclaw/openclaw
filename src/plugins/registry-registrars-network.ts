@@ -473,13 +473,14 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       });
       const isCurrent = () =>
         ownerCurrent?.() === true &&
-        (record.origin === "bundled" || record.trustedOfficialInstall === true) &&
         entry !== undefined &&
         getPluginRecordRegistry(registry, record).channels.includes(entry) &&
         entry.pluginId === record.id &&
         entry.plugin === metadata.plugin &&
         entry.captureReadAuthority === captureReadAuthority;
-      return isCurrent() ? isCurrent : undefined;
+      return (record.origin === "bundled" || record.trustedOfficialInstall === true) && isCurrent()
+        ? isCurrent
+        : undefined;
     };
     if (existing) {
       if (existingRuntime) {

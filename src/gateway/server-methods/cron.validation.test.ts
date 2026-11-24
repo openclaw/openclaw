@@ -1025,7 +1025,7 @@ describe("cron method validation", () => {
         const replay = await invokeCron(`cron.${method}`, params, { context, client });
         expectResponseError(replay.respond, {
           code: "INVALID_REQUEST",
-          messageIncludes: "Configured MCP cron authority is no longer active",
+          messageIncludes: "This run's MCP cron access has ended",
         });
         expect(committed).toHaveLength(1);
       } finally {
@@ -1045,7 +1045,7 @@ describe("cron method validation", () => {
     });
     expectResponseError(mismatch.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "Configured MCP cron authority is no longer active",
+      messageIncludes: "This run's MCP cron access has ended",
     });
     expect(context.committedAdds).toHaveLength(0);
 
@@ -1086,7 +1086,7 @@ describe("cron method validation", () => {
       });
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "Configured MCP cron authority is no longer active",
+        messageIncludes: "This run's MCP cron access has ended",
       });
       expect(context.committedAdds).toHaveLength(0);
       expect(context.committedUpdates).toHaveLength(0);
@@ -1128,20 +1128,6 @@ describe("cron method validation", () => {
       expect(context.committedUpdates).toHaveLength(0);
     },
   );
-
-  it("checks a direct Cron caller again at the add commit boundary", async () => {
-    const context = createCronContext();
-    const result = await invokeCron("cron.add", agentTurnCronParams(), {
-      context,
-      hasCurrentClientAuthority: () => context.cron.add.mock.calls.length === 0,
-    });
-    expect(context.cron.add).toHaveBeenCalledOnce();
-    expect(context.committedAdds).toHaveLength(0);
-    expectResponseError(result.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Gateway caller authority is no longer active",
-    });
-  });
 
   it.each([
     ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],

@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER, resolveDefaultModelMaxTokens } from "../agents/defaults.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-selection-normalize.js";
 import { buildModelAliasIndex, modelKey, type ModelRef } from "../agents/model-selection.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";

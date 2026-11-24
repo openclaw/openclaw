@@ -3,12 +3,12 @@
  * Seed with team-shape-fixture.ts; never accepts a live URL or operator state.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/config-reload-scope-herd.ts \
  *   --state-dir <synthetic-fixture> --output <new.json> --clients 14
- * --baseline-dir loads the three original owners into the same source graph.
+ * --baseline-dir loads the original server and UI owners into the same source graph.
  * Run A/A then interleaved baseline/candidate processes, at least five pairs.
  * --allocations and --cpu-profile are separate diagnostic runs. Counts include
  * simulated subscriptions; explicit models.list probes are reported separately.
- * --controls-only warms every burst kind, then measures duplicate no-op/model
- * controls for A/A comparison. Start each process below 8 one-minute load.
+ * Every process warms each burst kind before timing. --controls-only measures
+ * duplicate no-op/model controls for A/A. Start below 8 one-minute load.
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,9 +17,9 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { SessionRowChange } from "../../src/sessions/session-row-changes.js";
-import { isConversationConfigChange } from "../../ui/src/lib/config-change.ts";
 import { modelCatalogEventInvalidation } from "../../ui/src/lib/model-catalog-cache.ts";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
@@ -38,9 +38,7 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"] && values.output);
 const startLoad = loadavg();
-if (values["controls-only"]) {
-  assert(startLoad[0]! < 8, "Control arm must start below 8 one-minute load");
-}
+assert(startLoad[0]! < 8, "Arm must start below 8 one-minute load");
 const root = path.resolve(values["state-dir"]);
 const fixture = JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
 const count = Number(values.clients);
@@ -48,13 +46,22 @@ assert(Number.isSafeInteger(count) && count > 0 && count <= 64);
 const replaced = [
   "src/config/runtime-snapshot-value-fact.ts",
   "src/config/runtime-session-changes.ts",
-  "src/gateway/server-reload-managed.ts",
+  "src/config/resolution-facts.ts",
+  "src/config/read-dependencies.ts",
+  "src/state/user-channel-identity-operations.ts",
 ].map((file) =>
   registerPerfOwnerReplacement(
     new URL(`../../${file}`, import.meta.url).href,
-    values["baseline-dir"] ? path.join(values["baseline-dir"], file) : undefined,
+    values["baseline-dir"]
+      ? path.join(
+          values["baseline-dir"],
+          file === "src/config/read-dependencies.ts" ? "ui/src/lib/config-change.ts" : file,
+        )
+      : undefined,
   ),
 );
+// Register before importing the subscriber: both arms must exercise their own UI predicate.
+const { isConversationConfigChange } = await import("../../src/config/read-dependencies.js");
 const configPath = path.join(root, "openclaw.json");
 process.env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
   startupTrace: true,
@@ -71,7 +78,8 @@ const port = await getFreePort();
 const token = "synthetic-config-reload-proof";
 const config: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
 const logPath = path.join(root, "reload-scope-gateway.log");
-config.logging = { ...config.logging, file: logPath };
+config.logging = { ...config.logging, file: logPath, level: "info" };
+config.ui = { ...config.ui, prefs: { ...config.ui?.prefs, chatShowToolCalls: true } };
 writeFileSync(logPath, "");
 config.gateway = {
   ...config.gateway,
@@ -132,11 +140,16 @@ const { sessionChanges } = await import("../../src/sessions/session-row-changes.
 const { registerPreparedModelRuntimePublicationListener } =
   await import("../../src/agents/prepared-model-runtime.js");
 const { requestGatewayRestartWithSignalAdmission } = await import("../../src/infra/restart.js");
-const server = await startGatewayServer(port, {
-  bind: "loopback",
-  controlUiEnabled: false,
-  hotReloadRecovery: requestGatewayRestartWithSignalAdmission,
-});
+const { withAgentDatabaseStartupAdmission } =
+  await import("../../src/state/agent-database-startup.js");
+const { server, databaseStartup } = await withAgentDatabaseStartupAdmission(async (admission) => ({
+  server: await startGatewayServer(port, {
+    bind: "loopback",
+    controlUiEnabled: false,
+    hotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+  }),
+  databaseStartup: admission,
+}));
 await server.startupSettled;
 // Exclude the owner's deferred startup maintenance from warm reload measurements.
 const startupDeadline = Date.now() + 120_000;
@@ -157,6 +170,7 @@ const clients: InstanceType<typeof GatewayClient>[] = [];
 let active = false;
 const sessionKeys = new Map<InstanceType<typeof GatewayClient>, string>();
 let configEvents = 0;
+let sessionEvents = 0;
 let modelInvalidations = 0;
 const scopes: SessionRowChange["scope"][] = [];
 const counts: Record<string, number> = {};
@@ -232,7 +246,14 @@ try {
             }),
           );
         }
-        if (isConversationConfigChange(event)) {
+        if (event.event === "sessions.changed") {
+          sessionEvents++;
+        }
+        if (
+          isConversationConfigChange(event) ||
+          (event.event === "sessions.changed" &&
+            asNullableRecord(event.payload)?.reason === "profile-identity")
+        ) {
           for (const method of [
             "session.members.listEvidence",
             "sessions.describe",
@@ -249,6 +270,7 @@ try {
     clients.push(client);
     client.start();
     await ready.promise;
+    await client.request("sessions.subscribe", {});
   }
   const roster = await clients[0]!.request<{ sessions: Array<{ key: string }> }>("sessions.list", {
     agentId: "main",
@@ -265,6 +287,24 @@ try {
     ]) {
       await client.request(method, params(client, method));
     }
+  }
+  // Lazy reads can schedule full integrity verification after startupSettled.
+  await databaseStartup.pendingPreparation;
+  // The fixture's transcript pass runs independently of startup maintenance.
+  let progress = "";
+  let progressDeadline = Date.now() + 120_000;
+  while (true) {
+    const log = readFileSync(logPath, "utf8");
+    if (log.includes("session: transcript facts backfill pass complete:")) {
+      break;
+    }
+    const latest = log.match(/session: transcript facts backfill progress: [^"\n]+/g)?.at(-1);
+    if (latest && latest !== progress) {
+      progress = latest;
+      progressDeadline = Date.now() + 120_000;
+    }
+    assert(Date.now() < progressDeadline, "Transcript backfill stopped making progress");
+    await delay(1000);
   }
   if (values.allocations) {
     await inspector.post("HeapProfiler.startSampling", samplingOptions);
@@ -286,6 +326,8 @@ try {
     ["model", { agents: { defaults: { model: { primary: "fixture/second" } } } }],
     ["create", { browser: { profiles: { temporary: { cdpPort: 18801 } } } }],
     ["remove", { browser: { profiles: { temporary: null } } }],
+    ["ui-prefs", { ui: { prefs: { chatShowToolCalls: false } } }],
+    ["logging", { logging: { level: "debug" } }],
   ] as const;
   async function runBurst(label: string, patch: unknown, record = true) {
     await drain();
@@ -293,7 +335,7 @@ try {
     const revision = await clients[0]!.request<{ hash: string }>("config.get", {});
     Object.keys(counts).forEach((method) => delete counts[method]);
     automatic.length = probeMs.length = scopes.length = errors.length = 0;
-    configEvents = modelInvalidations = 0;
+    configEvents = sessionEvents = modelInvalidations = 0;
     if (values.allocations) {
       await inspector.post("HeapProfiler.startSampling", samplingOptions);
     }
@@ -353,22 +395,23 @@ try {
       retainedRuntime,
       modelInvalidations,
       configEvents,
+      sessionEvents,
       scopes: [...scopes],
       refetches: { ...counts },
       modelsProbeMs: [...probeMs],
     };
   }
   const resetModel = { agents: { defaults: { model: { primary: "fixture/first" } } } };
-  if (values["controls-only"]) {
-    // Exercise the real callbacks and all read/write worker classes before timing.
-    for (const [label, patch] of bursts) {
-      await runBurst(label, patch, false);
-    }
-    await runBurst("model-reset", resetModel, false);
+  // Exercise the real callbacks and all read/write worker classes before timing.
+  for (const [label, patch] of bursts) {
+    await runBurst(label, patch, false);
   }
+  await runBurst("model-reset", resetModel, false);
+  await runBurst("ui-reset", { ui: { prefs: { chatShowToolCalls: true } } }, false);
+  await runBurst("logging-reset", { logging: { level: "info" } }, false);
   const measuredStartLoad = loadavg();
+  assert(measuredStartLoad[0]! < 8, "Warmed arm must start below 8 one-minute load");
   if (values["controls-only"]) {
-    assert(measuredStartLoad[0]! < 8, "Warmed control arm must start below 8 one-minute load");
     for (const [label, patch] of bursts.slice(0, 3)) {
       results.push(await runBurst(label, patch));
     }
@@ -394,7 +437,7 @@ try {
         load: loadavg(),
         startLoad,
         measuredStartLoad,
-        warmedControls: values["controls-only"] === true,
+        warmedControls: true,
         clients: count,
         distinctSessions: new Set(sessionKeys.values()).size,
         fixture,

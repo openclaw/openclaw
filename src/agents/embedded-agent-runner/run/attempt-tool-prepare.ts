@@ -33,6 +33,7 @@ import {
 } from "../../local-model-lean.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "../../prepared-model-runtime-auth.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
@@ -346,6 +347,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         pluginExecutionAuthority,
         pluginExecutionSkillsSnapshot,
         assertInvocationCurrent: assertActive,
+        prepareHostFileMutation: assertActive?.prepareSessionSourceStorageEffect,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         exec: {
@@ -372,6 +374,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         codeModeSkills,
         installedSkills: params.installedSkills,
         preparedModelRuntime: attempt.preparedModelRuntime,
+        readDelegationConfig: getPreparedModelRuntimePolicyConfigReader(
+          attempt.preparedModelRuntime,
+        ),
         requireWorkspaceOnly: attempt.requireWorkspaceOnly,
         sessionReadScopeKey: attempt.sessionReadScopeKey,
         sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
@@ -383,6 +388,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             resolveWebSearchRoute().kind === "managed";
         },
         githubPublicationAvailable: attempt.githubPublicationAvailable,
+        sessionProjectMoveEligible: attempt.sessionProjectMoveEligible,
         githubPublicationConfigurationAware:
           !isRawModelRun && attempt.operation !== "settled-tool-finalization" ? true : undefined,
         abortSignal,

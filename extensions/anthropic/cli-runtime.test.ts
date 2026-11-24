@@ -578,11 +578,8 @@ describe("Claude native stdio boundary", () => {
 
   it.for([
     ["approval", "assertCurrent", "deny"],
-    ["approval", "assertPrivateInputCurrent", "allow"],
     ["initialize", "assertCurrent", undefined],
-    ["initialize", "assertPrivateInputCurrent", undefined],
     ["initialize", "prepareCredentialUse", undefined],
-    ["prompt", "assertPrivateInputCurrent", undefined],
   ] as const)(
     "revalidates authority at %s with %s",
     async ([stage, check, decision], { signal }) => {
@@ -611,9 +608,6 @@ describe("Claude native stdio boundary", () => {
           await withinTest(Promise.race([approvalStarted.promise, running]), signal);
         } else {
           await fixtureReadyBeforeSettlement(context, `${stage}.ready`, running, signal);
-          if (stage === "prompt") {
-            expect(await readFixture(context, "user.received")).toBe(context.prompt);
-          }
         }
         active = false;
       } finally {
@@ -629,16 +623,10 @@ describe("Claude native stdio boundary", () => {
         await expect(access(fixtureFile(context, "user.received"))).rejects.toThrow();
       } else {
         const detail = resultDetail(await withinTest(running, signal));
-        expect(detail).toMatchObject(
-          stage === "prompt"
-            ? { turn: 1, user: context.prompt }
-            : { hookDecision: { hookSpecificOutput: { permissionDecision: decision } } },
-        );
-        if (stage === "prompt") {
-          expect(detail.privateContext).toBeUndefined();
-        } else if (decision === "deny") {
-          expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
-        }
+        expect(detail).toMatchObject({
+          hookDecision: { hookSpecificOutput: { permissionDecision: decision } },
+        });
+        expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
       }
     },
   );

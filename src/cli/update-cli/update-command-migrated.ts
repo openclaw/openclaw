@@ -9,7 +9,6 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveUserPath } from "../../infra/home-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -17,7 +16,9 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
-  resolveUpdateStateContentVersion,
+  addAgentInventoryPaths,
+  listIncompleteUpdateMigrations,
+  resolveAgentDirOverrideDatabasePaths,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.versions.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
@@ -45,7 +46,6 @@ import type {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
-import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
@@ -63,9 +63,9 @@ import {
  * candidate Doctor or boot may have written it. Before any candidate opened state, an
  * unreadable store still holds the previous version's state; that read is a warning.
  *
- * A Git release switches only the release link: the previous Gateway keeps serving and
- * writing, no Doctor runs, and the Gateway that starts from the release migrates at boot.
- * Its inspection reads the live stores directly, as the pre-activation baseline does.
+ * A Git release can switch the link while the previous Gateway is serving. The
+ * updater runs no pre-restart Doctor for that path and inspects live stores as it
+ * did for the pre-activation baseline.
  */
 export async function inspectActivatedUpdateState(
   params: Pick<
@@ -85,13 +85,7 @@ export async function inspectActivatedUpdateState(
     return undefined;
   }
   const gitRelease = params.gitRelease === true;
-  const agentPaths = new Set(
-    [env.OPENCLAW_AGENT_DIR, env.PI_CODING_AGENT_DIR].flatMap((directory) =>
-      directory?.trim()
-        ? [path.join(resolveUserPath(directory, env), "openclaw-agent.sqlite")]
-        : [],
-    ),
-  );
+  const agentPaths = new Set(resolveAgentDirOverrideDatabasePaths(env));
   let blocked: FinishUpdateParams["rollbackBlockedReason"];
   try {
     const current = await readUpdateStateSchemaVersions({
@@ -105,34 +99,17 @@ export async function inspectActivatedUpdateState(
       // Preserved artifacts keep the final Doctor's captured generation valid. A Git
       // release captures none, and a full copy of a live store never stabilizes.
       preserveSourceArtifacts: !gitRelease,
-      onInventory: (files) => {
-        for (const database of files.values()) {
-          if (
-            database.owners?.some(({ role }) => role === "agent") ||
-            database.registeredPaths?.length
-          ) {
-            database.spellings.forEach((pathname) => agentPaths.add(pathname));
-          }
-        }
-      },
+      onInventory: (files) => addAgentInventoryPaths(agentPaths, files),
     });
-    const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
-    const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
-    const incompleteAgents = candidateSchemaVersions
-      ? current.filter(
-          (entry) =>
-            agentPaths.has(entry.path) &&
-            !shared?.retainedAgentPaths?.includes(entry.path) &&
-            entry.userVersion !== null &&
-            entry.userVersion !== candidateSchemaVersions.agent,
-        )
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const incomplete = candidateSchemaVersions
+      ? listIncompleteUpdateMigrations(current, {
+          sharedPath,
+          agentPaths,
+          candidateSchemaVersions,
+        })
       : [];
-    if (
-      result.status === "ok" &&
-      !gitRelease &&
-      candidateSchemaVersions &&
-      (sharedVersion !== candidateSchemaVersions.state || incompleteAgents.length > 0)
-    ) {
+    if (result.status === "ok" && !gitRelease && incomplete.length > 0) {
       // Doctor can warn without failing. Require applied content so startup
       // cannot migrate late; deferred publication alone is already ready.
       result.status = "error";
@@ -143,17 +120,13 @@ export async function inspectActivatedUpdateState(
         cwd: result.root ?? root,
         durationMs: 0,
         exitCode: 1,
-        stderrTail: [
-          ...(sharedVersion !== candidateSchemaVersions.state
-            ? [
-                `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
-              ]
-            : []),
-          ...incompleteAgents.map(
-            (entry) =>
-              `Agent database migration did not finish: ${entry.path}; expected schema ${candidateSchemaVersions.agent}, found ${entry.userVersion}.`,
-          ),
-        ].join("\n"),
+        stderrTail: incomplete
+          .map(({ path: file, expected, found }) =>
+            file === sharedPath
+              ? `Shared state migration did not finish: expected schema ${expected}, found ${found ?? "missing"}.`
+              : `Agent database migration did not finish: ${file}; expected schema ${expected}, found ${found}.`,
+          )
+          .join("\n"),
       });
     }
     blocked = updateStateSchemaVersionsMatch(schemaVersions, current, {
@@ -168,9 +141,7 @@ export async function inspectActivatedUpdateState(
       result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk;
     if (params.candidateOpenedState === false && result.root && !recordedRisk) {
       // No candidate has opened live state, so an unreadable store is no evidence of change.
-      result.steps.push(
-        inconclusiveInspectionStep(result.root, error, gitRelease, result.status === "ok"),
-      );
+      result.steps.push(inconclusiveInspectionStep(result.root, error, result.status === "ok"));
       return undefined;
     }
     result.status = "error";
@@ -194,15 +165,10 @@ export async function inspectActivatedUpdateState(
 function inconclusiveInspectionStep(
   cwd: string,
   cause: unknown,
-  gitRelease: boolean,
   continues: boolean,
 ): UpdateStepResult {
   const state = "No data was changed because no new-version process had opened the state.";
-  const outcome = !continues
-    ? ""
-    : gitRelease
-      ? " The update continues; the new release migrates state when it starts."
-      : " The update continues.";
+  const outcome = continues ? " The update continues." : "";
   return {
     name: "state-schema-verification",
     command: "openclaw update",
@@ -350,13 +316,7 @@ export async function continueMigratedUpdateInFreshProcess(
     const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const {
-      requesterAuthority,
-      executorFence,
-      sourceArtifactLock: _sourceArtifactLock,
-      deadline: _deadline,
-      ...runIdentity
-    } = run;
+    const { requesterAuthority, executorFence, deadline: _deadline, ...runIdentity } = run;
     const { onResult: _onResult, ...serializableOptions } = params.opts;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
@@ -399,7 +359,6 @@ export async function continueMigratedUpdateInFreshProcess(
           }
         },
       });
-    await releaseLegacySourceLock(root, run.sourceArtifactLock);
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();

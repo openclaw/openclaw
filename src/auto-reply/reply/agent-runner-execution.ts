@@ -571,18 +571,15 @@ async function executeAgentTurnOutcome(
   const requester = executionParams.followupRun.operatorAuthority;
   if (requester) {
     assertAdmittedRunOperatorAuthority(requester);
-    requester.assertCurrent();
   }
   let modelContextLease: AppContextTurnParams["mcpAppContextLease"];
   const prepareMcpAppModelContext = async () => {
-    requester?.assertCurrent();
     modelContextLease = await leaseMcpAppModelContextForSessionTurn({
       agentId: executionParams.followupRun.run.agentId,
       sessionId: executionParams.followupRun.run.sessionId,
       sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
       requesterId: requester?.profileId,
     });
-    requester?.assertCurrent();
     return modelContextLease;
   };
   // Keep committed facts outside cleanup so a restart cannot erase them.
@@ -604,7 +601,7 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        const execution = prepareReplyTurnExecution(executionParams, runId);
+        const execution = await prepareReplyTurnExecution(executionParams, runId);
         let scheduledInference: CronRunInference | undefined;
         let workspaceLease: CronWorkspaceLease | undefined;
         try {

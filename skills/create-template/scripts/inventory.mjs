@@ -252,7 +252,7 @@ function summarizeAutomations(result, agentId) {
     ) {
       continue;
     }
-    // Templates declare cron schedules; one-shot reminders and intervals are not routines to share.
+    // Templates declare cron schedules; one-shot reminders and intervals are not automations to share.
     if (job.schedule?.kind !== "cron" || typeof job.schedule.expr !== "string") {
       continue;
     }
@@ -271,7 +271,7 @@ const options = parseArgs(process.argv.slice(2));
 const [draft, plugins, automations, roster, instructions, skillReport] = await Promise.all([
   requestDraft(options.workspace, options.draft),
   cliJson(["plugins", "inspect", "--all", "--json"]),
-  // Use the active-only list: a paused routine must not become a new owner’s running job.
+  // Use the active-only list: a paused automation must not become a new owner’s running job.
   cliJson(["cron", "list", "--agent", options.agent, "--json"]),
   cliJson(["agents", "list", "--json"]),
   listInstructionFiles(options.workspace),

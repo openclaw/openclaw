@@ -127,8 +127,8 @@ const FeishuDriveSchema = Type.Union([
 type FeishuExplorerRootFolderMetaResponse = {
   code: number;
   msg?: string;
-  data?: {
-    token?: string;
+  data: {
+    token: string;
   };
 };
 
@@ -302,28 +302,22 @@ async function getRootFileInfo(client: Lark.Client, fileToken: string) {
 }
 
 async function createFolder(client: Lark.Client, name: string, folderToken?: string) {
-  // Feishu supports using folder_token="0" as the root folder.
-  // We *try* to resolve the real root token (explorer API), but fall back to "0"
-  // because some tenants/apps return 400 for that explorer endpoint.
-  let effectiveToken = folderToken && folderToken !== "0" ? folderToken : "0";
-  if (effectiveToken === "0") {
-    try {
-      const domain = client.domain ?? "https://open.feishu.cn";
-      const root = await client.httpInstance.get<FeishuExplorerRootFolderMetaResponse>(
-        `${domain}/open-apis/drive/explorer/v2/root_folder/meta`,
-      );
-      if (root.code === 0 && root.data?.token) {
-        effectiveToken = root.data.token;
-      }
-    } catch {
-      // ignore and keep "0"
-    }
-  }
+  // Feishu rejects folder_token "0", so root creation needs the real root token.
+  const parentToken =
+    folderToken && folderToken !== "0"
+      ? folderToken
+      : assertDriveApiSuccess(
+          await requestDriveApi<FeishuExplorerRootFolderMetaResponse>({
+            client,
+            method: "GET",
+            url: "/open-apis/drive/explorer/v2/root_folder/meta",
+          }),
+        ).data.token;
 
   const res = await client.drive.file.createFolder({
     data: {
       name,
-      folder_token: effectiveToken,
+      folder_token: parentToken,
     },
   });
   assertFeishuApiSuccess(res);

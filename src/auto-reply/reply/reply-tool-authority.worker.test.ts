@@ -660,7 +660,6 @@ it.each(["current", "revoked policy", "reassigned session"] as const)(
                   handle.messageInjectionV2 = createSteeredCliMessageInjection({
                     context: { params: { workspaceDir: state.workspaceDir } },
                     signal: source.signal,
-                    assertCurrent: () => source.signal.throwIfAborted(),
                     getInjection: () => ({
                       isAvailable: () => true,
                       async queueMessage(text, withCurrent) {

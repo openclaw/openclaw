@@ -7,11 +7,16 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveSubagentSpawnModelFallbacksOverride,
 } from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelFallbackAvailability } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { normalizeModelSelection, resolveConfiguredModelRef } from "./model-selection-shared.js";
 
+/** Shown wherever a model must run but the agent has none configured. */
+export const NO_MODEL_CONFIGURED_MESSAGE =
+  "No model is configured. Choose one in Settings → Models, send `/model <provider/model>` in chat, or run `openclaw models set <provider/model>`.";
+
+/** The agent's configured primary model; undefined when no model is configured. */
 export function resolveDefaultModelForAgent(
   params: {
     cfg: OpenClawConfig;
@@ -19,12 +24,19 @@ export function resolveDefaultModelForAgent(
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
+): ModelRef | undefined {
+  return resolveConfiguredModelRef({ ...params, defaultProvider: DEFAULT_PROVIDER });
+}
+
+/** The agent's configured primary model for a caller that must run one. */
+export function requireDefaultModelForAgent(
+  params: Parameters<typeof resolveDefaultModelForAgent>[0],
 ): ModelRef {
-  return resolveConfiguredModelRef({
-    ...params,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const model = resolveDefaultModelForAgent(params);
+  if (!model) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
+  return model;
 }
 
 export function resolveSubagentConfiguredModelSelection(params: {
@@ -107,6 +119,7 @@ export function resolveModelFallbackAvailability(params: {
     }
     const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
     if (
+      !primary ||
       primary.provider !== params.selectedModel.provider ||
       primary.model !== params.selectedModel.model
     ) {

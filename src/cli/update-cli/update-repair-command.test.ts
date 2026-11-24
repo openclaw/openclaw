@@ -159,7 +159,7 @@ describe("update repair ledger recovery", () => {
       new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"),
     );
     await expect(updateRepairCommand({ json: true })).rejects.toThrow(
-      /Stop the Gateway first \(openclaw gateway stop\)/,
+      /Stop the Gateway first \(openclaw gateway stop --force\)/,
     );
     expect(mocks.finalize).not.toHaveBeenCalled();
     expect(getUpdateRun(run.runId)).toEqual(run);

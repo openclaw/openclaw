@@ -456,6 +456,19 @@ describe("retained receipt recovery operator", () => {
     ).toMatchObject({ workflowSha: P, runId: "10" });
     for (const args of [
       ["--reconcile-request", "x", "--run", "10"],
+      ["--reconcile-request", "x", "--policy-sha", Q],
+      ["--run", "10", "--workflow-sha", P, "--request-file", "x", "--policy-sha", Q],
+      [
+        "--run",
+        "10",
+        "--workflow-sha",
+        P,
+        "--prepare-policy-admission",
+        "--policy-sha",
+        Q,
+        "--policy-admission-run",
+        "8",
+      ],
       ["--run", "10", "--run", "20"],
       ["--children", "{}"],
       [],

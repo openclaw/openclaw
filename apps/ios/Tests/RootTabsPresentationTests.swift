@@ -295,6 +295,19 @@ struct RootTabsPresentationTests {
         #expect(route == .none)
     }
 
+    @Test func `first gateway help requires a loaded empty registry and no configured route`() {
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: nil, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: true, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: true))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: true, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+    }
+
     @Test func `fresh install presents onboarding`() {
         let route = RootTabs.startupPresentationRoute(
             gatewayConnected: false,
@@ -697,16 +710,6 @@ struct RootTabsPresentationTests {
             activeAgentID: "main",
             groups: []).flatMap(\.nodes).map(\.session.key)
         #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
-    }
-
-    @Test func `sidebar agent badges use canonical identity fallback`() {
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable(" 🦞 ")]) == "🦞")
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable("?")]) == "RA")
-        #expect(RootSidebar.agentBadge(name: "Research Agent", identity: nil) == "RA")
     }
 
     @Test func `session work subtitle mirrors the web repo and branch line`() {

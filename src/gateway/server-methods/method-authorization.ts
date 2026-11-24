@@ -24,14 +24,19 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { PUBLICATION_READ_SCOPE, APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
-import { isPublicationReaderCurrent, isPublicationReaderMethod } from "../publication-reader.js";
+import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
+import {
+  isPublicationTransportCurrent,
+  isPublicationTransportEnabled,
+  isPublicationTransportMethod,
+  isPublicationTransportScope,
+} from "../publication-reader.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
 /** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
-export function authorizeGatewayMethodScopes(
+function authorizeGatewayMethodScopes(
   method: string,
   scopes: readonly string[],
   params: unknown,
@@ -67,25 +72,28 @@ export function authorizeGatewayMethod(
   context: GatewayRequestContext,
 ): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
   if (
-    client?.internal?.publicationReader ||
-    client?.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
+    client?.internal?.publicationTransport ||
+    client?.connect.scopes?.some(isPublicationTransportScope)
   ) {
-    const admission = client.internal?.publicationReader;
+    const admission = client.internal?.publicationTransport;
     const allowed =
-      isPublicationReaderCurrent(admission) &&
+      isPublicationTransportCurrent(admission) &&
+      isPublicationTransportEnabled(admission.scope) &&
       !client.invalidated &&
       client.isDeviceTokenAuth === true &&
       client.connect.role === "operator" &&
       client.connect.scopes?.length === 1 &&
-      client.connect.scopes[0] === PUBLICATION_READ_SCOPE &&
+      client.connect.scopes[0] === admission.scope &&
       client.connect.device?.id === admission.deviceId &&
       client.internal?.operatorDeviceTokenIdentity?.key === admission.key &&
       !client.internal?.syntheticClient &&
       !client.authenticatedUserProfile &&
       !client.internal?.operatorRoleActor &&
-      isPublicationReaderMethod(methodRegistry, method);
+      isPublicationTransportMethod(methodRegistry, method, admission.scope);
     return {
-      error: allowed ? null : errorShape(ErrorCodes.FORBIDDEN, "publication reader method denied"),
+      error: allowed
+        ? null
+        : errorShape(ErrorCodes.FORBIDDEN, "publication transport method denied"),
     };
   }
   // Pre-connect and health requests are allowed through; role/scope checks require the
@@ -106,7 +114,12 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   if (client.invalidated) {
-    return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
+    return {
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "This connection lost access. Reconnect and try again.",
+      ),
+    };
   }
   if (resolveGatewayOperatorRoleActor(client)?.kind === "operator") {
     const roleError = authorizeCurrentOperatorRoleScopes(
