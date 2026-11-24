@@ -1,8 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { recordDeliveredCommandExchange } from "../../config/sessions/command-transcript.js";
+import {
+  recordDeliveredCommandExchange,
+  shouldDeferDeliveredCommandExchange,
+} from "../../config/sessions/command-transcript.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
-import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import {
+  readAssistantDisplayContent,
+  retainAssistantModelContent,
+} from "../../shared/assistant-display-content.js";
 import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
@@ -27,10 +33,6 @@ import {
   selectChatSendFinalReplyInputs,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
-import {
-  deferCommandTranscriptWrite,
-  shouldDeferCommandTranscript,
-} from "./chat-send-command-transcript-deferral.js";
 import {
   createChatSendReplyFinalizationAuthority,
   type ChatSendReplyFinalizationParams,
@@ -173,8 +175,9 @@ export async function finalizeChatSendDispatchedReplies(
     return;
   }
 
+  const runtimeOwnsTranscript = params.runtimeOwnsTranscript === true;
   const contextFreeCommand =
-    !params.runtimeOwnsTranscript &&
+    !runtimeOwnsTranscript &&
     deliveredReplies.length > 0 &&
     deliveredReplies.every(({ input }) => {
       const payload = readChatSendReplyPayload(input);
@@ -304,61 +307,54 @@ export async function finalizeChatSendDispatchedReplies(
       (payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
     );
     const shouldAppendAssistantTranscript = Boolean(
-      ((!params.runtimeOwnsTranscript && !payloadOwnsAssistantTranscript) ||
-        useTranscriptMirrorOwner) &&
+      ((!runtimeOwnsTranscript && !payloadOwnsAssistantTranscript) || useTranscriptMirrorOwner) &&
       canAppendAssistantTranscript &&
       (transcriptReply || persistedContentForAppend?.length),
     );
     // A command ack delivered while another turn is running must not move that turn's
-    // transcript fence; it is recorded after the turn settles instead (#194451).
+    // transcript fence; it is recorded after that physical session settles instead (#194451).
+    // Production chat.send always threads the command input, so an absent commandText means
+    // there is no exchange to defer.
+    const commandText = params.commandText;
     const deferCommandTranscript =
+      !runtimeOwnsTranscript &&
       !contextFreeCommand &&
-      shouldDeferCommandTranscript({
-        runtimeOwnsTranscript: params.runtimeOwnsTranscript,
+      commandText !== undefined &&
+      rawFinalPayloads.length > 0 &&
+      rawFinalPayloads.every(
+        (payload) => getReplyPayloadMetadata(payload)?.commandReply === true,
+      ) &&
+      // The shared recorder owns this policy; scoping through the receiving store keeps a
+      // logical key that spans several stores from making the active-run lookup ambiguous.
+      shouldDeferDeliveredCommandExchange({
         sessionKey: transcriptSessionKey,
-        payloads: rawFinalPayloads,
+        agentId: transcriptAgentId,
+        storePath: latestStorePath,
+        config: cfg,
       });
-    if (deferCommandTranscript) {
+    if (deferCommandTranscript && commandText !== undefined) {
       if (authorizeDelivery("transcript append")) {
-        deferCommandTranscriptWrite({
+        // Deferring through the recorder keeps the prepared content, TTS marker, and media
+        // retention callback: the acknowledgement persists exactly as it would have inline.
+        await recordDeliveredCommandExchange({
           sessionKey: transcriptSessionKey,
-          write: async () => {
-            if (params.commandText) {
-              // Record the command and its acknowledgement as one exchange, the same
-              // pairing the channel dispatcher writes after a mid-turn delivery.
-              await recordDeliveredCommandExchange({
-                sessionKey: transcriptSessionKey,
-                agentId: transcriptAgentId,
-                storePath: latestStorePath,
-                expectedSessionId: sessionId,
-                commandText: params.commandText,
-                commandId: clientRunId,
-                replyId: "gateway-ack",
-                replyText: transcriptReply,
-                config: cfg,
-              });
-              return;
-            }
-            await persistUserTurnTranscript();
-            if (shouldAppendAssistantTranscript) {
-              await appendInjectedAssistantMessageToTranscript({
-                sessionKey: transcriptSessionKey,
-                message: transcriptReply,
-                ...(persistedContentForAppend?.length
-                  ? { content: persistedContentForAppend }
-                  : {}),
-                sessionId,
-                expectedSessionId: sessionId,
-                storePath: latestStorePath,
-                agentId: transcriptAgentId,
-                idempotencyKey: clientRunId,
-                stopReason,
-                ttsSupplement: ttsSupplementMarker,
-                config: cfg,
-                onMessageCommitted: retainCommittedChatReplyMedia,
-              });
-            }
-          },
+          agentId: transcriptAgentId,
+          storePath: latestStorePath,
+          expectedSessionId: sessionId,
+          commandText,
+          commandId: clientRunId,
+          replyId: "gateway-ack",
+          replyText: transcriptReply,
+          ...(persistedContentForAppend?.length
+            ? {
+                content: retainAssistantModelContent(persistedContentForAppend),
+                displayContent: persistedContentForAppend,
+              }
+            : {}),
+          ...(ttsSupplementMarker ? { ttsSupplement: ttsSupplementMarker } : {}),
+          stopReason,
+          config: cfg,
+          onMessageCommitted: retainCommittedChatReplyMedia,
         });
       }
     } else {

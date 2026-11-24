@@ -1,137 +1,149 @@
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import fs from "node:fs";
+import path from "node:path";
+import { expect, it, vi } from "vitest";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { getMediaDir } from "../../media/store.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
-import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
-import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
-import {
-  deferCommandTranscriptWrite,
-  shouldDeferCommandTranscript,
-} from "./chat-send-command-transcript-deferral.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { installGatewayTestHooks } from "../test-helpers.js";
+import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
 
-afterEach(() => controllerTesting.resetSessionControllerForTest());
+installGatewayTestHooks();
+const createFixture = useBrowserFollowupFixture();
 
-const commandPayload = () =>
-  setReplyPayloadMetadata({ text: "Thinking level set to ultra." }, { commandReply: true });
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
-it("records a mid-turn command exchange only after the active turn settles", async () => {
-  const state = await createOpenClawTestState({
-    label: "gateway-command-deferral",
-    applyEnv: false,
-  });
-  onTestFinished(() => state.cleanup());
-  const storePath = state.path("sessions.json");
-  const sessionKey = "agent:main:webchat:deferred-ack";
-  const target = { agentId: "main", storePath, sessionKey };
-  const sessionId = "busy-session";
-  await upsertSessionEntry({ ...target, entry: { sessionId, updatedAt: 1 } });
-  const scope = { ...target, sessionId };
-  await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: sessionId }]);
-  const read = async () =>
-    (await readVisibleSessionTranscriptMessageEntries({ ...target, sessionId })).map(
-      (entry) => entry.message,
-    );
+async function readMessages(fixture: Fixture) {
+  return (
+    await readVisibleSessionTranscriptMessageEntries({
+      agentId: fixture.scope.agentId,
+      storePath: fixture.scope.storePath,
+      sessionKey: fixture.scope.sessionKey,
+      sessionId: fixture.scope.sessionId,
+    })
+  ).map((entry) => entry.message);
+}
 
-  const [started, finish] = [createDeferred(), createDeferred()];
-  const turn = withSessionTurn(
-    { sessionKey, sessionId, storePath, agentId: "main" },
-    async (operation) => {
-      markReplyOperationExecutionStarted(operation!);
-      started.resolve();
-      await finish.promise;
+async function finalizeCommand(fixture: Fixture, payload: ReplyPayload, commandText: string) {
+  await finalizeChatSendDispatchedReplies({
+    accountId: undefined,
+    context: fixture.context,
+    emitFirstAssistantServerTiming: () => {},
+    terminalEntry: undefined,
+    session: {
+      agentId: fixture.scope.agentId,
+      backingSessionId: fixture.scope.sessionId,
+      cfg: fixture.context.getRuntimeConfig(),
+      clientRunId: "mid-turn-command-run",
+      sessionKey: fixture.scope.sessionKey,
+      sessionLoadOptions: {},
+      storePath: fixture.scope.storePath,
     },
-  );
-  await started.promise;
-
-  expect(
-    shouldDeferCommandTranscript({
-      runtimeOwnsTranscript: false,
-      sessionKey,
-      payloads: [commandPayload()],
-    }),
-  ).toBe(true);
-
-  const writes: string[] = [];
-  deferCommandTranscriptWrite({
-    sessionKey,
-    write: async () => {
-      writes.push("user");
-      await appendTranscriptMessage(scope, {
-        eventId: "command-input",
-        message: { role: "user", content: [{ type: "text", text: "/think ultra" }] },
-      });
-      writes.push("assistant");
-      await appendTranscriptMessage(scope, {
-        eventId: "command-ack",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Thinking level set to ultra." }],
-        },
-      });
-    },
+    deliveredReplies: [{ kind: "final", input: { kind: "raw", payload } }],
+    foldCommandBlocks: true,
+    persistUserTurnTranscript: async () => undefined,
+    runtimeOwnsTranscript: false,
+    state: "final",
+    commandText,
+    suppressReplies: false,
   });
+}
 
-  // The running turn's model-context fence stays untouched while it works.
-  await vi.waitFor(() => expect(writes).toEqual([]));
-  expect(await read()).toEqual([]);
+function writeTtsAudio() {
+  const audioPath = path.join(getMediaDir(), "mid-turn-tts.mp3");
+  fs.mkdirSync(path.dirname(audioPath), { recursive: true });
+  fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  return audioPath;
+}
 
-  finish.resolve();
-  await turn;
-  await vi.waitFor(async () => expect(await read()).toHaveLength(2), { timeout: 15_000 });
-  const messages = await read();
-  expect(messages).toEqual([
-    expect.objectContaining({ role: "user", content: [{ type: "text", text: "/think ultra" }] }),
-    expect.objectContaining({
-      role: "assistant",
-      content: [{ type: "text", text: "Thinking level set to ultra." }],
-    }),
-  ]);
-  for (const message of messages) {
-    expect(message).not.toHaveProperty("excludeFromContext");
+async function withActiveFixture(
+  run: (fixture: Fixture, activeRun: NonNullable<Fixture["activeRun"]>) => Promise<void>,
+) {
+  const fixture = await createFixture({ active: true });
+  const activeRun = fixture.activeRun;
+  if (!activeRun) {
+    throw new Error("expected the fixture's active run");
   }
-});
+  markReplyOperationExecutionStarted(activeRun);
+  try {
+    await run(fixture, activeRun);
+  } finally {
+    activeRun.complete();
+    await fixture.cleanup();
+  }
+}
 
-it("keeps an idle command exchange inline", () => {
-  expect(
-    shouldDeferCommandTranscript({
-      runtimeOwnsTranscript: false,
-      sessionKey: "agent:main:webchat:idle-ack",
-      payloads: [commandPayload()],
-    }),
-  ).toBe(false);
-});
+/** A deferred write must not touch the transcript until the owning turn settles. */
+async function expectTranscriptUntouchedWhileActive(fixture: Fixture, before: unknown[]) {
+  await vi.waitFor(async () => expect(await readMessages(fixture)).toEqual(before), {
+    timeout: 5_000,
+  });
+}
 
-it("does not defer ordinary replies or runtime-owned transcripts", async () => {
-  expect(
-    shouldDeferCommandTranscript({
-      runtimeOwnsTranscript: false,
-      sessionKey: "agent:main:webchat:ordinary",
-      payloads: [{ text: "ordinary answer" }],
-    }),
-  ).toBe(false);
-
-  const [started, finish] = [createDeferred(), createDeferred()];
-  const turn = withSessionTurn(
-    { sessionKey: "agent:main:webchat:runtime", sessionId: "runtime-session", agentId: "main" },
-    async (operation) => {
-      markReplyOperationExecutionStarted(operation!);
-      started.resolve();
-      await finish.promise;
+async function expectExchangeAfterSettle(
+  fixture: Fixture,
+  before: unknown[],
+  assertAck: (ack: Record<string, unknown>) => void,
+) {
+  await vi.waitFor(
+    async () => {
+      const messages = await readMessages(fixture);
+      expect(messages.length).toBe(before.length + 2);
+      expect(messages.at(-2)).toMatchObject({
+        role: "user",
+        content: [{ type: "text", text: expect.stringMatching(/^\//) }],
+      });
+      const ack = messages.at(-1) as Record<string, unknown>;
+      expect(ack).toMatchObject({ role: "assistant", model: "command" });
+      for (const message of messages.slice(before.length)) {
+        expect(message).not.toHaveProperty("excludeFromContext");
+      }
+      assertAck(ack);
     },
+    { timeout: 15_000 },
   );
-  await started.promise;
-  expect(
-    shouldDeferCommandTranscript({
-      runtimeOwnsTranscript: true,
-      sessionKey: "agent:main:webchat:runtime",
-      payloads: [commandPayload()],
-    }),
-  ).toBe(false);
-  finish.resolve();
-  await turn;
+}
+
+it("records a mid-turn command exchange through finalization only after the session settles", async () => {
+  await withActiveFixture(async (fixture, activeRun) => {
+    const before = await readMessages(fixture);
+    await finalizeCommand(
+      fixture,
+      setReplyPayloadMetadata({ text: "Thinking level set to ultra." }, { commandReply: true }),
+      "/think ultra",
+    );
+    await expectTranscriptUntouchedWhileActive(fixture, before);
+    activeRun.complete();
+    await expectExchangeAfterSettle(fixture, before, (ack) => {
+      expect(ack.content).toEqual([{ type: "text", text: "Thinking level set to ultra." }]);
+    });
+  });
+});
+
+it("keeps prepared rich content and its TTS marker on the deferred acknowledgement", async () => {
+  await withActiveFixture(async (fixture, activeRun) => {
+    const audioPath = writeTtsAudio();
+    const before = await readMessages(fixture);
+    await finalizeCommand(
+      fixture,
+      setReplyPayloadMetadata(
+        {
+          mediaUrl: audioPath,
+          trustedLocalMedia: true,
+          ttsSupplement: { spokenText: "Hello" },
+        },
+        { commandReply: true },
+      ),
+      "/tts audio Hello",
+    );
+    await expectTranscriptUntouchedWhileActive(fixture, before);
+    activeRun.complete();
+    await expectExchangeAfterSettle(fixture, before, (ack) => {
+      expect(ack.openclawTtsSupplement).toEqual({ textSha256: expect.any(String) });
+      // A text-only exchange would lose the audio attachment the reply delivered.
+      expect(readAssistantDisplayContent(ack).some((block) => block.type !== "text")).toBe(true);
+    });
+  });
 });

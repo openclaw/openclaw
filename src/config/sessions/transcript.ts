@@ -288,6 +288,10 @@ type SessionTranscriptAssistantAppendOptions = {
   /** Prepare display attachments in the writer queue; replays retain their accepted IDs. */
   prepareDisplayContent?: () => Promise<Array<Record<string, unknown>> | undefined>;
   contextFreeCommand?: true;
+  /** Terminal state of the delivered run; deferred command acks can carry `aborted`. */
+  stopReason?: "stop" | "aborted";
+  /** Companion TTS marker for a reply whose audio attachment is persisted beside it. */
+  ttsSupplement?: { textSha256: string };
   /** Delivered command exchanges are replayable conversation, not delivery bookkeeping. */
   command?: { text: string; idempotencyKey: string };
 };
@@ -334,8 +338,9 @@ export async function appendAssistantMessageToSessionTranscript(
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
       model: params.command ? "command" : OPENCLAW_DELIVERY_MIRROR_MODEL,
       usage: makeZeroUsageSnapshot(),
-      stopReason: "stop" as const,
+      stopReason: params.stopReason ?? ("stop" as const),
       timestamp: Date.now(),
+      ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
       ...(!params.command && params.deliveryMirror
         ? { openclawDeliveryMirror: params.deliveryMirror }
         : {}),
