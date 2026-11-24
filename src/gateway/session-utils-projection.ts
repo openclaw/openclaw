@@ -193,6 +193,9 @@ export function resolveTranscriptUsageFallbacks(params: {
       fallbackModelRef,
       { allowPluginNormalization: params.allowPluginNormalization },
     );
+    if (!resolvedModel) {
+      continue;
+    }
     if (
       params.freshTotalTokens !== undefined &&
       resolveEstimatedSessionCostUsd({

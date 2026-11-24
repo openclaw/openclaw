@@ -184,6 +184,7 @@ const { values } = parseArgs({
     "freeze-source": { type: "string" },
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
+    "filesystem-worker": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "fingerprint-import": { type: "boolean", default: false },
     "source-authority": { type: "boolean", default: false },
@@ -607,8 +608,16 @@ const reusableSerial =
   !values["agent-db-fixture"] &&
   siblingWorktrees === 0;
 assert(
-  !fingerprintImport || reusableSerial || reconcile,
-  "Fingerprint counters require the simple serial fixture or reconcile mode",
+  !fingerprintImport ||
+    reusableSerial ||
+    reconcile ||
+    (serialTurns &&
+      values.acceleration &&
+      !values["owner-switch"] &&
+      !values["restart-stage"] &&
+      !values["fresh-only"] &&
+      !values["reuse-fixture"]),
+  "Fingerprint counters require serial reuse, fresh template reuse, or reconcile mode",
 );
 if (fingerprintImport) {
   const frozen = path.join(sourceRoot, "checkpoint-source.json");
@@ -1188,6 +1197,15 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (values["filesystem-worker"] && relative === "src/agents/worktrees/filesystem-native.ts") {
+      assert(code);
+      const anchor = "return resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy);";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        `return new URL(${JSON.stringify(values["filesystem-worker"])});`,
+      );
+    }
     if (
       values["mutation-segments"] &&
       relative === "src/gateway/worker-environments/local-workspace-store.ts"
@@ -2273,7 +2291,7 @@ measurement: try {
       () => true,
     );
     try {
-      const captured = await authorityRuntime.captureGatewayOperatorRunAuthority({
+      const captured = await authorityRuntime.prepareGatewayOperatorRunAuthority({
         client: {
           connId: `synthetic-${++admissions}`,
           connect: {
@@ -3013,6 +3031,7 @@ measurement: try {
         files: inventory.length,
         bytes: initialBytes,
         source: values["fixture-source"] ?? null,
+        filesystemWorker: values["filesystem-worker"] ?? null,
         agentDatabase: values["agent-db-fixture"] ?? null,
         siblingWorktrees,
         acceleration: values.acceleration,

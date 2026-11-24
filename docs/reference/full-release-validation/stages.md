@@ -46,15 +46,19 @@ current Q grants, can outlive a failed, cancelled, or active parent:
 - Require equal Q or authenticated identical workload closure: owning/reusable workflows,
   local actions, complete scripts tree, root configuration/dependencies. Different Q
   requires authenticated tooling lineage; missing, unsupported, or changed closure blocks reuse.
-  Only `scripts/lib/release-validation-waivers.json` is excluded from workload identity:
-  a ledger-only Q change permits reevaluation under new Q grants. Control-only intent
-  for other paths is insufficient.
+  An authenticated ancestor-to-descendant change limited to the FRV parent workflow,
+  child-reuse policy and its focused tests, this stage/dispatch documentation, and
+  `scripts/lib/release-validation-waivers.json` preserves child execution evidence.
+  These orchestration-only paths are explicitly listed in `full-release-child-reuse.mjs`;
+  renames, deletions, and capped changed-file inventories do not qualify. Current Q
+  grants are reevaluated, not inherited from the original verdict.
 - Normal CI additionally retains complete `config`, `packages`, `src`, and `test` trees
   imported by its Q harness; even unrelated changes there invalidate reuse. Other product
   directories come from C and are excluded. Unrelated parent workflow changes alone do
   not invalidate normal CI. Other roles retain all workflows and the full root tree;
-  executable shared-script changes invalidate every child; the grant-ledger-only
-  exception does not exclude other scripts or root files.
+  executable shared-script changes invalidate every child unless confined to the
+  explicit orchestration-only paths above. Child workflows, test harnesses, build
+  inputs, package bytes, and dependency changes are not exempt.
 - Dispatch logs explain evaluated rejections, reused children, skipped runs, and fresh
   dispatches. Sealing, collectors, and final verification repeat tooling/receipt checks.
 

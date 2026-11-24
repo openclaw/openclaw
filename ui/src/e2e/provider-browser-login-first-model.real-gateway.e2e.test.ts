@@ -38,7 +38,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("names the selected model at once, sets the agent primary, and the starter chat answers", async () => {
+  it("sets the agent primary, offers the signed-in model, and the starter chat answers", async () => {
     const loginLabel = "Fixture browser sign-in";
     const modelName = "Signed-in fixture model";
     const primary = async () => {
@@ -88,12 +88,9 @@ suite.define(() => {
         expect(JSON.parse(listed.stdout).models).toContainEqual(
           expect.objectContaining({ name: localModelName, available: true }),
         );
-        const readiness = page.locator('[data-model-readiness="model-required"]');
-        await readiness.waitFor();
-        await readiness.locator("[data-models-connect]").click();
-        await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
+        await page.locator("[data-models-catalog-search]").fill(loginProvider);
+        await page.locator(`[data-models-catalog-provider="${loginProvider}"] button`).click();
         const modal = page.locator("openclaw-modal-dialog");
-        await modal.getByRole("button", { name: loginLabel, exact: true }).click();
         const link = page.locator(".wizard-step__external-link");
         await link.waitFor();
         const popup = context.waitForEvent("page");
@@ -101,11 +98,9 @@ suite.define(() => {
         const providerPage = await popup;
         await providerPage.getByRole("button", { name: "Approve sign-in" }).click();
 
-        // The ready dialog names the model and offers the starter in the same render.
+        // The ready dialog offers the signed-in provider's models; choosing picks its first one (#203379).
         await modal.getByRole("heading", { name: `${loginLabel} is ready`, exact: true }).waitFor();
-        await modal.getByText(`${modelName} is ready for your agent.`, { exact: true }).waitFor({
-          timeout: 1_000,
-        });
+        await modal.getByRole("button", { name: "Choose a model", exact: true }).click();
         const starter = modal.getByRole("button", {
           name: `Start a new chat with ${modelName}`,
           exact: true,

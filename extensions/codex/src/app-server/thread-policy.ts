@@ -83,11 +83,11 @@ export async function refreshCodexThreadInstructions(
   params: CodexThreadHandoffParams & { refreshableInstructions: string | undefined },
 ): Promise<void> {
   const notice =
-    "The following is the complete current OpenClaw refreshable thread instructions. It replaces earlier OpenClaw-supplied skills, persona, and memory instructions in this conversation.\n\n";
+    "The following is the complete current OpenClaw refreshable thread instructions. It replaces the earlier refreshable instructions in this conversation.\n\n";
   const text =
     notice +
     (params.refreshableInstructions ??
-      "The current OpenClaw refreshable thread instructions are empty; earlier OpenClaw-supplied skills, persona, and memory instructions are withdrawn.");
+      "The current OpenClaw refreshable thread instructions are empty; earlier refreshable instructions are withdrawn.");
   await injectCodexThreadDeveloperHandoff(params, text);
 }
 

@@ -49,6 +49,7 @@ import { isInvalidCronSessionTargetIdError } from "../../../cron/session-target.
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
+import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
 import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
@@ -89,6 +90,7 @@ export async function maybeRepairCronInferenceBindings(params: {
       throw new Error("Inference account migration requires offline Doctor maintenance.");
     }
     const inventory = await inspectCronJobsForDoctor({ env });
+    await prepareProviderModelPolicySurfaces();
     let shadowRoots: string[] | undefined;
     for (const stored of inventory.jobs) {
       const definition = stored.definition;

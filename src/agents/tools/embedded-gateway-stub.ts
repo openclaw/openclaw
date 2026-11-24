@@ -268,7 +268,7 @@ async function handleChatHistory(params: Record<string, unknown>) {
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const pageParams = {
     entry: historyEntry,
-    provider: resolvedSessionModel.provider,
+    provider: resolvedSessionModel?.provider,
     sessionId,
     storePath,
     sessionAgentId,

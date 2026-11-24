@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { NATIVE_HISTORICAL_TOOL_CALL } from "@openclaw/ai/provider-types";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderMessage } from "../../../../packages/ai/src/provider-types.js";
@@ -22,6 +23,11 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import {
+  PROJECT_MOVE_HANDOFF_NAME,
+  buildSessionToolHandoffNotice,
+  buildSessionsYieldContextMessage,
+} from "../../sessions-yield-context.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -62,6 +68,76 @@ import {
 } from "./runtime-context-prompt.js";
 
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
+  it("folds the current move continuation into the provider history before the first resumed request", async () => {
+    const { activeSession } = createActiveSession();
+    activeSession.agent.convertToLlm = convertHarnessMessages;
+    const completed = '{"status":"moved","projectId":"garden","branch":"openclaw/garden"}';
+    const request = "Move to the garden and read the note.";
+    const user: AgentMessage = {
+      role: "user",
+      content: request,
+      timestamp: 1,
+    };
+    const assistant = makeAssistantMessageFixture({
+      content: [
+        { type: "toolCall", id: "move", name: "session_project", arguments: { action: "move" } },
+      ],
+      stopReason: "toolUse",
+    });
+    const pending: AgentMessage = {
+      role: "toolResult",
+      toolCallId: "move",
+      toolName: "session_project",
+      content: [{ type: "text", text: '{"status":"started"}' }],
+      timestamp: 2,
+      isError: false,
+    };
+    const notice: AgentMessage = {
+      role: "custom",
+      timestamp: 3,
+      ...buildSessionsYieldContextMessage(buildSessionToolHandoffNotice(PROJECT_MOVE_HANDOFF_NAME)),
+    };
+    const continuation = {
+      role: "user" as const,
+      content: "Conversation move result: continue in the project.",
+      timestamp: 4,
+      provenance: {
+        kind: "internal_system",
+        sourceTool: "tool_handoff",
+        completedToolCall: { id: "move", result: completed },
+      },
+    };
+    const currentCarrier = buildRuntimeContextCustomMessage("current project context")!;
+    await prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        sessionId: "boundary-move",
+        prompt: continuation.content,
+        model: { api: "openai-completions", baseUrl: "http://127.0.0.1:8080/v1" },
+      },
+      getUserTranscriptContexts: () => undefined,
+      ...createBoundaryInputDefaults(),
+    });
+    const provider = await activeSession.agent.convertToLlm([
+      user,
+      assistant,
+      pending,
+      notice,
+      currentCarrier,
+      continuation,
+    ]);
+    expect(provider).toMatchObject([
+      { role: "user", content: expect.stringContaining(request) },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "move", [NATIVE_HISTORICAL_TOOL_CALL]: true }],
+      },
+      { ...pending, content: [{ type: "text", text: completed }] },
+      { role: "user", runtimeContextCarrier: true },
+    ]);
+    expect(pending.content).toEqual([{ type: "text", text: '{"status":"started"}' }]);
+  });
+
   it("strips persisted carriers when a session switches to transient replay", async () => {
     const previousUser: AgentMessage = { role: "user", content: "first question", timestamp: 1 };
     const previousCarrier: AgentMessage = buildRuntimeContextCustomMessage("persisted context")!;

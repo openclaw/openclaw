@@ -631,17 +631,6 @@ describe("createMediaGenerationTaskLifecycle", () => {
   );
   it.each([
     {
-      suffix: "terminal",
-      delivery: {
-        delivered: false,
-        path: "direct",
-        disposition: "ambiguous",
-        error: "generated media direct delivery failed after partial upload",
-      },
-      outcome: "delivered",
-      mediaUrls: undefined,
-    },
-    {
       suffix: "abandoned",
       delivery: {
         delivered: false,

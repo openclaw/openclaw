@@ -301,13 +301,10 @@ async function activateCandidate(
     },
   };
   const staged = await stageCandidate(ctx);
+  // Each error is a complete sentence; a saved credential adds only that fact.
   const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
     ...result,
-    ...(ctx.effects.credentialsSaved
-      ? {
-          error: `Credentials saved; default unchanged. ${result.error} Choose the saved sign-in in Model Setup to retry without signing in again.`,
-        }
-      : {}),
+    ...(ctx.effects.credentialsSaved ? { error: `Your sign-in is saved. ${result.error}` } : {}),
     disposition: "rejected-before-promotion" as const,
   });
   if ("error" in staged) {

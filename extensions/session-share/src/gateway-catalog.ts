@@ -34,6 +34,7 @@ type Source = {
   label: string;
   client: GatewayClient;
   connected: boolean;
+  supportsProfileRelation: boolean;
   // Socket turnover only; this never compares or pins a session/transcript identity.
   connectionVersion: number;
   assertConfigured: () => void;
@@ -142,6 +143,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
             hostId,
             label: typeof value.label === "string" ? value.label : id,
             connected: false,
+            supportsProfileRelation: false,
             connectionVersion: 0,
             assertConfigured,
             client: new GatewayClient({
@@ -162,7 +164,11 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                   throw new Error("Session Share service stopped");
                 }
               },
-              onHelloOk: () => {
+              onHelloOk: (hello) => {
+                source.supportsProfileRelation = [
+                  "session-share.catalog.list",
+                  "session-share.catalog.read",
+                ].every((method) => hello?.features?.methods?.includes(method));
                 source.connected = true;
                 source.connectionVersion++;
               },
@@ -194,6 +200,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
     audience: "session-viewers",
     supportsProcessHomeIsolation: true,
     requiresFreshList: true,
+    supportsProfileRelation: true,
     async list(query) {
       return Promise.all(
         [...sources.values()]
@@ -210,15 +217,65 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
               const connectionVersion = source.connectionVersion;
               source.assertConfigured();
               assertCurrent(source, connectionVersion);
-              const raw = await source.client.request("session-share.list", {
-                limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
-                ...(query.search ? { searchTerm: query.search } : {}),
-                ...(query.cursors?.[source.hostId] ? { cursor: query.cursors[source.hostId] } : {}),
-              });
-              const page = parseSessionSharePage(raw);
+              let relation = source.supportsProfileRelation ? query.profileRelation : undefined;
+              let partial = Boolean(query.profileRelation && !relation);
+              let cursor = query.cursors?.[source.hostId];
+              if (cursor && query.profileRelation) {
+                const decoded = sessionCatalogPaging.decodeScopedCursor(
+                  cursor,
+                  query.profileRelation,
+                );
+                if (decoded?.startsWith("partial:")) {
+                  relation = undefined;
+                  partial = true;
+                  cursor = decoded.slice("partial:".length);
+                } else if (decoded?.startsWith("filtered:") && relation) {
+                  cursor = decoded.slice("filtered:".length);
+                } else {
+                  throw new Error("Invalid relationship page cursor. Refresh the catalog.");
+                }
+              }
+              const requestPage = () =>
+                source.client.request(
+                  source.supportsProfileRelation
+                    ? "session-share.catalog.list"
+                    : "session-share.list",
+                  {
+                    ...(relation ? { profileRelation: relation } : {}),
+                    limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
+                    ...(query.search ? { searchTerm: query.search } : {}),
+                    ...(cursor ? { cursor } : {}),
+                  },
+                );
+              let page = parseSessionSharePage(await requestPage(), false, relation);
+              if (page.relationUnresolved) {
+                // Unknown or ambiguous target on the source: show authorized rows unfiltered.
+                relation = undefined;
+                partial = true;
+                cursor = undefined;
+                page = parseSessionSharePage(await requestPage(), false, relation);
+              }
               assertCurrent(source, connectionVersion);
               query.signal?.throwIfAborted();
               return Object.assign(common, page, {
+                ...(page.nextCursor && query.profileRelation
+                  ? {
+                      nextCursor: sessionCatalogPaging.encodeScopedCursor(
+                        `${relation ? "filtered:" : "partial:"}${page.nextCursor}`,
+                        query.profileRelation,
+                      ),
+                    }
+                  : {}),
+                ...(relation ? { profileRelation: relation } : {}),
+                ...(partial
+                  ? {
+                      error: {
+                        code: "FILTER_PARTIAL",
+                        message:
+                          "Relationship filtering is unavailable on this Gateway source. Showing authorized rows with client-side matching; update the source or check the identity link on both Gateways.",
+                      },
+                    }
+                  : {}),
                 sessions: page.sessions.map((session) =>
                   session.createdActor?.identity
                     ? Object.assign({}, session, {
@@ -254,12 +311,21 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       const connectionVersion = source.connectionVersion;
       source.assertConfigured();
       assertCurrent(source, connectionVersion);
+      if (request.profileRelation && !source.supportsProfileRelation) {
+        throw new Error(
+          "This Gateway does not support relationship filters. Update the source or choose All owners.",
+        );
+      }
       try {
-        const raw = await source.client.request("session-share.read", {
-          threadId: request.threadId,
-          limit: sessionCatalogPaging.boundedLimit(request.limit),
-          ...(request.cursor ? { cursor: request.cursor } : {}),
-        });
+        const raw = await source.client.request(
+          source.supportsProfileRelation ? "session-share.catalog.read" : "session-share.read",
+          {
+            ...(request.profileRelation ? { profileRelation: request.profileRelation } : {}),
+            threadId: request.threadId,
+            limit: sessionCatalogPaging.boundedLimit(request.limit),
+            ...(request.cursor ? { cursor: request.cursor } : {}),
+          },
+        );
         const page = parseSessionShareTranscriptPage(raw, request.threadId);
         assertCurrent(source, connectionVersion);
         return {
@@ -280,7 +346,11 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       } catch (error) {
         throw error instanceof SourceConfigurationChangedError
           ? error
-          : new Error("Shared Gateway read failed. Refresh the catalog.");
+          : new Error(
+              request.profileRelation
+                ? "Cannot apply this relationship filter. Check the verified identity link on both Gateways, or choose All owners."
+                : "Shared Gateway read failed. Refresh the catalog.",
+            );
       }
     },
   };

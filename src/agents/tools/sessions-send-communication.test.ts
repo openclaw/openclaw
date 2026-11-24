@@ -29,12 +29,15 @@ const state = vi.hoisted(() => ({
   approve: vi.fn(),
   assertCaller: vi.fn(),
   task: undefined as unknown,
-  caller: { agentId: "main", sessionKey: "agent:main:source" },
+  caller: {
+    agentId: "main",
+    sessionKey: "agent:main:source",
+    operationalRunInstance: { runId: "source-run" },
+  },
 }));
 vi.mock("./gateway-caller-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: () => state.caller,
-  captureGatewayToolCallerAssertion: () => state.assertCaller,
   resolveGatewayToolOperatorSelection: () => ({ assertCurrent: state.assertCaller }),
 }));
 vi.mock("./in-process-gateway.js", async (importOriginal) => ({

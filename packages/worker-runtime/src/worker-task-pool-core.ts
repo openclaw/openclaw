@@ -30,6 +30,7 @@ import {
   joinWorkerTaskPreparationCleanups,
   type WorkerTaskCompletion,
 } from "./worker-task-pool-completion.js";
+import { createWorkerTaskPoolMemory, finishWorkerTaskWaits } from "./worker-task-pool-memory.js";
 import {
   armWorkerTaskTimeout,
   closeOwnedWorkerTask,
@@ -109,6 +110,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private readonly maxWorkers: number;
   private readonly observeTask;
   private readonly admission: WorkerTaskAdmission;
+  private readonly memory;
   private workers = 0;
   private workersCreated = 0;
   private activeTasks = 0;
@@ -131,6 +133,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     if (!Number.isSafeInteger(this.maxWorkers) || this.maxWorkers < 1) {
       throw new RangeError("maxWorkers must be a positive safe integer");
     }
+    this.memory = createWorkerTaskPoolMemory(this.maxWorkers, () =>
+      host.createMemoryBudget?.(this, options.workerUrl, this.maxWorkers),
+    );
     this.computeCapacity = options.sharedCompute ? host.computeCapacity : undefined;
     this.admission = new WorkerTaskAdmission(
       options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS,
@@ -341,10 +346,11 @@ export class WorkerTaskPoolCore<Input, Output> {
     if (!this.queue.length || this.closedError || !this.retirement.dispatchAllowed) {
       this.computeCapacity?.remove(this.resumeCompute);
     }
+    this.memory.sync(this.slots.size, this.closedError !== undefined);
     while (!this.closedError && this.retirement.dispatchAllowed && this.queue.length) {
       const nextTask = this.queue[0]!;
       // One worker beyond the bulk limit stays reserved for point reads.
-      const workerLimit = this.maxWorkers + Number(nextTask.options.pointRead === true);
+      const workerLimit = this.memory.workerLimit(nextTask, this.activeTasks);
       let slot = this.activeTasks < workerLimit ? this.retirement.preferredIdle : undefined;
       slot ??= [...this.slots].find(
         (entry) =>
@@ -399,6 +405,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       }
       this.retirement.clearIdle(slot);
       const task = this.queue.shift()!;
+      this.memory.dispatched(task, this.slots.size);
       slot.task = task;
       this.activeTasks++;
       task.slot = slot;
@@ -585,7 +592,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         }
         return;
       }
-      this.finishHostWait(task);
+      finishWorkerTaskWaits(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
       armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
@@ -668,19 +675,11 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
   }
 
-  private finishHostWait(task: Task<Input, Output>): void {
-    const startedAt = task.hostWaitStartedAt;
-    if (startedAt !== undefined) {
-      task.hostWaitStartedAt = undefined;
-      task.hostWaitMs += performance.now() - startedAt;
-    }
-  }
-
   private finish(task: Task<Input, Output>, error?: Error, value?: Output, retire = false): void {
     if (task.done) {
       return;
     }
-    this.finishHostWait(task);
+    finishWorkerTaskWaits(task, this.memory.budget);
     task.done = true;
     task.observation?.completed();
     task.observation = undefined;

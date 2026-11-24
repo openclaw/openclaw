@@ -1,4 +1,5 @@
 import { listAgentEntries, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildStatusReply } from "../auto-reply/reply/commands-status.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
@@ -69,9 +70,14 @@ export async function resolveDirectStatusReplyForSessionCore(
   const selectedProvider =
     statusEntry?.providerOverride?.trim() ||
     statusEntry?.modelProvider?.trim() ||
-    statusModel.provider;
+    statusModel?.provider ||
+    defaultProvider;
   const selectedModel =
-    statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel.model;
+    statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel?.model;
+  if (!selectedModel) {
+    // Status of a model-less session reports the missing model and how to choose one.
+    return { text: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   // Selection may normalize stale model/auth pins. Give it a coherent private
   // snapshot without a persistence path so inspecting status cannot change them.
   const selectionEntry = statusEntry ? structuredClone(statusEntry) : undefined;

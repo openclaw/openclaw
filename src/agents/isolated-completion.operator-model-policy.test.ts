@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent as runRealCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
@@ -22,8 +23,7 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext: cli.pr
 vi.mock("./cli-runner/execute.runtime.js", () => ({ executePreparedCliRun: cli.execute }));
 
 const { attachProviderAuthAuthority } = await import("../plugins/provider-auth-authority.js");
-const { createAdmittedRunOperatorAuthority, readRunOperatorAuthority } =
-  await import("./admitted-run-context.js");
+const { readRunOperatorAuthority } = await import("./admitted-run-context.js");
 const { prepareOperatorModelPolicy } = await import("./operator-model-policy.js");
 const { withGatewayToolCallerIdentity } = await import("./tools/gateway-caller-context.js");
 const { AsyncWorkScope } = await import("../shared/async-work-scope.js");
@@ -41,27 +41,18 @@ function operator(initial?: Partial<ModelPolicy>) {
       manifestPlugins: [],
     });
   let policy = prepare(initial ?? {});
-  const listeners = new Set<() => void>();
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "isolated-reader",
     scopes: ["operator.write"],
     assertCurrent: () => {},
     get modelPolicy() {
       return policy;
     },
-    onModelPolicyChanged: initial
-      ? (listener) => {
-          listeners.add(listener);
-          return () => void listeners.delete(listener);
-        }
-      : undefined,
   });
   return {
     authority,
-    listeners,
     setPolicy(this: void, overrides: Partial<ModelPolicy>) {
       policy = prepare(overrides);
-      listeners.forEach((listener) => listener());
       return policy;
     },
   };
@@ -120,8 +111,8 @@ beforeEach(() => {
   });
 });
 
-it("keeps revocation latched after restoration without cancelling the source or sibling", async () => {
-  const { authority, listeners, setPolicy } = operator({
+it("keeps admitted completions and siblings alive while the next start uses current policy", async () => {
+  const { authority, setPolicy } = operator({
     allow: ["test-provider/model-a", "test-provider/model-b"],
   });
   mocks.resolveModelAsync.mockImplementation(async (provider, model) => ({
@@ -151,16 +142,16 @@ it("keeps revocation latched after restoration without cancelling the source or 
   const second = work.track(() => runPluginCompletion(authority, "model-b"));
   try {
     await waitForStart(started.promise, first, second);
-    setPolicy({ allow: ["test-provider/model-b"] });
+    const modelPolicy = setPolicy({ allow: ["test-provider/model-b"] });
     expect([signals.get("model-a")?.aborted, signals.get("model-b")?.aborted]).toEqual([
-      true,
+      false,
       false,
     ]);
-    const restored = setPolicy({ allow: ["test-provider/model-a", "test-provider/model-b"] });
-    expect(restored?.allows({ provider: "test-provider", model: "model-a" })).toBe(true);
     expect(() => authority.assertCurrent()).not.toThrow();
+    const nextAuthority = createTestOperatorAuthority({ ...authority, modelPolicy });
+    await expect(runPluginCompletion(nextAuthority, "model-a")).rejects.toMatchObject(denied);
     finishA.resolve();
-    await expect(first).rejects.toMatchObject(denied);
+    await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
     finishB.resolve();
     await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
   } finally {
@@ -169,7 +160,6 @@ it("keeps revocation latched after restoration without cancelling the source or 
     await Promise.allSettled([first, second]);
     await work.drain();
   }
-  expect(listeners.size).toBe(0);
 });
 it.each(["host", "harness"] as const)(
   "rejects a denied model resolved during %s preparation",

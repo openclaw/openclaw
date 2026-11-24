@@ -119,10 +119,10 @@ export async function captureRealIngressOperator(params: {
   await factory.registerPrincipalRecovery?.(async (audienceId) =>
     audienceId === grant.audienceId ? grant : undefined,
   );
-  const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+  const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
   let retained: { authority: AdmittedRunOperatorAuthority; release(): void } | undefined;
   const observe = vi
-    .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+    .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
     .mockImplementation(async (input) => {
       const result = await capture(input);
       if (input.client?.internal?.remoteIngressPrincipal && result) {

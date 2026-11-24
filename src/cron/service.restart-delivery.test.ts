@@ -4,7 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createFollowupRunner } from "../auto-reply/reply/followup-runner.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
@@ -366,7 +366,7 @@ it.each([true, false])(
           deliveryAttemptFence: fence,
         };
       }
-      queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      queued.operatorAuthority = createTestOperatorAuthority({
         profileId: "guest",
         scopes: ["operator.write"],
         assertCurrent: fence.assertCurrent,

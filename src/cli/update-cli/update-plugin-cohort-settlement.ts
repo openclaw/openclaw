@@ -35,10 +35,17 @@ import {
   hasUnrecordedUpdateRunDriver,
   inspectUpdateRunAbandonment,
   inspectNewerRecoveryHistory,
+  recordedUpdateRunDrivers,
   updateRunLastActivity,
 } from "../../infra/update-run-activity.js";
+import { PLUGIN_COHORT_REPLACED_INSTALLATION_STEP } from "../../infra/update-run-codec.js";
+import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
-import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import {
+  getUpdateRun,
+  listUpdateRuns,
+  recordUpdateRunDiagnostic,
+} from "../../infra/update-run-ledger.js";
 import {
   isAbandonedUpdateRun,
   isAcknowledgedAbandonedUpdateRun,
@@ -170,6 +177,81 @@ function ranBeforeRestart(run: UpdateRunRecord): boolean {
   return drivers.every((driver) => driver !== undefined && ranInEarlierHostBoot(driver, current));
 }
 
+/** Whose saved plugin cohort this is, seen from the installation at `installKey`. */
+export type PluginCohortInstallation =
+  | { kind: "this" }
+  /** The recorded installation still exists; its own repair settles the cohort. */
+  | { kind: "other" }
+  /** This installation replaced the recorded one; `warning` names the evidence. */
+  | { kind: "replaced"; warning: string }
+  /** The recorded installation is gone, but `why` this one replaced it is not shown. */
+  | { kind: "unproven"; why: string; wait: boolean };
+
+/**
+ * A cohort keys its installation by the package's real path. pnpm gives each
+ * package version its own directory, and activation moves the previous one away,
+ * so a run that verified its candidate and then died leaves its cohort keyed to a
+ * directory that no longer exists. That cohort is this installation's only when
+ * the directory is gone, the run's own install path now resolves here, every
+ * recorded driver has exited, and the run recorded its candidate serving.
+ */
+export function inspectPluginCohortInstallation(
+  pair: PluginCohortRecoveryPair,
+  installKey: string,
+  run: UpdateRunRecord | undefined,
+): PluginCohortInstallation {
+  const recorded = pair.cohort.installKey;
+  if (resolveUpdateInstallRoot(recorded) === installKey) {
+    return { kind: "this" };
+  }
+  try {
+    if (fs.lstatSync(recorded, { throwIfNoEntry: false })) {
+      return { kind: "other" };
+    }
+  } catch {
+    // An unreadable path is not evidence that the directory is gone.
+    return { kind: "other" };
+  }
+  const unproven = (why: string, wait = false) => ({ kind: "unproven" as const, why, wait });
+  const { from, to } = pair.reservation;
+  for (const root of new Set([from.root, to.root])) {
+    const resolved = resolveUpdateInstallRoot(root);
+    if (resolved === resolveUpdateInstallRoot(recorded)) {
+      return unproven("its update recorded only that directory, not the install path it ran from");
+    }
+    if (resolved !== installKey) {
+      return unproven(`its update ran from ${root}, which is not this installation`);
+    }
+  }
+  if (run?.status !== "running") {
+    return unproven("its update is not recorded as running");
+  }
+  const drivers = recordedUpdateRunDrivers(run);
+  if (
+    run.origin.managedHandoff ||
+    hasUnrecordedUpdateRunDriver(run) ||
+    drivers.some((driver) => inspectUpdateRunDriver(driver) !== "dead")
+  ) {
+    return unproven("its update is not known to have exited", true);
+  }
+  if (!drivers.length) {
+    return unproven("its update recorded no process");
+  }
+  const { verification } = run;
+  if (
+    verification.serviceRunning !== true ||
+    verification.versionMatch !== true ||
+    verification.runningVersion !== to.version ||
+    (to.buildId !== null && verification.runningBuildId !== to.buildId)
+  ) {
+    return unproven(`its update did not record OpenClaw ${to.version} serving`);
+  }
+  return {
+    kind: "replaced",
+    warning: `the package directory this update recorded, ${recorded}, no longer exists, its install path ${to.root} resolves to the installation at ${installKey}, its driver exited, and it recorded OpenClaw ${to.version} serving.`,
+  };
+}
+
 /**
  * Settle an interrupted run's saved plugin cohort under the caller's installation
  * ownership. Unless its candidate verified serving and the original core is gone,
@@ -181,6 +263,8 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   root: string;
   options: OpenClawStateDatabaseOptions & { env: NodeJS.ProcessEnv };
   assertCurrent: () => void;
+  /** Evidence that `root` replaced the cohort's recorded installation, checked under the claim. */
+  replaced?: Extract<PluginCohortInstallation, { kind: "replaced" }>;
   /** Throws to refuse the selected outcome before anything is restored or released. */
   admit?: (plan: {
     action: "commit" | "rollback";
@@ -208,7 +292,17 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const installed = (core: { version: string; buildId: string | null }) =>
     version === core.version && (buildId ?? null) === core.buildId;
   const { from, to } = current.reservation;
-  if (current.cohort.disposition === "commit" && !installed(to)) {
+  // Only a readable, different version or build proves the original core is gone.
+  const originalGone =
+    version !== null &&
+    (version !== from.version || (buildId !== null && buildId !== from.buildId));
+  // A proven successor may be a different build installed after the candidate served,
+  // but only one that shows the original core is no longer installed.
+  if (
+    current.cohort.disposition === "commit" &&
+    !installed(to) &&
+    !(params.replaced && originalGone)
+  ) {
     throw new Error(
       "Plugin cohort commit does not match the installed candidate version and build.",
     );
@@ -223,10 +317,11 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const forward =
     current.cohort.disposition !== "commit" &&
     current.cohort.settledPublications === 0 &&
-    // Only a readable, different version or build proves the original core is gone.
-    version !== null &&
-    (version !== from.version || (buildId !== null && buildId !== from.buildId)) &&
-    !hasPackageRecoveryAuthority(current.cohort.installKey) &&
+    originalGone &&
+    // A moved package directory's cohort is settled from its successor.
+    ![current.cohort.installKey, resolveUpdateInstallRoot(params.root)].some((key) =>
+      hasPackageRecoveryAuthority(key),
+    ) &&
     verification?.serviceRunning === true &&
     verification.versionMatch === true &&
     verification.runningVersion === to.version &&
@@ -248,6 +343,25 @@ export async function settleInterruptedUpdatePluginCohort(params: {
     onLaterDecisionsKept: (warning) => defaultRuntime.error(`Warning: ${warning}`),
   });
   assertCurrent();
+  if (params.replaced) {
+    // History reconciliation then closes the run; this says which installation settled it and
+    // why. The cohort owner may finish a rollback it began, so the outcome is not named here.
+    const warning = `Plugin recovery was settled from a replacing installation: ${params.replaced.warning}`;
+    defaultRuntime.error(`Warning: ${warning}`);
+    try {
+      recordUpdateRunDiagnostic(
+        current.cohort.runId,
+        warning,
+        options,
+        PLUGIN_COHORT_REPLACED_INSTALLATION_STEP,
+      );
+    } catch (error) {
+      // The settlement has committed; a lost bookkeeping entry must not report it unsettled.
+      defaultRuntime.error(
+        `Warning: That settlement was not recorded in update history: ${String(error)}`,
+      );
+    }
+  }
   // The plugin reservation is gone before ordinary history reconciliation.
   await assertUpdateRecoveryAdmission(options);
   assertCurrent();
@@ -404,13 +518,20 @@ export async function inspectInterruptedUpdateRecovery(
       if (installKind !== "package" && installKind !== "git") {
         return refuse("It was left by an update of a source checkout.");
       }
-      if (resolveUpdateInstallRoot(pair.cohort.installKey) !== installKey) {
+      const run = getUpdateRun(pair.cohort.runId, options);
+      const installation = inspectPluginCohortInstallation(pair, installKey, run);
+      if (installation.kind === "other") {
         return refuse(
           `It belongs to the installation at ${pair.cohort.installKey}.`,
           `Run ${repair} from that installation.`,
         );
       }
-      const run = getUpdateRun(pair.cohort.runId, options);
+      if (installation.kind === "unproven") {
+        return refuse(
+          `It belongs to the installation at ${pair.cohort.installKey}, which no longer exists, and this installation cannot show it replaced that one: ${installation.why}.`,
+          installation.wait ? `Wait for that update to finish, then retry ${update}.` : "",
+        );
+      }
       if (run?.status !== "running" || run.trigger !== "cli" || run.origin.managedHandoff) {
         return refuse(
           "It was not left by a killed openclaw update command, so this update does not settle it.",
@@ -505,11 +626,15 @@ export async function inspectInterruptedUpdateRecovery(
     const startedAt = Date.now();
     const settled = await withEngine(() =>
       withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const ownership = await executor.enter(pair.cohort.installKey).catch((cause: unknown) => {
-          // The executor's own refusal usually names what to wait for and run.
-          const message = formatErrorMessage(cause);
-          throw refuse(message, message.includes("update repair") ? "" : undefined, cause);
-        });
+        // The dead driver's lease is under the key it recorded; a replacing
+        // installation is claimed beside it, so no updater of its own runs meanwhile.
+        const ownership = await executor
+          .enter(pair.cohort.installKey, { serviceRoot: root })
+          .catch((cause: unknown) => {
+            // The executor's own refusal usually names what to wait for and run.
+            const message = formatErrorMessage(cause);
+            throw refuse(message, message.includes("update repair") ? "" : undefined, cause);
+          });
         const {
           installKey: claimed,
           owner: _owner,
@@ -521,7 +646,7 @@ export async function inspectInterruptedUpdateRecovery(
           ? databasePath !== undefined &&
             claimedStore.databasePath === fs.realpathSync(databasePath)
           : isDeepStrictEqual(claimedStore, store);
-        if (claimed !== installKey || !sameStore) {
+        if (claimed !== resolveUpdateInstallRoot(pair.cohort.installKey) || !sameStore) {
           throw refuse("The update lease store changed while this update was starting.");
         }
         if (!(await pendingRecovery())) {
@@ -535,6 +660,7 @@ export async function inspectInterruptedUpdateRecovery(
         if (rebooted && !ranBeforeRestart(history)) {
           throw refuse("The update's recorded processes changed while this update was starting.");
         }
+        const installation = inspectPluginCohortInstallation(pair, installKey, history);
         // What repair's finalization finishes and an already-current update would not.
         const gatewayStopped = findUpdateGatewayStop([history])?.started === false;
         const unfinished = gatewayStopped
@@ -545,6 +671,7 @@ export async function inspectInterruptedUpdateRecovery(
           expected: pair,
           root,
           options,
+          ...(installation.kind === "replaced" ? { replaced: installation } : {}),
           assertCurrent: () => {
             ownership.assertCurrent();
             if (resolveUpdateInstallRoot(root) !== installKey) {
@@ -575,20 +702,22 @@ export async function inspectInterruptedUpdateRecovery(
             refuse(`It could not be settled (${formatErrorMessage(cause)}).`, undefined, cause)
           );
         });
-        return { action, unfinished, gatewayStopped };
+        return { action, unfinished, gatewayStopped, replaced: installation.kind === "replaced" };
       }),
     );
     if (!settled || settled === "settled") {
       return;
     }
-    const { action, unfinished, gatewayStopped } = settled;
+    const { action, unfinished, gatewayStopped, replaced } = settled;
     const runId = pair.cohort.runId;
     const note = unfinished.length
       ? `Settled interrupted update ${runId}: ${unfinished.join(" ")} Its plugin and configuration changes were settled as ${repair} settles them, and this update finishes the installed version the same way before it continues.`
       : `Settled interrupted update ${runId}: its plugin and configuration changes were ${
-          action === "commit"
-            ? "kept, because its Gateway was verified on the installed version"
-            : "rolled back, because the previous version is still installed"
+          action !== "commit"
+            ? "rolled back, because the previous version is still installed"
+            : replaced
+              ? "kept, because its Gateway was verified on the version it installed, which this installation replaced"
+              : "kept, because its Gateway was verified on the installed version"
         }; update can proceed past recovery admission.`;
     defaultRuntime.error(note);
     const settledAt = Date.now();

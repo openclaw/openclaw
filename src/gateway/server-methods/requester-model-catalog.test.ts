@@ -4,7 +4,7 @@ import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/clie
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as ownership from "../../agents/harness/session-runtime-ownership.js";
 import { resolveOpenClawPluginToolsForOptions } from "../../agents/openclaw-plugin-tools.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
@@ -205,7 +205,7 @@ async function setup(missingAuth = false) {
         manifestPlugins: owner.metadataSnapshot,
       });
       let current = true;
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: person.id,
         scopes: ["operator.read"],
         modelPolicy: policy,

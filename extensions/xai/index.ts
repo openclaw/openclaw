@@ -69,11 +69,7 @@ import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
 } from "./x-search-tool-shared.js";
-import {
-  createXaiDeviceCodeAuthMethod,
-  createXaiOAuthAuthMethod,
-  refreshXaiOAuthCredential,
-} from "./xai-oauth-entry.js";
+import { createXaiOAuthAuthMethod, refreshXaiOAuthCredential } from "./xai-oauth-entry.js";
 
 const SUPERGROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SUPERGROK_CLIENT_MODE = "cli";
@@ -370,7 +366,7 @@ export default defineSingleProviderPluginEntry({
         },
       },
     ],
-    extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
+    extraAuth: [createXaiOAuthAuthMethod()],
     catalog: {
       order: "simple",
       run: async (ctx) => {

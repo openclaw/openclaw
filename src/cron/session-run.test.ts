@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
@@ -134,12 +135,11 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
 
 function restoredSource(): RestoredGatewayOperatorAuthority {
   return {
-    authority: {
+    authority: createTestOperatorAuthority({
       profileId: "requester",
       scopes: ["operator.read"],
-      assertCurrent: vi.fn(() => {}),
-    },
-    assertPolicyCurrent: vi.fn(),
+      assertCurrent() {},
+    }),
     authenticatedUserProfile: {
       profileId: "requester",
       displayName: null,
@@ -565,7 +565,7 @@ describe("scheduled session execution custody", () => {
     },
   );
 
-  it("refuses a source revoked while restoration was awaited", async () => {
+  it("refuses an occurrence stopped while source restoration was awaited", async () => {
     const source = restoredSource();
     const restoring = createDeferred();
     const restored = createDeferred<RestoredGatewayOperatorAuthority>();
@@ -573,13 +573,14 @@ describe("scheduled session execution custody", () => {
       restoring.resolve();
       return restored.promise;
     });
-    const run = runCronSessionTurn(input());
+    const params = input();
+    const run = runCronSessionTurn(params);
     await awaitGateBeforeSettlement(restoring.promise, run, "settled before restoring source");
-    vi.mocked(source.authority.assertCurrent).mockImplementation(() => {
-      throw new Error("original requester revoked");
+    vi.mocked(params.assertCurrent).mockImplementation(() => {
+      throw new Error("scheduled occurrence stopped");
     });
     restored.resolve(source);
-    await expect(run).rejects.toThrow("original requester revoked");
+    await expect(run).rejects.toThrow("scheduled occurrence stopped");
     expect(fixture.enqueue).not.toHaveBeenCalled();
     expect(source.release).toHaveBeenCalledOnce();
   });

@@ -48,9 +48,10 @@ Foreground local `exec` waits for process cleanup before delivery. Interrupting 
 keeps running, and the tool result tells the model how to poll or stop it. Node,
 durable, and explicitly backgrounded execution do not offer this shortcut.
 Code Mode aggregate tools and native or remote backends do not support tool-only
-interruption. A required Code Mode cell waiting solely on shell commands can
-yield its wait to a pending steer without stopping the commands: the correction
-reaches the next model decision, and `wait` collects the original cell's result.
+interruption. A required Code Mode cell waiting solely on shell commands or
+`process` polls can yield its wait to a pending steer without stopping the commands.
+The correction reaches the next model decision, and `wait` collects the original
+cell's result.
 Other unsupported calls keep waiting for their normal runtime boundary.
 
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.

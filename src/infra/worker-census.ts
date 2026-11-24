@@ -17,6 +17,7 @@ export function buildWorkerCensus(
     poolId?: number;
     policy?: WorkerPoolPolicy;
     taskMetrics?: { workerClass: WorkerPoolClass | "other" };
+    hostedEndpoints?: () => number;
     heap?: { value: { heapUsed: number }; sampledAt: number };
   }>,
 ) {
@@ -62,6 +63,9 @@ export function buildWorkerCensus(
       rows.set(key, row);
     }
     row.count++;
+    if (source.hostedEndpoints) {
+      row.hostedEndpoints = (row.hostedEndpoints ?? 0) + source.hostedEndpoints();
+    }
     // Same freshness window as diagnostic.memory.sample; missing is not zero.
     if (source.heap && now - source.heap.sampledAt < 60_000) {
       row.heapUsedBytes = (row.heapUsedBytes ?? 0) + source.heap.value.heapUsed;
