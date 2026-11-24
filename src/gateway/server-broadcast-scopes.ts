@@ -5,7 +5,7 @@ import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_ID_PEOPLE_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
-  GATEWAY_EVENT_SESSION_CATALOG_ROUTES_CHANGED,
+  GATEWAY_EVENT_CATALOG_ROUTES_CHANGED,
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import {
@@ -72,7 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "mentions.failed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
-  [GATEWAY_EVENT_SESSION_CATALOG_ROUTES_CHANGED]: [SESSION_READ_SCOPE],
+  [GATEWAY_EVENT_CATALOG_ROUTES_CHANGED]: [SESSION_READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
   "templates.add.progress": [ADMIN_SCOPE],
   "voicewake.changed": [READ_SCOPE],
@@ -218,14 +218,14 @@ export function metadataInvalidationFragment(
   event: string,
   payload: unknown,
 ): string | null | undefined {
-  if (event !== "chat.metadata.changed" && event !== GATEWAY_EVENT_SESSION_CATALOG_ROUTES_CHANGED) {
+  if (event !== "chat.metadata.changed" && event !== GATEWAY_EVENT_CATALOG_ROUTES_CHANGED) {
     return undefined;
   }
   if (!isPlainEventPayload(payload)) {
     return null;
   }
   const keys = Reflect.ownKeys(payload);
-  if (event === GATEWAY_EVENT_SESSION_CATALOG_ROUTES_CHANGED) {
+  if (event === GATEWAY_EVENT_CATALOG_ROUTES_CHANGED) {
     const field = Object.getOwnPropertyDescriptor(payload, "generation");
     return keys.length === 1 &&
       field?.enumerable &&
