@@ -28,17 +28,37 @@ function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * Whether the run's own session is an internal Control UI conversation that the
+ * private source-reply sink can address without an external channel target.
+ * The session owner decides this; the message-tool source-reply guard reuses it.
+ */
+export function isInternalSourceReplyConversation(params: {
+  currentChannelProvider?: string;
+  sessionKey?: string;
+}): boolean {
+  if (
+    normalizeOptionalLowercaseString(params.currentChannelProvider) !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return false;
+  }
+  // The message tool replaces ambient webchat context with an external route
+  // encoded in the session key. Do not classify that route as a private sink.
+  const route = parseSessionDeliveryRoute(params.sessionKey);
+  const channel = route ? normalizeMessageChannel(route.channel) : undefined;
+  return !channel || channel === INTERNAL_MESSAGE_CHANNEL;
+}
+
 function hasCurrentSourceReplyContext(input: InternalSourceReplySinkInput): boolean {
   const provider = normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
   if (!provider) {
     return false;
   }
   if (provider === INTERNAL_MESSAGE_CHANNEL) {
-    // The message tool replaces ambient webchat context with an external route
-    // encoded in the session key. Do not classify that route as a private sink.
-    const route = parseSessionDeliveryRoute(input.sessionKey);
-    const channel = route ? normalizeMessageChannel(route.channel) : undefined;
-    return !channel || channel === INTERNAL_MESSAGE_CHANNEL;
+    return isInternalSourceReplyConversation({
+      currentChannelProvider: provider,
+      sessionKey: input.sessionKey,
+    });
   }
   const currentMessageId = input.toolContext?.currentMessageId;
   return Boolean(
