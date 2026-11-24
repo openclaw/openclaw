@@ -6,16 +6,11 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import {
-  formatMemoryDreamingDay,
-  resolveMemoryLightDreamingConfig,
-  resolveMemoryRemDreamingConfig,
-} from "openclaw/plugin-sdk/memory-core-host-status";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeConceptToken } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
-import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   readSessionIngestionState,
   writeSessionIngestionState,
@@ -29,16 +24,12 @@ import {
   type DailyIngestionFileState,
   type DailyIngestionState,
 } from "./dreaming-ingestion-state.js";
-import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import type {
   DreamingPhasePreparation,
   DreamingPhaseRunParams,
-  DreamingSweepParams,
   LightDreamingConfig,
-  PreparedDreamNarrative,
   RemDreamingConfig,
 } from "./dreaming-phase-types.js";
-import { formatErrorMessage } from "./dreaming-shared.js";
 import { dedupeEntries, prioritizeLightEntriesByDiaryCoverage } from "./dreaming-snippet-dedupe.js";
 import { findForgottenMemorySessionIds } from "./memory-entry-origins.js";
 import {
@@ -50,7 +41,6 @@ import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
-  resolveAdmissionPolicy,
   resolveSessionAgentsForWorkspace,
   resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
@@ -70,8 +60,6 @@ import {
   filterFreshLightDreamingEntries,
   readLightStagedKeys,
   readShortTermRecallEntries,
-  recordDreamingPhaseSignals,
-  recordRemConsideredPhaseSignals,
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
@@ -980,7 +968,7 @@ export function previewRemDreaming(params: {
   };
 }
 
-async function ingestDreamingPhaseSignals(
+export async function ingestDreamingPhaseSignals(
   params: DreamingPhaseRunParams<LightDreamingConfig | RemDreamingConfig>,
 ): Promise<void> {
   const { workspaceDir, nowMs } = params;
@@ -1060,7 +1048,7 @@ async function readDreamingPhaseEntries(
   ).filter((entry) => !isPromotionOriginBlocked(entry));
 }
 
-async function prepareLightDreaming(
+export async function prepareLightDreaming(
   params: DreamingPhaseRunParams<LightDreamingConfig>,
 ): Promise<DreamingPhasePreparation> {
   const { nowMs } = params;
@@ -1101,7 +1089,7 @@ async function prepareLightDreaming(
   };
 }
 
-async function prepareRemDreaming(
+export async function prepareRemDreaming(
   params: DreamingPhaseRunParams<RemDreamingConfig>,
 ): Promise<DreamingPhasePreparation> {
   const { nowMs } = params;
@@ -1146,71 +1134,6 @@ async function prepareRemDreaming(
     logMessage: `memory-core: REM dreaming wrote reflections from ${entries.length} recent memory trace(s) [workspace=${params.workspaceDir}].`,
     data,
   };
-}
-
-export async function runDreamingSweepPhases(
-  params: DreamingSweepParams,
-): Promise<{ narratives: PreparedDreamNarrative[]; failed: boolean }> {
-  // All phases in one sweep share the same observation and report timestamp.
-  const sweepNowMs =
-    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
-  const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
-  const narratives: PreparedDreamNarrative[] = [];
-  let failed = false;
-  async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
-    phase: "light" | "rem",
-    config: TConfig,
-    prepare: (params: DreamingPhaseRunParams<TConfig>) => Promise<DreamingPhasePreparation>,
-  ): Promise<void> {
-    if (!config.enabled || config.limit <= 0) {
-      return;
-    }
-    try {
-      const phaseParams = { ...params, config, nowMs: sweepNowMs, admissionPolicy };
-      await ingestDreamingPhaseSignals(phaseParams);
-      // Keep source selection and report publication inside the forget boundary;
-      // model work runs outside it and revalidates its inputs before publication.
-      const data = await withMemoryWorkspaceLock(params.workspaceDir, async () => {
-        const prepared = await prepare(phaseParams);
-        const publication = { workspaceDir: params.workspaceDir, phase, nowMs: sweepNowMs };
-        await writeDailyDreamingPhaseBlock({
-          ...publication,
-          workspaceFileMode: params.workspaceFileMode,
-          bodyLines: prepared.bodyLines,
-          hasContent: prepared.data !== undefined,
-          timezone: config.timezone,
-          storage: config.storage,
-        });
-        if (prepared.consideredKeys?.length) {
-          await recordRemConsideredPhaseSignals({ ...publication, keys: prepared.consideredKeys });
-        }
-        await recordDreamingPhaseSignals({ ...publication, keys: prepared.keys });
-        if (prepared.data && config.storage.mode !== "separate") {
-          params.logger.info(prepared.logMessage);
-        }
-        return prepared.data;
-      });
-      if (data) {
-        narratives.push({ data, timezone: config.timezone, model: config.execution?.model });
-      }
-    } catch (err) {
-      await appendFailedDreamingEvent({
-        workspaceDir: params.workspaceDir,
-        phase,
-        error: formatErrorMessage(err),
-        storageMode: config.storage.mode,
-        nowMs: sweepNowMs,
-        logger: params.logger,
-      });
-      params.logger.error(`memory-core: ${phase} dreaming failed: ${formatErrorMessage(err)}`);
-      failed = true;
-    }
-  }
-  await runPhase("light", resolveMemoryLightDreamingConfig(params), prepareLightDreaming);
-  if (!failed) {
-    await runPhase("rem", resolveMemoryRemDreamingConfig(params), prepareRemDreaming);
-  }
-  return { narratives, failed };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
