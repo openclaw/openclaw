@@ -6,6 +6,8 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
+import type { OperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
@@ -204,6 +206,8 @@ type CompletionAuthority = NonNullable<
 type CompletionCustody = {
   authority: CompletionAuthority;
   entry: SubagentRunRecord;
+  /** The requester run whose accepted receipt this child's completion satisfies. */
+  requesterRunInstance?: OperationalRunInstanceRef;
   stop: () => void;
 };
 
@@ -245,7 +249,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return getCurrentSubagentRunOwner(this, entry) ?? entry;
   }
 
-  bindCompletionAuthority(observed: SubagentRunRecord, authority: CompletionAuthority): void {
+  bindCompletionAuthority(
+    observed: SubagentRunRecord,
+    authority: CompletionAuthority,
+    requesterRunInstance?: OperationalRunInstanceRef,
+  ): void {
     const entry = this.currentValue(observed);
     // A committed operator-owned row stays restricted if its source expires before publication.
     this.operatorCompletionEntries.add(getSubagentRunRuntimeKey(entry));
@@ -261,6 +269,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const custody: CompletionCustody = {
       authority,
       entry,
+      ...(requesterRunInstance ? { requesterRunInstance } : {}),
       stop: () => authority.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -392,11 +401,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     changedRunIds?: readonly string[],
   ): void {
     const changed = changedRunIds && new Set(changedRunIds);
-    for (const { entry } of this.completionAuthorities.values()) {
+    for (const { entry, requesterRunInstance } of this.completionAuthorities.values()) {
       if (changed && !changed.has(entry.runId)) {
         continue;
       }
       const record = committed.get(entry.runId);
+      // Committed removal ends this obligation; a later yield must not require its deleted row.
+      if (!record && requesterRunInstance) {
+        retireAcceptedSessionSpawnCompletionForRun(requesterRunInstance, {
+          runId: entry.taskRunId ?? entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      }
       if (
         !record ||
         !isSameSubagentRunOwner(this.get(entry.runId), entry) ||

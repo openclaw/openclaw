@@ -19,6 +19,7 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareTerminatedCollectorLaunch,
   prepareSwarmCollectorCompletion,
@@ -407,7 +408,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 ),
               });
               if (authority && completionAuthority) {
-                subagentRuns.bindCompletionAuthority(entry, authority);
+                subagentRuns.bindCompletionAuthority(
+                  entry,
+                  authority,
+                  getGatewayToolCallerIdentity()?.operationalRunInstance,
+                );
                 custodyTransferred = true;
               }
             } finally {
