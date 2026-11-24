@@ -58,7 +58,7 @@ suite.define(() => {
         "openclaw-select-picker:has(#model-providers-subagent-model)",
       );
       const trigger = picker.locator(".picker-select__trigger");
-      expect(await trigger.textContent()).toContain("Same as the parent session");
+      expect(await trigger.textContent()).toContain("Not set");
       await gateway.setMethodResponse(
         "config.get",
         sourceConfigSnapshot(saved, "subagent-defaults-saved"),

@@ -87,7 +87,7 @@ it("retains a saved unavailable model without offering it for another default se
   expect(onUtilityFallbackChange).toHaveBeenLastCalledWith("fixture/last");
 });
 
-it("shows a saved subagent model unfolded and returns it to the parent session's model", async () => {
+it("shows a saved subagent model unfolded and clears it back to not set", async () => {
   const onSubagentChange = vi.fn();
   const container = mount(
     props({

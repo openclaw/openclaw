@@ -211,17 +211,20 @@ describe("model provider config patches", () => {
         config,
         await submitDefaults({ ...defaults, ...readModelBehaviorConfig({}) }),
       );
-    actions.onSubagentChange("fixture/next");
+    // Promoting a saved fallback and switching back must not drop it from the chain.
+    actions.onSubagentChange("fixture/backup");
     expect(await saved()).toEqual({
       agents: {
         defaults: {
           subagents: {
             maxConcurrent: 4,
-            model: { primary: "fixture/next", fallbacks: ["fixture/backup"] },
+            model: { primary: "fixture/backup", fallbacks: ["fixture/backup"] },
           },
         },
       },
     });
+    actions.onSubagentChange("fixture/runner");
+    expect(await saved()).toEqual(config);
     actions.onSubagentChange(null);
     expect(await saved()).toEqual({
       agents: {

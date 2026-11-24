@@ -390,7 +390,7 @@ it.each([
     {},
     `Inherit default (${inheritedAgentModel})`,
   ],
-  ["the parent session's model without a default", {}, {}, "Same as the parent session"],
+  ["plain inheritance without a default", {}, {}, "Inherit default"],
   ["its own subagent model", {}, { subagents: { model: existingFallback } }, "Claude Sonnet 4.6"],
 ] as const)("shows %s and edits the agent's subagent model", async (_, defaults, beta, shown) => {
   const onSubagentModelChange = vi.fn();

@@ -136,8 +136,7 @@ const enSettings = {
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
       subagentModel: "Subagent model",
       subagentModelHelp:
-        "Runs the subagents and sessions this agent starts. Inherit the Models page default or choose one for this agent only.",
-      subagentModelInheritParent: "Same as the parent session",
+        "Runs subagents and agent-started sessions that run as this agent. Inherit the Models page default or choose one for this agent only.",
       inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
@@ -1337,10 +1336,10 @@ const enSettings = {
       subagent: "Subagent model",
       subagentHelpLabel: "About the subagent model",
       subagentHelpPurpose:
-        "Runs subagents and the sessions an agent starts. An agent’s own subagent model, or a model named in the request, takes priority.",
+        "Runs subagents and the sessions agents start. An agent’s own subagent model, or a model named in the request, takes priority.",
       subagentHelpInherit:
-        "Same as the parent session: each one runs on the model of the session that started it.",
-      subagentInherit: "Same as the parent session",
+        "Not set: a child of the same agent keeps the model of the session that started it. A child started under another agent uses that agent’s own model.",
+      subagentInherit: "Not set",
       utilityFallback: "Utility fallback model",
       utilityOverridesTitle: "Agents with their own utility settings:",
       utilityOverridesOthers: "Other agents use this default.",
