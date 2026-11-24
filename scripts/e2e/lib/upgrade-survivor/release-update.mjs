@@ -5,7 +5,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { backup, DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { readDatabase } from "./observations.mjs";
 import { mapRegistryHosts, prepareRegistryTls, startRegistryTlsRelay } from "./registry-tls.mjs";
@@ -90,6 +90,243 @@ const readRun = () =>
   readDatabase(database, (db) =>
     db.prepare("SELECT * FROM update_runs ORDER BY created_at_ms DESC LIMIT 1").get(),
   );
+const seedConfig = (gatewayPort) => ({
+  gateway: {
+    mode: "local",
+    bind: "loopback",
+    port: gatewayPort,
+    auth: { mode: "token", token: "release-survivor-token" },
+  },
+  update: { channel: "stable", checkOnStart: false },
+});
+
+// Own both the Gateway and its identity-query CLI, including respawned children.
+function startBackwardReadChild(args, probeEnv) {
+  let output = Buffer.alloc(0);
+  const child = spawn(process.execPath, args, {
+    env: probeEnv,
+    cwd: probeEnv.HOME,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let spawnError;
+  const done = new Promise((resolve) => {
+    child.once("error", (error) => {
+      spawnError = error;
+      resolve();
+    });
+    child.once("close", resolve);
+  });
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.on("data", (chunk) => {
+      output = Buffer.concat([output, chunk]).subarray(-65536);
+    });
+  }
+  return {
+    child,
+    done,
+    output: () => output.toString("utf8"),
+    error: () => spawnError,
+    async stop() {
+      const signal = (name) => {
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, name);
+          } catch (error) {
+            if (error.code !== "ESRCH") {
+              throw error;
+            }
+          }
+        }
+      };
+      signal("SIGTERM");
+      await Promise.race([done, delay(2000)]);
+      signal("SIGKILL");
+      await Promise.race([done, delay(2000)]);
+    },
+  };
+}
+
+async function reportBackwardRead(previous, previousBuild) {
+  const probeHome = path.join(root, "backward-read");
+  const probeState = path.join(probeHome, ".openclaw");
+  const snapshot = path.join(probeState, "state", "openclaw.sqlite");
+  const probePort = 28789; // Keep Gateway-derived sidecar ports away from the live 18789 range.
+  const args = [path.join(previous, "openclaw.mjs"), "gateway", "run", "--port", String(probePort)];
+  const receipt = {
+    scope: "shared-state-database-only",
+    result: "unproven",
+    expectedBuild: {
+      version: fixture.previous.version,
+      buildId: previousBuild.buildId,
+      commit: previousBuild.commit,
+      root: previous,
+    },
+    invocation: { executable: process.execPath, args, port: probePort, launcherForwarded: true },
+    snapshot: {
+      method: "node:sqlite.backup",
+      path: snapshot,
+      beforeSchema: null,
+      afterSchema: null,
+    },
+    ready: false,
+    live: false,
+    exitCode: null,
+    signal: null,
+  };
+  let gateway;
+  let identity;
+  try {
+    fs.mkdirSync(path.dirname(snapshot), { recursive: true });
+    const probeEnv = {
+      ...env,
+      HOME: probeHome,
+      PATH: env.PATH.split(path.delimiter)
+        .filter((entry) => entry !== path.join(prefix, "bin"))
+        .join(path.delimiter),
+      OPENCLAW_STATE_DIR: probeState,
+      OPENCLAW_CONFIG_PATH: path.join(probeState, "openclaw.json"),
+      // This is also how the real release launcher starts T during rollback.
+      OPENCLAW_RELEASE_LAUNCHER_FORWARDED: "1",
+    };
+    fs.writeFileSync(probeEnv.OPENCLAW_CONFIG_PATH, JSON.stringify(seedConfig(probePort)));
+    const source = new DatabaseSync(database, { readOnly: true });
+    // Match sqlite-backup.ts: native completion needs a callback checkpoint on Node 24.
+    const checkpoint = setInterval(() => {}, 100);
+    try {
+      receipt.snapshot.pages = await backup(source, snapshot);
+    } finally {
+      clearInterval(checkpoint);
+      source.close();
+    }
+    receipt.snapshot.beforeSchema = readDatabase(
+      snapshot,
+      (db) => db.prepare("PRAGMA user_version").get().user_version,
+    );
+    assert.equal(receipt.snapshot.beforeSchema, fixture.next.schema, "snapshot is not schema N+1");
+    gateway = startBackwardReadChild(args, probeEnv);
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      if (gateway.error()) {
+        throw gateway.error();
+      }
+      if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) {
+        await Promise.race([gateway.done, delay(1000)]);
+        break;
+      }
+      try {
+        receipt.ready = (
+          await fetch(`http://127.0.0.1:${probePort}/readyz`, {
+            signal: AbortSignal.timeout(1000),
+          })
+        ).ok;
+      } catch {
+        // Readiness remains an observation, not a lane assertion.
+      }
+      if (receipt.ready) {
+        identity = startBackwardReadChild(
+          [
+            path.join(previous, "openclaw.mjs"),
+            "gateway",
+            "probe",
+            "--url",
+            `ws://127.0.0.1:${probePort}`,
+            "--token",
+            "release-survivor-token",
+            "--json",
+          ],
+          probeEnv,
+        );
+        await Promise.race([identity.done, delay(15_000)]);
+        if (identity.error()) {
+          throw identity.error();
+        }
+        if (identity.child.exitCode === 0) {
+          const target = JSON.parse(identity.output()).targets.find(
+            (entry) => entry.url === `ws://127.0.0.1:${probePort}`,
+          );
+          if (target?.connect.ok) {
+            receipt.observedBuild = {
+              source: "probe-rpc",
+              version: target.server.version,
+              buildId: target.server.buildId,
+            };
+          }
+        }
+        break;
+      }
+      await delay(250);
+    }
+    receipt.live = gateway.child.exitCode === null && gateway.child.signalCode === null;
+    receipt.exitCode = gateway.child.exitCode;
+    receipt.signal = gateway.child.signalCode;
+    const output = gateway.output();
+    const refusal = output.match(/Refused by OpenClaw (\S+)(?: \(([^)\n]+)\))? installed at /u);
+    const refusedByT =
+      refusal?.[1] === fixture.previous.version && output.includes(`${refusal[0]}${previous}.`);
+    if (refusedByT) {
+      receipt.observedBuild = {
+        source: "schema-refusal",
+        version: refusal[1],
+        commit: refusal[2],
+        root: previous,
+      };
+    }
+    // These are the two existing product messages, not a general error classifier.
+    const schemaRefusal =
+      output.includes(
+        `${snapshot} uses newer schema version ${fixture.next.schema}; this build supports ${fixture.previous.schema}.`,
+      ) ||
+      output.includes(
+        `${snapshot} uses schema ${fixture.next.schema}; this build supports ${fixture.previous.schema};`,
+      );
+    if (
+      receipt.ready &&
+      receipt.live &&
+      receipt.observedBuild?.source === "probe-rpc" &&
+      receipt.observedBuild.version === fixture.previous.version &&
+      (receipt.observedBuild.buildId === undefined ||
+        receipt.observedBuild.buildId === previousBuild.buildId)
+    ) {
+      receipt.result = "readable";
+    } else if (!receipt.ready && receipt.exitCode === 78 && refusedByT && schemaRefusal) {
+      receipt.result = "refused";
+    }
+  } catch (error) {
+    receipt.error = error.message.slice(-4096);
+  } finally {
+    for (const process of [identity, gateway]) {
+      try {
+        await process?.stop();
+      } catch (error) {
+        receipt.result = "unproven";
+        receipt.cleanupError = error.message.slice(-4096);
+      }
+    }
+    receipt.outputTail = gateway?.output() ?? "";
+    receipt.cleanupExitCode = gateway?.child.exitCode ?? null;
+    receipt.cleanupSignal = gateway?.child.signalCode ?? null;
+    receipt.identityExitCode = identity?.child.exitCode ?? null;
+    receipt.identitySignal = identity?.child.signalCode ?? null;
+    try {
+      if (fs.existsSync(snapshot)) {
+        receipt.snapshot.afterSchema = readDatabase(
+          snapshot,
+          (db) => db.prepare("PRAGMA user_version").get().user_version,
+        );
+      }
+      fs.rmSync(probeHome, { recursive: true, force: true });
+    } catch (error) {
+      receipt.result = "unproven";
+      receipt.cleanupError = error.message.slice(-4096);
+    }
+    try {
+      save("backward-read.json", receipt);
+    } catch (error) {
+      console.error(`Could not preserve backward-read observation: ${error.message}`);
+    }
+  }
+}
 try {
   const tlsRoot = path.join(root, "tls");
   await prepareRegistryTls(tlsRoot);
@@ -129,18 +366,7 @@ try {
     path.join(env.HOME, ".npmrc"),
     `registry=http://127.0.0.1:${registryPort}\nprefix=${prefix}\ncache=${root}/npm-cache\n`,
   );
-  fs.writeFileSync(
-    env.OPENCLAW_CONFIG_PATH,
-    JSON.stringify({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        port,
-        auth: { mode: "token", token: "release-survivor-token" },
-      },
-      update: { channel: "stable", checkOnStart: false },
-    }),
-  );
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(seedConfig(port)));
   await command(
     "npm",
     ["install", "--global", sourceTarball, "--no-audit", "--no-fund"],
@@ -266,6 +492,11 @@ try {
     servingSchema: expected.schema,
     rowCount: after.length,
   });
+  try {
+    await reportBackwardRead(previous, previousBuild);
+  } catch (error) {
+    console.error(`Backward-read observation did not complete: ${error.message}`);
+  }
 } catch (error) {
   try {
     const source = path.join(state, "git-install", "releases", ".trial");
