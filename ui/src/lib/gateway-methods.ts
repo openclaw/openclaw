@@ -1,3 +1,4 @@
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.ts";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
@@ -54,6 +55,15 @@ export function canCallGatewayMethod(
     return false;
   }
   return canPresentGatewayMethod(snapshot, method, requiredScope, options);
+}
+
+/** Only a verified writable personal layout follows Gateway pin deadlines. */
+export function usesGatewayTimedSessionPins(snapshot: ApplicationGatewaySnapshot): boolean {
+  return (
+    Boolean(snapshot?.selfUser?.id) &&
+    isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.PERSONAL_SESSION_PINS) === true &&
+    canCallGatewayMethod(snapshot, "users.prefs.set", "operator.write")
+  );
 }
 
 /** Last-known advertisement and scopes for presentation only, never dispatch admission. */

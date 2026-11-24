@@ -13,6 +13,7 @@ import {
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarChildExpansion } from "./app-sidebar-child-expansion.ts";
+import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
   catalogErrorMessages,
@@ -53,6 +54,7 @@ type SidebarProjectionInput = {
   sections?: SidebarSessionSection<SidebarRecentSession>[];
   /** Personal pins render in the Pinned section above these sections, never twice. */
   pinnedKeys?: ReadonlySet<string>;
+  pinTime?: number;
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
   selfOwnerId?: string | null;
@@ -104,6 +106,8 @@ type SidebarPresentationHost = Pick<
   | "expandedAgentId"
 > & {
   readonly sessionData: SessionDataOwner;
+  readonly collapsedSessionSections: ReadonlySet<string>;
+  readonly gatewayPinTime?: number;
   readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
   readonly sidebarMenus: { agentMenuPosition: { x: number; top: number } | null };
   readonly rosterSessionSource: {
@@ -199,6 +203,11 @@ export class SidebarSessionProjection {
     const presentation = [
       host.navigationView,
       railRows.map(({ children: _children, ...row }) => row),
+      // A collapsed Pinned header still publishes its count when no selected row changes.
+      sessionsVisible &&
+        host.collapsedSessionSections.has("pinned") &&
+        sidebarPinnedSessionRows(zone, context?.sessions.archiveVisibility, host.gatewayPinTime)
+          .length,
       host.connected,
       this.#helloPresentation.readRevision(
         () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],
@@ -561,7 +570,9 @@ export class SidebarSessionProjection {
       input.sections ??
       groupSidebarSessionRows(
         pinnedKeys.size > 0
-          ? input.rows.filter((row) => !isListedInPinnedSection(row, pinnedKeys))
+          ? input.rows.filter(
+              (row) => !isListedInPinnedSection(row, pinnedKeys, input.pinTime ?? Date.now()),
+            )
           : input.rows,
         {
           grouping,

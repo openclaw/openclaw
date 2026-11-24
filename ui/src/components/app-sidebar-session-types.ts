@@ -600,12 +600,17 @@ export function sessionCatalogHostKey(catalogId: string, hostId: string): string
   return `${catalogId}\u0000${hostId}`;
 }
 
+export type SidebarSavedPinTime = (
+  row: Pick<GatewaySessionRow, "key" | "snoozedUntil">,
+) => number | undefined;
+
 /** Hidden pins remain discoverable in their lifecycle views without a duplicate in Pinned. */
 export function isListedInPinnedSection(
   row: Pick<SidebarRecentSession, "key" | "archived" | "snoozedUntil">,
   pinnedKeys: ReadonlySet<string>,
+  now: number,
 ): boolean {
-  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, Date.now());
+  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, now);
 }
 
 export type SidebarPinZone = {

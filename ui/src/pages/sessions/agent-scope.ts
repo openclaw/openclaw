@@ -1,7 +1,6 @@
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.ts";
 import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { canCallGatewayMethod, isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
+import { usesGatewayTimedSessionPins } from "../../lib/gateway-methods.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -35,10 +34,7 @@ export function sessionTableNavigation(context: ApplicationContext) {
       hello: gateway.hello,
     }),
     personalSidebarEntries: context.navigation.snapshot.sidebarEntries,
-    gatewayTimedPins:
-      Boolean(gateway.selfUser?.id) &&
-      isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.PERSONAL_SESSION_PINS) === true &&
-      canCallGatewayMethod(gateway, "users.prefs.set", "operator.write"),
+    gatewayTimedPins: usesGatewayTimedSessionPins(gateway),
   };
 }
 

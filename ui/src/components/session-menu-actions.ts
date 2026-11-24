@@ -26,6 +26,7 @@ export type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   snoozedUntil: number | null;
+  snoozeTime?: number;
   hiddenFromInvolvingMe?: boolean;
   communication?: GatewaySessionRow["communication"];
   effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];

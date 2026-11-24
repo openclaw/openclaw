@@ -127,7 +127,7 @@ export function renderSidebarSessionIndicators(
     () =>
       !readSession().isChild &&
       (host().sessionsStatusFilter === "snoozed" || host().sessionsStatusFilter === "all") &&
-      isSessionSnoozed(readSession(), Date.now()),
+      isSessionSnoozed(readSession(), host().gatewayTimeForSavedPin(readSession()) ?? Date.now()),
   );
   const metaId = createMemo(() =>
     snoozed() ? sidebarSessionMetaId(readSession().key) : undefined,

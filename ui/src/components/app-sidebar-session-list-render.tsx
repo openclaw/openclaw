@@ -172,8 +172,10 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
     const host = params.host;
     const zone = host.reconciledSidebarZone();
     const sessions = host.sessionDataContext?.sessions;
-    const now = Date.now();
-    const hasSnoozedPins = nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
+    const gatewayTime = host.gatewayPinTime;
+    const now = gatewayTime ?? Date.now();
+    const hasSnoozedPins =
+      gatewayTime === undefined && nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
     const rows = sidebarPinnedSessionRows(
       zone,
       (key) => sessions?.archiveVisibility(key),

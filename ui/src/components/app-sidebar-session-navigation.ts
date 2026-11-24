@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { usesGatewayTimedSessionPins } from "../lib/gateway-methods.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   collectKnownSessionGroups,
@@ -667,7 +668,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
             this.sessionData,
             this.selectedAgentSessionResult(),
             navigationState,
-          ),
+          ).filter((row) => this.gatewayTimeForSavedPin(row) === undefined),
         );
         if (roster) {
           return rows;
@@ -682,6 +683,25 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     const roster = this.rosterSessionSource;
     return roster ? roster.result : this.sessionData.resultForAgent(agentId);
   }
+
+  // Chip and all-agent mode observe different windows. Their own list owners
+  // reread at activityExpiresAt; never borrow the table or another agent's ts.
+  get gatewayPinTime(): number | undefined {
+    if (this.sidebarSnapshot || !usesGatewayTimedSessionPins(this.context.gateway.snapshot)) {
+      return undefined;
+    }
+    const result =
+      this.sidebarAgentsMode === "roster"
+        ? this.rosterSessionSource?.result
+        : this.selectedAgentSessionResult();
+    // A descriptor may arrive first. Keep a dated pin asleep until its window has a receipt.
+    return result?.ts ?? 0;
+  }
+
+  readonly gatewayTimeForSavedPin = (row: Pick<GatewaySessionRow, "key" | "snoozedUntil">) =>
+    row.snoozedUntil !== undefined && this.sessionOrganizer.isPersonalSessionPin(row.key)
+      ? this.gatewayPinTime
+      : undefined;
 
   selectedAgentMainSessionKey(agentId?: string): string {
     return resolveSidebarMainSessionKey({

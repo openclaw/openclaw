@@ -425,6 +425,7 @@ export function sidebarVisibleRowsInOrder(
   visibleRows: SidebarRecentSession[],
   host: {
     readonly collapsedSessionSections: ReadonlySet<string>;
+    readonly gatewayPinTime?: number;
     readonly sessionDataContext?: {
       sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
     };
@@ -432,8 +433,10 @@ export function sidebarVisibleRowsInOrder(
 ): SidebarRecentSession[] {
   const pins = host.collapsedSessionSections.has("pinned")
     ? []
-    : sidebarPinnedSessionRows(zone, (key) =>
-        host.sessionDataContext?.sessions.archiveVisibility(key),
+    : sidebarPinnedSessionRows(
+        zone,
+        (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
+        host.gatewayPinTime,
       );
   return [...pins, ...visibleRows];
 }

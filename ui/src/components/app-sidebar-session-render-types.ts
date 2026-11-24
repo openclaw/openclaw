@@ -24,6 +24,7 @@ import type {
 } from "./app-sidebar-session-projection.ts";
 import "./menu-surface.ts";
 import type {
+  SidebarSavedPinTime,
   SidebarRecentSession,
   SidebarToolActivity,
   SidebarSessionSortMode,
@@ -50,6 +51,8 @@ export interface SessionListHost {
   readonly sessionDataContext:
     | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
     | undefined;
+  readonly gatewayPinTime?: number;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowPreview: boolean;
