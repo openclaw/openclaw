@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, createUniqueId } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -388,29 +388,9 @@ function ChatReplyErrorNotice(props: {
   onDismiss?: () => void;
 }) {
   const app = useOptionalApplication();
-  const detailsId = createUniqueId();
   const busy = () => props.error.kind === "state_contention";
   const signIn = () => props.error.kind === "auth_refresh";
-  const message = () =>
-    t(
-      busy()
-        ? "chat.errorBusyMessage"
-        : signIn()
-          ? "chat.errorSignInMessage"
-          : "chat.errorReplyMessage",
-    );
-  const display = createMemo(() => formatWebUiIconErrorText(props.error.summary));
-  const hasDetails = () => {
-    const text = display().trim();
-    return Boolean(text && text !== message());
-  };
-  const runId = createMemo(() => props.error.runId);
-  const [open, setOpen] = createSignal(() => {
-    // Refreshing history keeps the disclosure open; a replacement failure starts closed.
-    runId();
-    display();
-    return false;
-  });
+  const message = () => formatUiErrorDetails(formatWebUiIconErrorText(props.error.summary)).trim();
 
   return (
     <div
@@ -432,17 +412,6 @@ function ChatReplyErrorNotice(props: {
         {message()}
       </span>
       <div class="row chat-reply-notice__actions">
-        <Show when={hasDetails()}>
-          <button
-            type="button"
-            class="btn btn--sm btn--ghost"
-            aria-expanded={open() ? "true" : "false"}
-            aria-controls={detailsId}
-            onClick={() => setOpen((value) => !value)}
-          >
-            {t("chat.details")}
-          </button>
-        </Show>
         <Show when={signIn() ? app : props.onRefresh}>
           <button
             type="button"
@@ -470,24 +439,6 @@ function ChatReplyErrorNotice(props: {
           </button>
         </Show>
       </div>
-      <Show when={hasDetails()}>
-        <div class="chat-reply-notice__details" id={detailsId} hidden={!open()}>
-          <code class="lazy-view-error__detail" tabindex={0} aria-label={t("chat.errorDetails")}>
-            {formatUiErrorDetails(display())}
-          </code>
-          <div class="row chat-reply-notice__tools">
-            <ReportIssueLink />
-            <span class="lazy-view-error__action">
-              <CopyButton
-                text={formatUiErrorDetails(props.error.summary)}
-                idleLabel={t("chat.copyError")}
-                bare
-                iconFeedback
-              />
-            </span>
-          </div>
-        </div>
-      </Show>
     </div>
   );
 }

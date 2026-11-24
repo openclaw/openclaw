@@ -324,17 +324,7 @@ suite.define(() => {
     });
     const failedAlert = page.locator(".chat-reply-notice").filter({ hasText: renderedDiagnostic });
     await failedAlert.waitFor();
-    await failedAlert.getByText("Couldn't finish this reply.", { exact: true }).waitFor();
-    expect(
-      await failedAlert
-        .getByRole("button", { name: "Details", exact: true })
-        .getAttribute("aria-expanded"),
-    ).toBe("false");
-    await failedAlert.getByRole("button", { name: "Details", exact: true }).click();
-    await failedAlert.getByLabel("Error details", { exact: true }).waitFor();
-    expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toContain(
-      renderedDiagnostic,
-    );
+    expect(await failedAlert.getByRole("alert").textContent()).toContain(renderedDiagnostic);
     expect(await page.locator(".chat-group.assistant").count()).toBe(0);
     expect(await stopButton(page).count()).toBe(0);
 
@@ -935,10 +925,9 @@ suite.define(() => {
     });
 
     const notice = page.locator(".chat-reply-notice");
-    await notice.getByRole("button", { name: "Details", exact: true }).click();
-    const details = notice.getByLabel("Error details", { exact: true });
-    await details.waitFor();
-    expect(await details.textContent()).toContain(`Error: ${diagnostic}`);
+    const message = notice.getByRole("alert");
+    await message.waitFor();
+    expect(await message.textContent()).toContain(`Error: ${diagnostic}`);
     expect(await page.getByLabel("Run status: Interrupted").count()).toBe(0);
     expect(await stopButton(page).count()).toBe(0);
   });

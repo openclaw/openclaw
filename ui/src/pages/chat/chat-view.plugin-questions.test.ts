@@ -278,7 +278,7 @@ it.each(["native", "delegated"] as const)(
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
       expect(provider.querySelector(".chat-reply-notice [role='alert']")?.textContent).toBe(
-        "Couldn't finish this reply.",
+        initial.runError?.summary,
       );
     });
     const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;

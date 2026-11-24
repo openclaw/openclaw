@@ -44,11 +44,9 @@ suite.define(() => {
       errorMessage,
     });
     const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
-    await failure.getByText("Couldn't finish this reply.", { exact: true }).waitFor();
-    await failure.getByRole("button", { name: "Details", exact: true }).click();
-    const details = failure.getByLabel("Error details", { exact: true });
-    await details.waitFor();
-    expect(await details.textContent()).toContain(errorMessage);
+    const message = failure.getByRole("alert");
+    await message.waitFor();
+    expect(await message.textContent()).toContain(errorMessage);
 
     const providerReview = {
       id: "synthetic-review-one",

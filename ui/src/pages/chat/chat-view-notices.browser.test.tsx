@@ -83,7 +83,7 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
 });
 
-it("keeps the recovery action beside the title with a visible dismiss", async () => {
+it("keeps the recovery action and dismiss beside a multi-line error", async () => {
   const previous = { width: window.innerWidth, height: window.innerHeight };
   await page.viewport(820, previous.height);
   try {
@@ -104,13 +104,10 @@ it("keeps the recovery action beside the title with a visible dismiss", async ()
     await waitForSolid(() =>
       expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
     );
-    const offset = () =>
-      box(view.container, ".chat-error__refresh").top -
-      box(view.container, ".chat-reply-notice__message").top;
-    const closed = offset();
-    expect(Math.abs(closed)).toBeLessThan(8);
-    view.getByRole("button", { name: "Details", exact: true }).click();
-    await waitForSolid(() => expect(offset()).toBe(closed));
+    const recovery = box(view.container, ".chat-error__refresh");
+    const message = box(view.container, ".chat-reply-notice__message");
+    expect(recovery.left).toBeGreaterThanOrEqual(message.right);
+    expect(recovery.top).toBeLessThan(message.bottom);
     const close = view.getByRole("button", { name: "Dismiss error", exact: true });
     expect(getComputedStyle(close).opacity).toBe("1");
     close.click();
@@ -120,49 +117,40 @@ it("keeps the recovery action beside the title with a visible dismiss", async ()
   }
 });
 
-it.each([300, 500])("keeps recovery and reporting clickable at %ipx", async (width) => {
-  const previous = { width: window.innerWidth, height: window.innerHeight };
-  await page.viewport(width, previous.height);
-  try {
-    const view = mountSolid(() => (
-      <ChatComposerNoticesContent
-        sessionKey="agent:main:main"
-        connected
-        messages={[]}
-        runError={{
-          runId: "synthetic-run",
-          summary: "Error: Restore failed.\nprovider reported lease destroyed",
-        }}
-        onRefresh={() => {}}
-      />
-    ));
-    await waitForSolid(() =>
-      expect(view.container.querySelector("[aria-controls]")).not.toBeNull(),
-    );
-    view.getByRole("button", { name: "Details", exact: true }).click();
-    await waitForSolid(() => {
-      const recovery = view.container.querySelector<HTMLElement>(".chat-error__refresh")!;
-      const report = view.container.querySelector<HTMLAnchorElement>("a.report-issue-link")!;
-      const a = recovery.getBoundingClientRect(),
-        b = report.getBoundingClientRect();
-      expect(a.width).toBeGreaterThan(0);
-      expect(b.width).toBeGreaterThan(0);
-      expect(a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top).toBe(
-        false,
+it.each([300, 500])(
+  "wraps long error text without pushing recovery offscreen at %ipx",
+  async (width) => {
+    const previous = { width: window.innerWidth, height: window.innerHeight };
+    await page.viewport(width, previous.height);
+    try {
+      const onRefresh = vi.fn();
+      const view = mountSolid(() => (
+        <ChatComposerNoticesContent
+          connected
+          messages={[]}
+          runError={{ summary: "Restore failed.\n" + "diagnostic".repeat(35) }}
+          onRefresh={onRefresh}
+        />
+      ));
+      await waitForSolid(() =>
+        expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
       );
-      for (const target of [recovery, report]) {
-        const bounds = target.getBoundingClientRect();
-        expect(
-          target.contains(
-            document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-          ),
-        ).toBe(true);
-      }
-    });
-  } finally {
-    await page.viewport(previous.width, previous.height);
-  }
-});
+      const notice = view.container.querySelector<HTMLElement>(".chat-reply-notice")!;
+      expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
+      const recovery = view.getByRole("button", { name: "Refresh", exact: true });
+      const bounds = recovery.getBoundingClientRect();
+      expect(
+        recovery.contains(
+          document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+        ),
+      ).toBe(true);
+      recovery.click();
+      expect(onRefresh).toHaveBeenCalledOnce();
+    } finally {
+      await page.viewport(previous.width, previous.height);
+    }
+  },
+);
 
 it("keeps discard recovery below the full warning on mobile", async () => {
   const previous = { width: window.innerWidth, height: window.innerHeight };

@@ -15,65 +15,63 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it.each([1280, 820, 400])(
-    "keeps failed-reply copy compact with reachable feedback at %ipx",
+  it.each([1280, 400])(
+    "shows the complete error and refreshes without resending at %ipx",
     async (width) => {
-      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page, context }) => {
-        const sessionKey = "agent:main:main";
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          sessions: [
-            {
-              key: sessionKey,
-              status: "failed",
-              hasActiveRun: false,
-              lastRunId: "failed-run",
-              lastRunError: "Synthetic reply failure for layout verification.",
-            },
-          ],
-          historyMessages: [{ role: "user", content: "Check the example operation." }],
-        });
-        await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
-        const notice = page.locator(".chat-error");
-        const message = notice.getByRole("alert");
-        const details = notice.getByRole("button", { name: "Details", exact: true });
-        const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
-        const report = notice.getByRole("link", { name: "Report a bug", exact: true });
-        await details.waitFor();
-        expect(await message.textContent()).toBe("Couldn't finish this reply.");
-        expect(await report.isVisible()).toBe(false);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          notice,
-          [message, refresh, details],
-          {
-            elements: [notice, message, refresh, details],
-            animations: "disabled",
-          },
-        );
-        await writeFile(path.join(suite.artifactDir, `layout-${width}.png`), frame.png);
-        if (width === 1280) {
-          expect(frame.elements[0]!.bounds.height).toBeLessThanOrEqual(48);
-        }
-        await details.press("Enter");
-        await notice.getByLabel("Error details", { exact: true }).waitFor();
-        expect(await details.getAttribute("aria-expanded")).toBe("true");
-        await context.route("https://github.com/**", (route) =>
-          route.fulfill({ body: "Issue form destination verified" }),
-        );
-        const popupPromise = page.waitForEvent("popup");
-        await report.click();
-        const popup = await popupPromise;
-        await popup.waitForLoadState();
-        expect(new URL(popup.url()).pathname).toBe("/openclaw/openclaw/issues/new");
-        await popup.close();
-        const reads = (await gateway.getRequests("chat.history")).length;
-        await refresh.click();
-        await gateway.waitForRequest("chat.history", { after: reads });
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await notice.getByRole("button", { name: "Dismiss error", exact: true }).click();
-        await notice.waitFor({ state: "hidden" });
-      });
+      await suite.withPage(
+        { viewport: { width, height: 800 }, colorScheme: "light" },
+        async ({ page }) => {
+          const sessionKey = "agent:main:main";
+          const error = "The model provider interrupted the connection.\nRequest ID: example-7942.";
+          const draft = "Can you also pull out the action items?";
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            sessions: [
+              {
+                key: sessionKey,
+                status: "failed",
+                hasActiveRun: false,
+                lastRunId: "failed-run",
+                lastRunError: error,
+              },
+            ],
+            historyMessages: [
+              { role: "user", content: "Summarize the notes from our planning session." },
+            ],
+          });
+          await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
+          const notice = page.locator(".chat-error");
+          const message = notice.getByRole("alert");
+          const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
+          const input = page.locator(".agent-chat__input textarea");
+          await message.waitFor();
+          expect(await message.textContent()).toBe(error);
+          expect(await notice.locator("details, [aria-expanded]").count()).toBe(0);
+          await input.fill(draft);
+          if (process.env.OPENCLAW_REPLY_PROOF_DIR) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              notice,
+              [message, refresh, input],
+              {
+                elements: [notice, message, refresh, input],
+                animations: "disabled",
+              },
+            );
+            await writeFile(
+              path.join(process.env.OPENCLAW_REPLY_PROOF_DIR, "direct-" + width + ".png"),
+              frame.png,
+            );
+          }
+          const reads = (await gateway.getRequests("chat.history")).length;
+          await refresh.click();
+          await gateway.waitForRequest("chat.history", { after: reads });
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await input.inputValue()).toBe(draft);
+          await notice.getByRole("button", { name: "Dismiss error", exact: true }).click();
+          await notice.waitFor({ state: "hidden" });
+        },
+      );
     },
   );
   it("opens the appropriate public issue template without attaching runtime data", async () => {

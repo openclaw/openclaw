@@ -8,30 +8,13 @@
 .chat-reply-notice__message {
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.4;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.chat-reply-notice__actions,
-.chat-reply-notice__tools {
+.chat-reply-notice__actions {
   gap: 6px;
   flex-wrap: wrap;
-}
-
-.chat-reply-notice__actions .btn--ghost {
-  background: transparent;
-  color: var(--muted);
-}
-
-.chat-reply-notice__details:not([hidden]) {
-  display: grid;
-  grid-column: 2 / -1;
-  gap: 8px;
-  border-block-start: 1px solid var(--border);
-  padding-block: 8px 4px;
-}
-
-.chat-reply-notice__tools {
-  justify-content: space-between;
 }
 
 @media (max-width: 560px) {

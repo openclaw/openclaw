@@ -370,7 +370,7 @@ suite.define(() => {
         const sendButton = page.getByRole("button", { name: "Send message" });
         const alert = page.locator(".chat-reply-notice").filter({ hasText: renderedDiagnostic });
         const stop = page.getByRole("button", { name: "Stop", exact: true });
-        const details = alert.getByLabel("Error details", { exact: true });
+        const message = alert.getByRole("alert");
         await composer.fill("Try again");
         expect(await sendButton.isEnabled()).toBe(true);
         if (retryTiming === "before history") {
@@ -398,12 +398,8 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe("Try again");
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
-          await alert.getByText("Couldn't finish this reply.", { exact: true }).waitFor();
-          const toggle = alert.getByRole("button", { name: "Details", exact: true });
-          expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-          await toggle.click();
-          await details.waitFor();
-          expect(await details.textContent()).toContain(renderedDiagnostic);
+          await message.waitFor();
+          expect(await message.textContent()).toContain(renderedDiagnostic);
           await sendButton.click();
         }
         const send = await gateway.waitForRequest("chat.send");

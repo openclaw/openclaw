@@ -132,7 +132,7 @@ suite.define(() => {
         state: "error",
       });
       const notice = page.locator(".chat-reply-notice");
-      await polledText(notice.getByRole("alert")).toBe("Couldn't sign in to the AI service.");
+      await polledText(notice.getByRole("alert")).toContain(message);
       expect(await exactButton(notice, "Refresh").count()).toBe(0);
       await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
       const textarea = page.locator(".agent-chat__input textarea");
