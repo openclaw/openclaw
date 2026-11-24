@@ -32,7 +32,7 @@ export function cronPage(id?: string): CompactCronPage {
     snapshotRevision: id ?? "empty",
     total: jobs.length,
     offset: 0,
-    limit: 50,
+    limit: 200,
     hasMore: false,
     nextOffset: null,
   };
