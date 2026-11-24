@@ -62,7 +62,7 @@ import type { GatewayRequestContext } from "./types.js";
 export async function prepareSessionPatchArchives(
   params: Pick<
     SessionPatchArchiveParams,
-    "cfg" | "context" | "personalModelSelection" | "pluginOwnerId"
+    "cfg" | "context" | "personalModelSelection" | "pluginOwnerId" | "assertDrainStartAllowed"
   > & {
     targets: readonly PreparedPatchTarget[];
     mutationTargets: readonly MutationTarget[];
@@ -82,6 +82,7 @@ export async function prepareSessionPatchArchives(
             pluginOwnerId: params.pluginOwnerId,
             target,
             commitGuard: params.mutationTargets[target.index]!.commitGuard,
+            assertDrainStartAllowed: params.assertDrainStartAllowed,
             loadGatewayModelCatalogSnapshot: () => params.loadCatalog(target.targetAgentId),
           });
           if (result.ok) {
@@ -143,6 +144,7 @@ function archiveTargetChanged(params: {
 }
 
 type SessionPatchArchiveParams = {
+  assertDrainStartAllowed?: () => void;
   commitGuard: () => ErrorShape | undefined;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
@@ -367,6 +369,7 @@ async function prepareSessionPatchArchiveFromSource(
     const drain = await prepareSessionLifecycleDrain({
       action: "archive",
       authorize: assertCurrent,
+      onPrepared: params.assertDrainStartAllowed,
       context: params.context,
       storePath: target.storePath,
       sessionKeys,

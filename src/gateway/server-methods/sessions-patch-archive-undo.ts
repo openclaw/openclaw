@@ -43,7 +43,7 @@ export type ArchiveUndoCaller = {
   profileId: string;
   connId: string;
   token?: string;
-  assertCurrent: () => void;
+  assertCurrent: (boundary?: "session-mutation") => void;
 };
 
 export function admitArchiveUndo(
@@ -72,18 +72,25 @@ export function admitArchiveUndo(
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
   const connId = client?.connId;
-  // Ordinary RPCs can outlive the socket. Undo belongs to this exact, still-live transport.
-  const isCurrent = () =>
+  const isCurrent = (boundary?: "session-mutation") =>
     Boolean(
       client &&
       connId &&
+      client.connId === connId &&
       profileId &&
       client.authenticatedUserProfile?.profileId === profileId &&
       client.connect.role === "operator" &&
       !client.internal?.remoteIngressPrincipal &&
       !client.internal?.operatorRunAuthority &&
       !isIneligiblePersonalGatewayCaller(client) &&
-      context.isConnectionActive?.(connId, client),
+      (context.isConnectionActive?.(connId, client) ||
+        // Only the Archive mutation can outlive an ordinary socket close. Each drain
+        // checks the live issuer before cancellation; Undo and delivery never detach.
+        (issue &&
+          boundary === "session-mutation" &&
+          client.connectionSignal?.aborted &&
+          !client.invalidated &&
+          options.hasCurrentClientAuthority?.() === true)),
     );
   if (
     !profileId ||
@@ -107,8 +114,8 @@ export function admitArchiveUndo(
       profileId,
       connId,
       token,
-      assertCurrent: () => {
-        if (!isCurrent()) {
+      assertCurrent: (boundary) => {
+        if (!isCurrent(boundary)) {
           throw new SessionMutationAuthorizationChangedError(
             errorShape(ErrorCodes.FORBIDDEN, "The Archive Undo connection changed."),
           );

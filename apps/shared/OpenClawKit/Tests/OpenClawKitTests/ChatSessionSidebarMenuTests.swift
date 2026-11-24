@@ -13,6 +13,7 @@ func sidebarMenuConnection(
     local: Bool = false,
     selfProfileID: String? = nil,
     scopes: [String] = ["operator.admin"],
+    capabilities: [String] = [],
     request: @escaping (OpenClawChatGatewayRequest) async throws -> Data) throws -> OpenClawSessionMenuConnection
 {
     var payload = try #require(JSONSerialization.jsonObject(with: Data(#"""
@@ -21,6 +22,10 @@ func sidebarMenuConnection(
      "snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},
      "auth":{"scopes":["operator.admin"]},"policy":{}}
     """#.utf8)) as? [String: Any])
+    if !capabilities.isEmpty, var features = payload["features"] as? [String: Any] {
+        features["capabilities"] = capabilities
+        payload["features"] = features
+    }
     payload["auth"] = ["scopes": scopes]
     let hello = try JSONDecoder().decode(HelloOk.self, from: JSONSerialization.data(withJSONObject: payload))
     return OpenClawSessionMenuConnection(
@@ -116,6 +121,56 @@ struct ChatSessionSidebarMenuTests {
             #expect(!submenu.items.isEmpty)
             #expect(submenu.items.allSatisfy { $0.isEnabled == (kind == "root") })
         }
+    }
+
+    @Test(arguments: [false, true])
+    func `Threads keeps historical pins visible but only offers a swipe on a negotiated window`(
+        personalPins: Bool) async throws
+    {
+        let fixture = try SidebarSnoozeMenuFixture()
+        defer { fixture.close() }
+        fixture.model.sessions = [fixture.row]
+        let commands = OpenClawChatWindowCommands()
+        try commands.setSessionMenuConnection(sidebarMenuConnection(
+            scopes: ["operator.sessions.write"], capabilities: personalPins ? ["personal-session-pins"] : [])
+        { _ in
+            throw URLError(.unsupportedURL)
+        })
+        await commands.sessionMenuActions.refreshTask?.value
+        let host = NSHostingController(rootView: ChatSessionsSheet(viewModel: fixture.model)
+            .environment(\.openClawChatWindowCommands, commands)
+            .defaultAppStorage(fixture.defaults))
+        let window = NSWindow(contentViewController: host)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.setContentSize(NSSize(width: 600, height: 400))
+        host.view.layoutSubtreeIfNeeded()
+        func findTable(_ view: NSView) -> NSTableView? {
+            view as? NSTableView ?? view.subviews.lazy.compactMap(findTable).first
+        }
+        let table = try #require(findTable(host.view))
+        let menus = (0..<table.numberOfRows).compactMap { row -> (Int, NSMenu)? in
+            let rect = table.rect(ofRow: row)
+            let point = table.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+            guard let event = NSEvent.mouseEvent(
+                with: .rightMouseDown,
+                location: point,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1),
+                let menu = table.menu(for: event) else { return nil }
+            menu.update()
+            return (row, menu)
+        }
+        let (index, menu) = try #require(menus.first { $0.1.item(withTitle: "Unpin") != nil })
+        #expect(menu.item(withTitle: "Unpin")?.isEnabled == personalPins)
+        let leading = table.delegate?.tableView?(table, rowActionsForRow: index, edge: .leading)
+        #expect(leading?.map(\.title) == (personalPins ? ["Unpin"] : []))
+        #expect(menu.item(withTitle: "Archive")?.isEnabled == true)
     }
 
     @Test func `appearance reset and involvement address the row incarnation and agent`() async throws {
@@ -400,7 +455,7 @@ private final class SidebarSnoozeMenuFixture {
     let actions: ChatSessionSidebarActions
     let requests = AsyncStream<OpenClawChatGatewayRequest>.makeStream()
     private let suite = "SidebarSnoozeMenuTests.\(UUID().uuidString)"
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
 
     init(scopes: [String] = ["operator.admin"]) throws {
         self.defaults = try #require(UserDefaults(suiteName: self.suite))

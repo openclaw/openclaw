@@ -23,6 +23,14 @@ public struct ChatSessionsSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
     private let agentID: String?
     @Environment(\.dismiss) private var dismiss
+    #if os(macOS)
+    @Environment(\.openClawChatWindowCommands) private var windowCommands
+    private var canEditPins: Bool {
+        self.windowCommands?.sessionMenuActions.canEditPins == true
+    }
+    #else
+    private let canEditPins = true
+    #endif
     @State private var searchText = ""
     @State private var scope: SessionScope = .active
     @State private var scopedIDs: [String] = []
@@ -298,7 +306,7 @@ public struct ChatSessionsSheet: View {
             }
         } label: { self.sessionRowContent(session) }
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                if !session.isArchived {
+                if !session.isArchived, self.canEditPins {
                     self.pinButton(session)
                         .tint(OpenClawChatTheme.accent)
                 }
@@ -333,6 +341,7 @@ public struct ChatSessionsSheet: View {
                 }
                 if !session.isArchived {
                     self.pinButton(session)
+                        .disabled(!self.canEditPins)
                 }
                 if ChatSessionSidebarModel.canArchiveSession(
                     session,
@@ -430,8 +439,11 @@ public struct ChatSessionsSheet: View {
 
     private var batchActionBar: some View {
         HStack(spacing: 12) {
-            Button("Pin") { Task { await self.runBatch(.pin) } }
-            Button("Unpin") { Task { await self.runBatch(.unpin) } }
+            Group {
+                Button("Pin") { Task { await self.runBatch(.pin) } }
+                Button("Unpin") { Task { await self.runBatch(.unpin) } }
+            }
+            .disabled(!self.canEditPins)
             Button("Archive") { Task { await self.runBatch(.archive) } }
             Spacer()
             Button("Delete", role: .destructive) {

@@ -79,6 +79,7 @@ private struct ChatSessionSidebarRowMenu: View {
                         pinned: self.session.pinned != true,
                         agentID: self.session.agentId)
                 }
+                .disabled(!self.actions.canEditPins)
             }
             // Snooze shares Pin's root-session eligibility.
             if ChatSessionSidebarEligibility.canPin(self.session, isChild: self.isChild), !self.session.isArchived,

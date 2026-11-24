@@ -140,9 +140,9 @@ function createSessionPatchHandler(
       ) {
         return await patchPersonalSessionPins(options, targets, patch, request.many);
       }
-      const assertCurrent = () => {
+      const assertCurrent = (boundary?: "session-mutation") => {
         requestAuthority.assertCurrent();
-        archive.caller?.assertCurrent();
+        archive.caller?.assertCurrent(boundary);
         if (!request.many) {
           sessionMutationAuthorization?.assertCurrent();
         }
@@ -176,7 +176,7 @@ function createSessionPatchHandler(
         targets: targets.map((target) => ({
           ...target,
           commitGuard: createCommitGuard(target.key.trim(), () => {
-            assertCurrent();
+            assertCurrent("session-mutation");
             if (request.many) {
               sessionMutationAuthorization?.assertTargetCurrent({
                 sessionKey: target.key.trim(),

@@ -244,6 +244,7 @@ export async function executeSessionPatchMutations(params: SessionPatchExecution
       // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
       timing?.mark("archive");
       await prepareSessionPatchArchives({
+        assertDrainStartAllowed: params.archiveUndo?.assertCurrent,
         targets: activePrepared,
         mutationTargets,
         outcomes,
