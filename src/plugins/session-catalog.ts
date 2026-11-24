@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogRouteMethods,
   SessionCatalogSourceProfileRelation,
   SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
@@ -198,6 +199,12 @@ export type SessionCatalogProvider = {
   supportsProfileRelation?: true;
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
+  /** Owned RPCs used when the caller lacks the shared operation's scope. The host verifies ownership. */
+  ownedRoute?: {
+    methods: SessionCatalogRouteMethods;
+    /** An original, current grant from this policy plugin is required for these methods. */
+    requiredGrantPluginId?: string;
+  };
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
