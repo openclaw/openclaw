@@ -41,7 +41,7 @@ const childPublisher = "Seal full release child evidence / Seal child receipt";
 // Only external transport is replaced; validation runs through production owners.
 export function recoveryConsumptionFixture(
   admitted: boolean | ReturnType<typeof candidatePublicationFixture> = false,
-  fixtureOptions: { waivedFailure?: boolean } = {},
+  fixtureOptions: { waivedFailure?: boolean; waiverPolicySha?: string } = {},
 ) {
   const direct =
     typeof admitted === "boolean"
@@ -129,10 +129,14 @@ export function recoveryConsumptionFixture(
     jobName: string;
     reason: string;
     aggregates: never[];
+    evidence: { runId: number; runAttempt: number };
   }[] = [];
-  const sourceFile = (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
+  const sourceFile = (sha: string, path = ".github/workflows/full-release-validation.yml") =>
     path === "scripts/lib/release-validation-waivers.json"
-      ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: waiverPolicy })
+      ? JSON.stringify({
+          schema: "openclaw.release-validation-waivers/v1",
+          waivers: sha === (fixtureOptions.waiverPolicySha ?? q) ? waiverPolicy : [],
+        })
       : readFileSync(path, "utf8");
   const producer = { runId: "900", runAttempt: 1, fullRef: "refs/heads/main", sha: p };
   const source = createPublicationSourceFact(
@@ -230,6 +234,7 @@ export function recoveryConsumptionFixture(
         jobName: workload[0]!.name,
         reason: "Synthetic Q-only recovery grant",
         aggregates: [],
+        evidence: { runId: Number(id), runAttempt: 1 },
       });
     }
     const publisher = job(10099 + index * 100, childPublisher, id);
@@ -732,7 +737,10 @@ export function recoveryConsumptionFixture(
     validateChildReuse: (
       selection: Parameters<typeof validateReusableReleaseChild>[0],
       request: Parameters<typeof validateReusableReleaseChild>[1],
-      options: { deadlineMs?: number } = {},
+      options: Pick<
+        NonNullable<Parameters<typeof validateReusableReleaseChild>[2]>,
+        "deadlineMs" | "waiverPolicy"
+      > = {},
     ) =>
       validateReusableReleaseChild(selection, request, {
         ...options,
