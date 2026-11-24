@@ -288,6 +288,12 @@ function buildRoutedModel(
     upstreamModel = model.upstream;
   }
 
+  // Older router catalogs omit modalities and sampling metadata. Match only
+  // the two known OpenAI identities, not unknown siblings.
+  const gpt62 =
+    provider.id === "openai" &&
+    api === "openai-responses" &&
+    (model.id === "openai/gpt-6.2-astra" || model.id === "openai/gpt-6.2-sol");
   const providerPrefix = `${provider.id}/`;
   const modelLabel = model.id.startsWith(providerPrefix)
     ? model.id.slice(providerPrefix.length)
@@ -299,17 +305,28 @@ function buildRoutedModel(
     api,
     baseUrl,
     reasoning:
-      model.supportedReasoningEfforts !== undefined || inferReasoning(provider.id, model.id),
+      gpt62 ||
+      model.supportedReasoningEfforts !== undefined ||
+      inferReasoning(provider.id, model.id),
     ...(model.supportedReasoningEfforts
       ? {
           thinkingLevelMap: buildThinkingLevelMap(model.supportedReasoningEfforts),
+        }
+      : {}),
+    ...(model.supportedReasoningEfforts || gpt62
+      ? {
           compat: {
-            supportsReasoningEffort: true,
-            supportedReasoningEfforts: model.supportedReasoningEfforts,
+            ...(model.supportedReasoningEfforts
+              ? {
+                  supportsReasoningEffort: true,
+                  supportedReasoningEfforts: model.supportedReasoningEfforts,
+                }
+              : {}),
+            ...(gpt62 ? { supportsTemperature: false } : {}),
           },
         }
       : {}),
-    input: inferInput(provider.id, model.id),
+    input: gpt62 ? ["text", "image"] : inferInput(provider.id, model.id),
     cost: modelCost(model.pricing),
     contextWindow: model.pricing?.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: model.pricing?.defaultMaxOutputTokens ?? DEFAULT_MAX_TOKENS,
