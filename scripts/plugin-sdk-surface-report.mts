@@ -341,7 +341,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: provider auth failure class, reason, recovery, and OAuth failure converter (#203394).
       // +1: shipped reply session-init conflict classifier (#201363).
       // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
-      3921,
+      // +7: session-catalog adds three route types, the resolve result, and three service export types.
+      // +1: sendToResolvedSession submits to the destination observed by an authenticated handler.
+      3929,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -406,7 +408,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: OAuth failure converter; ProviderAuthFailure is construct-only (#203394).
       // +1: shipped reply session-init conflict classifier (#201363).
       // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
-      2256,
+      // +1: sendToResolvedSession owns the strict target and correlates native admission.
+      2257,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
