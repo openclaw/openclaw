@@ -34,7 +34,7 @@ export const startUpgradeWsServer = async (params: {
 
 export const connectWs = async (url: string): Promise<WebSocket> => {
   const ws = new WebSocket(url);
-  (await once(ws, "open")) as Promise<[unknown]>;
+  await once(ws, "open");
   return ws;
 };
 
@@ -44,7 +44,7 @@ export const waitForClose = async (
   code: number;
   reason: string;
 }> => {
-  const [code, reason] = ((await once(ws, "close")) as Promise<[number, Buffer]>) ?? [];
+  const [code, reason] = (await once(ws, "close")) as [number, Buffer];
   return {
     code,
     reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || ""),
