@@ -517,6 +517,10 @@ Use one TLS termination point and apply HSTS there.
 
 ## Proxy setup examples
 
+For local accounts without an external identity provider, [Shellgate](/plugins/shellgate)
+adds per-account proxy Bearer tokens alongside existing Caddy Basic authentication.
+Gateway profiles and named roles remain the identity and permission owners.
+
 Cloudflare Access is covered end to end, including the tunnel and node routes, in
 [Cloudflare Tunnel and Access](/gateway/cloudflare-access).
 

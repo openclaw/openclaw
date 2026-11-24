@@ -52,7 +52,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-79 plugins
+80 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -189,6 +189,8 @@ Each entry lists the package, distribution route, and description.
 - **[session-share](/plugins/reference/session-share)** (`@openclaw/session-share`) - included in OpenClaw. Read-only OpenClaw sessions on paired gateways.
 
 - **[sglang](/plugins/reference/sglang)** (`@openclaw/sglang-provider`) - included in OpenClaw. Adds SGLang model provider support to OpenClaw.
+
+- **[shellgate](/plugins/reference/shellgate)** (`@openclaw/shellgate`) - included in OpenClaw. Per-account Bearer credentials for a trusted reverse proxy; Gateway profiles and roles remain authoritative.
 
 - **[skill-workshop](/plugins/reference/skill-workshop)** (`@openclaw/skill-workshop`) - included in OpenClaw. Learned skills each agent saves from its own work.
 

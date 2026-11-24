@@ -1896,6 +1896,7 @@
                       "plugins/mcp-relay",
                       "plugins/oc-path",
                       "plugins/session-share",
+                      "plugins/shellgate",
                       "plugins/workboard",
                       "plugins/zalouser"
                     ]
