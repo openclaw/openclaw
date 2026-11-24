@@ -8,6 +8,7 @@ import { captureGatewayServiceDefinitionBackup } from "./service-definition-back
 import {
   gatewayServiceCommandMatchesRoot,
   resolveGatewayServiceInstallationRefreshRoot,
+  resolveServiceEntrypoint,
 } from "./service-layout.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { settleGatewayServiceRebind } from "./service-rebind.js";
@@ -83,7 +84,18 @@ export async function reconcileGatewayServiceDefinition(params: {
           roots.map((root) => gatewayServiceCommandMatchesRoot(root, command)),
         );
         assertCurrent();
-        if (!ownership.includes(true)) {
+        let matchesInstallation = ownership.includes(true);
+        const entrypoint = resolveServiceEntrypoint(command);
+        if (!matchesInstallation && params.root && entrypoint) {
+          const { isRetiredPnpmGenerationOfInstall } =
+            await import("../infra/update-global-pnpm-retired.js");
+          matchesInstallation = await isRetiredPnpmGenerationOfInstall({
+            entrypoint,
+            activeRoot: params.root,
+          });
+          assertCurrent();
+        }
+        if (!matchesInstallation) {
           const state = await readGatewayServiceState(resolveGatewayService(), {
             env: params.env,
             requireEffective: true,
