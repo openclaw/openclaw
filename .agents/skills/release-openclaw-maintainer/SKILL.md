@@ -194,7 +194,9 @@ verify their original admitted qualification identity (or historical trusted-mai
 workflow SHA) and current attempt. The sealed
 manifest supplies the SDK evidence digest and npm publication decisions; it
 never acknowledges SDK API changes, so supply
-`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes.
+Review the diff and acknowledge it yourself; stop for the operator only if a
+change looks harmful. The
 publisher accepts only successful FRV and cannot grant a waiver. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
