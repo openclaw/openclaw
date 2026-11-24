@@ -18,7 +18,9 @@ it.each(["body", "revalidation"] as const)(
     let current = true;
     const assertCurrent = (requiredGrant?: string) => {
       expect(requiredGrant).toBe("visitor-access");
-      if (!current) throw new Error("publisher authority ended");
+      if (!current) {
+        throw new Error("publisher authority ended");
+      }
     };
     const revalidate = async (requiredGrant?: string) => {
       entered.resolve();

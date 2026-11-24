@@ -211,7 +211,9 @@ describe("Beam authenticated uploader identity", () => {
         const ownerless = "c".repeat(32);
         const sharedHeaders = { authorization: `Bearer ${tokenAuth.token}` };
         const publicationId = await upload(origin, ownerless, "Shared snapshot", sharedHeaders);
-        if (!publicationId) throw new Error("Expected a new publication");
+        if (!publicationId) {
+          throw new Error("Expected a new publication");
+        }
         await upload(origin, ownerless, "Shared snapshot", sharedHeaders, 403, publicationId);
         expect(await listProfiles()).toHaveLength(3);
       });
