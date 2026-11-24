@@ -6944,8 +6944,8 @@ jobs:
             .artifacts/docker-tests/????????T??????Z/failures.json
             .artifacts/docker-tests/upgrade-survivor-*/summary.json
             .artifacts/docker-tests/upgrade-survivor-*/failure.json
-            .artifacts/docker-tests/upgrade-survivor-*/healthy/*.json
-            .artifacts/docker-tests/upgrade-survivor-*/crash/*.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/*.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/*.json
           include-hidden-files: true
           if-no-files-found: warn
 
