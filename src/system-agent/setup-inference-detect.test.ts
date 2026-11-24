@@ -241,7 +241,7 @@ describe("setup inference discovery concurrency", () => {
       }
 
       const cli = pendingProbe<InferenceBackendCandidate[]>();
-      fixture.detectInferenceBackends.mockImplementationOnce(cli.run);
+      fixture.detectInferenceBackends.mockImplementationOnce(() => cli.run());
       const pending = detectSetupInference();
       await cli.started;
       await vi.advanceTimersByTimeAsync(30_000);
