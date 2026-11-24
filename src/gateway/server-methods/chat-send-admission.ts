@@ -117,7 +117,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     timeoutMs,
     expectedLeafEntryId,
   } = session;
-  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(session, context);
+  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(
+    session.sessionRoutingChanged,
+    context,
+  );
   const cachedMeta = { cached: true, runId: clientRunId };
   const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();

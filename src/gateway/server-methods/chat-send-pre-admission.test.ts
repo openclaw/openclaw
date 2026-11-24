@@ -322,7 +322,9 @@ it.each([false, true])("scopes Stop by agent and optional session ID (%s)", (str
         ...(strict ? { expectedSessionId: "selected-session" } : {}),
       },
     });
-    if (!normalized.ok) throw new Error(normalized.error);
+    if (!normalized.ok) {
+      throw new Error(normalized.error);
+    }
     params.request = normalized.value;
     Object.assign(params.session, {
       cfg,

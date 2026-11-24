@@ -5,6 +5,7 @@ import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../process/gateway-work-admission.js";
@@ -12,7 +13,6 @@ import { errorShapeFromError } from "../error-shape.js";
 import { formatForLog } from "../ws-log.js";
 import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-active-leaf.js";
 import { SESSION_SETTINGS_CHANGED_ERROR_REASON } from "./chat-send-session-settings.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -30,11 +30,11 @@ export function chatSendIncarnationChangedError() {
 
 /** Bind routing checks to the prepared session rather than rediscovering its target. */
 export function createChatSessionRoutingAssertion(
-  session: Pick<PreparedChatSendSession, "sessionRoutingChanged">,
+  sessionRoutingChanged: (config: OpenClawConfig) => boolean,
   context: Pick<GatewayRequestContext, "getRuntimeConfig">,
 ) {
   return () => {
-    if (session.sessionRoutingChanged(context.getRuntimeConfig())) {
+    if (sessionRoutingChanged(context.getRuntimeConfig())) {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }
   };
