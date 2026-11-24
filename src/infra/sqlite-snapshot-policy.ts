@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
+import { readSqliteImageSizeBytes } from "./sqlite-schema-catalog.js";
 
 export const MAX_SNAPSHOT_ATTEMPTS = 10;
 export const SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS = 30_000;
@@ -32,8 +33,7 @@ export function assertSqliteSnapshotSpace(
           (bytes, suffix) => bytes + sqliteSnapshotSourceFileSize(source + suffix),
           0,
         )
-      : Number(source.prepare("PRAGMA page_count;").get()?.page_count) *
-        Number(source.prepare("PRAGMA page_size;").get()?.page_size);
+      : readSqliteImageSizeBytes(source);
   const space = tryReadDiskSpace(destination);
   if (space && space.availableBytes < requiredBytes) {
     throw Object.assign(
