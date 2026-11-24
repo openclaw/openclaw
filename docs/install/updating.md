@@ -233,10 +233,11 @@ found that earlier receipts did not prove what they claimed.
 The `release-update-survivor` CI lane covers the Linux npm/container cell on
 PRs that touch update, state, update CLI, or launcher owners. It installs the
 PR-head build, builds a distinct successor from the same source with a
-disposable schema migration, then runs `openclaw update`. Separate healthy and
-crash-after-migration cases check the serving version, trial outcome, schema,
-and seeded row counts and contents. The fixture changes scratch source only;
-it does not change the shipped schema or replace the other platform cells.
+disposable schema migration, then runs `openclaw update`. The healthy case
+checks the serving version, committed trial, schema, and seeded row counts
+and contents. Crash-after-migration enforcement is being added with the
+store-custody fix; it is not claimed by this lane yet. The fixture changes
+scratch source only, without changing the shipped schema or other platform cells.
 
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with

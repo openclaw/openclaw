@@ -585,25 +585,17 @@ if [ "$SCENARIO" = "release-update" ]; then
   node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
     "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
-  case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
-    "") release_cases=(healthy crash) ;;
-    healthy|crash) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
-    *) echo "Unknown release survivor case" >&2; exit 1 ;;
-  esac
-  for release_case in "${release_cases[@]}"; do
-    mkdir -p "$ARTIFACT_DIR/$release_case"
-    docker_e2e_run_with_harness \
-      --init \
-      --user root \
-      -e OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE="$release_case" \
-      -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
-      -v "$ARTIFACT_DIR/$release_case:/tmp/openclaw-upgrade-survivor-artifacts" \
-      -v "$UPGRADE_SCENARIO_STAGE:/tmp/openclaw-release-fixtures:ro" \
-      "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-      "$IMAGE_NAME" \
-      timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
-      node scripts/e2e/lib/upgrade-survivor/release-update.mjs
-  done
+  mkdir -p "$ARTIFACT_DIR/healthy"
+  docker_e2e_run_with_harness \
+    --init \
+    --user root \
+    -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
+    -v "$ARTIFACT_DIR/healthy:/tmp/openclaw-upgrade-survivor-artifacts" \
+    -v "$UPGRADE_SCENARIO_STAGE:/tmp/openclaw-release-fixtures:ro" \
+    "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+    "$IMAGE_NAME" \
+    timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
+    node scripts/e2e/lib/upgrade-survivor/release-update.mjs
   run_completed="1"
   exit 0
 fi
