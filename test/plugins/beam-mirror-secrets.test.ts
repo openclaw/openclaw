@@ -63,6 +63,7 @@ async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvi
     const producer = createPluginRecord({
       id: "native-catalog-fixture",
       source: "fixture",
+      configSchema: true,
       origin: "bundled",
       enabled: true,
     });
