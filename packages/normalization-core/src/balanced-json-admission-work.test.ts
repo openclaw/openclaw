@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { measureJsonWork } from "./balanced-json-work.test-support.js";
 import { extractBalancedJsonFragments } from "./balanced-json.js";
 
 describe("balanced JSON extraction", () => {
@@ -757,60 +758,23 @@ describe("balanced JSON extraction", () => {
         const suffix = '{"after":true}';
         const source = parent + (dangling ? "\n" : " ") + suffix;
         const stringEnd = parent.lastIndexOf('"');
-        const push = Array.prototype.push;
-        const pop = Array.prototype.pop;
-        const parse = JSON.parse;
-        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
-        const slice = String.prototype.slice;
-        let pushes = 0;
-        let pops = 0;
-        let parsedUnits = 0;
-        let copiedUnits = 0;
-        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
-        Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
-          pushes += items.length;
-          return Reflect.apply(push, this, items);
-        };
-        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
-        Array.prototype.pop = function (this: unknown[]) {
-          pops++;
-          return Reflect.apply(pop, this, []);
-        };
-        JSON.parse = (text, reviver) => {
-          parsedUnits += text.length;
-          return parse(text, reviver);
-        };
-        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
-        String.prototype.slice = function (this: string, start, end) {
-          const result = Reflect.apply(slice, this, [start, end]);
-          copiedUnits += result.length;
-          return result;
-        };
-        let result: ReturnType<typeof extractBalancedJsonFragments>;
-        try {
-          result = extractBalancedJsonFragments(source, {
-            ...strictRecovery,
-            strictJson: {
-              source,
-              opaqueSpans: dangling
-                ? framing
-                  ? [{ startIndex: 10, endIndex: 9 + framing.length }]
-                  : []
-                : [
-                    { startIndex: 1, endIndex: 1 },
-                    { startIndex: stringEnd, endIndex: stringEnd },
-                  ],
-            },
-          });
-        } finally {
-          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
-          Array.prototype.push = push;
-          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
-          Array.prototype.pop = pop;
-          JSON.parse = parse;
-          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
-          String.prototype.slice = slice;
-        }
+        const { result, pushes, visits, retirements, parsedUnits, copiedUnits } = measureJsonWork(
+          () =>
+            extractBalancedJsonFragments(source, {
+              ...strictRecovery,
+              strictJson: {
+                source,
+                opaqueSpans: dangling
+                  ? framing
+                    ? [{ startIndex: 10, endIndex: 9 + framing.length }]
+                    : []
+                  : [
+                      { startIndex: 1, endIndex: 1 },
+                      { startIndex: stringEnd, endIndex: stringEnd },
+                    ],
+              },
+            }),
+        );
         expect(result).toEqual([
           ...(dangling ? [] : [{ json: parent, startIndex: 0, endIndex: parent.length - 1 }]),
           { json: suffix, startIndex: parent.length + 1, endIndex: source.length - 1 },
@@ -818,9 +782,10 @@ describe("balanced JSON extraction", () => {
         expect(parsedUnits).toBeLessThanOrEqual(2 * source.length + 2 * (depth + 3));
         expect(copiedUnits).toBeLessThanOrEqual(3 * source.length);
         expect(pushes).toBeLessThanOrEqual(10 * source.length);
-        expect(pops).toBeLessThanOrEqual(4 * source.length);
+        expect(visits).toBeLessThanOrEqual(50 * source.length);
+        expect(retirements).toBeLessThanOrEqual(10 * source.length);
         if (dangling) {
-          expect(pops).toBeGreaterThanOrEqual(depth + 1);
+          expect(retirements).toBeGreaterThanOrEqual(depth + 1);
         }
       }
     }

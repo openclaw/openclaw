@@ -11,13 +11,15 @@ type JsonSpan = Omit<BalancedJsonFragment, "json">;
 
 type BalancedJsonOptions = {
   openers?: readonly JsonOpeningDelimiter[];
+  /** Ordinary delimiter scans only; strict/recovery scans retain original quote ownership. */
   skipQuotedOpeners?: boolean;
 };
 
 type BalancedJsonFragmentOptions = BalancedJsonOptions & {
   /** A line-start record can supersede an unmatched opener in preceding prose. */
   recoverAtLineStart?: boolean;
-  /** Admit JSON syntax, optionally binding a same-coordinate discovery view to its original text. */
+  /** Discovery chooses starts; original text owns syntax, quotes and completion.
+   * Only accepted opaque framing suppresses an original endpoint. */
   strictJson?:
     | true
     | {
@@ -31,7 +33,8 @@ type StrictJsonOwner = {
   opener: JsonOpeningDelimiter;
   start: number;
   end: number;
-  stackIndex: number;
+  previous?: number;
+  next?: number;
   warning: boolean;
   matcherContext: JsonStructureContext;
   quote?: QuoteState;
@@ -95,37 +98,64 @@ function advanceQuotedText(
 function createJsonStructureMatcher<T extends { opener: JsonOpeningDelimiter; start: number }>(
   create: (opener: JsonOpeningDelimiter, start: number, parent: T | undefined) => T,
 ) {
-  const stacks: [T[], T[]] = [[], []];
+  type Entry = { value: T; phase: 0 | 1; previous?: number; next?: number };
+  const entries = new Map<number, Entry>();
+  const tails: [number | undefined, number | undefined] = [undefined, undefined];
+  const groups = new Map<number, number[]>();
   const protectedOwners = new Map<number, number>();
   let phase: 0 | 1 = 0;
   let escaped = false;
-  const pop = (stack: T[]) => {
-    const entry = expectDefined(stack.pop(), "JSON structure entry");
-    protectedOwners.delete(entry.start);
-    return entry;
+  const last = () => entries.get(tails[phase] ?? -1)?.value;
+  const remove = (start: number): T | undefined => {
+    const entry = entries.get(start);
+    if (!entry) {
+      return;
+    }
+    const previous = entries.get(entry.previous ?? -1);
+    const next = entries.get(entry.next ?? -1);
+    if (previous) {
+      previous.next = entry.next;
+    }
+    if (next) {
+      next.previous = entry.previous;
+    } else {
+      tails[entry.phase] = entry.previous;
+    }
+    entries.delete(start);
+    protectedOwners.delete(start);
+    return entry.value;
   };
   const isProtected = (entry: T | undefined, index: number) =>
     (protectedOwners.get(entry?.start ?? -1) ?? -1) >= index;
   // Either quote parity may own a candidate after arbitrary prose. Each opener
   // belongs to one forest. Callers decide which original bytes participate.
   return {
-    advance(char: string | undefined, index: number): T | undefined {
+    advance(char: string | undefined, index: number, owner?: number): T | undefined {
       let closed: T | undefined;
       if (char === '"' && !escaped) {
         phase = phase === 0 ? 1 : 0;
       } else if (char === "{" || char === "[") {
-        const stack = stacks[phase];
-        stack.push(create(char, index, stack.at(-1)));
+        const previous = entries.get(tails[phase] ?? -1);
+        const value = create(char, index, previous?.value);
+        entries.set(index, { value, phase, previous: tails[phase] });
+        if (previous) {
+          previous.next = index;
+        }
+        tails[phase] = index;
+        if (owner !== undefined) {
+          const group = groups.get(owner) ?? [];
+          group.push(index);
+          groups.set(owner, group);
+        }
       } else if (char === "}" || char === "]") {
-        const stack = stacks[phase];
         // Exposed string delimiters cannot retire a native-valid owner early.
-        if (!isProtected(stack.at(-1), index)) {
-          if (stack.at(-1)?.opener === (char === "}" ? "{" : "[")) {
-            closed = pop(stack);
+        if (!isProtected(last(), index)) {
+          if (last()?.opener === (char === "}" ? "{" : "[")) {
+            closed = remove(expectDefined(tails[phase], "JSON structure tail"));
           } else {
             // Each mismatched forest is discarded once, without an ancestry scan.
-            while (stack.length && !isProtected(stack.at(-1), index)) {
-              pop(stack);
+            while (last() && !isProtected(last(), index)) {
+              remove(expectDefined(tails[phase], "JSON structure tail"));
             }
           }
         }
@@ -139,15 +169,15 @@ function createJsonStructureMatcher<T extends { opener: JsonOpeningDelimiter; st
     protect(start: number, end: number) {
       protectedOwners.set(start, end);
     },
-    retireFrom(start: number, context: JsonStructureContext) {
-      // Lexical retirement supersedes descendants and their quote contribution.
-      // The owner's checkpoint survives structural warning expiry; restoring a
-      // global parity would corrupt a crossing owner in the other forest.
-      for (const stack of stacks) {
-        while (stack.length && expectDefined(stack.at(-1), "JSON structure entry").start >= start) {
-          pop(stack);
-        }
+    retire(owner: number) {
+      // Entries opened inside a lexical owner's quote share its lifetime.
+      // Crossing owners have separate groups, even in the other quote forest.
+      for (const start of groups.get(owner) ?? []) {
+        remove(start);
       }
+      groups.delete(owner);
+    },
+    restore(context: JsonStructureContext) {
       phase = context.phase;
       escaped = context.escaped;
     },
@@ -220,7 +250,8 @@ function extractStrictJsonFragments(
   const validEnds = indexOriginalJsonContainers(source);
   const candidates: (JsonSpan & { visible: boolean })[] = [];
   const candidateClosures = new Map<number, (typeof candidates)[number]>();
-  const owners: StrictJsonOwner[] = [];
+  const owners = new Map<number, StrictJsonOwner>();
+  let tail: number | undefined;
   const ownerClosures = new Map<number, StrictJsonOwner>();
   const warnings = new Map<number, StrictJsonOwner>();
   const warningMatcher = createJsonStructureMatcher((opener, start) => ({ opener, start }));
@@ -231,22 +262,38 @@ function extractStrictJsonFragments(
   let opaqueIndex = 0;
   let spanEnd = -1;
   let spanOpaque = false;
-  const retireOwnersFrom = (stackIndex: number) => {
-    const first = expectDefined(owners[stackIndex], "first retiring JSON owner");
-    warningMatcher.retireFrom(first.start, first.matcherContext);
-    while (owners.length > stackIndex) {
-      const owner = expectDefined(owners.pop(), "retiring JSON owner");
+  const retireOwnersFrom = (first: StrictJsonOwner, indexed = false) => {
+    let owner: StrictJsonOwner | undefined = first;
+    while (owner) {
+      const previous = owners.get(owner.previous ?? -1);
+      const next = owners.get(owner.next ?? -1);
+      if (previous) {
+        previous.next = owner.next;
+      }
+      if (next) {
+        next.previous = owner.previous;
+      } else {
+        tail = owner.previous;
+      }
+      owners.delete(owner.start);
+      warningMatcher.retire(owner.start);
       activeOpeners[owner.opener] -= 1;
       warningDepth -= Number(owner.warning);
-      if (owner.end >= 0) {
-        ownerClosures.delete(owner.end);
-      }
+      ownerClosures.delete(owner.end);
       warnings.delete(owner.start);
+      // An indexed end abandons malformed descendants, not a crossing valid
+      // owner. Each removed link is visited once; survivors are never rescanned.
+      if (indexed && next && next.end >= 0) {
+        return true;
+      }
+      owner = next;
     }
+    warningMatcher.restore(first.matcherContext);
+    return false;
   };
   for (let index = 0; index < source.length; index += 1) {
-    const parent = owners.at(-1);
-    const quote = parent ? parent.quote : rootQuote;
+    let parent = owners.get(tail ?? -1);
+    let quote = parent ? parent.quote : rootQuote;
     const char = source[index];
     const atLineStart = lineStart;
     const entering = opaqueSpans[opaqueIndex];
@@ -264,17 +311,20 @@ function extractStrictJsonFragments(
       (opts.recoverAtLineStart === true && char === "\r") ||
       (lineStart && (opaque || char === " " || char === "\t" || char === "\r"));
 
-    // Candidate completion and source ownership are independent events. Hidden
-    // endpoints suppress emission, but still retire the original source owner.
+    // Discovery masks choose starts only. Accepted opaque framing suppresses
+    // emission at an endpoint, but still retires its original source owner.
     const candidate = candidateClosures.get(index);
     if (candidate) {
       candidate.visible = !opaque;
       candidateClosures.delete(index);
     }
     const closingOwner = ownerClosures.get(index);
-    if (closingOwner && owners[closingOwner.stackIndex] === closingOwner) {
-      retireOwnersFrom(closingOwner.stackIndex);
-      continue;
+    if (closingOwner) {
+      if (!retireOwnersFrom(closingOwner, true)) {
+        continue;
+      }
+      parent = owners.get(tail ?? -1);
+      quote = parent ? parent.quote : rootQuote;
     }
 
     // Framing cannot create quotes, consume warning delimiters, or influence
@@ -305,26 +355,31 @@ function extractStrictJsonFragments(
     if (!consumed && (char === "}" || char === "]")) {
       const opener = char === "}" ? "{" : "[";
       if (activeOpeners[opener] > 0) {
-        let survivor = owners.length - 1;
-        let survivingOwner = expectDefined(owners[survivor], "surviving JSON owner");
+        let survivingOwner = expectDefined(owners.get(tail ?? -1), "surviving JSON owner");
         while (survivingOwner.opener !== opener && survivingOwner.end < index) {
-          survivor--;
-          survivingOwner = expectDefined(owners[survivor], "surviving JSON owner");
+          survivingOwner = expectDefined(
+            owners.get(survivingOwner.previous ?? -1),
+            "surviving JSON owner",
+          );
         }
         if (survivingOwner.end < index) {
           // Consume an actual lexical exit before its token can expire an
           // enclosing warning through a retired child's stale quote phase.
-          retireOwnersFrom(survivor);
+          retireOwnersFrom(survivingOwner);
           continue;
         }
-        if (survivor + 1 < owners.length) {
-          retireOwnersFrom(survivor + 1);
+        if (survivingOwner.next !== undefined) {
+          retireOwnersFrom(expectDefined(owners.get(survivingOwner.next), "abandoned JSON owner"));
         }
         // A protected survivor still owns this token; its matcher protection
         // handles it below without replaying a delimiter after retirement.
       }
     }
-    const matched = warningMatcher.advance(char, index);
+    const matched = warningMatcher.advance(
+      char,
+      index,
+      !consumed && (char === "{" || char === "[") ? index : parent?.start,
+    );
     const closingWarning = matched && warnings.get(matched.start);
     if (closingWarning) {
       // Expiry removes only this contribution, not crossing or unfinished
@@ -364,13 +419,18 @@ function extractStrictJsonFragments(
         opener: char,
         start: index,
         end,
-        stackIndex: owners.length,
+        previous: tail,
         // Valid containers are resolved by final emitted containment. Malformed
         // warnings still restrict inline recovery, including filtered kinds.
         warning: end < 0 && openers.includes(char),
         matcherContext: warningMatcher.checkpoint(),
       };
-      owners.push(owner);
+      const previous = owners.get(tail ?? -1);
+      if (previous) {
+        previous.next = index;
+      }
+      owners.set(index, owner);
+      tail = index;
       activeOpeners[char]++;
       warningDepth += Number(owner.warning);
       if (end >= 0) {

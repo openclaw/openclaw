@@ -1,4 +1,4 @@
 # Complete-record recovery, original JSON syntax and atomic external framing.
 # Covers default compatibility, malformed input, CRLF and framing/source-mask boundaries.
-# Native formatting leaves 2055 net regression-test lines against the field-policy parent.
-1655
+# Native formatting leaves 2173 net regression-test lines against the field-policy parent.
+1773
