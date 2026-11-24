@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
@@ -25,7 +25,7 @@ export function createMediaModelPolicyFixture(
     },
   };
   let active = true;
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes: ["operator.write"],
     retain: () => {

@@ -657,7 +657,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             <Show
               when={
                 this.context.theme.branding.communityLinks &&
-                this.context.config.current.communityInvite
+                this.context.config.current.communityInvite &&
+                this.communityInviteAllowed
               }
             >
               <SidebarCommunityInvite

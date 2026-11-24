@@ -122,6 +122,7 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("process supervisor", () => {
@@ -157,10 +158,11 @@ describe("process supervisor", () => {
     expect(failure.stack).toContain("cleanup identity lost");
   });
 
-  it.each(["child", "pty", "external"] as const)(
+  it.each(["child", "pty", "external", "sandbox-worker", "sandbox-gateway"] as const)(
     "enforces host memory ownership for %s",
     async (mode) => {
       vi.useFakeTimers();
+      vi.stubGlobal("WORKER_DEPLOY_BUILD", mode === "sandbox-worker");
       mockProcessPlatform("linux");
       memoryOwner.setBudget({ memoryBytes: 128 * 1024, swapBytes: 0 });
       const read = readMemory.mockReturnValue(Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
@@ -176,10 +178,11 @@ describe("process supervisor", () => {
         argv: ["fixture"],
         executionIntent: "agent-tool",
         ...(mode === "external" ? { cleanupOwnership: "external" } : {}),
+        ...(mode.startsWith("sandbox-") ? { workerMemoryBoundary: "sandbox" as const } : {}),
       });
       try {
         await vi.advanceTimersByTimeAsync(1000);
-        if (mode === "external") {
+        if (mode === "external" || mode === "sandbox-worker") {
           expect(read).not.toHaveBeenCalled();
           adapter.settle(0);
         } else {

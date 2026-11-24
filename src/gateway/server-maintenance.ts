@@ -357,8 +357,9 @@ export function startGatewayMaintenanceTimers(params: {
     scheduleTelemetry(generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS));
   }
   schedulePeriodic("installation", TICK_INTERVAL_MS, () =>
-    checkGatewayInstallationReplacement().catch((error: unknown) =>
-      params.logHealth.error(`installation check failed: ${formatError(error)}`),
+    checkGatewayInstallationReplacement(params.resolveGatewayContext?.()?.getReadiness).catch(
+      (error: unknown) =>
+        params.logHealth.error(`installation check failed: ${formatError(error)}`),
     ),
   );
   schedulePeriodic("host-thaw", TICK_INTERVAL_MS, () =>

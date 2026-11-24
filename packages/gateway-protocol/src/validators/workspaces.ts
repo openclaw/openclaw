@@ -118,6 +118,18 @@ export const validateProjectsRemoveParams = createProtocolValidator(
   S.ProjectsRemoveParamsSchema,
   Checks.isProjectsRemoveParams,
 );
+export const validateProjectsMoveSessionOptionsParams = createProtocolValidator(
+  S.ProjectsMoveSessionOptionsParamsSchema,
+  Checks.isProjectsMoveSessionOptionsParams,
+);
+export const validateProjectsMoveSessionParams = createProtocolValidator(
+  S.ProjectsMoveSessionParamsSchema,
+  Checks.isProjectsMoveSessionParams,
+);
+export const validateProjectsRenameParams = createProtocolValidator(
+  S.ProjectsRenameParamsSchema,
+  Checks.isProjectsRenameParams,
+);
 export const validateWorktreesListParams = createProtocolValidator(
   S.WorktreesListParamsSchema,
   Checks.isWorktreesListParams,

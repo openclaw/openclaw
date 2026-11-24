@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
@@ -19,6 +20,8 @@ export type InputProvenance = {
   sourcePromptPrefix?: string;
   jobId?: string;
   runId?: string;
+  /** A host tool handoff's committed result for model-history replay. */
+  completedToolCall?: { id: string; result: string };
 };
 
 /** Native input attribution, not canonical chat visibility or execution authority. */
@@ -117,6 +120,14 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     const normalized = normalizeOptionalString(record[key]);
     if (normalized) {
       provenance[key] = normalized;
+    }
+  }
+  if (provenance.kind === "internal_system" && provenance.sourceTool === "tool_handoff") {
+    const call = asOptionalObjectRecord(record.completedToolCall);
+    const id = normalizeOptionalString(call?.id);
+    const result = normalizeOptionalString(call?.result);
+    if (id && result) {
+      provenance.completedToolCall = { id, result };
     }
   }
   return provenance;

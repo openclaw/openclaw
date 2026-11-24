@@ -81,7 +81,6 @@ export async function admitWorkerStopChat(params: {
       backingSessionId: sessionId,
       agentId,
       resolvedSessionModel: { provider: "openai", model: "gpt-5.6-luna" },
-      resolvedSessionAuthProvider: "openai",
       activeRunScopeKey: sessionKey,
       timeoutMs: 600000,
       now,

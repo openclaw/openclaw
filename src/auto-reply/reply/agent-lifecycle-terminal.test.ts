@@ -2,10 +2,12 @@ import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
+import { ProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { decodePostgresError } from "../../infra/postgres-sync/protocol.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { ProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
@@ -180,6 +182,20 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       httpStatus: 401,
     });
     expect(JSON.stringify(event)).not.toContain(rawDiagnostic);
+  });
+
+  it("names the provider and an auth failure when a saved sign-in needs a new login", () => {
+    const terminal = createTerminal();
+
+    terminal.emit(
+      "error",
+      new ProviderAuthError("missing-provider-auth", "gemini", "The gemini sign-in has ended.", {
+        cause: new ProviderAuthFailure("refresh_rejected"),
+      }),
+    );
+
+    // Clients key their sign-in action (Control UI: Open Models) on this cause.
+    expect(emitted().data.errorObservation).toEqual({ provider: "gemini", failoverReason: "auth" });
   });
 
   it.each(

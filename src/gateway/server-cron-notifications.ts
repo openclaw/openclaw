@@ -34,6 +34,7 @@ import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
   runWithGatewayDetachedWorkContinuation,
@@ -105,32 +106,29 @@ async function runGatewayCronFailureRepair(
     if (!agentId) {
       throw new Error("Cron failure repair owner conversation names no agent.");
     }
-    const { target, release } = await captureCronJobTurnTarget({
+    const target = await captureCronJobTurnTarget({
       job,
       agentId,
       sessionKey: request.sessionKey,
       context,
     });
-    let receipt: ReturnType<typeof enqueueSessionEventForHost>;
-    try {
-      receipt = enqueueSessionEventForHost(request.message, {
-        agentId,
-        sessionKey: request.sessionKey,
-        source: "cron_failure_repair",
-        contextKey: `cron-failure-repair:${request.repairId}`,
-        expectedTarget: target,
-        // Only the agent's authored reply reaches the chat; the next alert owns escalation.
-        suppressErrorDelivery: true,
-        // The scheduler's repair brief permits silence; public provenance does not grant it.
-        replyExpectation: "optional",
-      });
-      const accepted = await receipt.accepted;
-      if (!accepted.ok) {
-        throw new Error(`Cron failure repair was not accepted: ${accepted.error}`);
+    const receipt = enqueueSessionEventForHost(request.message, {
+      agentId,
+      sessionKey: request.sessionKey,
+      source: "cron_failure_repair",
+      contextKey: `cron-failure-repair:${request.repairId}`,
+      expectedTarget: target,
+      // Only the agent's authored reply reaches the chat; the next alert owns escalation.
+      suppressErrorDelivery: true,
+      // The scheduler's repair brief permits silence; public provenance does not grant it.
+      replyExpectation: "optional",
+    });
+    const accepted = await receipt.accepted;
+    if (!accepted.ok) {
+      if (accepted.cause instanceof Error && isOperatorAuthorityUnavailable(accepted.cause)) {
+        throw accepted.cause;
       }
-    } finally {
-      // The accepted event retains its own custody of the restored operator source.
-      release();
+      throw new Error(`Cron failure repair was not accepted: ${accepted.error}`);
     }
     const outcome = await withTimeout(
       receipt.settled,

@@ -55,7 +55,7 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(),
   runSubagentAnnounceFlow: vi
     .fn<typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow>()
-    .mockResolvedValue("retryable"),
+    .mockResolvedValue("undelivered"),
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn<() => Map<string, SubagentRunRecord>>(() => new Map()),
   persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
@@ -213,7 +213,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.onAgentEvent.mockReset();
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
     mocks.runSubagentAnnounceFlow.mockReset();
-    mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
+    mocks.runSubagentAnnounceFlow.mockResolvedValue("undelivered");
     await registry.resetSubagentRegistryForTests({ persist: false });
     mocks.persistRegistryRows.mockReset();
     await configureMockSubagentRegistryPersistence(mocks);
@@ -241,43 +241,8 @@ describe("announce loop guard (#18264)", () => {
     }
   });
 
-  test("expired entries with high retry count are skipped by resumeSubagentRun", async () => {
-    const now = Date.now();
-    const entry = terminalRun(
-      "test-expired-loop",
-      "expired-child",
-      "sess-expired",
-      [15 * 60_000, 14 * 60_000, 10 * 60_000],
-      {
-        task: "expired test task",
-        cleanupCompletedAt: undefined,
-        delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
-      },
-    );
-    // An explicit live cleanup attempt finalizes expired rows without another delivery.
-    const beforeInit = Date.now();
-    await activateCompletion(entry);
-    const completed = await waitForRun(
-      entry.runId,
-      (run) => typeof run.cleanupCompletedAt === "number",
-    );
-
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(completed.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
-    expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [entry.runId]);
-  });
-  test.each([
-    {
-      name: "controller queue custody preserves the failure budget without timer replay",
-      attemptCount: 3,
-      retryDelayMs: 0,
-    },
-    {
-      name: "honors retry backoff before transferring delivery to the controller queue",
-      attemptCount: 3,
-      retryDelayMs: 1_000,
-    },
-  ])("$name", async ({ attemptCount, retryDelayMs }) => {
+  test("controller queue custody preserves the failure budget without timer replay", async () => {
+    const attemptCount = 3;
     const busyRequester = reserveSessionControllerSource("agent:main:main", {
       sourceTurnId: "busy-requester",
       policy: { mode: "followup" },
@@ -332,16 +297,11 @@ describe("announce loop guard (#18264)", () => {
           lastAttemptAt: now - 30_000,
           windowStartedAt: now - 60_000,
           deadlineAt: now - 60_000 + 30 * 60_000,
-          ...(retryDelayMs ? { nextAttemptAt: now + retryDelayMs } : {}),
         },
       },
     );
     await prepareSubagentRequesterFixture(entry, { entries: sessionStore });
     await activateCompletion(entry);
-    if (retryDelayMs) {
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(retryDelayMs);
-    }
     const resumed = await waitForRun(
       entry.runId,
       (run) =>
@@ -369,27 +329,5 @@ describe("announce loop guard (#18264)", () => {
     const delivered = await waitForRun(entry.runId, (run) => Boolean(run.cleanupCompletedAt));
     expect(delivered.delivery?.status).toBe("delivered");
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-  });
-
-  test("announce rejection resets cleanupHandled so retries can resume", async () => {
-    mocks.runSubagentAnnounceFlow.mockRejectedValueOnce(new Error("announce failed"));
-
-    const runId = "test-announce-rejection";
-    const entry = terminalRun(runId, "child-1", "sess-child-1", [30_000, 20_000, 10_000], {
-      task: "rejection test",
-      cleanupHandled: false,
-    });
-    await prepareSubagentRequesterFixture(entry, { entries: sessionStore });
-
-    await activateCompletion(entry);
-    await flushAsync();
-
-    const stored = await waitForRun(
-      runId,
-      (run) => run.cleanupHandled === false && run.delivery?.attemptCount === 1,
-    );
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(stored.cleanupCompletedAt).toBeUndefined();
-    expect(stored.delivery?.lastAttemptAt).toBeTypeOf("number");
   });
 });

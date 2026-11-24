@@ -61,9 +61,12 @@ async function startUpdate(page: Page) {
   await openUpdateConfirmation(page);
   await updateDialog(page).getByRole("button", { name: "Update and restart", exact: true }).click();
 }
-async function openUpdateConfirmation(page: Page): Promise<void> {
+async function openUpdateConfirmation(page: Page, recorded = false): Promise<void> {
   const updateIssue = await openUpdateIssue(page);
-  await updateIssue.locator(".sidebar-update-card__action").click();
+  const action = recorded
+    ? updateIssue.getByRole("button", { name: "View update details", exact: true })
+    : updateIssue.locator(".sidebar-update-card__action");
+  await action.click();
   await waitForConfirmModal(page);
 }
 async function openUpdateIssue(page: Page) {
@@ -166,8 +169,11 @@ suite.define(() => {
         .getByRole("button", { name: "Close", exact: true })
         .click();
       const updateIssue = await openUpdateIssue(page);
-      await text(updateIssue, restartingText).first().waitFor();
-      await updateIssue.locator(".sidebar-update-card__action").click();
+      await text(
+        updateIssue.locator("summary"),
+        "OpenClaw update in progress: restarting.",
+      ).waitFor();
+      await updateIssue.getByRole("button", { name: "View update details", exact: true }).click();
       await text(updateDialog(page), restartingText).waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(await page.locator(".sidebar-issues-button__count").count()).toBe(1);
@@ -224,6 +230,10 @@ suite.define(() => {
 
       try {
         const dialog = updateDialog(page);
+        await dialog.locator('[data-run-status="failed"]').waitFor();
+        const diagnostics = dialog.locator(".update-run-view__diagnostics");
+        expect(await diagnostics.getAttribute("open")).toBeNull();
+        await diagnostics.locator("summary").click();
         await text(dialog.locator(".update-run-view__details"), expectedText).waitFor();
         expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
           "fail",
@@ -283,7 +293,7 @@ suite.define(() => {
       try {
         await announceUpdate(page, gateway);
 
-        await openUpdateConfirmation(page);
+        await openUpdateConfirmation(page, run !== null);
         if (run) {
           await button(page, "Retry update").click();
         }

@@ -565,8 +565,8 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       "Immutable installations require the native immutable openclaw update entry point.",
     );
   }
-  if (opts.sha !== undefined) {
-    throw new Error("--sha requires an adopted immutable installation.");
+  if (opts.sha !== undefined && installKind !== "git") {
+    throw new Error("--sha requires a Git checkout or an adopted immutable installation.");
   }
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     throw new Error(formatExternalSupervisorUpdateRequired());

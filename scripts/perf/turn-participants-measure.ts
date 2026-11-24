@@ -27,6 +27,7 @@ const { createReplyTurnParticipants } =
 const { createAdmittedRunOperatorAuthority } =
   await import("../../src/agents/admitted-run-context.js");
 const authority = createAdmittedRunOperatorAuthority({
+  canonicalIdentity: null,
   profileId: "synthetic-profile",
   scopes: ["operator.admin"],
   assertCurrent() {},

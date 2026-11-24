@@ -363,15 +363,18 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
 
 // mock-isolation: mutable fixtures must stay independent of the process config publication owner.
 vi.mock("../config/runtime-snapshot.js", async () => {
-  const { hashRuntimeConfigValue } = await vi.importActual<
-    typeof import("../config/runtime-snapshot.js")
-  >("../config/runtime-snapshot.js");
+  const actual = await vi.importActual<typeof import("../config/runtime-snapshot.js")>(
+    "../config/runtime-snapshot.js",
+  );
   const { createMutableRuntimeSnapshotMock } =
     await import("./agent-command.runtime-snapshot.test-support.js");
-  return createMutableRuntimeSnapshotMock({
-    hashRuntimeConfigValue,
-    getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-  });
+  return {
+    ...actual,
+    ...createMutableRuntimeSnapshotMock({
+      hashRuntimeConfigValue: actual.hashRuntimeConfigValue,
+      getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+    }),
+  };
 });
 
 vi.mock("../config/sessions.js", () => ({
@@ -1863,6 +1866,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each([
+    { name: "an operator turn", sourceRole: undefined, touchActivity: true },
+    {
+      name: "a child's sessions_send to its requester",
+      sourceRole: "subagent",
+      touchActivity: false,
+    },
+  ] as const)("records unread-worthy activity for $name", async ({ sourceRole, touchActivity }) => {
+    setupSuccessfulAttempt();
+    const sessionKey = "agent:default:main";
+    setupStoredSession({}, undefined, sessionKey);
+    state.resolvedSessionKeyMock = sessionKey;
+
+    await runBasicAgentCommand({
+      sessionKey,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceSessionKey: "agent:default:subagent:child",
+        ...(sourceRole ? { sourceRole } : {}),
+      },
+    });
+
+    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ touchActivity }),
+    );
+  });
 
   it.each(["current", "persisted", "legacy", "probe"] as const)(
     "resolves the channel model from %s context",

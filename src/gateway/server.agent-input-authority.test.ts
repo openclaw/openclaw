@@ -32,7 +32,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
@@ -194,7 +194,7 @@ describe("spawn input ownership transfer", () => {
         },
         (resolved) => expect(resolved).toMatchObject({ ok: true, key: childKey }),
       );
-      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      const operator = await prepareGatewayOperatorRunAuthority({ client, context });
       if (!operator) {
         throw new Error("Expected original operator authority");
       }
@@ -372,7 +372,7 @@ describe("spawn input ownership transfer", () => {
           },
         );
       }
-      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      const operator = await prepareGatewayOperatorRunAuthority({ client, context });
       if (!operator) {
         throw new Error("Expected operator-owned Gateway admission");
       }

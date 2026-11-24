@@ -40,6 +40,7 @@ const serialGatewayFiles =
       "required-human-action",
       "model-provider-remove-offline",
       "provider-browser-login-first-model",
+      "provider-browser-login-leave",
     )
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");

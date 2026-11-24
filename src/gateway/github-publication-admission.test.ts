@@ -37,7 +37,7 @@ import {
 } from "./github-publication-requester.test-support.js";
 import { readPersonalGitHubPublicationAsync } from "./github-publication-store-async.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -399,7 +399,7 @@ describe("project issue creation through the guest tool and registered Gateway m
       makeContextParams({ getAttachedGatewayMethodRegistry: () => registry }),
     );
     const invoke = async (args: Record<string, unknown>, client = f.guestSource.client) => {
-      const operator = await captureGatewayOperatorRunAuthority({
+      const operator = await prepareGatewayOperatorRunAuthority({
         client,
         context: f.guestSource.context,
       });

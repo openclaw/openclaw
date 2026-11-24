@@ -4,10 +4,11 @@ import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 
 export function* applySessionContextWindowPatch(params: {
-  resolveDefaultModel: () => ModelRef;
+  resolveDefaultModel: () => ModelRef | undefined;
   loadModelCatalog: () => Generator<
     void,
     ModelCatalogEntry[] | undefined,
@@ -45,8 +46,11 @@ export function* applySessionContextWindowPatch(params: {
     delete params.next.contextWindow;
     return { ok: true };
   }
-  const provider = params.next.providerOverride ?? params.resolveDefaultModel().provider;
-  const model = params.next.modelOverride ?? params.resolveDefaultModel().model;
+  const provider = params.next.providerOverride ?? params.resolveDefaultModel()?.provider;
+  const model = params.next.modelOverride ?? params.resolveDefaultModel()?.model;
+  if (!provider || !model) {
+    return { ok: false, error: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   const catalog = yield* params.loadModelCatalog();
   const logical = catalog
     ? findModelCatalogEntry(catalog, { provider, modelId: model })

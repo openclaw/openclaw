@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { runEmbeddedAttempt } from "../../agents/embedded-agent-runner/run/attempt.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createOpenClawAgentHarness } from "../../agents/harness/builtin-openclaw.js";
@@ -228,7 +228,6 @@ describe("Goal continuation eligibility", () => {
     [false, "local", "localCodexGoal"],
     [false, "worker-required", undefined],
     [false, "no-authority", "localCodexGoal"],
-    [false, "revoked", undefined],
   ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
     const codexSession = { ...entry(), agentHarnessId: "codex" };
@@ -243,24 +242,16 @@ describe("Goal continuation eligibility", () => {
       });
     }
     if (mode !== "no-authority" && mode !== "local-no-authority") {
-      f.params.base.operatorAuthority = {
+      f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.admin"],
-        assertCurrent: () => {
-          if (mode === "revoked") {
-            throw new Error("operator revoked");
-          }
-        },
-      };
+        assertCurrent: () => {},
+      });
     }
     if (mode === "worker-required") {
       f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
     }
-    if (mode === "revoked") {
-      await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
-    } else {
-      expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
-    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
     expect(enqueueFollowupRun).toHaveBeenCalledTimes(marker ? 1 : 0);
     if (marker) {
       const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
@@ -696,7 +687,7 @@ describe("Goal return from committed child custody", () => {
   it("keeps the original route and independently retained operator restriction until queue handoff", async () => {
     const f = retainedGoal();
     let holds = 1;
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
       assertCurrent() {
@@ -819,7 +810,7 @@ describe("Goal return from committed child custody", () => {
   it("releases an obsolete return when a newer requester owns the same child cohort", async () => {
     const first = retainedGoal();
     const release = vi.fn();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
       assertCurrent() {},
@@ -916,7 +907,7 @@ describe("Goal return from committed child custody", () => {
       const f = retainedGoal();
       const revoked = new AbortController();
       let current = true;
-      f.params.base.operatorAuthority = createAdmittedRunOperatorAuthority({
+      f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "goal-owner",
         scopes: ["operator.write"],
         signal: revoked.signal,

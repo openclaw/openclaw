@@ -8,7 +8,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveSessionAgentIdsStrict } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
-import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -191,7 +191,7 @@ export async function forkPluginSession<T>(input: {
   // Lazy: the fork runtime stays out of the Gateway startup chunk.
   const [
     { readActiveTranscriptEntryAnchorAsync },
-    { readSessionForkTurn, prepareSessionFork, runSessionFork },
+    { readSessionForkTurn, prepareSessionFork, resolveSessionForkModel, runSessionFork },
     { SessionManager },
   ] = await Promise.all([
     import("../config/sessions/session-transcript-anchor-read.js"),
@@ -227,28 +227,32 @@ export async function forkPluginSession<T>(input: {
     // tool-free fork runs nothing, so it proceeds on the session's own facts.
     throw new Error(`Session "${session.key}" no longer holds the input of entry "${entryId}".`);
   }
-  const sessionModel = resolveSessionModelRef(cfg, session.entry, agentId);
-  const turnModel = turn?.model ?? sessionModel;
+  const {
+    sessionModel,
+    turnModel,
+    model: sessionForkModel,
+  } = resolveSessionForkModel({
+    cfg,
+    agentId,
+    entry: session.entry,
+    turnModel: turn?.model,
+  });
   const override = input.override ? splitTrailingAuthProfile(input.override.model) : undefined;
-  // On the session's own provider the fork runs on the credential the session's turns use (a
-  // user pin or an automatic rotation): its internal session has no stored selection, so
-  // without this it could bill another profile and miss the turn's cache.
-  const sessionProfile =
-    turnModel.provider === sessionModel.provider
-      ? session.entry.authProfileOverride?.trim()
-      : undefined;
   const model = override
     ? {
         provider: expectDefined(input.override?.provider, "override provider"),
         model: override.model,
         ...(override.profile ? { authProfileId: override.profile } : {}),
       }
-    : { ...turnModel, ...(sessionProfile ? { authProfileId: sessionProfile } : {}) };
+    : sessionForkModel;
+  if (!model) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   // Running on the turn's or session's own model needs no override trust.
   const ownModel =
     !override?.profile &&
     [turnModel, sessionModel].some(
-      (own) => own.provider === model.provider && own.model === model.model,
+      (own) => own !== undefined && own.provider === model.provider && own.model === model.model,
     );
   if (override && !ownModel) {
     expectDefined(input.authorizeModelOverride, "model override authorization")(

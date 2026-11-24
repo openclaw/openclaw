@@ -67,7 +67,26 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
     }
   };
   return (
-    <Show when={review() || state().error || state().busy === "reviewing"}>
+    <Show
+      when={review()}
+      fallback={
+        <Show when={!state().busy && state().error}>
+          {(error) => (
+            <InlineAlert
+              tone="danger"
+              title={t("templatesDraft.draftUnavailable")}
+              action={
+                <button type="button" class="btn btn--sm" onClick={() => props.flow.retryReview()}>
+                  {t("templatesDraft.tryAgain")}
+                </button>
+              }
+            >
+              {error()}
+            </InlineAlert>
+          )}
+        </Show>
+      }
+    >
       <section class="template-publish-card" aria-label={t("templatesDraft.publishTitle")}>
         <header>
           <span class="template-art">
@@ -163,7 +182,12 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
             </Match>
             <Match when={status() === "pending" && state().publication?.url}>
               {(url) => (
-                <a class="btn primary" href={url()} target="_blank" rel="noopener noreferrer">
+                <a
+                  class="btn primary"
+                  href={`${url()}?view=submission`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   {t("templatesDraft.viewSubmission")}
                 </a>
               )}

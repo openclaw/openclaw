@@ -888,7 +888,9 @@ describe("scheduled message actions", () => {
           text = embeddedModel.observation.toolOutput;
         }
         if (disableBeforeResponse === 429) {
-          expect(text).toMatch(/authority is no longer active|disabled by operator|abort|cancel/i);
+          expect(text).toMatch(
+            /authority is no longer active|disabled by operator|message turn has ended|abort|cancel/i,
+          );
         } else {
           assertToolResult(expectDefined(text, "scheduled provider tool result"));
         }

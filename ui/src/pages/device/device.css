@@ -19,7 +19,3 @@
   flex-wrap: wrap;
   gap: var(--space-3);
 }
-
-.device-extension-setup p {
-  margin: 0;
-}

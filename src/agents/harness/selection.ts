@@ -521,7 +521,6 @@ export async function runAgentHarnessAttempt(
 
 function assertHarnessModelPolicySupport(harness: AgentHarness, params: EmbeddedRunAttemptParams) {
   const authority = readRunOperatorAuthority(params);
-  authority?.assertCurrent();
   const error = !isBuiltInOpenClawAgentHarness(harness)
     ? resolveAgentHarnessOperatorPolicyError(harness, authority)
     : undefined;
