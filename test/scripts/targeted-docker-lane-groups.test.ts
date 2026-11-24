@@ -347,41 +347,54 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
   });
 });
 
-it("prioritizes long families and preserves every CLI row and the remaining order", async () => {
-  const { execFileSync } = await import("node:child_process");
-  const groups: ReturnType<typeof planTargetedDockerLaneGroups> = JSON.parse(
-    execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        LANES:
-          "doctor-switch published-upgrade-survivor update-first-hop-compat-2026.9.2 update-first-hop-compat-2026.9.1 root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update",
-        GROUP_SIZE: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.9.3 2026.9.4",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base legacy-operator-state",
-      },
-    }),
-  );
-  const lane = (name: string) => ({ docker_lanes: name, label: name });
-  const scenario = (version: string, name: string, index: number) => ({
-    docker_lanes: "published-upgrade-survivor",
-    label: `published-upgrade-survivor-${version}-scenarios-${index}`,
-    published_upgrade_survivor_baselines: `openclaw@${version}`,
-    published_upgrade_survivor_scenarios: name,
-    timeout_minutes: 90,
-  });
-  expect(groups).toEqual([
-    lane("update-first-hop-compat-2026.9.2"),
-    lane("update-first-hop-compat-2026.9.1"),
-    { ...lane("update-restart-auth"), timeout_minutes: 75 },
-    lane("plugin-update"),
-    scenario("2026.9.4", "legacy-operator-state", 2),
-    scenario("2026.9.3", "legacy-operator-state", 2),
-    lane("root-managed-vps-upgrade"),
-    lane("doctor-switch"),
-    scenario("2026.9.4", "base", 1),
-    scenario("2026.9.3", "base", 1),
-    lane("plugins-offline"),
-  ]);
-});
+it.each([32, 48, 64])(
+  "preserves complete CLI rows and scopes tool-bridge priority at cap %i",
+  async (maxParallel) => {
+    const { execFileSync } = await import("node:child_process");
+    const groups: ReturnType<typeof planTargetedDockerLaneGroups> = JSON.parse(
+      execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          LANES:
+            "doctor-switch published-upgrade-survivor update-first-hop-compat-2026.9.2 update-first-hop-compat-2026.9.1 root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update",
+          GROUP_SIZE: "1",
+          MAX_PARALLEL: String(maxParallel),
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.9.3 2026.9.4",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+            "base legacy-operator-state acpx-openclaw-tools-bridge",
+        },
+      }),
+    );
+    const lane = (name: string) => ({ docker_lanes: name, label: name });
+    const scenario = (version: string, name: string, index: number) => ({
+      docker_lanes: "published-upgrade-survivor",
+      label: `published-upgrade-survivor-${version}-scenarios-${index}`,
+      published_upgrade_survivor_baselines: `openclaw@${version}`,
+      published_upgrade_survivor_scenarios: name,
+      timeout_minutes: 90,
+    });
+    expect(groups).toEqual([
+      lane("update-first-hop-compat-2026.9.2"),
+      lane("update-first-hop-compat-2026.9.1"),
+      { ...lane("update-restart-auth"), timeout_minutes: 75 },
+      lane("plugin-update"),
+      ...(maxParallel === 64
+        ? [
+            scenario("2026.9.4", "acpx-openclaw-tools-bridge", 3),
+            scenario("2026.9.3", "acpx-openclaw-tools-bridge", 3),
+          ]
+        : []),
+      scenario("2026.9.4", "legacy-operator-state", 2),
+      scenario("2026.9.3", "legacy-operator-state", 2),
+      lane("root-managed-vps-upgrade"),
+      lane("doctor-switch"),
+      scenario("2026.9.4", "base", 1),
+      ...(maxParallel !== 64 ? [scenario("2026.9.4", "acpx-openclaw-tools-bridge", 3)] : []),
+      scenario("2026.9.3", "base", 1),
+      ...(maxParallel !== 64 ? [scenario("2026.9.3", "acpx-openclaw-tools-bridge", 3)] : []),
+      lane("plugins-offline"),
+    ]);
+  },
+);

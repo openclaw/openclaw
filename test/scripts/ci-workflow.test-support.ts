@@ -99,6 +99,7 @@ export function evaluateWorkflowExpression(
     ciShape?: "default" | "main";
     ciOnPush?: string;
     includeAndroid?: boolean;
+    inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
@@ -208,6 +209,7 @@ export function evaluateWorkflowExpression(
       run_windows_ci: context.runWindowsCi ?? false,
       skip_defender_exclusions: context.skipDefenderExclusions ?? false,
       windows_ci_replay: context.windowsCiReplay ?? "",
+      ...context.inputs,
     },
     env: context.env ?? {},
     secrets: context.secrets ?? {},
