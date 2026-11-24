@@ -1,7 +1,9 @@
 import type * as Llm from "@openclaw/llm-core";
 export type * from "./types.js";
 
-export const PROVIDER_CONTEXT_HANDOFF: unique symbol = Symbol("providerContextHandoff");
+// A globally registered symbol keeps the handoff key equal when the provider
+// types are bundled into more than one chunk of a published build.
+export const PROVIDER_CONTEXT_HANDOFF: unique symbol = Symbol.for("openclaw.providerContextHandoff");
 export const PROVIDER_MODEL_INPUT: unique symbol = Symbol("providerModelInput");
 /** Callable tools deliberately left out of the request's tool list (Tool Search directory). */
 export const PROVIDER_DEFERRED_TOOL_NAMES: unique symbol = Symbol("providerDeferredToolNames");

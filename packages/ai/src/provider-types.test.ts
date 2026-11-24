@@ -58,6 +58,21 @@ describe("provider call types", () => {
     expectTypeOf<ImagesModel["input"][number]>().toEqualTypeOf<"text" | "image">();
   });
 
+  it("uses a globally registered handoff symbol so bundled copies agree", () => {
+    expect(PROVIDER_CONTEXT_HANDOFF).toBe(Symbol.for("openclaw.providerContextHandoff"));
+  });
+
+  it("resolves a handoff set under a separately evaluated module copy", async () => {
+    vi.resetModules();
+    const fresh = await import("./provider-types.js");
+    const handoff = vi.fn(async () => ({ systemPrompt: "from-handoff", messages: [], tools: [] }));
+    const context = { systemPrompt: "canonical", messages: [], tools: [] };
+    await expect(
+      resolveProviderContext(context, { [fresh.PROVIDER_CONTEXT_HANDOFF]: handoff }),
+    ).resolves.toMatchObject({ systemPrompt: "from-handoff" });
+    expect(handoff).toHaveBeenCalledOnce();
+  });
+
   it("projects canonical context unless a provider handoff is present", async () => {
     const context = { systemPrompt: "system", messages: [], tools: [] };
     await expect(resolveProviderContext(context)).resolves.toBe(context);
