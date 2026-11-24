@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@openai/codex": "0.169.0",
+    "@openai/codex": "0.172.0",
     "@openclaw/fs-safe": "0.28.2",
     "acorn": "8.19.0",
     "semver": "7.8.5",
