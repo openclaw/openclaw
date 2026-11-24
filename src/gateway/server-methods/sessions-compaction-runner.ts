@@ -20,10 +20,8 @@ import { readTranscriptStatsAsync } from "../../config/sessions/session-transcri
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveParentSessionKeyCandidate } from "../../sessions/stored-model-overrides.js";
 import { resolveSessionSelectedModelRefAsync } from "../session-utils-model-selection.js";
-import { resolveSessionModelRef } from "../session-utils.js";
+import { prepareGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
 
 type GatewaySessionCompactionParams = {
   agentId: string;
@@ -36,6 +34,25 @@ type GatewaySessionCompactionParams = {
   sessionStoreKey: string;
   storePath: string;
 };
+
+/** Select the model ordinary turns use, including one inherited from a parent session. */
+async function resolveCompactionSessionModel(params: GatewaySessionCompactionParams) {
+  const readSourceEntry = await prepareGatewaySessionEntryReader({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    entry: params.entry,
+    store: {},
+  });
+  params.abortSignal?.throwIfAborted();
+  return await resolveSessionSelectedModelRefAsync({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    source: { entry: params.entry, readSourceEntry },
+    manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
+  });
+}
 
 /** Prepare eligibility and owner metadata without materializing a host transcript. */
 export async function prepareGatewaySessionCompaction(
@@ -51,8 +68,8 @@ export async function prepareGatewaySessionCompaction(
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
   };
+  const resolvedModel = await resolveCompactionSessionModel(params);
   const usesLegacyRuntime = (entry: SessionEntry) => {
-    const resolvedModel = resolveSessionModelRef(params.cfg, entry, params.agentId);
     const persistedRuntime = resolveManualCompactionCliTarget({
       provider: resolvedModel?.provider,
       entry,
@@ -157,34 +174,7 @@ export async function runGatewaySessionCompaction(
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
   };
-  // Compact with the model ordinary turns select, including one inherited from a parent session.
-  const parentKey = resolveParentSessionKeyCandidate({
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.entry.parentSessionKey,
-  });
-  const parentAgentId = parentKey ? parseAgentSessionKey(parentKey)?.agentId : undefined;
-  const parentEntry = parentKey
-    ? await readSessionEntryReadOnlyInWorker({
-        sessionKey: parentKey,
-        agentId: parentAgentId ?? params.agentId,
-        ...(!parentAgentId || parentAgentId === params.agentId
-          ? { storePath: params.storePath }
-          : {}),
-        clone: false,
-        hydrateSkillPromptRefs: false,
-      })
-    : undefined;
-  params.abortSignal?.throwIfAborted();
-  const resolvedModel = await resolveSessionSelectedModelRefAsync({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    source: {
-      entry: params.entry,
-      readSourceEntry: (key) => (key === parentKey ? parentEntry : undefined),
-    },
-    manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
-  });
+  const resolvedModel = await resolveCompactionSessionModel(params);
   if (!resolvedModel) {
     return { ok: false, compacted: false, reason: NO_MODEL_CONFIGURED_MESSAGE };
   }
