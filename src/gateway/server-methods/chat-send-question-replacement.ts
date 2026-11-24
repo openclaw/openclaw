@@ -27,7 +27,6 @@ export function captureChatSendQuestionReplacement(
     isCommand ||
     request.systemInputProvenance ||
     request.turnKind !== "main" ||
-    request.reconnectResumeRequested ||
     request.p.queueMode !== "steer" ||
     !request.rawMessage.trim() ||
     request.clientInfo?.id !== GATEWAY_CLIENT_NAMES.CONTROL_UI
