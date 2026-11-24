@@ -5,7 +5,10 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -69,6 +72,58 @@ async function expandGroups(page: Page, reply: string) {
 }
 
 suite.define(() => {
+  it.each([90, 140])(
+    "scales mobile code blocks and tool output to %i percent",
+    async (textScale) => {
+      await suite.withPage(
+        { viewport: { width: 390, height: 844 }, locale: "en-US" },
+        async ({ page }) => {
+          await page.addInitScript(
+            ({ key, scale }) => localStorage.setItem(key, JSON.stringify({ textScale: scale })),
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), scale: textScale },
+          );
+          const prose = "The service is healthy.";
+          await installMockGateway(page, {
+            methodResponses: {
+              "chat.history": prepareChatHistoryFixture([
+                { role: "user", content: "Check the service status.", timestamp },
+                {
+                  ...result,
+                  toolName: "read_file",
+                  content: [{ type: "text", text: "service running" }],
+                },
+                {
+                  role: "assistant",
+                  content: prose + "\n\n```sh\nprintf 'service running'\n```",
+                  timestamp: timestamp + 3,
+                },
+              ]),
+            },
+          });
+          await page.goto(suite.server.baseUrl + "chat");
+          await expandGroups(page, prose);
+          const disclosure = page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first();
+          if (await disclosure.isVisible()) {
+            await disclosure.click();
+          }
+          const code = page.locator(".chat-text pre code").last();
+          const output = page
+            .locator(".chat-tool-card__block-content code")
+            .filter({ hasText: "service running" });
+          await code.waitFor();
+          const artifacts = captureUiProof
+            ? createControlUiE2eArtifactDir("chat-text-scale")
+            : undefined;
+          await capture(page, artifacts, "text-scale-" + textScale);
+          const size = (element: Element) => Number.parseFloat(getComputedStyle(element).fontSize);
+          const expectedSize = (12 * textScale) / 100;
+          expect(await code.evaluate(size)).toBe(expectedSize);
+          expect(await output.evaluate(size)).toBe(expectedSize);
+        },
+      );
+    },
+  );
+
   it("does not call a complete image-only result unavailable", async () => {
     const imageResult = {
       ...result,

@@ -366,7 +366,7 @@
 
 .chat-message-source {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   min-width: 0;
   overflow-wrap: anywhere;
 }

@@ -950,7 +950,7 @@
   flex: none;
   margin: 0 0.35em;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
 }
 
@@ -965,14 +965,14 @@
 .chat-assistant-attachment-card__title {
   flex: 1;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
 .chat-assistant-attachment-card__meta {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -1463,7 +1463,7 @@
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: pre;
 }
 
@@ -1524,7 +1524,7 @@
 
 @media (max-width: 640px) {
   .chat-text :where(pre) {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   .chat-text :where(.markdown-inline-image) {

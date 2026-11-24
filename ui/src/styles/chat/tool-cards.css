@@ -473,7 +473,7 @@
   gap: 8px;
   padding: 8px 12px 0;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.55;
   color: var(--text);
 }
@@ -494,7 +494,7 @@
 .chat-tool-term__out {
   margin: 0;
   padding: 6px 12px 10px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
   overflow: auto;
@@ -509,7 +509,7 @@
   padding: 7px 14px 9px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-align: end;
 }
 
@@ -616,7 +616,7 @@
   max-height: min(46vh, 540px);
   padding: 12px 14px 14px;
   overflow: auto;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.55;
 }
 
@@ -762,7 +762,7 @@
 }
 
 .chat-tool-card__block-label {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -777,7 +777,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
