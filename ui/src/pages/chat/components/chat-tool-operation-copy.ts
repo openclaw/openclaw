@@ -10,6 +10,15 @@ registerEnglishCatalog(registerChatToolOperationsEnglish);
 const catalog = registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["code_execution", "search"],
+  ["crabbox", "box"],
+  ["diffs", "fileDiff"],
+  ["file_fetch", "file"],
+  ["dir_list", "file"],
+  ["dir_fetch", "file"],
+  ["file_write", "file"],
+  ["qa_restart_wait", "bug"],
+  ["qa_restart_unsafe_probe", "bug"],
   ["decision_evaluate", "scale"],
   ["sessions_create", "messageSquarePlus"],
   ["sessions_history", "messageSquare"],
