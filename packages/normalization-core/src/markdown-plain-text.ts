@@ -107,11 +107,15 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/```/g, " ");
   // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
   // A span closes on the next backtick run of its own length, so ``a`b`` keeps its inner backtick.
-  const withoutCode = stripInlineLinks(withoutFences).replace(
-    /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
-    (_match, _run: string | undefined, literal: string | undefined) =>
-      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
-  );
+  // Protect each retained part before removing links can join separate backtick runs.
+  const withoutCode = stripInlineLinks(withoutFences, {
+    transformText: (part) =>
+      part.replace(
+        /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
+        (_match, _run: string | undefined, literal: string | undefined) =>
+          literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
+      ),
+  });
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
   // Recognize tables before removing block markers: a following heading or list is not a row.
   let flattened = stripTables(withoutCode).replace(
@@ -310,8 +314,9 @@ function matchLinks(text: string): {
 /** Strips inline link destinations, retaining nested labels and optionally omitting images entirely. */
 export function stripInlineLinks(
   text: string,
-  options: { images?: "label" | "omit" } = {},
+  options: { images?: "label" | "omit"; transformText?: (text: string) => string } = {},
 ): string {
+  const transform = options.transformText ?? ((part: string) => part);
   const { labelEnds, destinationEnds } = matchLinks(text);
   const suffixEnds = new Map<number, number>();
   let output = "";
@@ -319,7 +324,7 @@ export function stripInlineLinks(
   for (let index = 0; index < text.length; index += 1) {
     const suffixEnd = suffixEnds.get(index);
     if (suffixEnd !== undefined) {
-      output += text.slice(cursor, index);
+      output += transform(text.slice(cursor, index));
       cursor = suffixEnd;
       index = suffixEnd - 1;
       continue;
@@ -339,7 +344,7 @@ export function stripInlineLinks(
     if (!isImage && labelEnd === index + 1) {
       continue;
     }
-    output += text.slice(cursor, isImage ? index - 1 : index);
+    output += transform(text.slice(cursor, isImage ? index - 1 : index));
     if (isImage && options.images === "omit") {
       cursor = destinationEnd + 1;
       index = destinationEnd;
@@ -348,5 +353,5 @@ export function stripInlineLinks(
     cursor = index + 1;
     suffixEnds.set(labelEnd, destinationEnd + 1);
   }
-  return output + text.slice(cursor);
+  return output + transform(text.slice(cursor));
 }

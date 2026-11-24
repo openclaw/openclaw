@@ -12,6 +12,16 @@ describe("flattenMarkdownToPlainText", () => {
     ],
     ["images", "Status ![green check](https://example.com/check.png)", "Status green check"],
     [
+      "linked code followed by code",
+      "Use [`dict`](https://docs.python.org/3/library/stdtypes.html#dict)`.get()` and [`list`](https://docs.python.org/3/library/stdtypes.html#list)`.append()`.",
+      "Use dict.get() and list.append().",
+    ],
+    [
+      "code beside linked code with literal backticks",
+      "`prefix`[`**/*`](url)[`.ts`](other) and ``a`b``",
+      "prefix**/*.ts and a`b",
+    ],
+    [
       "nested link label brackets",
       "Read the [Report [Q3 [draft]]](https://example.com/r) and then deploy.",
       "Read the Report [Q3 [draft]] and then deploy.",
