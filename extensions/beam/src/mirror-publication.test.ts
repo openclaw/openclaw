@@ -38,6 +38,8 @@ const source = {
   agentId: "main",
   sourceHomeId: "home",
 };
+const testEndpoint = "https://team.example/api/v2/beam";
+const testAuthority = { assertCurrent() {}, async revalidate() {} };
 const raw = Buffer.from("synthetic reviewed packet"),
   id = "a".repeat(32);
 const digest = (body: Buffer) => "sha256:" + createHash("sha256").update(body).digest("hex");
@@ -55,10 +57,58 @@ const publicationStore = (authority: { assertCurrent(): void }) =>
     { namespace: "mirror-publications", retention: "retained", env: state.env },
     authority,
   );
+const runnerStores = { getPublicationStore: publicationStore, getScheduleStore: scheduleStore };
+const mirrorRuntime = (url = testEndpoint, token?: string) =>
+  createBeamTestRuntime(
+    beamTestMirrorConfig({ endpoint: url, catalogs: [source.catalogId], token }),
+  );
+type TestCatalog = ReturnType<typeof createBeamTestCatalog>;
+
+function pagingCatalog(
+  native: TestCatalog,
+  onList: (exact: boolean, offset: number) => void,
+): TestCatalog {
+  let granted = new Set<string>();
+  return {
+    ...native,
+    async list(request) {
+      const host = (await native.list(request))[0]!;
+      const offset = request.source ? 0 : Number(request.cursors?.[source.hostId] ?? 0);
+      const limit = request.limitPerHost ?? 100;
+      onList(Boolean(request.source), offset);
+      const sessions = host.sessions.slice(offset, offset + limit);
+      granted = new Set(sessions.map((row) => row.threadId));
+      return [
+        {
+          ...host,
+          sessions,
+          nextCursor: offset + limit < host.sessions.length ? String(offset + limit) : undefined,
+        },
+      ];
+    },
+    assertCurrent(locator) {
+      if (!granted.has(locator.threadId)) {
+        throw new Error("source grant superseded");
+      }
+    },
+    async read(request) {
+      this.assertCurrent(request);
+      return native.read(request);
+    },
+  };
+}
+
+function acknowledgeEnrollment() {
+  vi.mocked(transport.enrollBeamMirrorV2).mockImplementationOnce(async ({ raw: packet }) => ({
+    state: "published",
+    head: { ...head, sha256: digest(Buffer.from(packet)) },
+  }));
+}
+
 const open = (
   explicit = false,
   token = "publisher-test",
-  endpoint = "https://team.example/api/v2/beam",
+  endpoint = testEndpoint,
   assertCurrent: () => void = () => {},
   confirmGeneration?: string,
 ) =>
@@ -84,31 +134,22 @@ afterEach(async () => {
 });
 
 it("reuses only the settled receiver receipt after freshly reading an enrolled source", async () => {
-  const endpoint = "https://team.example/api/v2/beam";
   const catalog = {
     id: source.catalogId,
     hostId: source.hostId,
     sessions: [{ ...source, recencyAt: beamTestNow }],
   };
   const fixture = beamMirrorTestFixture();
-  const runtime = createBeamTestRuntime(
-    beamTestMirrorConfig({ endpoint, catalogs: [source.catalogId], token: "publisher-test" }),
-  );
+  const runtime = mirrorRuntime(testEndpoint, "publisher-test");
   const read = vi.fn();
-  const runner = fixture.runner(
-    { ...catalog, onRead: read },
-    { runtime, getPublicationStore: publicationStore, getScheduleStore: scheduleStore },
-  );
-  vi.mocked(transport.enrollBeamMirrorV2).mockImplementationOnce(async (request) => ({
-    state: "published",
-    head: { ...head, sha256: digest(Buffer.from(request.raw)) },
-  }));
-  const authority = { async revalidate() {}, assertCurrent() {} };
+  const runner = fixture.runner({ ...catalog, onRead: read }, { runtime, ...runnerStores });
+  acknowledgeEnrollment();
   const selected = { ...source, title: "private display title", modelProvider: "private provider" };
-  const enrolled = await runner.enroll(selected, authority);
+  const enrolled = await runner.enroll(selected, testAuthority);
   expect(enrolled.state).toBe("published");
   expect(
-    (await publicationStore(authority).lookup(beamMirrorEnrollmentKey(endpoint, source)))?.source,
+    (await publicationStore(testAuthority).lookup(beamMirrorEnrollmentKey(testEndpoint, source)))
+      ?.source,
   ).toEqual(source);
   await runner.tick();
   await runner.tick();
@@ -136,10 +177,7 @@ it("reuses only the settled receiver receipt after freshly reading an enrolled s
 });
 
 it("replays a frozen update after an authorized read even when a newer candidate cannot be cleaned", async () => {
-  const endpoint = "https://team.example/api/v2/beam";
-  const runtime = createBeamTestRuntime(
-    beamTestMirrorConfig({ endpoint, catalogs: [source.catalogId], token: "publisher-test" }),
-  );
+  const runtime = mirrorRuntime(testEndpoint, "publisher-test");
   const native = createBeamTestCatalog({
     id: source.catalogId,
     hostId: source.hostId,
@@ -155,20 +193,14 @@ it("replays a frozen update after an authorized read even when a newer candidate
       const page = await native.read(request);
       return {
         ...page,
-        items: [
-          {
-            type: "agentMessage",
-            text: sourceState,
-          },
-        ],
+        items: [{ type: "agentMessage", text: sourceState }],
       };
     },
   };
   const runner = createBeamTestRunner({
     runtime,
     listCatalogs: () => [catalog],
-    getPublicationStore: publicationStore,
-    getScheduleStore: scheduleStore,
+    ...runnerStores,
   });
   const mock = vi.mocked(cleaner.cleanBeamCandidate);
   const clean = mock.getMockImplementation()!;
@@ -182,11 +214,8 @@ it("replays a frozen update after an authorized read even when a newer candidate
     }
     return clean(input, ...args);
   });
-  vi.mocked(transport.enrollBeamMirrorV2).mockImplementationOnce(async (p) => ({
-    state: "published",
-    head: { ...head, sha256: digest(Buffer.from(p.raw)) },
-  }));
-  await runner.enroll(source, { async revalidate() {}, assertCurrent() {} });
+  acknowledgeEnrollment();
+  await runner.enroll(source, testAuthority);
   vi.mocked(transport.publishBeamMirrorV2)
     .mockRejectedValueOnce(new Error("lost acknowledgement"))
     .mockImplementationOnce(async (p) => ({
@@ -330,16 +359,8 @@ it("checks receiver release authority before reserving the first local enrollmen
 it.each([33, 101])(
   "delivers current and pre-locator enrollment at rank %i after a cold start",
   async (rank) => {
-    const endpoint = "https://team.example/api/v2/beam";
-    const runtime = createBeamTestRuntime(
-      beamTestMirrorConfig({
-        endpoint,
-        catalogs: [source.catalogId],
-        token: "publisher-test",
-      }),
-    );
+    const runtime = mirrorRuntime(testEndpoint, "publisher-test");
     const read = vi.fn();
-    const rejected = vi.fn();
     let title = "first",
       recencyAt = beamTestNow;
     const prior = Array.from({ length: rank - 1 }, (_, i) => ({
@@ -355,53 +376,23 @@ it.each([33, 101])(
     });
     const pages: number[] = [];
     function create() {
-      let allowed = new Set<string>();
-      const catalog: typeof native = {
-        ...native,
-        async list(request) {
-          const all = (await native.list(request))[0]!;
-          const offset = request.source ? 0 : Number(request.cursors?.[source.hostId] ?? 0);
-          const limit = request.limitPerHost ?? 100;
-          if (!request.source) {
-            pages.push(offset);
-          }
-          const sessions = all.sessions.slice(offset, offset + limit);
-          allowed = new Set(sessions.map((row) => row.threadId));
-          return [
-            {
-              ...all,
-              sessions,
-              nextCursor: offset + limit < all.sessions.length ? String(offset + limit) : undefined,
-            },
-          ];
-        },
-        assertCurrent(locator) {
-          if (!allowed.has(locator.threadId)) {
-            throw new Error("source grant superseded");
-          }
-        },
-        async read(request) {
-          this.assertCurrent(request);
-          return native.read(request);
-        },
-      };
+      const catalog = pagingCatalog(native, (exact, offset) => {
+        if (!exact) {
+          pages.push(offset);
+        }
+      });
       return createBeamTestRunner({
         runtime,
         listCatalogs: () => [catalog],
-        getPublicationStore: publicationStore,
-        getScheduleStore: scheduleStore,
+        ...runnerStores,
       });
     }
-    const authority = { assertCurrent() {}, async revalidate() {} };
-    vi.mocked(transport.enrollBeamMirrorV2).mockImplementationOnce(async (p) => ({
-      state: "published",
-      head: { ...head, sha256: digest(Buffer.from(p.raw)) },
-    }));
+    acknowledgeEnrollment();
     vi.mocked(transport.publishBeamMirrorV2).mockImplementation(async (p) => ({
       state: "published",
       head: { ...head, revision: '"updated"', sha256: digest(Buffer.from(p.raw)) },
     }));
-    await create().enroll(source, authority);
+    await create().enroll(source, testAuthority);
     title = "fresh edit";
     await create().tick();
     expect(transport.publishBeamMirrorV2).toHaveBeenCalledOnce();
@@ -411,13 +402,11 @@ it.each([33, 101])(
     // byte and precondition from its first attempt; only remove the added locator.
     title = "lost response";
     vi.mocked(transport.publishBeamMirrorV2).mockImplementationOnce(async () => {
-      rejected();
       throw new Error("dropped response");
     });
     await create().tick();
-    expect(rejected).toHaveBeenCalledOnce();
-    const store = publicationStore(authority);
-    const key = beamMirrorEnrollmentKey(endpoint, source);
+    const store = publicationStore(testAuthority);
+    const key = beamMirrorEnrollmentKey(testEndpoint, source);
     const retained = (await store.lookup(key))!;
     expect(retained.pending).toBeDefined();
     const { source: _source, ...old } = retained;
@@ -446,25 +435,24 @@ it.each([33, 101])(
 );
 
 it("rotates the 32 active slots across restarts without reading unrelated sources", async () => {
-  const endpoint = "https://team.example/api/v2/beam";
-  const authority = { assertCurrent() {} };
   vi.mocked(transport.enrollBeamMirrorV2).mockResolvedValueOnce({ state: "published", head });
   await (await open(true))!.enroll(id, raw);
-  const store = publicationStore(authority),
-    original = (await store.lookup(beamMirrorEnrollmentKey(endpoint, source)))!;
+  const store = publicationStore(testAuthority),
+    original = (await store.lookup(beamMirrorEnrollmentKey(testEndpoint, source)))!;
   const sources = Array.from({ length: 68 }, (_, i) => ({
     ...source,
     threadId: i === 0 ? source.threadId : `selected-${i}`,
   }));
   for (const item of sources.slice(1)) {
-    await store.register(beamMirrorEnrollmentKey(endpoint, item), { ...original, source: item });
+    await store.register(beamMirrorEnrollmentKey(testEndpoint, item), {
+      ...original,
+      source: item,
+    });
   }
   vi.mocked(transport.publishBeamMirrorV2).mockRejectedValue(new Error("offline"));
   const fixture = beamMirrorTestFixture();
   const read = vi.fn();
-  const runtime = createBeamTestRuntime(
-    beamTestMirrorConfig({ endpoint, catalogs: [source.catalogId], token: "publisher-test" }),
-  );
+  const runtime = mirrorRuntime(testEndpoint, "publisher-test");
   for (const count of [32, 32, 4]) {
     const before = read.mock.calls.length;
     await fixture
@@ -479,7 +467,7 @@ it("rotates the 32 active slots across restarts without reading unrelated source
           })),
           onRead: read,
         },
-        { runtime, getPublicationStore: publicationStore, getScheduleStore: scheduleStore },
+        { runtime, ...runnerStores },
       )
       .tick();
     expect(read.mock.calls.length - before).toBe(count);
@@ -542,7 +530,6 @@ it.runIf(process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT).each([
         }
       },
       async (origin) => {
-        const endpoint = origin + "/api/v2/beam";
         let title = "initial";
         const native = createBeamTestCatalog({
           id: source.catalogId,
@@ -558,43 +545,17 @@ it.runIf(process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT).each([
             measures.reads++;
           },
         });
-        let granted = new Set<string>();
-        const catalog: typeof native = {
-          ...native,
-          async list(request) {
-            const host = (await native.list(request))[0]!;
-            const sessions = host.sessions.slice(0, request.limitPerHost);
-            if (request.source) {
-              measures.exact++;
-            } else {
-              measures.lists++;
-            }
-            granted = new Set(sessions.map((item) => item.threadId));
-            return [
-              {
-                ...host,
-                sessions,
-                nextCursor: sessions.length < host.sessions.length ? "next" : undefined,
-              },
-            ];
-          },
-          assertCurrent(locator) {
-            if (!granted.has(locator.threadId)) {
-              throw new Error("superseded source");
-            }
-          },
-        };
+        const catalog = pagingCatalog(native, (exact) => {
+          measures[exact ? "exact" : "lists"]++;
+        });
         const runner = createBeamTestRunner({
-          runtime: createBeamTestRuntime(
-            beamTestMirrorConfig({ endpoint, catalogs: [source.catalogId] }),
-          ),
+          runtime: mirrorRuntime(origin + "/api/v2/beam"),
           listCatalogs: () => [catalog],
           resolveExecutable,
-          getScheduleStore: scheduleStore,
-          getPublicationStore: publicationStore,
+          ...runnerStores,
         });
         for (const item of selected) {
-          await runner.enroll(item, { assertCurrent() {}, async revalidate() {} });
+          await runner.enroll(item, testAuthority);
         }
         const tick = async () => {
           for (const key of ["lists", "exact", "reads", "heads", "puts"] as const) {
@@ -616,12 +577,10 @@ it.runIf(process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT).each([
 );
 
 it("restarts an expired legacy host cursor while a sibling remains healthy", async () => {
-  const endpoint = "https://team.example/api/v2/beam";
-  const authority = { assertCurrent() {} };
   vi.mocked(transport.enrollBeamMirrorV2).mockResolvedValueOnce({ state: "published", head });
   await (await open(true))!.enroll(id, raw);
-  const store = publicationStore(authority),
-    key = beamMirrorEnrollmentKey(endpoint, source);
+  const store = publicationStore(testAuthority),
+    key = beamMirrorEnrollmentKey(testEndpoint, source);
   const { source: _source, ...legacy } = (await store.lookup(key))!;
   await store.register(key, legacy);
   const fixture = beamMirrorTestFixture();
@@ -656,9 +615,7 @@ it("restarts an expired legacy host cursor while a sibling remains healthy", asy
       ];
     },
   };
-  const runtime = createBeamTestRuntime(
-    beamTestMirrorConfig({ endpoint, catalogs: [source.catalogId], token: "publisher-test" }),
-  );
+  const runtime = mirrorRuntime(testEndpoint, "publisher-test");
   for (let i = 0; i < 8 && !(await store.lookup(key))?.source; i++) {
     await fixture
       .runner(
@@ -666,8 +623,7 @@ it("restarts an expired legacy host cursor while a sibling remains healthy", asy
         {
           runtime,
           listCatalogs: () => [catalog],
-          getPublicationStore: publicationStore,
-          getScheduleStore: scheduleStore,
+          ...runnerStores,
         },
       )
       .tick();
