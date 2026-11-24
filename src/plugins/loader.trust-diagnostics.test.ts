@@ -37,6 +37,16 @@ if (!agentMailIntegrity) {
   throw new Error("Expected a valid AgentMail catalog integrity");
 }
 
+function communityClawHubOverride(packageName: string): Partial<PluginInstallRecord> {
+  return {
+    source: "clawhub",
+    spec: `clawhub:${packageName}@1.0.0`,
+    clawhubPackage: packageName,
+    clawhubUrl: "https://clawhub.ai",
+    clawhubChannel: "community",
+  };
+}
+
 afterEach(async () => {
   try {
     await closeOpenClawStateDatabaseAsync();
@@ -222,6 +232,45 @@ describe("recorded plugin trust diagnostics", () => {
       trusted: false,
     },
     {
+      name: "consistent community ClawHub install",
+      pluginId: "community-demo",
+      packageName: "@vendor/community-demo",
+      version: "1.0.0",
+      override: communityClawHubOverride("@vendor/community-demo"),
+      reason: "community-clawhub",
+      trusted: false,
+    },
+    {
+      name: "conflicting community ClawHub identity",
+      pluginId: "community-demo",
+      packageName: "@vendor/community-demo",
+      version: "1.0.0",
+      override: {
+        ...communityClawHubOverride("@vendor/community-demo"),
+        resolvedName: "@vendor/other",
+      },
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
+      name: "community ClawHub install from another registry",
+      pluginId: "community-demo",
+      packageName: "@vendor/community-demo",
+      version: "1.0.0",
+      override: {
+        ...communityClawHubOverride("@vendor/community-demo"),
+        clawhubUrl: "https://example.invalid",
+      },
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
+      name: "official package recorded as a community ClawHub install",
+      override: communityClawHubOverride(defaultPackageName),
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
       name: "unendorsed AgentMail npm namesake",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
@@ -324,13 +373,17 @@ describe("recorded plugin trust diagnostics", () => {
           origin: "global",
         });
         expect(loaded.status).toBe("loaded");
-        if (reason === "third-party-npm") {
+        if (reason === "third-party-npm" || reason === "community-clawhub") {
           const refusal = new PluginTrustRefusalError({
             pluginId,
             source: plugin.file,
             trust: loaded.trust,
           });
-          expect(refusal.message).toContain("Reinstalling the same package will not change that");
+          expect(refusal.message).toContain(
+            reason === "third-party-npm"
+              ? "Reinstalling the same package will not change that"
+              : "Reinstalling the same listing will not change that",
+          );
           expect(refusal.message).not.toContain("Reinstall from the official");
         }
         const warnings = warn.mock.calls.filter(([message]) =>
