@@ -180,7 +180,7 @@ export async function runCliTurnCompactionLifecycle(
         : (input.abortSignal ?? sourceSignal);
     const params = { ...input, abortSignal };
     const assertActive = composeSessionSourceAssertion(
-      [assertSourceActive, operatorAuthority?.assertCurrent, host.assertActive],
+      [assertSourceActive, host.assertActive],
       (assertSources) => {
         params.abortSignal?.throwIfAborted();
         assertSources();

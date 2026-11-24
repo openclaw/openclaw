@@ -4,7 +4,8 @@ import { copyString } from "../utils/truncate.js";
 import { parseCompactionDetails } from "./compaction-details.js";
 import {
   capCompactionSummary,
-  fitCompactionSummary,
+  compactionSummaryTargetTokens,
+  largestFittingSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
 } from "./compaction-summary-budget.js";
 import type { CompactionPreparation, CompactionResult } from "./compaction.js";
@@ -320,16 +321,17 @@ export function commitCompactionSummary(
     );
   const renderFloor = (maxChars: number) =>
     maxChars >= MIN_SUMMARY_FLOOR_CHARS ? renderCompactionFloor(prepared, maxChars) : "";
-  // The floor shrinks, then disappears, before the artifact may exceed the token budget.
-  const fitted = fitCompactionSummary(
-    tokenBudget,
+  // The optional floor never takes the summary's fallback room: it fits the target or shrinks,
+  // then disappears, so the artifact leaves the next turn its headroom.
+  const fitted = largestFittingSummary(
+    compactionSummaryTargetTokens(tokenBudget),
     (maxChars) => {
       const floor = renderFloor(maxChars);
       return floor ? { summary: `${summary}${SUMMARY_FLOOR_HEADING}${floor}` } : undefined;
     },
     maxFloorChars,
   );
-  const committed = fitted.ok ? fitted.value.summary : summary;
+  const committed = fitted?.summary ?? summary;
   if (onFloorReduced && tokenBudget !== undefined) {
     const floorChars = renderFloor(maxFloorChars).length;
     const keptChars =

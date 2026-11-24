@@ -96,7 +96,6 @@ it("observes a human-created managed session through the CLI owner's real readin
           const retained = options.client?.internal?.operatorRunAuthority;
           assert(retained);
           assertAdmittedRunOperatorAuthority(retained);
-          retained.assertCurrent();
           expect(retained.profileId).toBe(GATEWAY_OWNER_PROFILE_ID);
           expect(retained.scopes).toEqual(["operator.read"]);
           expect(retained.source === source.authority.source).toBe(true);

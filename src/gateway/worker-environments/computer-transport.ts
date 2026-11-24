@@ -129,7 +129,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
     };
     const assertPlacement = () => {
       if (!sourceIsCurrent()) {
-        throw new Error("Session desktop placement authority changed");
+        throw new Error("Session desktop placement changed. Start a new turn.");
       }
     };
     assertPlacement();
@@ -689,7 +689,7 @@ export function createWorkerComputerTransportOwner(
           environment.attachedSessionIds.length !== 1 ||
           environment.attachedSessionIds[0] !== claim.sessionId
         ) {
-          throw new Error("Session desktop placement authority changed");
+          throw new Error("Session desktop placement changed. Start a new turn.");
         }
       },
     });

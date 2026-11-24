@@ -169,33 +169,22 @@ describe("Gateway computer RPC", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it.each(["invalidation", "disconnect", "revocation"] as const)(
-    "prevents desktop dispatch after operator %s during preparation",
-    async (retirement) => {
-      const client = createClient();
-      const controller = new AbortController();
-      const requestController = new AbortController();
-      client.connectionSignal = controller.signal;
-      const { entered, prepared, sideEffect, service } = deferredInput(controller.signal);
-      let current = true;
-      const result = invoke("computer.invoke", snapshot, service, {
-        client,
-        signal: requestController.signal,
-        hasCurrentClientAuthority: () => current,
-      });
-      await entered.promise;
-      if (retirement === "invalidation") {
-        client.invalidated = true;
-      } else if (retirement === "disconnect") {
-        controller.abort();
-      } else {
-        current = false;
-      }
-      prepared.resolve();
-      expect((await result)?.[0]).toBe(false);
-      expect(sideEffect).not.toHaveBeenCalled();
-    },
-  );
+  it("prevents desktop dispatch after operator disconnect during preparation", async () => {
+    const client = createClient();
+    const controller = new AbortController();
+    const requestController = new AbortController();
+    client.connectionSignal = controller.signal;
+    const { entered, prepared, sideEffect, service } = deferredInput(controller.signal);
+    const result = invoke("computer.invoke", snapshot, service, {
+      client,
+      signal: requestController.signal,
+    });
+    await entered.promise;
+    controller.abort();
+    prepared.resolve();
+    expect((await result)?.[0]).toBe(false);
+    expect(sideEffect).not.toHaveBeenCalled();
+  });
 
   it("keeps run ownership stable across connections", async () => {
     const identity = createIdentity();

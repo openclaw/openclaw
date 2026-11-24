@@ -272,11 +272,8 @@ export async function runSystemAgentRescueMessage(
     return "OpenClaw rescue is restricted to owner DMs by default.";
   }
 
-  const assertOwnerCurrent = input.command.assertOwnerCurrent;
-  const assertInvocationCurrent = input.assertCurrent;
   const assertCurrent = () => {
-    assertOwnerCurrent?.();
-    assertInvocationCurrent?.();
+    input.assertCurrent?.();
   };
   const env = input.env;
   const options = {

@@ -73,7 +73,14 @@ it.each(["status", "stop"])("rewrites /loop %s as a scoped work order", async (c
 });
 
 it.each([
-  { isAuthorizedSender: false, senderIsOwner: true, expected: { shouldContinue: false } },
+  {
+    isAuthorizedSender: false,
+    senderIsOwner: true,
+    expected: {
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("`commands.allowFrom` does not include") },
+    },
+  },
   {
     isAuthorizedSender: true,
     senderIsOwner: false,

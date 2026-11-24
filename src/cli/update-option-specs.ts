@@ -7,7 +7,11 @@ export const UPDATE_OPTION_SPECS: readonly [
   ["--json", "Output result as JSON", false],
   ["--no-restart", "Skip updater restart (package Gateways may restart themselves)"],
   ["--dry-run", "Preview update actions without making changes", false],
-  ["--full-integrity-check", "Run full database integrity checks during migrations", false],
+  [
+    "--full-integrity-check",
+    "Unavailable for prepared-release updates; use openclaw doctor --fix --full-integrity-check",
+    false,
+  ],
   [
     "--admission <auto|installed>",
     "Select candidate or installed admission checks (default: auto)",

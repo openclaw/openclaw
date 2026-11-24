@@ -25,7 +25,6 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -88,8 +87,8 @@ function completeRun(runId: string, text: string) {
   return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
 }
 
-it.for(["success", "child error", "owner revoked", "owner reassigned", "new user turn"] as const)(
-  "enforces owner authority at the final plugin write after an inline wait expires (%s)",
+it.for(["success", "child error", "owner revoked", "new user turn"] as const)(
+  "keeps the admitted owner at the final plugin write after an inline wait expires (%s)",
   async (outcome, { signal }) => {
     const root = tempDirs.make("openclaw-followup-owner-");
     const parent = "agent:main:main";
@@ -113,13 +112,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     const config = { ...getRuntimeConfig(), commands: { ownerAllowFrom: ["discord:owner-proof"] } };
     setRuntimeConfigSnapshot(config);
     publishSystemEventStoreConfig(config);
-    const sender = { senderId: "owner-proof", channel: "discord" };
-    const owner = {
-      ...sender,
-      accountId: "default",
-      isCurrent: () => isConfiguredCommandOwner(getRuntimeConfig(), sender),
-    };
-    expect(owner.isCurrent()).toBe(true);
+    const owner = { senderId: "owner-proof", channel: "discord", accountId: "default" };
     const childMayFinish = createDeferred();
     const pluginEntered = createDeferred();
     const effectMayFinish = createDeferred();
@@ -136,7 +129,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         (entry.delivery?.status === "delivered" ||
           entry.delivery?.status === "suspended" ||
           entry.delivery?.status === "discarded" ||
-          entry.delivery?.disposition === "permanent_failure" ||
           entry.cleanupCompletedAt !== undefined)
       ) {
         completionSettled.resolve();
@@ -310,7 +302,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
           createCronCreatorAuthorityCapability(
             originalRun,
             { kind: "unknown" },
-            { source: "channel-owner", isCurrent: owner.isCurrent },
+            { source: "channel-owner" },
             () => true,
             undefined,
             owner,
@@ -324,7 +316,11 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
             sessionKey: parent,
             operationalRunInstance,
             approvalAuthority: authority,
-            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+            receiptAuthority: () => {
+              if (!validateAgentRunDelegatedAuthority(authority)) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             gatewayContextResolver: () => kernel.gatewayRequestContext,
           },
           () =>
@@ -367,11 +363,9 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         "Requester ended before plugin invocation",
       );
       expect([parentError, pluginError]).toEqual([undefined, undefined]);
-      if (outcome === "owner revoked" || outcome === "owner reassigned") {
-        setRuntimeConfigSnapshot({
-          ...config,
-          commands: { ownerAllowFrom: outcome === "owner revoked" ? [] : ["discord:new-owner"] },
-        });
+      if (outcome === "owner revoked") {
+        // Admission checked the owner once; revoking it mid-run does not refuse the started work.
+        setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: [] } });
       } else if (outcome === "new user turn") {
         revokeRequesterCronAuthority(parent);
       }
@@ -383,7 +377,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       expect(subagentRuns.get(expectDefined(childRunId, "child run ID"))).toMatchObject({
         delivery: { status: "delivered" },
       });
-      if (outcome === "success" || outcome === "child error") {
+      if (outcome !== "new user turn") {
         expect(pluginError).toBeUndefined();
         expect(fs.readFileSync(effectPath, "utf8")).toBe("authorized effect");
       } else {

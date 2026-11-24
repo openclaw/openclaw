@@ -218,7 +218,10 @@ export function trustedMainPackageFixture({
     throw new Error("Historical fixture does not contain candidate or reused artifacts");
   };
   const client = {
+    readWorkloadIdentity: unsupported,
     validateChildReuse: unsupported,
+    selectPublicationArtifactSource: unsupported,
+    verifyReleaseRecoveryProducer: unsupported,
     getRunAttempt: unsupported,
     getRunAttemptJobs: unsupported,
     loadExecutionPlan: unsupported,
@@ -226,6 +229,8 @@ export function trustedMainPackageFixture({
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
     getArtifact: unsupported,
+    getCommit: unsupported,
+    resolveQualificationAdmissionDescriptor: unsupported,
     loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
@@ -237,6 +242,14 @@ export function trustedMainPackageFixture({
       throw new Error("historical fixture must not request candidate admission authority");
     },
     getCandidateFileNames: () => [],
+    getSourceFiles(requests: Array<{ sha: string; path: string }>): Map<string, string> {
+      return new Map(
+        requests.map(({ sha, path }) => [sha + ":" + path, this.getSourceFile(sha, path)]),
+      );
+    },
+    getSourceFile: (_sha: string, _path: string): string => {
+      throw new Error("Fixture has no beta-to-final source delta");
+    },
     getWorkflowSource: (_sha: string, path?: string) =>
       path === "scripts/lib/release-validation-waivers.json"
         ? readFileSync(

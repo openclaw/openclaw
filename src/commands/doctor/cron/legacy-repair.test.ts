@@ -16,6 +16,7 @@ import { cronStoreKey } from "../../../cron/store/key.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
+import { withInstalledOfficialProviderCustody } from "../../../plugins/provider-policy-custody.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -611,4 +612,31 @@ it.each(["load", "commit"])(
         expect(await fs.readFile(`${file}.migrated`)).toEqual(bytes);
       }
     })(),
+);
+
+it(
+  "prepares an installed provider policy before checking retired models under Doctor custody",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    await saveJobs(storePath, {
+      ...job("disabled-legacy", { enabled: false }),
+      payload: { kind: "agentTurn", message: "run", model: "anthropic/claude-sonnet-4-6" },
+    });
+    const cfg = {
+      cron: { store: storePath },
+      agents: { defaults: { modelPolicy: { allow: ["arcee/trinity-large-thinking"] } } },
+    } as OpenClawConfig;
+
+    const result = await withInstalledOfficialProviderCustody(
+      fixture.statePath("policy-owner"),
+      async () =>
+        await applyLegacyCronStoreRepair({
+          cfg,
+          state: expectDefined(await loadLegacyCronRepairState({ cfg, storePath }), "cron state"),
+          repairRetiredModelRefs: true,
+        }),
+    );
+
+    expect(result.warnings).toEqual([]);
+  }),
 );

@@ -16,7 +16,7 @@ export function isExecApprovalMutationRefused(error: unknown): boolean {
 export function createExecApprovalMutationGuard(
   assertActive: () => void,
   assertBinding: () => void,
-  caller: { guard?: OperatorApprovalStoreGuard; assertCurrent?: () => void },
+  caller: { guard?: OperatorApprovalStoreGuard },
 ): OperatorApprovalStoreGuard {
   return {
     family: caller.guard?.family ?? "worker",
@@ -24,12 +24,12 @@ export function createExecApprovalMutationGuard(
       assertActive();
       try {
         caller.guard?.assertCurrent();
-        caller.assertCurrent?.();
         assertBinding();
       } catch (error) {
-        throw new ApprovalMutationRefusedError("approval resolver authority is no longer active", {
-          cause: error,
-        });
+        throw new ApprovalMutationRefusedError(
+          "Approval resolution ended. Look up the approval again.",
+          { cause: error },
+        );
       }
     },
   };

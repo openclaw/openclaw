@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, Model, ProviderReplayState } from "@openclaw/llm-core";
 import type { AiTransportHost } from "../host.js";
 import { createAnthropicCompactionSourceReader } from "./anthropic-compaction-replay.js";
 import {
@@ -17,7 +17,7 @@ export type ReplayMessage = { role: string };
 
 export function isAssistantReplayMessage<T extends ReplayMessage>(
   message: T,
-): message is T & AssistantMessage {
+): message is T & AssistantHistoryMessage {
   return message.role === "assistant";
 }
 

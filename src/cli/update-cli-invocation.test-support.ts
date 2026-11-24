@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { expect, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { gitReleaseSlot, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
 import { readGitRuntimeArtifactIdentity } from "../infra/update-git-runtime.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
@@ -81,41 +80,6 @@ export function expectPluginCapabilityRetryNotice(
   }
 }
 
-export function expectUpdateFailureReport(
-  failure: unknown,
-  cause: Error,
-  output: unknown,
-  runId: string | undefined,
-): void {
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).toMatchObject({
-    name: "UpdateCommandFailure",
-    message: expect.stringContaining(cause.message),
-    exitCode: 1,
-    result: { status: "error", reason: "update-failed" },
-  });
-  expect(collectNestedErrorCandidates(failure)).toContain(cause);
-  expect(output).toMatchObject({
-    status: "error",
-    reason: "update-failed",
-    runId,
-    reportPath: expect.any(String),
-  });
-  expect(JSON.stringify(output)).toContain(cause.message);
-}
-
-export function expectDelegatedPluginDoctorInput(input: unknown): void {
-  expect(JSON.parse(String(input))).toMatchObject({
-    root: process.cwd(),
-    runId: expect.any(String),
-    executor: expect.any(Object),
-    configInputHash: expect.any(String),
-    repair: true,
-    yes: true,
-    workspaceSuggestions: false,
-  });
-}
-
 export function expectSelectorTriageFailure(
   error: unknown,
   diagnostic: unknown,
@@ -157,14 +121,6 @@ export async function invokeUpdateCli(opts: UpdateCommandOptions) {
   ];
   await program.parseAsync(args, { from: "user" });
 }
-
-export const devTargetRefusalCases = [
-  ["malformed tracked", "openclaw-dev-target:v1:not+base64url", false, false],
-  ["unknown version tracked", "openclaw-dev-target:v2:hostile-ref", false, false],
-  ["unknown namespace tracked", "other-dev-target:v1:hostile-ref", false, false],
-  ["malformed inferred", "openclaw-dev-target:v1:not+base64url", true, false],
-  ["malformed inferred JSON", "openclaw-dev-target:v1:not+base64url", true, true],
-] as const;
 
 export const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult => ({
   status: "ok",

@@ -83,6 +83,7 @@ export async function prepareConfigFileWrite(
       return replaceFileAtomicSync({
         filePath: configPath,
         content: params.content,
+        allowDrvfsRenameRecovery: true,
         dirMode: params.dirMode ?? 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,

@@ -650,6 +650,8 @@ export function createCrabboxWorkerProvider(
     id: CRABBOX_WORKER_PROVIDER_ID,
     supportsResourceReceipts: true,
     resolveDisplayId: (profile) => parseCrabboxProfile(profile).provider,
+    resolveExecMemoryBoundary: (profile) =>
+      parseCrabboxProfile(profile).provider === "azure-sandbox" ? "sandbox" : undefined,
     // Disposable worker desktops may resize only when the RFB server negotiates support.
     allowsDesktopResize: true,
     async dispose() {

@@ -24,7 +24,7 @@ function primary(cfg: ReturnType<typeof applyZaiConfig>) {
 }
 const customUrl = "https://proxy.example.test/zai";
 
-it("zai onboard resolves GLM-5.3 models through the selected Coding Plan or custom endpoint", async () => {
+it("zai onboard resolves catalog models through the selected Coding Plan or custom endpoint", async () => {
   for (const [name, cfg, expectedBaseUrl] of [
     ["coding-cn", applyZaiConfig({}, { endpoint: "coding-cn" }), ZAI_CODING_CN_BASE_URL],
     ["custom", applyZaiConfig(withBaseUrl(customUrl)), customUrl],
@@ -39,7 +39,7 @@ it("zai onboard resolves GLM-5.3 models through the selected Coding Plan or cust
       );
       const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
       expect(registry.getError()).toBeUndefined();
-      for (const modelId of ["glm-5.3", "glm-5.3-flash"]) {
+      for (const modelId of ["glm-5.4", "glm-5.3", "glm-5.3-flash"]) {
         expect(registry.find("zai", modelId)?.baseUrl).toBe(expectedBaseUrl);
       }
     } finally {
@@ -48,13 +48,13 @@ it("zai onboard resolves GLM-5.3 models through the selected Coding Plan or cust
   }
 });
 
-it("zai onboard defaults general endpoints to GLM-5.2 and Coding Plan endpoints to GLM-5.3", () => {
+it("zai onboard defaults general endpoints to GLM-5.2 and Coding Plan endpoints to GLM-5.4", () => {
   const codingCfg = applyZaiConfig({}, { endpoint: "coding-global" });
   const existingCodingCfg = applyZaiConfig(withBaseUrl(`${ZAI_CODING_GLOBAL_BASE_URL}/`));
   expect(primary(applyZaiConfig({}))).toBe("zai/glm-5.2");
   expect(codingCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
-  expect(primary(codingCfg)).toBe("zai/glm-5.3");
-  expect(primary(existingCodingCfg)).toBe("zai/glm-5.3");
+  expect(primary(codingCfg)).toBe("zai/glm-5.4");
+  expect(primary(existingCodingCfg)).toBe("zai/glm-5.4");
 });
 
 it("zai onboard does not overwrite existing primary model in provider-only mode", () => {

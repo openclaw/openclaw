@@ -133,7 +133,6 @@ export async function resolveEmbeddedModelSelection(params: {
   const operatorAuthority = params.opts.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const configuredDefaultRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
@@ -250,7 +249,6 @@ export async function resolveEmbeddedModelSelection(params: {
         storePath: params.storePath,
         initialEntry,
         entry,
-        assertCommitAllowed: operatorAuthority?.assertCurrent,
       });
       hasStoredOverride =
         sessionEntry?.modelOverrideSource !== "default" &&
@@ -645,7 +643,6 @@ export async function resolveEmbeddedModelSelection(params: {
         storePath: params.storePath,
         initialEntry: entry,
         entry: next,
-        assertCommitAllowed: operatorAuthority?.assertCurrent,
       })) ?? sessionEntry;
     sessionEntryForAttempt = {
       ...(sessionEntryForAttempt ?? next),

@@ -76,6 +76,7 @@ export class ShellGatewayOwner {
     profileId: string;
     runtimeConfig: ApplicationContext["runtimeConfig"];
     invalidationId: number;
+    generation: number;
     failed: boolean;
     retryAttempt: number;
     retryTimer?: ReturnType<typeof globalThis.setTimeout>;
@@ -585,10 +586,7 @@ export class ShellGatewayOwner {
   ): Promise<void> {
     const { client, selfUser, phase, hello } = context.gateway.snapshot;
     const profileId = selfUser?.id;
-    if (!profileId) {
-      return Promise.resolve();
-    }
-    if (phase !== "connected" || !client) {
+    if (!profileId || phase !== "connected" || !client) {
       return Promise.resolve();
     }
     const runtimeConfig = context.runtimeConfig;
@@ -597,6 +595,7 @@ export class ShellGatewayOwner {
       previous?.client === client &&
       previous.profileId === profileId &&
       previous.runtimeConfig === runtimeConfig &&
+      previous.generation === this.preferenceGeneration &&
       previous.invalidationId === profilePreferencesState.invalidationId;
     if (!force && sameSource && (!previous.failed || previous.retryTimer !== undefined)) {
       return previous.promise;
@@ -609,6 +608,7 @@ export class ShellGatewayOwner {
       profileId,
       runtimeConfig,
       invalidationId: profilePreferencesState.invalidationId,
+      generation: this.preferenceGeneration,
       failed: false,
       retryAttempt: !force && sameSource ? previous.retryAttempt : retryAttempt,
       promise: Promise.resolve(),

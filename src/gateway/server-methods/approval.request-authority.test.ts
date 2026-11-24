@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -25,7 +24,6 @@ import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
-import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createApprovalHandlers } from "./approval.js";
 import {
   createApprovalInvocation,
@@ -175,28 +173,15 @@ it("acknowledges committed exec approval before follow-up session changes", asyn
 });
 
 it.each([
-  "verdict-reviewer",
   "verdict-source",
   "native-refused",
   "native-config-unrelated",
   "native-config-unrelated-agent",
-  "native-config-role-aba",
-  "native-config-routing-aba",
-  "access",
-  "reviewer",
   "source",
   "binding",
-  "profile",
-  "config",
   "config-unrelated",
   "config-unrelated-agent",
-  "config-target-routing-aba",
-  "config-target-store-aba",
   "config-other-identity",
-  "config-own-identity-aba",
-  "config-role-aba",
-  "config-routing-aba",
-  "transport-reviewer",
   "transport-source",
   "transport-unrelated-agent",
 ] as const)("preserves disconnected request custody with %s authority", async (revocation) => {
@@ -207,16 +192,15 @@ it.each([
     "config-unrelated-agent",
     "config-other-identity",
     "native-config-unrelated",
+    "transport-unrelated-agent",
     "native-config-unrelated-agent",
   ].includes(revocation);
-  const targetsMainSession =
-    revocation.endsWith("unrelated-agent") || revocation.startsWith("config-target-");
-  const { exec, invoke, record, decision, client, read, drain, state, settled } =
-    await createFixture(
-      `request-custody-${revocation}`,
-      undefined,
-      targetsMainSession ? { sessionKey: "agent:main:main", agentId: "main" } : {},
-    );
+  const targetsMainSession = revocation.endsWith("unrelated-agent");
+  const { exec, invoke, record, decision, client, read, drain, settled } = await createFixture(
+    `request-custody-${revocation}`,
+    undefined,
+    targetsMainSession ? { sessionKey: "agent:main:main", agentId: "main" } : {},
+  );
   const connection = new AbortController();
   client.connectionSignal = connection.signal;
   let nativeRevoked = false;
@@ -243,20 +227,11 @@ it.each([
     const identity = (email: string): OpenClawConfig => ({
       gateway: { auth: { identityScopes: { [email]: ["operator.approvals"] } } },
     });
-    const routing = { ...initialConfig, session: { mainKey: "other" } };
     const configs: Record<string, OpenClawConfig> = {
       "config-unrelated": { ...initialConfig, messages: { ackReaction: "ok" } },
       "config-unrelated-agent": unrelatedAgentConfig,
       "transport-unrelated-agent": unrelatedAgentConfig,
-      "config-target-routing-aba": routing,
-      "config-routing-aba": routing,
-      "config-target-store-aba": {
-        ...initialConfig,
-        session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
-      },
       "config-other-identity": identity("other@example.test"),
-      "config-own-identity-aba": identity("reviewer@example.test"),
-      "config-role-aba": rolePolicyConfig(),
     };
     const config = configs[change];
     if (config) {
@@ -275,20 +250,10 @@ it.each([
   });
   const lookup = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
   const mutations: Record<string, () => void> = {
-    access: bumpGatewayAccessRevision,
-    reviewer: () => {
-      record.approvalReviewerDeviceIds = ["other-reviewer"];
-    },
     source: () => {
       record.request.sessionKey = "agent:main:other";
     },
     binding: () => exec.retire(),
-    profile: () => {
-      client.authenticatedUserId = "other-user";
-    },
-    config: () => {
-      invocation.context.getRuntimeConfig = () => ({});
-    },
   };
   const mutate = (change: string) => {
     const mutation = mutations[change.replace(/^(transport|verdict)-/, "")];

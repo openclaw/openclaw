@@ -27,6 +27,7 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
+  resolveProjectRegistry,
   resolveRecordedProjectByRoot,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
@@ -35,7 +36,11 @@ import type { ProjectRegistryRecord } from "../projects/project-registry.types.j
 import type { ExecutionSkillWorkspace } from "../skills/loading/workspace-skill-roots.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
-import { type ProjectRequester, resolveRequesterProject } from "./project-access.js";
+import {
+  type ProjectRequester,
+  resolveProjectAccess,
+  resolveRequesterProject,
+} from "./project-access.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type { PreparedGatewaySessionLifecycle } from "./session-create-service.types.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -148,12 +153,16 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   onRefresh?: () => void;
 }): Promise<{ current: boolean; worktree: boolean; refreshing?: boolean }> {
   params.assertCurrent();
-  const project = await resolveRequesterProject(params.cfg, params.projectId, params.requester);
+  const project = await resolveProjectRegistry(params.cfg, params.projectId);
+  const access = project
+    ? await resolveProjectAccess(params.cfg, project, params.requester)
+    : undefined;
   params.assertCurrent();
-  if (!project) {
+  if (!project || !access) {
     return { current: false, worktree: false };
   }
-  if (project.source === "cloned") {
+  // Session creation hands a project reached only through a role grant out as a worktree.
+  if (project.source === "cloned" || access === "granted") {
     return { current: false, worktree: true };
   }
   const direct = await prepareSessionCreateFilesystemRoot({

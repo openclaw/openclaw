@@ -308,6 +308,34 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  // Scoped projection of the recovery receipt from Actions artifact 14890042643.
+  const lifecycle = {
+    runId: "00000000-0000-4000-8000-000000000000",
+    phase: "finished",
+    status: "succeeded",
+    after: { version: "2026.11.16-first-hop.0" },
+    steps: [
+      { step: "activating", status: "completed" },
+      { step: "notice:activating", status: "skipped" },
+    ],
+  };
+  it.each([
+    { name: "terminal success", patch: {}, status: 0 },
+    { name: "prepared activation", patch: { phase: "activating", status: "running" }, status: 1 },
+    {
+      name: "failed step",
+      patch: { steps: [{ step: "activating", status: "failed" }] },
+      status: 1,
+    },
+  ])("classifies lifecycle receipts: $name", ({ patch, status }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      { ...lifecycle, ...patch },
+      lifecycle.after.version,
+    );
+    expect(result.status, result.stderr).toBe(status);
+  });
+
   it.each([
     { name: "skipped startup", patch: {}, succeeds: true },
     { name: "failed startup", patch: { exitCode: 1 }, succeeds: false },

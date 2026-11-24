@@ -233,11 +233,9 @@ try {
                 context,
               );
             } else {
-              row.materialized = replaceSessionRowFacts(
-                row.materialized,
-                { lastMessagePreview: "Synthetic preview" },
-                { lastMessagePreview: "Synthetic preview" },
-              );
+              row.materialized = replaceSessionRowFacts(row.materialized, {
+                lastMessagePreview: "Synthetic preview",
+              });
             }
           }
           if (next !== row) {
