@@ -14,10 +14,8 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import * as sessionStoreLookup from "../session-utils-store-lookup.js";
-import {
-  canUseInternalAgentHandoff,
-  prepareAgentRequestPreflight,
-} from "./agent-request-preflight.js";
+import { canUseInternalAgentHandoff } from "./agent-request-handoff-authority.js";
+import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
 

@@ -22,8 +22,8 @@ import {
 } from "./update-candidate-predecessor-stop.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import { readUpdateDoctorGeneration } from "./update-doctor-generation-reader.js";
 import {
-  readUpdateDoctorGeneration,
   runUpdateDoctorAttributedStateWrite,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";

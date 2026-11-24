@@ -1,6 +1,5 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_MODES } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope.js";
@@ -39,25 +38,12 @@ import {
 } from "../session-request-agent.js";
 import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
+import { canUseInternalAgentHandoff } from "./agent-request-handoff-authority.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type AgentRequestPreflight = NonNullable<
   Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
 >;
-
-/** Determines whether the connection has server-owned internal handoff authority. */
-export function canUseInternalAgentHandoff(
-  mode: string | undefined,
-  evidence?: Pick<
-    NonNullable<AgentTurnPrincipal["internal"]>,
-    "syntheticClient" | "localBackendClient"
-  >,
-): boolean {
-  return (
-    mode === GATEWAY_CLIENT_MODES.BACKEND &&
-    (evidence?.syntheticClient === true || evidence?.localBackendClient === true)
-  );
-}
 
 export async function prepareAgentRequestPreflight(params: {
   request: AgentRunRequest;
