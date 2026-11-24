@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import type { CyberAccessProgram } from "../../api/types.ts";
-import { resolveDaybreakAccessProgram } from "./daybreak-access-program.ts";
+import {
+  resolveDaybreakAccessProgram,
+  resolveDaybreakModelSwitch,
+} from "./daybreak-access-program.ts";
 
 const mainline = ["standard", "daybreak_blue"] as const;
 const cyber = ["daybreak_red"] as const;
@@ -103,4 +106,24 @@ it.each<{
   { programs: [], selected: "standard", locked: false, on: false, checked: false, visible: false },
 ])("resolves Daybreak with $programs and $selected", ({ programs, selected, ...state }) => {
   expect(resolveDaybreakAccessProgram(programs, selected)).toEqual(state);
+});
+
+it.each<{
+  current?: CyberAccessProgram;
+  stored?: CyberAccessProgram;
+  next: readonly CyberAccessProgram[];
+  expected?: CyberAccessProgram;
+}>([
+  // Inherited from the previous model's configured default: store it so Daybreak stays on.
+  { current: "daybreak_blue", next: mainline, expected: "daybreak_blue" },
+  { current: "daybreak_blue", stored: "daybreak_blue", next: mainline },
+  { current: "daybreak_blue", stored: "daybreak_blue", next: cyber, expected: "daybreak_red" },
+  { current: "daybreak_red", stored: "daybreak_red", next: mainline, expected: "daybreak_blue" },
+  { current: "standard", stored: "standard", next: cyber, expected: "daybreak_red" },
+  { current: "standard", next: mainline },
+  { current: "daybreak_blue", stored: "daybreak_blue", next: ["standard"] },
+])("keeps Daybreak across a switch from $current ($stored) to $next", (switch_) => {
+  expect(resolveDaybreakModelSwitch(switch_.next, switch_.current, switch_.stored)).toBe(
+    switch_.expected,
+  );
 });

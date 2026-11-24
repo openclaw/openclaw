@@ -11,7 +11,7 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import { resolveDaybreakAccessProgram } from "../../lib/chat/daybreak-access-program.ts";
+import { resolveDaybreakModelSwitch } from "../../lib/chat/daybreak-access-program.ts";
 import {
   buildCatalogDisplayLookup,
   buildQualifiedChatModelValue,
@@ -407,11 +407,14 @@ export async function switchChatModel(
       ),
       activeRow?.agentRuntime?.id,
     );
-    const currentProgram =
+    const storedProgram =
       host.sessions.settingsPreview(targetSessionKey, agentScope.agentId)?.cyberAccessProgram ??
-      activeRow?.cyberAccessProgram ??
-      currentEntry?.cyberAccessProgramDefault;
-    remap = resolveDaybreakAccessProgram(nextPrograms, currentProgram).remap;
+      activeRow?.cyberAccessProgram;
+    remap = resolveDaybreakModelSwitch(
+      nextPrograms,
+      storedProgram ?? currentEntry?.cyberAccessProgramDefault,
+      storedProgram,
+    );
   }
   const patch: SessionPatch = {
     model: nextModel || null,

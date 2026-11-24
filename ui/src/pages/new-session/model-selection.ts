@@ -6,7 +6,7 @@ import type {
   ModelCatalogEntry,
 } from "../../api/types.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
-import { resolveDaybreakAccessProgram } from "../../lib/chat/daybreak-access-program.ts";
+import { resolveDaybreakModelSwitch } from "../../lib/chat/daybreak-access-program.ts";
 import {
   normalizeChatFastModeInput,
   type ChatFastModeSelectValue,
@@ -336,11 +336,12 @@ export abstract class NewSessionModelSelection {
         agentRuntime: this.agentRuntime,
         requested: this.cyberAccessProgram,
       });
-      const { remap } = resolveDaybreakAccessProgram(
-        target.entry.availableAccessPrograms.cyber,
-        current,
-      );
-      this.cyberAccessProgram = remap ?? this.cyberAccessProgram;
+      this.cyberAccessProgram =
+        resolveDaybreakModelSwitch(
+          target.entry.availableAccessPrograms.cyber,
+          current,
+          this.cyberAccessProgram,
+        ) ?? this.cyberAccessProgram;
     }
     this.applyModelSelection(selection);
     this.markExplicitSelection();

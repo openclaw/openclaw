@@ -21,3 +21,13 @@ export function resolveDaybreakAccessProgram(
     remap,
   };
 }
+
+/** A model switch keeps Daybreak on: store the destination's program unless it is already stored. */
+export function resolveDaybreakModelSwitch(
+  programs: readonly CyberAccessProgram[],
+  current: CyberAccessProgram | undefined,
+  stored: CyberAccessProgram | undefined,
+) {
+  const { on, program } = resolveDaybreakAccessProgram(programs, current);
+  return on && program !== stored ? program : undefined;
+}

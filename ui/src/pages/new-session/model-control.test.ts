@@ -807,6 +807,21 @@ it("saves one model selection with mandatory Daybreak, then follows the new mode
   expect(control.draftSelection("main")?.cyberAccessProgram).toBe("daybreak_blue");
 });
 
+it("keeps a configured Daybreak default on when switching to a Standard-default model", async () => {
+  const configuredBlue: ModelCatalogEntry = {
+    ...sol,
+    availableAccessPrograms: { cyber: ["standard", "daybreak_blue"] },
+    cyberAccessProgramDefault: "daybreak_blue",
+  };
+  const { context, control } = setup([configuredBlue, daybreakMainline]);
+  const agent = { id: "main", model: { primary: "openai/" + configuredBlue.id } };
+  control.load(context, "main", true, { agent });
+  await control.metadataRead;
+  expect(control.accessProgramForSubmission()).toBe("daybreak_blue");
+  control.selectModel("openai/" + daybreakMainline.id);
+  expect(control.accessProgramForSubmission()).toBe("daybreak_blue");
+});
+
 it("carries a first-use mandatory Daybreak draft over as Blue", async () => {
   const { context, control } = setup([daybreakMainline, daybreakCyber]);
   const agent = { id: "main", model: { primary: "openai/" + daybreakCyber.id } };
