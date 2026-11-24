@@ -138,10 +138,12 @@ describe("AppSidebar selected agent row", () => {
     expect(request).not.toHaveBeenCalledWith("agent.identity.get", { agentId: "rust-claw" });
   });
 
-  it("leads the list with the main conversation and its latest reply", async () => {
+  it("leads the list with the main conversation and the agent's latest reply", async () => {
     const sessions = createSessions("main", ["agent:main:main", "agent:main:dashboard:notes"]);
-    const main = sessions.state.result!.sessions[0]!;
-    main.lastAssistantMessage = { text: "The outline is ready.", timestamp: 10 };
+    const [main, notes] = sessions.state.result!.sessions;
+    main!.lastAssistantMessage = { text: "Morning summary sent.", timestamp: 5 };
+    // Like the roster row, the subtitle follows the agent's newest reply in any conversation.
+    notes!.lastAssistantMessage = { text: "The outline is ready.", timestamp: 10 };
     const { sidebar, dom } = await mountAgent(undefined, TWO_AGENTS, undefined, sessions);
     const onNavigate = vi.fn();
     Object.assign(sidebar, { connected: true, onNavigate });

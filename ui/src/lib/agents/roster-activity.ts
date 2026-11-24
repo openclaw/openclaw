@@ -11,6 +11,20 @@ import {
 } from "../sessions/session-key.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar, selectableAgentsList } from "./display.ts";
 
+/** An agent's latest reply across its sessions, leaving out subagent and system work. */
+export function latestAgentReply(sessions: readonly GatewaySessionRow[]) {
+  return sessions.reduce<GatewaySessionRow["lastAssistantMessage"]>(
+    (latest, row) =>
+      row.lastAssistantMessage &&
+      !isSubagentSessionRow(row.key, row) &&
+      !isSystemCreatedSessionRow(row) &&
+      (!latest || row.lastAssistantMessage.timestamp > latest.timestamp)
+        ? row.lastAssistantMessage
+        : latest,
+    undefined,
+  );
+}
+
 /** Shared identity and activity in configured roster order. */
 export function agentRosterCards(
   roster: AgentsListResult | undefined,
@@ -44,16 +58,7 @@ export function agentRosterCards(
       (latest, row) => (!latest || (row.updatedAt ?? 0) > (latest.updatedAt ?? 0) ? row : latest),
       undefined,
     );
-    const lastAssistantMessage = sessions.reduce<GatewaySessionRow["lastAssistantMessage"]>(
-      (latest, row) =>
-        row.lastAssistantMessage &&
-        !isSubagentSessionRow(row.key, row) &&
-        !isSystemCreatedSessionRow(row) &&
-        (!latest || row.lastAssistantMessage.timestamp > latest.timestamp)
-          ? row.lastAssistantMessage
-          : latest,
-      undefined,
-    );
+    const lastAssistantMessage = latestAgentReply(sessions);
     const main = sessions.find((row) => row.key === mainKey) ?? sessions.find((row) => row.isMain);
     return {
       id: agent.id,

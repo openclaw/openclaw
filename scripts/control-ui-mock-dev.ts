@@ -2028,6 +2028,8 @@ async function createChatPickerScenario(
       sharingRole: "owner",
       isMain: true,
       lastMessagePreview: rosterAgents[0].preview,
+      // The agent row under the rail reads the main conversation's last reply.
+      lastAssistantMessage: { text: rosterAgents[0].preview, timestamp: rosterTime - 1_000 },
       activeRunIds: fixture === "reactions" ? [] : [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
       hasActiveRun: fixture !== "reactions",

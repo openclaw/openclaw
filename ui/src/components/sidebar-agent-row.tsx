@@ -169,7 +169,6 @@ export function SidebarSelectedAgentRow(props: { host: AppSidebarRenderHost }) {
       ? host().sidebarSnapshot!.brand
       : null;
   const mainKey = () => host().selectedAgentMainSessionKey(agentId());
-  const main = createMemo(() => host().mainSessionRow(agentId()));
   const home = createMemo(() => host().visibleHomeSession(agentId()));
   const card = createMemo((): SidebarAgentRowCard | null => {
     const live = agent();
@@ -200,7 +199,7 @@ export function SidebarSelectedAgentRow(props: { host: AppSidebarRenderHost }) {
             basePath: host().basePath,
           })
       ).href,
-      assistantPreview: main()?.lastAssistantMessage?.text,
+      assistantPreview: host().agentLatestReply(agentId()),
     };
   });
   const running = () =>

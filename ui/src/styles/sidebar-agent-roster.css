@@ -22,7 +22,8 @@ openclaw-sidebar-agent-roster,
   font-weight: 600;
 }
 
-.sidebar-agent-roster__header:is(:hover, :focus-within),
+/* Keyboard focus reveals what hover does; a mouse click leaves no pinned state behind. */
+.sidebar-agent-roster__header:is(:hover, :has(:focus-visible)),
 .sidebar-agent-roster__header--current {
   background: var(--bg-hover);
 }
@@ -251,7 +252,7 @@ openclaw-sidebar-agent-roster,
   padding: 0;
 }
 
-.sidebar-agent-roster__header:is(:hover, :focus-within) .sidebar-agent-roster__row,
+.sidebar-agent-roster__header:is(:hover, :has(:focus-visible)) .sidebar-agent-roster__row,
 .sidebar-agent-roster__header--attention .sidebar-agent-roster__row {
   padding-inline-end: 32px;
 }
@@ -277,6 +278,23 @@ openclaw-sidebar-agent-roster,
   top: 7px;
   inset-inline-end: 6px;
   box-shadow: 0 0 0 2px var(--sidebar-bg, var(--bg));
+}
+
+/* With a mouse, ⋯ waits for hover; until then its dot stands alone where it will appear. */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-agent-roster__header--attention:not(
+      :hover,
+      :has(:focus-visible, .sidebar-agent-roster__menu [aria-expanded="true"])
+    )
+    .sidebar-agent-roster__action {
+    & > svg {
+      visibility: hidden;
+    }
+    & > .sidebar-agent-roster__action-unread {
+      inset: 0;
+      margin: auto;
+    }
+  }
 }
 
 .sidebar-agent-roster__action:hover {
@@ -313,7 +331,7 @@ openclaw-sidebar-agent-roster,
 }
 /* Revealed actions overlay the row end; step the status left of them instead of
    reserving the same space again inside the link. */
-.sidebar-agent-roster__header:is(:hover, :focus-within):has(
+.sidebar-agent-roster__header:is(:hover, :has(:focus-visible)):has(
     > .sidebar-agent-roster__signals .sidebar-session-team-state
   ) {
   & > .sidebar-agent-roster__row {
@@ -335,7 +353,7 @@ openclaw-sidebar-agent-roster,
   transform: translateY(-50%);
 }
 .sidebar-agent-roster__header:hover .sidebar-agent-roster__actions,
-.sidebar-agent-roster__header:focus-within .sidebar-agent-roster__actions,
+.sidebar-agent-roster__header:has(:focus-visible) .sidebar-agent-roster__actions,
 .sidebar-agent-roster__header--attention .sidebar-agent-roster__actions,
 .sidebar-agent-roster__header:has(.sidebar-agent-roster__menu [aria-expanded="true"])
   .sidebar-agent-roster__actions {

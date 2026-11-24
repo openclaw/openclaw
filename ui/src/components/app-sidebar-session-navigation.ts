@@ -7,6 +7,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { latestAgentReply } from "../lib/agents/roster-activity.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   collectKnownSessionGroups,
@@ -716,6 +717,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       this.selectedAgentSessionResult(normalized)?.sessions ?? [],
       this.sessionData.activeSessionLineageRoot,
     );
+  }
+
+  /** The agent row's subtitle: the same latest reply its roster row shows. */
+  agentLatestReply(agentId: string): string | undefined {
+    const normalized = normalizeAgentId(agentId);
+    const rows = this.selectedAgentSessionResult(normalized)?.sessions ?? [];
+    return latestAgentReply(rows.filter((row) => this.sessionNavigationAgentId(row) === normalized))
+      ?.text;
   }
 
   /** Identity-card click: the agent's rolling main session, or Settings offline. */
