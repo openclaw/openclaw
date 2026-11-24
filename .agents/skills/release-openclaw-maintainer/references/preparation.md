@@ -106,7 +106,9 @@ prerelease. Preserve the resolved tag in the contribution manifest and reuse
 it for verification/recovery after the selector moves. Every beta gets freshly
 inventoried delta prose; a new candidate refuses cumulative-only notes.
 Stable notes compare with the previous published regular stable release, not a
-reachable main closeout or an older ancestor tag. Capture npm latest before
+reachable main closeout or an older ancestor tag. See the
+[shipped baseline rationale](../../openclaw-changelog-update/SKILL.md#inputs)
+for the v2026.11.4 → v2026.11.5 omission. Capture npm latest before
 publication (or provide the already captured tag for recovery); divergent tags
 retain their identity while the inventory removes proven shipped backports.
 Missing historical metadata is reported conservatively, never inferred from

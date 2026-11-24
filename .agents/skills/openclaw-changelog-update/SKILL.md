@@ -67,8 +67,10 @@ of this skill; initial generation must never overwrite them.
   tag; local tag ordering is not proof of publication. Extended-stable requires
   an explicit previous published tag on its maintenance line (the selected
   regular-stable cut for that line's first release), never the current regular
-  latest. A main-closeout SHA is not a shipped boundary: it can omit unreleased
-  beta development that landed before closeout. Explicit ancestral SHAs remain
+  latest. A main-closeout SHA is not a shipped boundary: the
+  [v2026.11.4 → v2026.11.5 incident](https://github.com/openclaw/openclaw/pull/200958)
+  showed that it can omit unreleased beta development that landed before
+  closeout. Explicit ancestral SHAs remain
   readable for historical replay with a diagnostic, not recommended for new notes.
 - Divergent histories: keep the selected tag as base in the manifest and public
   contribution provenance; mergeBase is separate traversal information. Inventory
