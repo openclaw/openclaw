@@ -88,6 +88,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         props.modelSwitching,
         props.selectedAgentRuntime,
         props.modelSelectionLocked,
+        props.sessionRowCurrent,
         session?.model,
         session?.modelProvider,
         session?.modelDisplayName,
@@ -124,6 +125,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       modelSwitching,
       selectedRuntimeOverride,
       modelSelectionLocked,
+      sessionRowCurrent,
       sessionModel,
       sessionProvider,
       sessionModelDisplayName,
@@ -182,10 +184,12 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     );
     const selectedValue = currentOverride || defaultModel;
     const selectedEntry = catalog.entry(selectedValue);
-    // A pending catalog need not rename a known selection. Never borrow the row's name
-    // for a different optimistic selection or use it to admit picker choices.
+    // Before the first scoped catalog, a live role-projected row can name the saved
+    // preference. It cannot admit options or name a different optimistic selection.
+    const labelValue =
+      uninitialized && !retired && sessionRowCurrent ? rawCurrentOverride : selectedValue;
     const rowLabel =
-      !selectedEntry && selectedValue && selectedValue === sessionModelValue
+      !selectedEntry && labelValue && labelValue === sessionModelValue
         ? sessionModelDisplayName?.trim()
         : undefined;
     const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
@@ -359,7 +363,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A lock prevents model changes; the concrete selection still owns its label.
     // Without a selection, neither the runtime nor the agent default identifies it.
     const committedModelLabel =
-      modelSelectionLocked === true && !currentOverride
+      modelSelectionLocked === true && !currentOverride && !(uninitialized && rowLabel)
         ? translate("chat.selectors.lockedSessionModel")
         : resolveChatModelPickerLabel(
             selectedEntry,
