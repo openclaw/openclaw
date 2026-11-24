@@ -881,6 +881,7 @@ exit "$status"
     confirmed: "false",
     merged: "",
     observed: "",
+    retain: "false",
   };
   function expectedDispatch(fields: Partial<typeof dispatchFields>) {
     return Object.values({ ...dispatchFields, ...fields })
@@ -906,6 +907,21 @@ exit "$status"
     main?: boolean;
     nested?: boolean;
   }>([
+    {
+      name: "resource retention",
+      args: ["merge-run", "123", "--retain-resources"],
+      fields: { retain: "true" },
+    },
+    {
+      name: "omitted retention flag during recovery",
+      args: recoveryArgs,
+      fields: { outcome: outcomeOid },
+    },
+    {
+      name: "explicit retention during recovery",
+      args: [...recoveryArgs, "--retain-resources"],
+      fields: { outcome: outcomeOid, retain: "true" },
+    },
     {
       name: "body relative to caller",
       args: ["merge-run", "123", "--body-file", "operator body.md"],
@@ -960,6 +976,39 @@ exit "$status"
   });
 
   itPosix(
+    "runs retention recovery and contradictory-option guards through the anchored CLI",
+    () => {
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+      fixture.write("gh", baseBranchGhStub("main"), fixture.bin);
+      // Isolate the parser/owner boundary: real bootstrap, supervisor and merge_run;
+      // real-Git lifecycle tests separately own receipt validation and remote reconciliation.
+      fixture.write(
+        "scripts/pr-lib/merge.sh",
+        `${readScript("scripts/pr-lib/merge.sh")}\nmerge_outcome_init() { MERGE_OUTCOME_OID=${outcomeOid}; MERGE_OUTCOME_RECORD='{"version":2,"retention":{}}'; }\nmerge_outcome_resume() { echo retained-reconciliation; }\n`,
+      );
+      fixture.commit(["scripts/pr-lib/merge.sh"], true);
+      const inherited = runWrapper(fixture, recoveryArgs, "canonical");
+      expect(inherited, inherited.stderr).toMatchObject({
+        status: 0,
+        stdout: "retained-reconciliation\n",
+      });
+      for (const flags of [
+        ["--auto-merge"],
+        ["--admin-evidence", "unused.json", "--confirmed-operator-admin"],
+      ]) {
+        const refused = runWrapper(
+          fixture,
+          ["merge-run", "123", "--retain-resources", ...flags],
+          "canonical",
+        );
+        expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+        expect(refused.stderr).toContain("retention requires ordinary immediate exact-head squash");
+        expect(refused.stdout).not.toContain("retained-reconciliation");
+      }
+    },
+  );
+
+  itPosix(
     "requires an exact receipt and explicit confirmation for completion-only dispatch",
     () => {
       const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
@@ -998,6 +1047,7 @@ exit "$status"
       ["merge-run", "123", "--body-file", ""],
       ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
+      ["merge-run", "123", "--retain-resources", "--retain-resources"],
       ["merge-recover", "123", outcomeOid, "--body-file", "one"],
       ...[
         ["--admin-evidence", "proof.json"],
