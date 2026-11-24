@@ -195,7 +195,6 @@ function createRestrictedFixture() {
   const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: fixture.cfg,
       policy: { sourceAgent: "main", deny: ["custom/child"] },

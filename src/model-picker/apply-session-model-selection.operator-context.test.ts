@@ -27,7 +27,6 @@ function restrictedSelection(options: { empty?: boolean } = {}) {
   const operatorAuthority = createTestOperatorAuthority({
     profileId: profile.profileId,
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: params.cfg,
       policy: { allow: options.empty ? [] : ["fixture/fallback", "fixture/manual"] },

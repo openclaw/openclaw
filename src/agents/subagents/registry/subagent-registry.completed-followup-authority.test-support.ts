@@ -93,7 +93,6 @@ export function registerCompletedFollowupAuthorityTests({
             ),
           );
           original.release();
-          expect(original.authority.assertCurrent).not.toThrow();
           const entry = expectDefined(subagentRuns.get("child"), "completed child");
           await updateRun(entry.runId, (draft) => {
             draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
@@ -147,7 +146,6 @@ export function registerCompletedFollowupAuthorityTests({
           );
           await releaseSubagentRun(entry.runId);
           await releaseSubagentRun(successor.runId);
-          expect(original.authority.assertCurrent).toThrow();
           expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
         } finally {
           original.release();

@@ -154,6 +154,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/creator-sign-in.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":

@@ -66,8 +66,8 @@ export function sessionPinRequester(options: GatewayRequestHandlerOptions) {
       return undefined;
     }
     assertAdmittedRunOperatorAuthority(run);
-    run.assertCurrent();
-    caller.operatorAuthority.assertCurrent();
+    run.signal?.throwIfAborted();
+    caller.operatorAuthority.signal?.throwIfAborted();
     return run.profileId;
   };
   const id = identity();

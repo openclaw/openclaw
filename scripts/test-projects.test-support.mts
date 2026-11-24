@@ -180,7 +180,12 @@ type ChangedTestTargetOptions = {
   broad?: boolean;
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
-  aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
+  aggressive?: {
+    maxDirectImporters: number;
+    maxDirectoryTests: number;
+    /** Owners whose behavior tests sit many imports away select every transitive importer. */
+    transitiveOwners?: RegExp;
+  };
   adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
@@ -4858,11 +4863,12 @@ function resolveBoundedChangedTestTargetPlan(
       graph ??= getImportGraph(cwd, graphOptions, changedPaths);
       directImporters = new Set(walkAffectedTestsFromImportGraph([changedPath], graph, 1));
       const directCount = new Set(graph.reverseImports.get(changedPath)).size;
-      const depth = options.aggressive
-        ? directCount < options.aggressive.maxDirectImporters
-          ? 2
-          : 1
-        : undefined;
+      const depth =
+        !options.aggressive || options.aggressive.transitiveOwners?.test(changedPath)
+          ? undefined
+          : directCount < options.aggressive.maxDirectImporters
+            ? 2
+            : 1;
       affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph, depth);
     }
     if (graph) {

@@ -296,7 +296,6 @@ export function isSessionSharingOwnerEquivalent(
     return false;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   // Attribution alone grants nothing; neither side may widen session-only scopes.
   return (
     authority.profileId === actor.profileId &&

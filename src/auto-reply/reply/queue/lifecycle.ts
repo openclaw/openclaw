@@ -128,7 +128,6 @@ export function markFollowupRunEnqueued(run: FollowupRun): boolean {
   const state = custody(run);
   const authority = run.operatorAuthority;
   authority?.signal?.throwIfAborted();
-  authority?.assertCurrent();
   if (!state.enqueued) {
     // Deferral publishes the source and can synchronously wake its RPC waiters.
     state.enqueued = true;

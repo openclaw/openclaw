@@ -404,7 +404,6 @@ describe("runMemoryFlushIfNeeded", () => {
       const operatorAuthority = createTestOperatorAuthority({
         profileId: "guest",
         scopes: ["operator.write"],
-        assertCurrent: vi.fn<() => void>(),
         retain: () => releaseOperatorAuthority,
       });
       runEmbeddedAgentMock

@@ -2,6 +2,7 @@ import type {
   TemplateDraftReviewItem,
   TemplatesDraftsPublishResult,
   TemplatesDraftsReviewResult,
+  TemplatesDraftsSignInResult,
 } from "@openclaw/gateway-protocol";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -11,6 +12,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 // importing each other's modules or constructing the flow during chat boot.
 export type TemplatePackagePreview = { description?: string | null; content?: string };
 
+export type TemplateSignInPresentation =
+  | { status: "required" | "starting" | "expired" | "denied" | "cancelled" | "failed" }
+  | Extract<TemplatesDraftsSignInResult, { status: "pending" }>;
+
 export interface TemplateCreator {
   busy: "starting" | "reviewing" | "publishing" | null;
   review: TemplatesDraftsReviewResult | null;
@@ -18,6 +23,9 @@ export interface TemplateCreator {
   publication: TemplatesDraftsPublishResult | null;
   publicationIssue: "failed" | "unconfirmed" | null;
   error: string | null;
+  readonly signIn: TemplateSignInPresentation | null;
+  startClawHubSignIn(): void;
+  cancelClawHubSignIn(): void;
   readonly hasActiveDraft: boolean;
   readonly subscribe: (listener: () => void) => () => void;
   readonly sessionKey: string | undefined;
