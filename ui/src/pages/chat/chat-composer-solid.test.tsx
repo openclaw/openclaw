@@ -188,15 +188,29 @@ it("publishes submitted and restored drafts without remounting the input", () =>
 });
 
 it("retires submitted command suggestions before a delayed catalog refresh", async () => {
+  const paneId = "delayed-command-refresh";
   const refresh = createDeferred();
   const onSend = vi.fn(() => {
     clearSubmittedComposerState(state, state.chatMessage, [], [], null);
   });
   const { state, view, input } = mountOwnedComposer({
+    paneId,
     onSend,
     onSlashIntent: () => refresh.promise,
   });
   input("/help");
+  flush();
+  const menu = getChatComposerState(paneId).slashMenu.state;
+  expect(menu.slashMenuOpen).toBe(true);
+  expect(menu.slashMenuItems.some((item) => item.name === "help")).toBe(true);
+  expect(state.chatMessage).toBe("/help");
+  expect(view.textarea().value).toBe("/help");
+  expect([view.textarea().selectionStart, view.textarea().selectionEnd]).toEqual([5, 5]);
+  expect(view.textarea().getAttribute("aria-controls")).toBe(
+    "chat-delayed-command-refresh-slash-menu-listbox",
+  );
+  // The real input starts the lazy menu import; the catalog refresh stays pending.
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(view.query('[role="listbox"]')).not.toBeNull());
 
   findPrimaryButton(view.container).click();
