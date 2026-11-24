@@ -1,3 +1,4 @@
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../types.js";
@@ -27,7 +28,8 @@ export async function resolveCronSkillsSnapshot(params: {
   });
   return (
     await runtime.resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: params.workspaceDir,
+      workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
+      executionWorkspaceDir: params.workspaceDir,
       config: params.config,
       agentId: params.agentId,
       existingSnapshot: params.existingSnapshot,
