@@ -7,9 +7,9 @@ import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
-  captureSqliteDatabaseDescriptorCustodyLocations,
   observeSqliteDatabaseAdmissionLocation,
   retireSqliteDatabaseAdmissionForPath,
+  retireSqliteDatabaseDescriptorCustody,
 } from "../infra/sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
@@ -659,12 +659,7 @@ export async function closeOpenClawStateDatabaseAsync(
 /** Join native consumers and identity descriptors before transferring store custody. */
 export async function releaseOpenClawStateDatabaseCustody(): Promise<void> {
   await closeOpenClawStateDatabaseAsync();
-  for (const location of captureSqliteDatabaseDescriptorCustodyLocations()) {
-    retireSqliteDatabaseAdmissionForPath(location);
-  }
-  for (const location of captureSqliteDatabaseDescriptorCustodyLocations()) {
-    throw new Error(`OpenClaw state database descriptor custody remains held for ${location}.`);
-  }
+  retireSqliteDatabaseDescriptorCustody();
 }
 
 export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
