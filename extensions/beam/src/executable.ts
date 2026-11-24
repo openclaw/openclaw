@@ -6,7 +6,7 @@ import packageManifest from "../package.json" with { type: "json" };
 
 export type BeamNativeRelease = {
   version: string;
-  protocol: 1;
+  protocol: number;
   platforms: Readonly<Record<string, { executableBytes: number; executableSha256: string }>>;
 };
 
