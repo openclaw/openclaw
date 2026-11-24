@@ -88,8 +88,18 @@ function readBeamSession(
         type: item.type,
         text: item.text,
         timestamp: session.updatedAt,
-        sender:
-          item.type === "userMessage" && session.uploaderProfileId
+        sender: item.speaker
+          ? {
+              identity: {
+                type: "observation" as const,
+                pluginId: "beam",
+                accountId: null,
+                senderKind: "unknown" as const,
+                id: `${session.beamId}:${session.revision}:${item.speaker}`,
+              },
+              label: item.speaker,
+            }
+          : item.type === "userMessage" && !session.portable && session.uploaderProfileId
             ? { identity: { type: "profile" as const, id: session.uploaderProfileId } }
             : undefined,
       }))
