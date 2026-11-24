@@ -14,10 +14,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { BrokerNativeResourceCloseError } from "../process/spawn-broker/resource-protocol.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import {
-  readSqliteDatabaseAdmissions,
-  SqliteDatabaseAdmissionRegistry,
-} from "./sqlite-database-admission-record.js";
+import { readSqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
+import { SqliteDatabaseAdmissionRegistry } from "./sqlite-database-admission-registry.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 import type { NativeWorkerReply, NativeWorkerRequest } from "./worker-native-lifecycle.types.js";

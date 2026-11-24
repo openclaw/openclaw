@@ -2,15 +2,16 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import {
   SqliteDatabaseGenerationSlot,
-  SqliteDatabaseAdmissionRegistry,
   createSqliteDatabaseAdmissionCursor,
   readSqliteDatabaseGeneration,
   type Admission,
 } from "./sqlite-database-admission-record.js";
+import { SqliteDatabaseAdmissionRegistry } from "./sqlite-database-admission-registry.js";
 import {
   createSqliteDatabaseWriteReceipts,
   sqliteSessionIdWriteScope,
 } from "./sqlite-database-write-receipts.js";
+import { createSqliteDescriptorCustody } from "./sqlite-descriptor-custody.js";
 
 function createAdmission(): Admission {
   return {
@@ -18,6 +19,7 @@ function createAdmission(): Admission {
     location: ":memory:",
     descriptor: -1,
     descriptorOwner: 0,
+    descriptorCustody: createSqliteDescriptorCustody(-1),
     generationId: "receipt-test",
     physicalIdentity: { key: "file:1:1", birthtime: "0" },
     generation: new SharedArrayBuffer(

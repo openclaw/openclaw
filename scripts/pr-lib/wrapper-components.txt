@@ -1288,10 +1288,12 @@ src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-delta.ts
 src/infra/sqlite-database-admission-record.ts
+src/infra/sqlite-database-admission-registry.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
 src/infra/sqlite-database-admission-wait.ts
 src/infra/sqlite-database-admission.ts
+src/infra/sqlite-descriptor-custody.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts

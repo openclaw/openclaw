@@ -67,9 +67,9 @@ export function createSqliteDatabaseDescriptorOwner(
     identity?: DatabasePathIdentity;
     expectedIdentity?: DatabaseFileIdentity;
     observedLocation?: SqliteDatabaseAdmissionLocation;
+    retainAcquisition?(completion: Promise<void>): void;
     create?: {
       authorize(canonicalPath: string): void | Promise<void>;
-      retain(completion: Promise<void>): void;
     };
   };
 
@@ -136,7 +136,7 @@ export function createSqliteDatabaseDescriptorOwner(
         params.assertCurrent();
         return observed;
       }
-      const custody = exists ? state.registry.descriptors.get(key) : undefined;
+      const custody = exists ? state.registry.getDescriptorCustody(key) : undefined;
       if (custody) {
         assertDatabaseFileIdentity(custody.file, observed);
         if (
@@ -154,9 +154,11 @@ export function createSqliteDatabaseDescriptorOwner(
       if (!custody && !privateStaging) {
         params.assertCurrent();
       }
-      const accepted = creator ? createDeferredCore() : undefined;
+      const accepted =
+        !custody && !privateStaging && params.retainAcquisition ? createDeferredCore() : undefined;
       if (accepted) {
-        creator?.retain(accepted.promise);
+        // Register before submission; cancellation must join reads as well as CREATE.
+        params.retainAcquisition?.(accepted.promise);
       }
       let acquired: number | undefined;
       let rollbackDescriptor: number | undefined;
@@ -266,7 +268,7 @@ export function createSqliteDatabaseDescriptorOwner(
     observedLocation?: SqliteDatabaseAdmissionLocation,
   ): boolean {
     const bound = !observedLocation && state.registry.forLocation(location);
-    const boundCustody = bound && state.registry.descriptors.get(bound.identity);
+    const boundCustody = bound && state.registry.getDescriptorCustody(bound.identity);
     if (
       bound &&
       expectedIdentity?.birthtime !== undefined &&
@@ -280,7 +282,8 @@ export function createSqliteDatabaseDescriptorOwner(
       seals.load(bound);
       return true;
     }
-    const custody = observedLocation && state.registry.descriptors.get(observedLocation.identity);
+    const custody =
+      observedLocation && state.registry.getDescriptorCustody(observedLocation.identity);
     if (observedLocation && custody && seals.isLoaded(custody)) {
       if (expectedIdentity) {
         assertDatabaseFileIdentity(custody.file, expectedIdentity);
@@ -346,7 +349,7 @@ export function createSqliteDatabaseDescriptorOwner(
         return undefined;
       }
       const descriptor =
-        state.registry.descriptors.get(key)?.descriptor ?? fs.openSync(location, "r");
+        state.registry.getDescriptorCustody(key)?.descriptor ?? fs.openSync(location, "r");
       // Never close a source descriptor while another native connection may hold POSIX locks.
       const opened = fs.fstatSync(descriptor, { bigint: true });
       if (!opened.isFile() || identity(opened) !== key) {

@@ -51,36 +51,55 @@ assert(Number.isSafeInteger(operations) && operations > 0);
 const root = mkdtempSync(path.join(tmpdir(), "sqlite-admission-release-"));
 process.once("exit", () => rmSync(root, { recursive: true, force: true }));
 const source = readFileSync(ownerFile, "utf8");
-const singleton = readFileSync(path.join(sourceRoot, "src/shared/global-singleton.ts"), "utf8");
+const read = (relative) => readFileSync(path.join(sourceRoot, relative), "utf8");
+const dependencies = {
+  singleton: read("src/shared/global-singleton.ts"),
+  key: read("src/infra/sqlite-database-admission-key.ts"),
+  delta: read("src/infra/sqlite-database-admission-delta.ts"),
+  custody: read("src/infra/sqlite-descriptor-custody.ts"),
+  // A supplied pre-extraction baseline already contains its own registry.
+  registry: source.includes("export class SqliteDatabaseAdmissionRegistry")
+    ? ""
+    : read("src/infra/sqlite-database-admission-registry.ts"),
+};
 const identity = readFileSync(path.join(sourceRoot, "src/infra/sqlite-worker-identity.ts"), "utf8");
-const key = readFileSync(
-  path.join(sourceRoot, "src/infra/sqlite-database-admission-key.ts"),
-  "utf8",
-);
 const normalize = identity.slice(
   identity.indexOf("export function normalizeDatabasePath("),
   identity.indexOf("export function readDatabaseFileIdentity("),
 );
 assert(normalize.startsWith("export function normalizeDatabasePath("));
 assert(process.platform !== "win32", "this synthetic publication proof runs on Unix hosts");
-// Keep the complete owner. Native descriptor helpers are outside this workload and fail closed.
-const owner = source
-  .replace(/^import type .*;\n/gm, "")
-  .replace(/^import \{ resolveGlobalSingleton \} from .*;\n/m, "")
-  .replace(/^import \{ SQLITE_DATABASE_ADMISSIONS_KEY \} from .*;\n/m, "")
-  .replace(/^import \{\n[\s\S]*?\} from "\.\/sqlite-worker-identity\.js";\n/m, "");
+// Compile the complete publication owners; native identity operations remain unsupported.
+const stripImports = (body) => body.replace(/^import[\s\S]*?from "[^"]+";\n/gm, "");
+dependencies.normalize = normalize;
+const owner = [
+  'import { randomUUID } from "node:crypto";',
+  'import fs from "node:fs";',
+  'import path from "node:path";',
+  'import { setEnvironmentData, threadId } from "node:worker_threads";',
+  dependencies.singleton,
+  dependencies.key,
+  dependencies.delta,
+  "const changedWriteScopes = changedAdmissionWriteScopes;",
+  stripImports(dependencies.custody),
+  normalize,
+  `function unsupportedIdentityOperation() { throw new Error("native identity is outside publication proof"); }
+   const assertDatabaseFileIdentity = unsupportedIdentityOperation;
+   const isSoleDatabaseFileDescriptor = unsupportedIdentityOperation;
+   const readDatabaseIdentityBirthtime = unsupportedIdentityOperation;
+   const normalizeWindowsPathPreservingCase = unsupportedIdentityOperation;`,
+  stripImports(source),
+  stripImports(dependencies.registry),
+].join("\n");
 assert(!/from "\.\.?\//.test(owner), "owner dependency imports changed; review harness");
-const code = stripTypeScriptTypes(`${singleton}\n${key}\n${normalize}\n
-function unsupportedIdentityOperation() { throw new Error("native identity is outside publication proof"); }
-const isSoleDatabaseFileDescriptor = unsupportedIdentityOperation;
-const readDatabaseIdentityBirthtime = unsupportedIdentityOperation;
-const normalizeWindowsPathPreservingCase = unsupportedIdentityOperation;
-${owner}`);
+const code = stripTypeScriptTypes(owner);
 const moduleFile = path.join(root, "admission-owner.mjs");
 writeFileSync(moduleFile, code);
-const { SqliteDatabaseAdmissionRegistry, SqliteDatabaseGenerationSlot } = await import(
-  pathToFileURL(moduleFile).href
-);
+const {
+  SqliteDatabaseAdmissionRegistry,
+  SqliteDatabaseGenerationSlot,
+  createSqliteDescriptorCustody,
+} = await import(pathToFileURL(moduleFile).href);
 // Base/candidate source capsules may use the old flat Map or the bucket wire format.
 const wireScopes = (scopes) => (source.includes("type AdmissionSnapshot =") ? [scopes] : scopes);
 const databaseCount = 40;
@@ -102,8 +121,10 @@ function fixture() {
       location: `/synthetic/admission-${i}.sqlite`,
       descriptor: -1,
       descriptorOwner: 0,
+      descriptorCustody: createSqliteDescriptorCustody(-1),
       generationId: `generation-${i}`,
       generation: new SharedArrayBuffer(36),
+      writerDiagnostic: new Int32Array(new SharedArrayBuffer(125 * Int32Array.BYTES_PER_ELEMENT)),
       writeScopes: new Map(),
       writeScopeRevision: 0,
       references: new Map([[0, refs]]),
@@ -341,7 +362,7 @@ console.log(
     platform: process.platform,
     sourceSha256: createHash("sha256").update(source).digest("hex"),
     dependenciesSha256: Object.fromEntries(
-      Object.entries({ singleton, normalize, key }).map(([name, value]) => [
+      Object.entries(dependencies).map(([name, value]) => [
         name,
         createHash("sha256").update(value).digest("hex"),
       ]),
