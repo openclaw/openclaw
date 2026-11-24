@@ -10,6 +10,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "./session-key.ts";
+import type { SessionListRead } from "./session-managed-list-refresh.ts";
 import {
   buildSessionListParams,
   DEFAULT_SESSION_LIST_QUERY,
@@ -479,6 +480,8 @@ export type ManagedSessionList = ObservedSessionList & {
   readRevision: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
+  /** Admitted reads may serve primary presentation and observed membership independently. */
+  reads: Set<SessionListRead>;
   queued: ManagedSessionListRefresh | null;
 };
 
