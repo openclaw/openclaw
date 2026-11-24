@@ -4,7 +4,10 @@ import {
   readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
@@ -29,7 +32,14 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
-    return { actions: reactionsEnabled ? ["send", "react"] : ["send"] };
+    const actions: ChannelMessageActionName[] = ["send"];
+    if (configuredAccounts.some((account) => account.transport.kind !== "container")) {
+      actions.push("poll");
+    }
+    if (reactionsEnabled) {
+      actions.push("react");
+    }
+    return { actions };
   },
   supportsAction: ({ action }) => action === "react",
   prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
