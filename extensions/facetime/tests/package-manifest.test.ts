@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveReleaseCompatibilityVersion } from "../../../release-compatibility.mjs";
 import { resolveNpmJsonEntries } from "../../../scripts/lib/npm-json-output.mts";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 
@@ -57,11 +58,10 @@ describe("FaceTime plugin manifest", () => {
     const pluginManifest = JSON.parse(
       readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
     );
-    // Extended-stable 2026.10.33 ships the signed 2026.11.4 API baseline while
-    // package and build metadata retain the release identity. minHostVersion
-    // remains the independent installation floor chosen by this plugin.
+    // Package/build metadata and the minimum install version are distinct
+    // from the release baseline used for plugin API admission.
     const hostVersion = packageManifest.version;
-    const apiVersion = hostVersion === "2026.10.33" ? "2026.11.4" : hostVersion;
+    const apiVersion = resolveReleaseCompatibilityVersion(hostVersion);
     expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
 
     expect(packageManifest.openclaw.extensions).toEqual(["./index.ts"]);
