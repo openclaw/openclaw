@@ -32,13 +32,12 @@ export function resolveSessionCatalogRoute(
   const scopes = client?.connect.scopes ?? [];
   const authority = client?.internal?.operatorAccessAuthority;
   const requiredGrant = provider.ownedRoute?.requiredGrantPluginId;
-  // Match the admission policy as well as the original grant. An unrelated policy
-  // granting the same scope must not disclose a restricted catalog's existence.
+  // The admission owner attests the role-required policy even when several
+  // policies contribute to the same live authority.
   const canDiscoverOwned =
     client?.authenticatedUserProfile?.profileId &&
     (requiredGrant === undefined ||
       (requiredGrant === authority?.requiredPolicyPlugin &&
-        requiredGrant === authority.gatewayAccessGrant?.pluginId &&
         hasCurrentGatewayOperatorAccess(authority)));
   const available: SessionCatalogRouteMethods = {};
   for (const operation of ["list", "read", "resolve", "continue"] as const) {

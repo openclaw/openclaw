@@ -109,6 +109,7 @@ it("resolves a cold route against this caller's read and write scopes", async ()
     params: Record<string, unknown>,
     identified = true,
     issuer = "guest-access",
+    signal = new AbortController().signal,
   ) => {
     const respond = vi.fn();
     const client = {
@@ -117,8 +118,8 @@ it("resolves a cold route against this caller's read and write scopes", async ()
       internal: {
         operatorAccessAuthority: {
           requiredPolicyPlugin: issuer,
-          gatewayAccessGrant: { pluginId: issuer, grantId: "grant" },
-          signal: new AbortController().signal,
+          // A composed authority has no singular durable recovery grant.
+          signal,
           assertCurrent() {},
         },
       },
@@ -157,6 +158,9 @@ it("resolves a cold route against this caller's read and write scopes", async ()
     true,
     null,
   ]);
+  expect(
+    await resolve(["operator.sessions.write"], lookup, true, "guest-access", AbortSignal.abort()),
+  ).toEqual([true, null]);
   expect(await resolve(["operator.sessions.read"], lookup)).toEqual([true, null]);
   expect(await resolve(["operator.sessions.write"], lookup, false)).toEqual([true, null]);
   expect(await resolve(["operator.sessions.write"], { routeSegment: "unknown" })).toEqual([
