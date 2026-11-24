@@ -5,6 +5,7 @@ import {
   CONTROL_UI_SETTINGS_PAGES,
   findControlUiSetting,
 } from "../../../src/shared/control-ui-settings/index.ts";
+import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { configPageForSection } from "../pages/config/config-sections.ts";
@@ -263,4 +264,67 @@ suite.define(() => {
       expect(checked).toBeGreaterThan(15);
     });
   });
+
+  it("names every row on every Settings page", async () => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    const schema = buildConfigSchemaCore();
+    const paths = [
+      ...visibleSettingsNavigationGroups(true).flatMap((group) =>
+        group.routes.map((routeId) => pathForRoute(routeId)),
+      ),
+      pathForRoute("ai-agents"),
+      ...["overview", "tools", "skills", "channels", "cron", "memory"].map(
+        (panel) => `/settings/agents/main/${panel}`,
+      ),
+    ];
+    await withPage(async ({ page }) => {
+      await installMockGateway(page, {
+        ...gatewayScenario,
+        methodResponses: { ...gatewayScenario.methodResponses, "config.schema": schema },
+      });
+      const failures: string[] = [];
+      let rows = 0;
+      for (const path of new Set(paths)) {
+        await page.goto(`${suite.server.baseUrl}${path.slice(1)}`);
+        await page
+          .locator("main .settings-page, main .settings-row")
+          .first()
+          .waitFor({ timeout: 4000 })
+          .catch(() => {});
+        // Late reads add rows; give them one settle window before counting.
+        await page.waitForTimeout(400);
+        const result = await page.evaluate(() => {
+          const found = [
+            ...document.querySelectorAll<HTMLElement>("main .settings-row, main .provider-row"),
+          ];
+          const tiers = found
+            .filter((row) => row.id)
+            .map(
+              (row) =>
+                `${row.closest(".config-advanced-disclosure") ? "advanced" : "common"} ${row.id}`,
+            );
+          return {
+            count: found.length,
+            unnamed: found
+              .filter((row) => !row.id && !row.hasAttribute("data-settings-info"))
+              .map(
+                (row) =>
+                  row.querySelector(".settings-row__title")?.textContent?.trim() ?? row.className,
+              ),
+            duplicates: [...new Set(tiers.filter((key, index) => tiers.indexOf(key) !== index))],
+          };
+        });
+        rows += result.count;
+        if (result.unnamed.length > 0) {
+          failures.push(`${path}: rows without a setting ID: ${result.unnamed.join(", ")}`);
+        }
+        if (result.duplicates.length > 0) {
+          failures.push(`${path}: repeated setting IDs: ${result.duplicates.join(", ")}`);
+        }
+      }
+      expect(failures).toEqual([]);
+      expect(rows).toBeGreaterThan(300);
+    });
+    // One pass over every Settings page; each visit is a full load against the mock Gateway.
+  }, 240_000);
 });
