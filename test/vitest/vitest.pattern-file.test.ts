@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { convertPathToPattern, globSync } from "tinyglobby";
 import { afterEach, expect, it, vi } from "vitest";
+import { parseCLI } from "vitest/node";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import * as cliPatterns from "./vitest.include-patterns.ts";
 import * as cli from "./vitest.pattern-file.ts";
@@ -18,6 +19,35 @@ const narrow = (include: string[], ...args: string[]) =>
   cli.narrowIncludePatternsForCli(include, ["node", "vitest", "run", ...args]);
 const matches = (file: string, include: string[], ...args: string[]) =>
   cli.matchesVitestCliSelection(file, include, ["run", ...args], "", {});
+const discover = (
+  include: string[],
+  args: string[],
+  scopedDir: string,
+  env: NodeJS.ProcessEnv,
+  selectedPatterns?: readonly string[] | null,
+  root?: string,
+  exclude?: readonly string[],
+) => {
+  const native = cli.createVitestCliDiscovery(args, root);
+  const dir = native.effectiveDir(scopedDir);
+  const selection = cliPatterns.splitIncludePatterns(
+    cli.relativizeScopedPatterns(
+      selectedPatterns ??
+        cli.loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
+        include,
+      scopedDir,
+    ),
+  );
+  return native.discover(selection.include, dir, [
+    ...cli.resolveNativeVitestExcludes(
+      cli.relativizeScopedPatterns(exclude ?? [], scopedDir),
+      selection.include,
+      path.resolve(root ?? process.cwd(), scopedDir),
+      dir,
+    ),
+    ...selection.exclude,
+  ]);
+};
 function fixturePath(root: string, file: string) {
   const target = path.join(root, file);
   mkdirSync(path.dirname(target), { recursive: true });
@@ -190,6 +220,7 @@ it("plans Node CI test ownership before dependencies are installed", () => {
     "test/vitest/vitest.pattern-file.ts",
     "test/vitest/vitest.include-patterns.ts",
     "scripts/lib/vitest-cli-mode.mts",
+    "scripts/lib/vitest-cli.mts",
   ]) {
     copyFileSync(path.resolve(import.meta.dirname, "../..", relative), fixturePath(root, relative));
   }
@@ -280,6 +311,222 @@ it.each([
   expect(cli.matchesVitestCliSelection(file, [file], args, dir, {}, [file])).toBe(selected);
 });
 
+it.each(["plain", "[selection]"])("matches native discovery exclusions under %s", (name) => {
+  const root = path.join(tempDirs.make("vitest-effective-exclusions-"), name);
+  const files = [
+    "test/keep.test.ts",
+    "test/excluded.test.ts",
+    "test/.hidden.test.ts",
+    "test/[literal].test.ts",
+  ];
+  for (const file of files) writeFileSync(fixturePath(root, file), "");
+  const include = ["test/**/*.test.ts"];
+  for (const exclusion of [
+    files[1]!,
+    path.resolve(root, files[1]!),
+    path.resolve(root, files[1]!).replaceAll("\\", "/"),
+    "test\\excluded.test.ts",
+    "!test/excluded.test.ts",
+    "test/",
+    "test/{excluded,keep}.test.ts",
+    "test/@(excluded|keep).test.ts",
+    "test/!(keep).test.ts",
+    "test/.hidden.test.ts",
+    String.raw`test/\[literal\].test.ts`,
+    '"test/excluded.test.ts"',
+    "'test/excluded.test.ts'",
+  ]) {
+    const args = ["run", "--exclude", exclusion];
+    const parsed = parseCLI(["vitest", ...args]);
+    const { selected } = discover(include, args, "", {}, include, root);
+    const native = globSync(include, {
+      cwd: root,
+      ignore: parsed.options.exclude,
+      dot: true,
+      expandDirectories: false,
+    });
+    expect(selected.toSorted(), exclusion).toEqual(native.toSorted());
+  }
+});
+
+it.each([
+  [String.raw`test\keep.test.ts`, ["test/keep.test.ts"]],
+  ["test/other/../keep.test.ts", ["test/keep.test.ts"]],
+  ["test//keep.test.ts:12", ["test/keep.test.ts"]],
+  ["test\\", ["test/keep.test.ts", "test/other.test.ts"]],
+  ['"test/keep.test.ts"', []],
+  ["'test/keep.test.ts'", []],
+])("uses native startup path normalization for positional %s", (filter, expected) => {
+  const root = tempDirs.make("vitest-native-positional-");
+  const include = ["test/**/*.test.ts"];
+  for (const file of ["test/keep.test.ts", "test/other.test.ts"]) {
+    writeFileSync(fixturePath(root, file), "");
+  }
+  const args = ["run", filter];
+  const originalArgs = [...args];
+  expect(parseCLI(["vitest", ...args]).filter).toEqual([filter]);
+  const discovery = cli.createVitestCliDiscovery(args, root);
+  expect(discovery.discover(include, discovery.effectiveDir()).selected.toSorted()).toEqual(
+    expected,
+  );
+  expect(args).toEqual(originalArgs);
+});
+
+it.each([
+  [[], ["tooling", "tooling-isolated", "cli-process"]],
+  [["--project=tooling"], ["tooling"]],
+  [["--project", "TOOLING"], ["tooling"]],
+  [["-p", "tooling*", "-p", "!tooling-isolated"], ["tooling"]],
+  [["--project=!tooling*"], ["cli-process"]],
+  [
+    ["--project=tooling", "--project=cli-process"],
+    ["tooling", "cli-process"],
+  ],
+  [["--project=tooling?"], []],
+  [["--project=[t]ooling"], []],
+  [["--project=missing"], []],
+])("prepares native project eligibility for %j", (args, expected) => {
+  const original = [...args];
+  const discovery = cli.createVitestCliDiscovery(args);
+  expect(
+    ["tooling", "tooling-isolated", "cli-process"].filter(
+      (name) => discovery.projectStatus(name) === "eligible",
+    ),
+  ).toEqual(expected);
+  expect(args).toEqual(original);
+});
+
+it("keeps crawler-root, hidden-file and matching-parent discovery semantics", () => {
+  const root = path.join(tempDirs.make("vitest-native-crawl-"), "repo");
+  const files = ["test/.hidden.test.ts", "test/excluded.test.ts", "test/keep.test.ts"];
+  for (const file of files) writeFileSync(fixturePath(root, file), "");
+  const include = ["test/**/*.test.ts"];
+  for (const [ignore, expected] of [
+    [[], files],
+    [["test/"], files],
+    [["../repo/test/excluded.test.ts"], [files[0]!, files[2]!]],
+  ] as const) {
+    const args = ignore.flatMap((pattern) => ["--exclude", pattern]);
+    const actual = discover(include, args, "", {}, include, root);
+    expect(actual.available.toSorted()).toEqual([...expected].toSorted());
+    expect(actual.selected.toSorted()).toEqual([...expected].toSorted());
+  }
+});
+
+it("uses invocation roots for fallback narrowing and forwarded discovery controls", () => {
+  const root = tempDirs.make("vitest-selection-root-");
+  const file = "test/example.test.ts";
+  const include = ["test/**/*.test.ts"];
+  const absolute = path.resolve(root, file);
+  writeFileSync(fixturePath(root, file), "");
+  expect(cli.narrowIncludePatternsForCli(include, ["node", "vitest", absolute], { root })).toEqual([
+    absolute,
+  ]);
+  const selected = (args: string[]) =>
+    discover(include, args, "", {}, undefined, root).selected.includes(file);
+  expect(selected(["run", absolute])).toBe(true);
+  expect(selected(["run", "--root", root, absolute])).toBe(true);
+  expect(selected(["run", `--dir=${root}`, absolute])).toBe(true);
+  expect(selected(["run", "--root", "test"])).toBe(true);
+  expect(selected(["run", "--dir", "test"])).toBe(false);
+  expect(selected(["run", "--root", "other", "--dir", "."])).toBe(true);
+  expect(selected(["run", "--root", ".", "--dir", "test"])).toBe(false);
+  expect(
+    discover(include, ["run", "--root", "other"], "test", {}, include, root).selected.includes(
+      file,
+    ),
+  ).toBe(true);
+  expect(selected(["run", "--", "--dir=test"])).toBe(true);
+});
+
+it("uses normalized native operands when narrowing an unprepared scoped selection", () => {
+  const root = tempDirs.make("vitest-scoped-fallback-");
+  const file = "test/scripts/example.test.ts";
+  const include = ["test/scripts/**/*.test.ts"];
+  writeFileSync(fixturePath(root, file), "");
+  for (const operand of [
+    "test/scripts//example.test.ts",
+    "test/scripts/other/../example.test.ts",
+    String.raw`test\scripts\example.test.ts`,
+    `${path.resolve(root, file)}:12`,
+  ]) {
+    for (const forwarded of [[], ["--dir", path.join(root, "test/scripts")]]) {
+      const args = ["run", operand, ...forwarded];
+      const original = [...args];
+      expect(discover(include, args, "test/scripts", {}, undefined, root).selected).toEqual([file]);
+      expect(
+        discover(include, [...args, "--exclude", "*.test.ts"], "test/scripts", {}, undefined, root)
+          .selected,
+      ).toEqual([]);
+      expect(args).toEqual(original);
+    }
+  }
+  for (const quoted of ['"test/scripts/example.test.ts"', "'test/scripts/example.test.ts'"]) {
+    expect(
+      discover(include, ["run", quoted], "test/scripts", {}, undefined, root).selected,
+    ).toEqual([]);
+  }
+});
+
+it("applies native basename filters after discovering unprepared owner includes", () => {
+  const root = tempDirs.make("vitest-native-basename-");
+  const files = ["test/example.test.ts", "test/nested/example.test.ts", "test/other.test.ts"];
+  for (const file of files) writeFileSync(fixturePath(root, file), "");
+  const include = ["test/**/*.test.ts"];
+  const args = ["run", "--coverage.enabled", "example.test.ts"];
+  const originalArgs = [...args];
+  const selection = (env = {}, prepared?: string[]) =>
+    discover(include, args, "test", env, prepared, root).selected.toSorted();
+  expect(selection()).toEqual(files.slice(0, 2).toSorted());
+  const file = path.join(root, "include.json");
+  writeFileSync(file, JSON.stringify([files[1]]));
+  const env = { OPENCLAW_VITEST_INCLUDE_FILE: file };
+  expect(selection(env)).toEqual([files[1]]);
+  expect(selection(env, ["test/example.test.ts"])).toEqual(["test/example.test.ts"]);
+  expect(args).toEqual(originalArgs);
+});
+
+it("keeps owner exclusions anchored when absolute selections use another native directory", () => {
+  const root = tempDirs.make("vitest-native-exclusions-");
+  const files = [
+    "test/scripts/owned.test.ts",
+    "test/scripts/keep.test.ts",
+    "test/scripts/cli.test.ts",
+    "test/scripts/node_modules/ignored.test.ts",
+  ];
+  for (const file of files) writeFileSync(fixturePath(root, file), "");
+  const include = [path.resolve(root, "test/scripts/**/*.test.ts").replaceAll("\\", "/")];
+  const exclusions = ["test/scripts/owned.test.ts", "**/node_modules/**"];
+  const args = ["run", "--dir", path.join(root, "test/scripts"), "--exclude", "cli.test.ts"];
+  const originalArgs = [...args];
+  expect(discover(include, args, "", {}, include, root, exclusions)).toEqual({
+    available: ["test/scripts/keep.test.ts"],
+    selected: ["test/scripts/keep.test.ts"],
+  });
+  expect(cli.resolveNativeVitestExcludes(exclusions, ["test/**/*.test.ts"], root)).toEqual(
+    exclusions,
+  );
+  expect(args).toEqual(originalArgs);
+});
+
+it.each([
+  "src/gateway",
+  String.raw`src\gateway`,
+  "src/../src/gateway",
+  String.raw`src\..\src\gateway`,
+])("normalizes the discovery directory through native CLI parsing: %s", (directory) => {
+  const root = tempDirs.make("vitest-selection-directory-");
+  const include = ["*.test.ts"];
+  const args = ["run", "--dir", directory];
+  const originalArgs = [...args];
+  expect(parseCLI(["vitest", ...args]).options.dir).toBe("src/gateway");
+  writeFileSync(fixturePath(root, "src/gateway/example.test.ts"), "");
+  writeFileSync(fixturePath(root, "src/other/example.test.ts"), "");
+  const { selected } = discover(include, args, "", {}, include, root);
+  expect(selected).toEqual(["src/gateway/example.test.ts"]);
+  expect(args).toEqual(originalArgs);
+});
+
 it("keeps a large exclusion inventory within Node's compiled-pattern cache budget", () => {
   const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
   const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);
@@ -341,11 +588,114 @@ it("preserves native non-browser discovery and shallow extension bounds", () => 
   expect(filterFiles(files, narrow(owner, "ui/src")!).toSorted()).toEqual(withTsx(uiTs).toSorted());
 });
 
+it.each(["posix", "win32"] as const)(
+  "preserves both intersection operands' absolute provenance on %s",
+  async (platform) => {
+    const paths = path[platform];
+    const root = platform === "win32" ? "C:/repo" : "/repo";
+    const absolute = (pattern: string) => paths.resolve(root, pattern).replaceAll("\\", "/");
+    const file = "test/scripts/example.test.ts";
+    const other = "test/scripts/other.test.ts";
+    const owner = "test/scripts/**/*.test.{ts,tsx}";
+    vi.resetModules();
+    vi.doMock("node:path", () => ({ default: paths }));
+    try {
+      const { intersectIncludePatterns } = await import("./vitest.include-patterns.ts");
+      for (const [includes, selected, expected] of [
+        [[file], [absolute(file)], [absolute(file)]],
+        [[file, other], [absolute("test/**/*.test.ts")], [absolute(file), absolute(other)]],
+        [[owner], [absolute("test/**/*.test.ts")], [absolute("test/scripts/**/*.test.ts")]],
+        [[absolute(file)], ["test/**/*.test.ts"], [absolute(file)]],
+        [[absolute(owner)], [file], [absolute(file)]],
+        [
+          [file, other],
+          [file, other],
+          [file, other],
+        ],
+        [[file], [absolute("src/foreign.test.ts")], []],
+        [[absolute(file), other], ["test/**/*.test.ts"], [absolute(file), other]],
+        [[file, absolute(file)], [file], [file, absolute(file)]],
+        [[file], [absolute(file), file, absolute(file)], [absolute(file), file]],
+        [[owner, absolute(file)], [owner], [owner, absolute(file)]],
+        [[absolute(file), owner], [owner], [absolute(file), owner]],
+        [
+          ["test/**/*.test.ts", absolute("test/scripts/**/*.test.ts")],
+          ["test/scripts/sub/**/*.test.ts"],
+          ["test/scripts/sub/**/*.test.ts", absolute("test/scripts/sub/**/*.test.ts")],
+        ],
+        [
+          [absolute("test/scripts/**/*.test.ts"), "test/**/*.test.ts"],
+          ["test/scripts/sub/**/*.test.ts"],
+          [absolute("test/scripts/sub/**/*.test.ts"), "test/scripts/sub/**/*.test.ts"],
+        ],
+        [
+          [file, absolute(other), "test/scripts/last.test.ts"],
+          [owner],
+          [file, absolute(other), "test/scripts/last.test.ts"],
+        ],
+        [[owner, absolute("src/**/*.test.ts")], [owner], [owner]],
+        [
+          [owner, absolute("src/**/*.test.ts")],
+          ["test/scripts/upgrade-survivor-native-*.test.ts"],
+          ["test/scripts/upgrade-survivor-native-*.test.ts"],
+        ],
+        [
+          [absolute("src/**/*.test.ts"), owner],
+          ["test/scripts/upgrade-survivor-native-*.test.ts"],
+          ["test/scripts/upgrade-survivor-native-*.test.ts"],
+        ],
+        [[owner, absolute(file)], [absolute(owner)], [absolute(owner)]],
+        [[file], [], []],
+      ] as const) {
+        expect(
+          intersectIncludePatterns([...includes], [...selected], paths.matchesGlob, root),
+        ).toEqual(expected);
+      }
+    } finally {
+      vi.doUnmock("node:path");
+      vi.resetModules();
+    }
+  },
+);
+
+it.each([32, 128, 512])("prepares literal membership once for %i include paths", (size) => {
+  const files = Array.from({ length: size }, (_, index) => `test/file-${index}.test.ts`);
+  const originalEvery = Array.prototype.every;
+  let visits = 0;
+  const every = vi.spyOn(Array.prototype, "every").mockImplementation(function (
+    this: unknown[],
+    predicate,
+    thisArg,
+  ) {
+    return originalEvery.call(this, (value, index, array) => {
+      visits++;
+      return predicate.call(thisArg, value, index, array);
+    });
+  });
+  let actual: string[] | null;
+  try {
+    actual = intersect(files, files);
+  } finally {
+    every.mockRestore();
+  }
+  expect(actual).toEqual(files);
+  // Include validation visits each path segment too; it must remain linear.
+  expect(visits).toBeLessThanOrEqual(size * 10);
+});
+
 it.each([
   ["ui/src/**/*.e2e.test.ts", "ui/src/e2e/*.e2e.test.ts"],
   ["ui/src/**/prefix" + cliPatterns.nonBrowserTestBasenamePattern, "ui/src/**/*.test.ts"],
+  ["src/logging/**/*.test.ts", "src/@(logging|shared)/redact*.test.ts"],
+  ["src/logging/**/*.test.ts", "src/+(logging|shared)/redact*.test.ts"],
 ])("retains the ambiguity guard for glob-owned inventory %s", (owner, requested) => {
   expect(() => intersect([owner], [requested])).toThrow(
     "cannot safely intersect non-literal include path",
   );
+});
+
+it.each(["@", "+"])("keeps a proven disjoint %s extglob empty", (operator) => {
+  expect(
+    intersect(["src/logging/**/*.test.ts"], [`test/${operator}(logging|shared)/redact*.test.ts`]),
+  ).toEqual([]);
 });

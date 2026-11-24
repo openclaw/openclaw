@@ -146,6 +146,13 @@ function runPlan(
     includePatterns,
     forwardedArgs,
     watchMode,
+    ...(watchMode &&
+    includePatterns &&
+    ["tooling", "tooling-isolated", "tooling-docker", "cli", "cli-process", "infra"].includes(
+      config,
+    )
+      ? { includePatternsPrepared: true }
+      : {}),
   };
 }
 
@@ -162,7 +169,7 @@ function expectRun(
     runPlan(
       project,
       expected.includePatterns ?? null,
-      expected.forwardedArgs ?? [],
+      expected.forwardedArgs ?? (expected.watchMode ? ["--watch"] : []),
       expected.watchMode ?? false,
     ),
   ]);
@@ -428,7 +435,7 @@ describe("scripts/test-projects changed-target routing", () => {
       const absolute = path.join(cwd, target);
       expectRun(planRuns([absolute], cwd), "unit", { forwardedArgs: [absolute] });
       expectRun(planRuns(["--watch", target], cwd), "unit", {
-        forwardedArgs: [target],
+        forwardedArgs: ["--watch", target],
         watchMode: true,
       });
     });
@@ -1340,8 +1347,6 @@ export const single = {
 
   it.each([
     ["src/agents/**/*.test.ts", configFile("agents")],
-    ["test/plugins", configFile("tooling")],
-    ["test/scripts", configFile("tooling")],
     ["src/plugin-state", configFile("unit")],
   ])("preserves watch selection across database ownership for %s", (target, owner) => {
     expect(planRuns(["--watch", target])).toEqual([
@@ -1351,11 +1356,640 @@ export const single = {
         databaseWorkerWatchTests: databaseWorkerCoreTestFiles.filter((file) =>
           file.startsWith(`${target.split("/**")[0]}/`),
         ),
-        forwardedArgs: [],
+        forwardedArgs: ["--watch"],
         includePatterns: [target.endsWith(".test.ts") ? target : `${target}/**/*.test.ts`],
         watchMode: true,
       },
     ]);
+  });
+
+  it.each([
+    ["test/scripts/upgrade-survivor-native-systemd.test.ts"],
+    ["test/scripts/upgrade-survivor-native-systemd*.test.ts"],
+    ["test/scripts/managed-child-process.{drain,termination}.test.ts"],
+    [
+      "test/scripts/upgrade-survivor-native-systemd*.test.ts",
+      "test/scripts/managed-child-process.drain.test.ts",
+    ],
+  ])("preserves isolated watch ownership and live selectors for %j", (...targets) => {
+    const args = ["--watch", ...targets, "--reporter=dot"];
+    expectRun(planRuns(args, undefined, undefined, { env: {} }), "tooling-isolated", {
+      includePatterns: targets,
+      forwardedArgs: ["--watch", "--reporter=dot"],
+      watchMode: true,
+    });
+    const [spec] = runSpecs(args, { baseEnv: {} });
+    expect(spec?.config).toBe(configFile("tooling-isolated"));
+    expect(spec?.includePatterns).toEqual(targets);
+    expect(spec?.watchMode).toBe(true);
+    expect(spec?.pnpmArgs).not.toContain("run");
+  });
+
+  it.each([
+    ["test/scripts/upgrade-survivor-native-*.test.ts"],
+    ["test/scripts/managed-child-process.*.test.ts"],
+    ["test/plugins"],
+    ["test/scripts"],
+    [
+      "test/scripts/upgrade-survivor-native-systemd*.test.ts",
+      "test/scripts/upgrade-survivor-native-assignments.test.ts",
+    ],
+  ])("rejects mixed isolated watch selectors instead of omitting tests for %j", (...targets) => {
+    // These directories also own database tests. That watch composition alone
+    // cannot include the isolated fixtures excluded from ordinary tooling.
+    for (const select of [
+      () => planRuns(["--watch", ...targets], undefined, undefined, { env: {} }),
+      () => runSpecs(["--watch", ...targets], { baseEnv: {} }),
+    ]) {
+      expect(select).toThrow("watch mode with mixed test suites is not supported");
+    }
+  });
+
+  it.each([
+    ["src/selector/one.test.ts", "unit"],
+    ["test/example.e2e.test.ts", "e2e"],
+    ["packages/sdk/src/app-sdk-external-boundary.e2e.test.ts", "e2e"],
+  ])("preserves existing native OR forwarding for the %s watch owner", (target, project) => {
+    withTinyFileTree({ [target]: "" }, (cwd) => {
+      const args = ["--watch", target, "unrelated-filter"];
+      expectRun(planRuns(args, cwd, undefined, { env: {} }), project, {
+        forwardedArgs: ["--watch", "unrelated-filter", target],
+        watchMode: true,
+      });
+      const [spec] = runSpecs(args, { cwd, baseEnv: {} });
+      expect(spec?.pnpmArgs).toEqual(expect.arrayContaining(["unrelated-filter", target]));
+      expect(spec?.includePatterns).toBeNull();
+    });
+  });
+
+  it("preserves existing agent forwarding outside the competing tooling boundary", () => {
+    const directory = "src/agents/tools";
+    const keep = `${directory}/keep.test.ts`;
+    const drop = `${directory}/drop.test.ts`;
+    withTinyFileTree({ [keep]: "", [drop]: "" }, (cwd) => {
+      const args = ["--watch", directory, drop, "keep"];
+      const includes = [`${directory}/**/*.test.ts`, drop];
+      expectRun(planRuns(args, cwd, undefined, { env: {} }), "agents-tools", {
+        includePatterns: includes,
+        forwardedArgs: ["--watch", "keep"],
+        watchMode: true,
+      });
+      const [spec] = runSpecs(args, { cwd, baseEnv: {} });
+      expect(spec?.includePatterns).toEqual(includes);
+      expect(spec?.pnpmArgs.at(-1)).toBe("keep");
+      expect(spec?.pnpmArgs).not.toContain(directory);
+      expect(spec?.pnpmArgs).not.toContain(drop);
+    });
+  });
+
+  it.each([
+    [
+      "test/scripts/upgrade-survivor-native-assignments.test.ts",
+      "test/scripts/upgrade-survivor-native-assignment*.test.ts",
+      "tooling",
+    ],
+    [
+      "test/scripts/upgrade-survivor-native-systemd.test.ts",
+      "test/scripts/upgrade-survivor-native-systemd*.test.ts",
+      "tooling-isolated",
+    ],
+  ])("retains a live %s watch with no current positional matches", (file, target, project) => {
+    withTinyFileTree({ [file]: "import fs from 'node:fs';" }, (cwd) => {
+      const args = ["--watch", target, "currently-unmatched"];
+      expectRun(planRuns(args, cwd, undefined, { env: {} }), project, {
+        includePatterns: [target],
+        forwardedArgs: ["--watch", "currently-unmatched"],
+        watchMode: true,
+      });
+      const [spec] = runSpecs(args, { cwd, baseEnv: {} });
+      expect(spec?.config).toBe(configFile(project));
+      expect(spec?.includePatterns).toEqual([target]);
+      expect(spec?.pnpmArgs).toContain("currently-unmatched");
+      expect(spec?.watchMode).toBe(true);
+    });
+  });
+
+  it("does not invent isolated watch ownership for absent fixtures", () => {
+    withTinyFileTree({ "test/scripts/ordinary.test.ts": "import fs from 'node:fs';" }, (cwd) => {
+      expect(planRuns(["--watch", "test/scripts"], cwd, undefined, { env: {} })).toMatchObject([
+        {
+          config: configFile("tooling"),
+          includePatterns: ["test/scripts/**/*.test.ts"],
+          watchMode: true,
+        },
+      ]);
+    });
+  });
+
+  it.each(["separated", "inline", "absolute"])(
+    "classifies effective isolated watch matches after %s exclusions",
+    (style) => {
+      const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+      const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+      const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+      withTinyFileTree({ [isolated]: "", [ordinary]: "import fs from 'node:fs';" }, (cwd) => {
+        const pattern =
+          style === "absolute" ? path.resolve(cwd, ordinary).replaceAll("\\", "/") : ordinary;
+        const exclusion = style === "inline" ? [`--exclude=${pattern}`] : ["--exclude", pattern];
+        expectRun(
+          planRuns(["--watch", target, ...exclusion], cwd, undefined, { env: {} }),
+          "tooling-isolated",
+          {
+            includePatterns: [target],
+            forwardedArgs: ["--watch", ...exclusion],
+            watchMode: true,
+          },
+        );
+        expect(() => planRuns(["--watch", target], cwd, undefined, { env: {} })).toThrow(
+          "watch mode with mixed test suites is not supported",
+        );
+        expectRun(
+          planRuns(["--watch", target, "--exclude", isolated], cwd, undefined, { env: {} }),
+          "tooling",
+          {
+            includePatterns: [target],
+            forwardedArgs: ["--watch", "--exclude", isolated],
+            watchMode: true,
+          },
+        );
+      });
+    },
+  );
+
+  it("classifies only effective literal owners, including implied database workers", () => {
+    const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+    const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    const worker = "test/scripts/upgrade-survivor-acp-metadata.test.ts";
+    withTinyFileTree(
+      { [isolated]: "", [ordinary]: "import fs from 'node:fs';", [worker]: "" },
+      (cwd) => {
+        for (const excluded of [ordinary, worker]) {
+          const args = ["--watch", isolated, excluded, "--exclude", excluded];
+          expectRun(planRuns(args, cwd, undefined, { env: {} }), "tooling-isolated", {
+            includePatterns: [isolated],
+            forwardedArgs: ["--watch", "--exclude", excluded],
+            watchMode: true,
+          });
+        }
+        expectRun(
+          planRuns(["--watch", isolated, ordinary, "--exclude", isolated], cwd, undefined, {
+            env: {},
+          }),
+          "tooling",
+          {
+            includePatterns: [ordinary],
+            forwardedArgs: ["--watch", "--exclude", isolated],
+            watchMode: true,
+          },
+        );
+      },
+    );
+  });
+
+  it("keeps classified tooling exceptions alongside ordinary watch targets", () => {
+    const exception = "src/config/doc-baseline.integration.test.ts";
+    const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    withTinyFileTree(
+      { [exception]: "import fs from 'node:fs';", [ordinary]: "import fs from 'node:fs';" },
+      (cwd) => {
+        for (const excluded of [null, exception, ordinary]) {
+          const forwardedArgs = excluded ? ["--exclude", excluded] : [];
+          const args = ["--watch", exception, ordinary, ...forwardedArgs];
+          const includePatterns = [exception, ordinary];
+          expectRun(planRuns(args, cwd, undefined, { env: {} }), "tooling", {
+            includePatterns,
+            forwardedArgs: ["--watch", ...forwardedArgs],
+            watchMode: true,
+          });
+          const [spec] = runSpecs(args, { cwd, baseEnv: {} });
+          expect(spec?.config).toBe(configFile("tooling"));
+          expect(spec?.includePatterns).toEqual(includePatterns);
+        }
+      },
+    );
+  });
+
+  it("prepares inherited scope and native substring filters before watch ownership", () => {
+    const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+    const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+    withTinyFileTree({ [isolated]: "", [ordinary]: "import fs from 'node:fs';" }, (cwd) => {
+      const includeFile = path.join(cwd, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify([isolated]));
+      const baseEnv = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+      expectRun(
+        planRuns(["--watch", target], cwd, undefined, { env: baseEnv }),
+        "tooling-isolated",
+        {
+          includePatterns: [isolated],
+          forwardedArgs: ["--watch"],
+          watchMode: true,
+        },
+      );
+      expect(runSpecs(["--watch", target], { cwd, baseEnv })[0]?.includePatterns).toEqual([
+        isolated,
+      ]);
+      // Explicit file ownership still overrides an inherited include file.
+      expect(() => runSpecs(["--watch", target, ordinary], { cwd, baseEnv })).toThrow(
+        "watch mode with mixed test suites is not supported",
+      );
+      for (const selector of [target, "test/scripts"]) {
+        const args = ["--watch", selector, "native-systemd"];
+        expectRun(planRuns(args, cwd, undefined, { env: {} }), "tooling-isolated", {
+          includePatterns: [selector === target ? target : "test/scripts/**/*.test.ts"],
+          forwardedArgs: ["--watch", "native-systemd"],
+          watchMode: true,
+        });
+      }
+    });
+  });
+
+  it.each([
+    [
+      "src/cli/update-cli/update-command-legacy-finalize.test.ts",
+      "src/cli/update-cli/*-finalize.test.ts",
+      "tooling-isolated",
+    ],
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-build-helper*.test.ts",
+      "tooling-docker",
+    ],
+  ])("uses the competing native owner for %s", (file, target, project) => {
+    withTinyFileTree({ [file]: "import fs from 'node:fs';" }, (cwd) => {
+      expectRun(planRuns(["--watch", target], cwd, undefined, { env: {} }), project, {
+        includePatterns: [target],
+        watchMode: true,
+      });
+    });
+  });
+
+  it.each(["relative", "absolute"])(
+    "intersects %s inherited watch selections in the invocation root",
+    (style) => {
+      const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+      const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+      const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+      withTinyFileTree({ [isolated]: "", [ordinary]: "import fs from 'node:fs';" }, (cwd) => {
+        const includeFile = path.join(cwd, "include.json");
+        fs.writeFileSync(
+          includeFile,
+          JSON.stringify([style === "absolute" ? path.resolve(cwd, isolated) : isolated]),
+        );
+        const baseEnv = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+        expectRun(
+          planRuns(["--watch", target], cwd, undefined, { env: baseEnv }),
+          "tooling-isolated",
+          {
+            includePatterns: [
+              style === "absolute" ? path.resolve(cwd, isolated).replaceAll("\\", "/") : isolated,
+            ],
+            watchMode: true,
+          },
+        );
+        for (const extra of style === "absolute"
+          ? [[], ["--dir", path.join(cwd, "test/scripts")]]
+          : [[]]) {
+          const args = ["--watch", target, ...extra];
+          const [spec] = runSpecs(args, { cwd, baseEnv });
+          expect(spec?.config).toBe(configFile("tooling-isolated"));
+          expect(spec?.includePatterns).toEqual([
+            style === "absolute" ? path.resolve(cwd, isolated).replaceAll("\\", "/") : isolated,
+          ]);
+          expect(spec?.pnpmArgs).toEqual(expect.arrayContaining(extra));
+        }
+      });
+    },
+  );
+
+  it("permits missing borrowed watch metadata only for owned selections", () => {
+    const owned = "test/scripts/run-node.test.ts";
+    const borrowed = "test/scripts/upgrade-survivor-native-*.test.ts";
+    withTinyFileTree({ [owned]: "import fs from 'node:fs';" }, (cwd) => {
+      const baseEnv = { OPENCLAW_VITEST_INCLUDE_FILE: path.join(cwd, "missing.json") };
+      const args = ["--watch", owned];
+      expectRun(planRuns(args, cwd, undefined, { env: baseEnv }), "tooling", {
+        includePatterns: [owned],
+        watchMode: true,
+      });
+      expect(runSpecs(args, { cwd, baseEnv })[0]?.includePatterns).toEqual([owned]);
+      for (const contents of [undefined, "{}"]) {
+        if (contents) {
+          fs.writeFileSync(baseEnv.OPENCLAW_VITEST_INCLUDE_FILE, contents);
+        }
+        if (contents) {
+          expect(() => runSpecs(args, { cwd, baseEnv })).toThrow("must point to a JSON array");
+        } else {
+          expect(runSpecs(args, { cwd, baseEnv })[0]?.includePatterns).toEqual([owned]);
+        }
+        for (const targets of [[borrowed], [owned, borrowed]]) {
+          expect(() =>
+            planRuns(["--watch", ...targets], cwd, undefined, { env: baseEnv }),
+          ).toThrow();
+          expect(() => runSpecs(["--watch", ...targets], { cwd, baseEnv })).toThrow();
+        }
+      }
+    });
+  });
+
+  it.each([false, true])(
+    "preserves both inherited output bases after watch selection (absolute first: %s)",
+    (absoluteFirst) => {
+      const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+      const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+      withTinyFileTree({ [isolated]: "", [ordinary]: "import fs from 'node:fs';" }, (cwd) => {
+        const relative = "test/scripts/**/*.test.ts";
+        const absolute = path.resolve(cwd, isolated).replaceAll("\\", "/");
+        const inherited = absoluteFirst ? [absolute, relative] : [relative, absolute];
+        const includeFile = path.join(cwd, "include.json");
+        fs.writeFileSync(includeFile, JSON.stringify(inherited));
+        const args = ["--watch", "test/scripts", "--dir", path.join(cwd, "test/scripts")];
+        const baseEnv = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+        expectRun(planRuns(args, cwd, undefined, { env: baseEnv }), "tooling-isolated", {
+          includePatterns: inherited,
+          forwardedArgs: ["--watch", ...args.slice(2)],
+          watchMode: true,
+        });
+        const [spec] = runSpecs(args, { cwd, baseEnv });
+        expect(spec?.config).toBe(configFile("tooling-isolated"));
+        expect(spec?.includePatterns).toEqual(inherited);
+        expect(spec?.pnpmArgs).toEqual(expect.arrayContaining(args.slice(2)));
+      });
+    },
+  );
+
+  it("retains prepared Docker ownership for mixed literal and live-glob operands", () => {
+    const docker = "test/scripts/docker-build-helper.test.ts";
+    const target = "test/scripts/docker-build-helper*.test.ts";
+    const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+    withTinyFileTree({ [docker]: "import fs from 'node:fs';", [isolated]: "" }, (cwd) => {
+      const args = ["--watch", target, docker];
+      expectRun(planRuns(args, cwd, undefined, { env: {} }), "tooling-docker", {
+        includePatterns: [target, docker],
+        watchMode: true,
+      });
+      const [spec] = runSpecs(args, { cwd, baseEnv: {} });
+      expect(spec?.config).toBe(configFile("tooling-docker"));
+      expect(spec?.includePatterns).toEqual([target, docker]);
+      expect(() => planRuns(["--watch", target, isolated], cwd, undefined, { env: {} })).toThrow(
+        "watch mode with mixed test suites is not supported",
+      );
+    });
+  });
+
+  it.each([false, true])(
+    "uses the CLI-process project root for exclusions (explicit dir: %s)",
+    (explicitDir) => {
+      const isolated = "src/cli/update-cli/update-command-legacy-finalize.test.ts";
+      const processFile = "src/cli/update-cli/update-command-migrated.test.ts";
+      const target = "src/cli/update-cli/update-command-{legacy-finalize,migrated}.test.ts";
+      withTinyFileTree(
+        { [isolated]: "import fs from 'node:fs';", [processFile]: "import fs from 'node:fs';" },
+        (cwd) => {
+          const forwarded = ["--exclude", processFile, ...(explicitDir ? ["--dir", cwd] : [])];
+          const args = ["--watch", target, ...forwarded];
+          expectRun(planRuns(args, cwd, undefined, { env: {} }), "tooling-isolated", {
+            includePatterns: [target],
+            forwardedArgs: ["--watch", ...forwarded],
+            watchMode: true,
+          });
+          const [spec] = runSpecs(args, { cwd, baseEnv: {} });
+          expect(spec?.config).toBe(configFile("tooling-isolated"));
+          expect(spec?.includePatterns).toEqual([target]);
+          expect(spec?.pnpmArgs).toEqual(expect.arrayContaining(forwarded));
+          expect(() => planRuns(["--watch", target], cwd, undefined, { env: {} })).toThrow(
+            "watch mode with mixed test suites is not supported",
+          );
+        },
+      );
+    },
+  );
+
+  it.each([
+    [["--project=tooling"], "tooling"],
+    [["--project", "TOOLING"], "tooling"],
+    [["-p", "tooling*", "-p", "!tooling-isolated"], "tooling"],
+    [["--project=!tooling"], "tooling-isolated"],
+    [["--project=tooling-isolated"], "tooling-isolated"],
+  ] as const)(
+    "applies project eligibility before mixed watch admission for %j",
+    (filter, owner) => {
+      const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+      withTinyFileTree(
+        {
+          "test/scripts/upgrade-survivor-native-systemd.test.ts": "",
+          "test/scripts/upgrade-survivor-native-assignments.test.ts": "import fs from 'node:fs';",
+        },
+        (cwd) => {
+          const args = ["--watch", target, ...filter];
+          expectRun(planRuns(args, cwd, undefined, { env: {} }), owner, {
+            includePatterns: [target],
+            forwardedArgs: ["--watch", ...filter],
+            watchMode: true,
+          });
+          const [spec] = runSpecs(args, { cwd, baseEnv: {} });
+          expect(spec?.config).toBe(configFile(owner));
+          expect(spec?.includePatterns).toEqual([target]);
+          expect(spec?.pnpmArgs.slice(-filter.length)).toEqual(filter);
+          expect(spec?.env.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_TESTS).toBeUndefined();
+          expect(() =>
+            planRuns(["--watch", target, "--project=tooling*"], cwd, undefined, { env: {} }),
+          ).toThrow("watch mode with mixed test suites");
+        },
+      );
+    },
+  );
+
+  it("preserves inherited negatives in the prepared watch include-file transport", () => {
+    const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+    const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+    withTinyFileTree({ [ordinary]: "import fs from 'node:fs';", [isolated]: "" }, (cwd) => {
+      const inherited = [target, `!${ordinary}`];
+      const file = path.join(cwd, "include.json");
+      fs.writeFileSync(file, JSON.stringify(inherited));
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: file };
+      expectRun(planRuns(["--watch", target], cwd, undefined, { env }), "tooling-isolated", {
+        includePatterns: inherited,
+        watchMode: true,
+      });
+      const [spec] = runSpecs(["--watch", target], { cwd, baseEnv: env });
+      expect(spec?.includePatterns).toEqual(inherited);
+      writeVitestIncludeFile(file, spec!.includePatterns!, { cwd, expandGlobs: false });
+      expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(inherited);
+    });
+  });
+
+  it("retains an inherited veto for an explicitly owned watch file", () => {
+    const target = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    withTinyFileTree({ [target]: "import fs from 'node:fs';" }, (cwd) => {
+      const file = path.join(cwd, "include.json");
+      fs.writeFileSync(file, JSON.stringify([`!${target}`]));
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: file };
+      const [spec] = runSpecs(["--watch", target], { cwd, baseEnv: env });
+      expect(spec?.config).toBe(configFile("tooling"));
+      expect(spec?.includePatterns).toEqual([target, `!${target}`]);
+      expect(spec?.watchMode).toBe(true);
+      assert(spec?.includePatterns);
+      writeVitestIncludeFile(file, spec.includePatterns, { cwd, expandGlobs: false });
+      expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual([target, `!${target}`]);
+      writeVitestIncludeFile(file, spec.includePatterns, { cwd });
+      expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual([]);
+    });
+  });
+
+  it("does not read excluded owner sources or borrowed selection before native project errors", () => {
+    const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+    const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    withTinyFileTree({ [ordinary]: "import fs from 'node:fs';" }, (cwd) => {
+      const reads = vi.spyOn(fs, "readFileSync");
+      try {
+        const env = { OPENCLAW_VITEST_INCLUDE_FILE: path.join(cwd, "missing.json") };
+        const args = ["--watch", target, "--project=missing", "--passWithNoTests"];
+        const [spec] = runSpecs(args, { cwd, baseEnv: env });
+        expect(spec?.config).toBe(configFile("tooling"));
+        expect(spec?.includePatterns).toEqual([target]);
+        expect(spec?.pnpmArgs.slice(-2)).toEqual(args.slice(-2));
+        expect(spec?.watchMode).toBe(true);
+        fs.writeFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "[]");
+        expect(runSpecs(args, { cwd, baseEnv: env })).toHaveLength(1);
+        expect(reads.mock.calls.some(([file]) => String(file) === path.join(cwd, ordinary))).toBe(
+          false,
+        );
+      } finally {
+        reads.mockRestore();
+      }
+    });
+  });
+
+  it("contains the CLI-process owner without changing native exclusion coordinates", () => {
+    const ordinary = "src/cli/update-cli/update-command.test.ts";
+    const processFile = "src/cli/update-cli/update-command-candidate-exit.test.ts";
+    const target = "src/cli/update-cli/update-command{,-candidate-exit}.test.ts";
+    withTinyFileTree({ [ordinary]: "import fs from 'node:fs';", [processFile]: "" }, (cwd) => {
+      expect(() => planRuns(["--watch", target], cwd, undefined, { env: {} })).toThrow(
+        "watch mode with mixed test suites",
+      );
+      const exclude = ["--exclude", "update-cli/update-command.test.ts"];
+      const [spec] = runSpecs(["--watch", target, ...exclude], { cwd, baseEnv: {} });
+      expect(spec?.config).toBe(configFile("cli-process"));
+      expect(spec?.includePatterns).toEqual([target]);
+      expect(spec?.pnpmArgs.slice(-2)).toEqual(exclude);
+      expectRun(
+        planRuns(["--watch", target, "--exclude", processFile], cwd, undefined, { env: {} }),
+        "cli",
+        {
+          includePatterns: [target],
+          forwardedArgs: ["--watch", "--exclude", processFile],
+          watchMode: true,
+        },
+      );
+      for (const filters of [["--project=cli-process"], ["--project=cli"]]) {
+        const owner = filters[0]!.slice("--project=".length);
+        expect(
+          runSpecs(["--watch", target, ...filters, "not-created-yet"], { cwd, baseEnv: {} })[0]
+            ?.config,
+        ).toBe(configFile(owner));
+      }
+    });
+  });
+
+  it("keeps selected database siblings visible to mixed-owner refusal", () => {
+    const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+    const worker = "test/scripts/upgrade-survivor-acp-metadata.test.ts";
+    withTinyFileTree({ [isolated]: "", [worker]: "" }, (cwd) => {
+      expect(() =>
+        planRuns(["--watch", "test/scripts/upgrade-survivor-*.test.ts"], cwd, undefined, {
+          env: {},
+        }),
+      ).toThrow("watch mode with mixed test suites is not supported");
+      expectRun(planRuns(["--watch", worker], cwd, undefined, { env: {} }), "infra", {
+        includePatterns: [worker],
+        watchMode: true,
+      });
+    });
+  });
+
+  it("does not count shared opt-in exclusions as ordinary watch owners", () => {
+    const isolated = "test/worker-browser-config.test.ts";
+    const live = "test/agent-exec-code-mode.live.test.ts";
+    withTinyFileTree({ [isolated]: "", [live]: "" }, (cwd) => {
+      const target = "test/{worker-browser-config,agent-exec-code-mode.live}.test.ts";
+      expectRun(planRuns(["--watch", target], cwd, undefined, { env: {} }), "tooling-isolated", {
+        includePatterns: [target],
+        forwardedArgs: ["--watch"],
+        watchMode: true,
+      });
+    });
+  });
+
+  it.each(["inherited", "substring"])(
+    "combines %s scope, a live glob and exclusions before adding worker owners",
+    (mode) => {
+      const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+      const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+      const worker = "test/scripts/upgrade-survivor-acp-metadata.test.ts";
+      const target = "test/scripts/upgrade-survivor-*.test.ts";
+      withTinyFileTree(
+        { [isolated]: "", [ordinary]: "import fs from 'node:fs';", [worker]: "" },
+        (cwd) => {
+          const inherited =
+            mode === "inherited" ? [isolated, worker] : [isolated, ordinary, worker];
+          const includeFile = path.join(cwd, "include.json");
+          fs.writeFileSync(includeFile, JSON.stringify(inherited));
+          const baseEnv = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+          const forwarded =
+            mode === "inherited"
+              ? ["--exclude", worker, "native-"]
+              : ["--exclude", ordinary, "native-systemd"];
+          const args = ["--watch", target, ...forwarded];
+          expectRun(planRuns(args, cwd, undefined, { env: baseEnv }), "tooling-isolated", {
+            includePatterns: inherited,
+            forwardedArgs: ["--watch", ...forwarded],
+            watchMode: true,
+          });
+          const specs = runSpecs(args, { cwd, baseEnv });
+          expect(specs).toHaveLength(1);
+          expect(specs[0]?.config).toBe(configFile("tooling-isolated"));
+          expect(specs[0]?.includePatterns).toEqual(inherited);
+          expect(specs[0]?.pnpmArgs).toEqual(expect.arrayContaining(forwarded));
+          expect(specs[0]?.env.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_TESTS).toBeUndefined();
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "retains native backslash exclusion semantics before mixed-watch refusal",
+    () => {
+      const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+      const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+      const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+      withTinyFileTree({ [isolated]: "", [ordinary]: "import fs from 'node:fs';" }, (cwd) => {
+        expect(() =>
+          planRuns(["--watch", target, "--exclude", path.resolve(cwd, ordinary)], cwd, undefined, {
+            env: {},
+          }),
+        ).toThrow("watch mode with mixed test suites is not supported");
+      });
+    },
+  );
+
+  it("ignores deleted tracked matches without replacing the live watch selector", () => {
+    const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+    const deleted = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    const target = "test/scripts/upgrade-survivor-native-*.test.ts";
+    withTinyGitRepo({ [isolated]: "", [deleted]: "import fs from 'node:fs';" }, (cwd) => {
+      expect(() => planRuns(["--watch", target], cwd, undefined, { env: {} })).toThrow(
+        "watch mode with mixed test suites is not supported",
+      );
+      fs.unlinkSync(path.join(cwd, deleted));
+      expectRun(planRuns(["--watch", target], cwd, undefined, { env: {} }), "tooling-isolated", {
+        includePatterns: [target],
+        forwardedArgs: ["--watch"],
+        watchMode: true,
+      });
+    });
   });
 
   it.each([
@@ -1819,6 +2453,22 @@ export const single = {
     ]);
   });
 
+  it("retains singleton worker process ownership for absolute inherited paths", () => {
+    const files = databaseWorkerExtensionTestFiles
+      .filter((file) => file.startsWith("extensions/telegram/"))
+      .slice(0, 2);
+    expect(files).toHaveLength(2);
+    const absolute = files.map((file) => path.resolve(file).replaceAll("\\", "/"));
+    withIncludeFile(absolute, (includeFile) => {
+      const specs = runSpecs(["extensions/telegram"], {
+        baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+      }).filter((spec) => spec.config === configFile("extension-database-workers"));
+      expect(specs.map((spec) => spec.includePatterns)).toEqual(
+        absolute.toSorted().map((file) => [file]),
+      );
+    });
+  });
+
   it("keeps explicit Matrix files and watch runs unchunked", () => {
     const testFile = listExtensionTestFilesForRoots(["extensions/matrix"])[0];
     expect(testFile).toBeDefined();
@@ -1831,7 +2481,7 @@ export const single = {
         databaseWorkerWatchTests: databaseWorkerExtensionTestFiles.filter((file) =>
           file.startsWith("extensions/matrix/"),
         ),
-        forwardedArgs: [],
+        forwardedArgs: ["--watch"],
         includePatterns: expect.arrayContaining(["extensions/matrix/**/*.test.ts"]),
         watchMode: true,
       },
@@ -2125,6 +2775,22 @@ export const single = {
       );
     },
   );
+
+  it("materializes absolute and relative globs in their original coordinate systems", () => {
+    const files = ["src/logging/redact.test.ts", "src/logging/nested/redact-extra.test.ts"];
+    withTinyGitRepo(Object.fromEntries(files.map((file) => [file, ""])), (cwd) => {
+      const relative = "src/logging/**/redact*.test.ts";
+      const absolute = path.resolve(cwd, relative).replaceAll("\\", "/");
+      const includeFile = path.join(cwd, "include.json");
+      writeVitestIncludeFile(includeFile, [absolute, relative], { cwd });
+      expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([
+        ...files.toSorted().map((file) => path.resolve(cwd, file).replaceAll("\\", "/")),
+        ...files.toSorted(),
+      ]);
+      writeVitestIncludeFile(includeFile, [absolute, relative], { cwd, expandGlobs: false });
+      expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([absolute, relative]);
+    });
+  });
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
     const [spec] = runSpecs(["ui/src/pages/plugins/plugin-skills.e2e.test.ts"], {

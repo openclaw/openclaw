@@ -11,7 +11,7 @@ export function createInfraVitestConfig(
     exclude: infraTestOwner.exclude,
     isolate: true,
     name: "infra",
-    intersectIncludeFile: include !== undefined,
+    intersectIncludeFile: true,
     passWithNoTests: true,
     pool: "forks",
   });
