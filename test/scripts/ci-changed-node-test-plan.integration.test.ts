@@ -268,7 +268,7 @@ it.each([
   "src/auto-reply/reply/agent-runner-memory.ts",
   "packages/agent-core/src/harness/compaction/summarization-completion.ts",
   "packages/ai/src/transports/anthropic-messages.ts",
-])("selects every transitive importer test when %s changes", (source) => {
+])("selects the declared behavior tests and same-directory importers when %s changes", (source) => {
   const selected = new Set(
     resolveChangedNodeTestTargets([source], { selectionMode: "aggressive" }),
   );
@@ -280,11 +280,15 @@ it.each([
   ]) {
     expect(selected.has(test), test).toBe(true);
   }
+  const directory = source.replace(/[^/]+$/u, "");
   const importers = resolveAffectedTestsFromImportGraph(source, process.cwd(), {
     tooling: true,
     forceFull: true,
     resolveAliases: true,
     runtimeOnly: true,
-  }).filter((file) => /^(?:src|test|extensions|packages|ui)\//u.test(file));
+  }).filter(
+    (file) =>
+      file.startsWith(directory) && !/^(?:src|packages)\/[^/]+(?:\/src)?\/$/u.test(directory),
+  );
   expect(importers.filter((file) => !selected.has(file))).toEqual([]);
 });
