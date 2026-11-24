@@ -815,12 +815,16 @@ it.each([
   },
   { model: daybreakCyber, expected: "daybreak_red" },
 ] satisfies { model: ModelCatalogEntry; expected: string }[])(
-  "commits first-use Access as $expected",
+  "commits the displayed first-use Access as $expected",
   async ({ model, expected }) => {
     const { context, control, changed } = setup([model]);
     const agent = { id: "main", model: { primary: "openai/" + model.id } };
     control.load(context, "main", true, { agent });
     await control.metadataRead;
+    expect(
+      control.renderProps({ context, agentId: "main", agent, sending: false })
+        .requestedAccessProgram,
+    ).toBe(expected);
     expect(control.accessProgramForSubmission()).toBe(expected);
     control.initializeAccessProgram();
     expect(changed).toHaveBeenLastCalledWith(

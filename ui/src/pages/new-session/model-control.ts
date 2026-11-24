@@ -695,11 +695,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       sending: options.sending,
       sessionKey,
       selectedSession: undefined,
-      requestedAccessProgram:
-        this.cyberAccessProgram ??
-        (this.ownsMetadata() && this.metadataState.status === "ready"
-          ? modelControls.accessProgramDefault
-          : undefined),
+      // Drafts display the normalized program they will submit; there is no saved row to repair.
+      requestedAccessProgram: this.accessProgramForSubmission(),
       selectedAgentRuntime: this.agentRuntime,
       sessionsResult: agentDefaultsAvailable ? sourceResult : null,
       stream: null,

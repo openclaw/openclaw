@@ -131,7 +131,6 @@ export function resolveDraftModelControls(params: {
   };
   return {
     defaultTarget,
-    accessProgramDefault: entry?.cyberAccessProgramDefault,
     agentDefaultModel,
     modelCatalogState,
     contextWindowTarget:
