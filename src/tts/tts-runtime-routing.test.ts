@@ -12,7 +12,6 @@ import {
   listSpeechVoices,
   prepareTtsRequest,
   prefsPathFor,
-  requireAttempt,
   requireFirstSynthesisRequest,
   requireRecord,
   resetTtsRuntime,
@@ -21,8 +20,6 @@ import {
   synthesizeSpeech,
   textToSpeech,
   textToSpeechCore,
-  textToSpeechStream,
-  textToSpeechTelephony,
   transcodeAudioBufferMock,
   type OpenClawConfig,
   type SpeechListVoicesRequest,
@@ -30,6 +27,7 @@ import {
 } from "./tts-runtime.test-support.js";
 import * as ttsSettings from "./tts-settings.js";
 
+const { textToSpeechStream, textToSpeechTelephony } = await import("./runtime-api.js");
 const { resolveExplicitTtsOverridesAsync } = await import("./tts-request.js");
 
 const mockConfig = (providerConfig: Record<string, unknown>): OpenClawConfig => ({
@@ -126,7 +124,7 @@ describe("TTS runtime native voice-note routing", () => {
           ? textToSpeechTelephony(params)
           : synthesizeSpeech(params));
       expect(result.success).toBe(false);
-      const attempt = requireAttempt(result.attempts, 0);
+      const attempt = result.attempts?.[0];
       expect(attempt).toMatchObject({
         provider: "mock",
         outcome: "failed",
@@ -165,7 +163,7 @@ describe("TTS runtime native voice-note routing", () => {
         disableFallback: true,
       });
       expect(result.success).toBe(false);
-      const attempt = requireAttempt(result.attempts, 0);
+      const attempt = result.attempts?.[0];
       expect(attempt).toMatchObject({
         error: "mock: Synthetic original failure",
         reasonCode: "provider_error",
