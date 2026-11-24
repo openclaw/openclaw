@@ -61,6 +61,8 @@ Model pickers show the authentication methods available to the selected agent. I
 
 To set one agent's utility model, open **Settings → Agents → Overview → Utility model**. **Inherit default** removes the agent's own primary, **Disabled for this agent** saves an empty primary, and a model choice saves that model. The agent's own utility fallbacks are kept, in order, for every choice. A configured model that is currently unavailable stays shown and selected.
 
+**Models → More settings → Subagent model** sets `agents.defaults.subagents.model`, the model for subagents and for sessions an agent starts. **Same as the parent session** clears it, so each one runs on the model of the session that started it. To set one agent's subagent model, open **Settings → Agents → Overview → Subagent model**; **Inherit default** removes that agent's own choice. Configured fallbacks are kept for every choice. A model named in the request still takes priority; see [sub-agent defaults](/tools/subagents/tool-reference).
+
 Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts without a known recovery method show **Review account**. These actions open **Models** so you can repair the saved account.
 
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.

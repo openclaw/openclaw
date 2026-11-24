@@ -74,6 +74,10 @@ export function modelDefaultsActions(
       });
     },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
+    onSubagentChange: (model: string | null) =>
+      stageDefaults({
+        subagentModel: withModelSettingPrimary(getDefaults().subagentModel ?? null, model),
+      }),
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }, "thinking"),
     onThinkingReset: () =>
@@ -109,6 +113,7 @@ export function readModelBehaviorConfig(
 const DEFAULT_MODELS_REPLACE_PATHS = [
   "agents.defaults.model.fallbacks",
   "agents.defaults.utilityModel.fallbacks",
+  "agents.defaults.subagents.model.fallbacks",
 ];
 
 const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
@@ -229,6 +234,10 @@ export function runModelProviderDefaultsMutation(
               : {}),
             utilityModel: modelSettingPatch(params.utilityModel),
             ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
+            // Untouched and unset stays out of the patch, so no empty subagents object is written.
+            ...(params.subagentModel !== undefined
+              ? { subagents: { model: modelSettingPatch(params.subagentModel) } }
+              : {}),
             thinkingDefault:
               params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
             fastModeDefault:

@@ -385,6 +385,32 @@ it("keeps the full model ids in title for truncated controls", async () => {
 
 it.each([
   [
+    "the default subagent model",
+    { subagents: { model: inheritedAgentModel } },
+    {},
+    `Inherit default (${inheritedAgentModel})`,
+  ],
+  ["the parent session's model without a default", {}, {}, "Same as the parent session"],
+  ["its own subagent model", {}, { subagents: { model: existingFallback } }, "Claude Sonnet 4.6"],
+] as const)("shows %s and edits the agent's subagent model", async (_, defaults, beta, shown) => {
+  const onSubagentModelChange = vi.fn();
+  const container = renderAgents({
+    configForm: agentConfig(defaults, beta),
+    overview: { modelCatalog: catalog, onSubagentModelChange },
+  });
+  await updatePickers(container);
+  const picker = container.querySelector<HTMLButtonElement>("#agent-subagent-model")!;
+  expect(picker.textContent).toContain(shown);
+  await choosePickerValue(picker, nextFallback);
+  expect(onSubagentModelChange).toHaveBeenLastCalledWith("beta", nextFallback);
+  if ("subagents" in beta) {
+    await choosePickerValue(picker, "__openclaw_inherit_subagent__");
+    expect(onSubagentModelChange).toHaveBeenLastCalledWith("beta", null);
+  }
+});
+
+it.each([
+  [
     "its own utility model and fallbacks",
     { utilityModel: { primary: existingFallback, fallbacks: [nextFallback] } },
     "Claude Sonnet 4.6",

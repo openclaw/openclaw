@@ -70,6 +70,21 @@ export function createAgentConfigActions(params: {
               : (modelId ?? undefined),
           );
         }),
+      // null inherits agents.defaults.subagents.model; own fallbacks and sibling settings survive.
+      onSubagentModelChange: (agentId: string, modelId: string | null) =>
+        edit(agentId, modelId !== null, (config, target) => {
+          const subagents = asNullableRecord(target.entry.subagents);
+          const { fallbacks } = existingModelParts(subagents?.model);
+          const model = fallbacks
+            ? { ...(modelId === null ? {} : { primary: modelId }), fallbacks }
+            : (modelId ?? undefined);
+          const siblings = Object.keys(subagents ?? {}).some((key) => key !== "model");
+          stage(
+            config,
+            [...target.path, "subagents", ...(model === undefined && !siblings ? [] : ["model"])],
+            model,
+          );
+        }),
       onThinkingDefaultChange: (agentId: string, level: string | null) =>
         edit(agentId, level !== null, (config, target) =>
           stage(config, [...target.path, "thinkingDefault"], level ?? undefined),

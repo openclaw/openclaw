@@ -59,6 +59,7 @@ import { renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 registerEnglishCatalog(registerSettingsEnglish);
 
 const INHERIT_UTILITY = "__openclaw_inherit_utility__";
+const INHERIT_SUBAGENT = "__openclaw_inherit_subagent__";
 
 export function AgentOverview(
   params: AgentConfigState &
@@ -173,6 +174,27 @@ export function AgentOverview(
       ...buildModelOptions(
         configForm(),
         utilityModel() || undefined,
+        params.modelCatalog,
+        params.agent.id,
+      ),
+    ];
+  });
+  // Own subagent model: unset inherits agents.defaults.subagents.model, then the parent session.
+  const subagentModel = createMemo(() =>
+    modelSettingPrimary(readModelSetting(config().entry?.subagents?.model)),
+  );
+  const subagentModelOptions = createMemo(() => {
+    const inherited = modelSettingPrimary(readModelSetting(config().defaults?.subagents?.model));
+    return [
+      {
+        value: INHERIT_SUBAGENT,
+        label: inherited
+          ? t("agents.overview.inheritDefaultModel", { model: inherited })
+          : t("agents.overview.subagentModelInheritParent"),
+      },
+      ...buildModelOptions(
+        configForm(),
+        subagentModel() || undefined,
         params.modelCatalog,
         params.agent.id,
       ),
@@ -559,6 +581,27 @@ export function AgentOverview(
                 params.onUtilityModelChange(
                   params.agent.id,
                   value === INHERIT_UTILITY ? null : value,
+                )
+              }
+              onOpen={params.onModelCatalogOpen}
+            />
+          }
+        />
+        <SettingsRow
+          title={t("agents.overview.subagentModel")}
+          description={t("agents.overview.subagentModelHelp")}
+          control={
+            <ModelPicker
+              id="agent-subagent-model"
+              label={t("agents.overview.subagentModel")}
+              title={subagentModel() || undefined}
+              value={subagentModel() || INHERIT_SUBAGENT}
+              options={subagentModelOptions()}
+              disabled={disabled()}
+              onChange={(value) =>
+                params.onSubagentModelChange(
+                  params.agent.id,
+                  value === INHERIT_SUBAGENT ? null : value,
                 )
               }
               onOpen={params.onModelCatalogOpen}

@@ -119,6 +119,26 @@ describe("agent model config", () => {
     expect(runtimeConfig.state.configForm).toEqual({ agents: { entries: { main: {} } } });
     runtimeConfig.dispose();
   });
+  it("sets the agent's subagent model and clears it without leaving an empty block", async () => {
+    const runtimeConfig = createRuntimeConfig({
+      agents: { entries: { main: {}, scout: { subagents: { allowAgents: ["main"] } } } },
+    });
+    await runtimeConfig.ensureLoaded();
+    const entries = () =>
+      (runtimeConfig.state.configForm as { agents: { entries: Record<string, unknown> } }).agents
+        .entries;
+    const actions = modelActionsFor(runtimeConfig);
+    actions.onSubagentModelChange("main", "openai/gpt-5.4");
+    actions.onSubagentModelChange("scout", "openai/gpt-5.4");
+    expect(entries()).toEqual({
+      main: { subagents: { model: "openai/gpt-5.4" } },
+      scout: { subagents: { allowAgents: ["main"], model: "openai/gpt-5.4" } },
+    });
+    actions.onSubagentModelChange("main", null);
+    actions.onSubagentModelChange("scout", null);
+    expect(entries()).toEqual({ main: {}, scout: { subagents: { allowAgents: ["main"] } } });
+    runtimeConfig.dispose();
+  });
   it("distinguishes an explicit decision disable from inheritance without changing other settings", async () => {
     const defaults = { decisionModel: "typesafe/jev-latest", model: "openai/gpt-5.4" };
     const runtimeConfig = createRuntimeConfig({ agents: { defaults } });

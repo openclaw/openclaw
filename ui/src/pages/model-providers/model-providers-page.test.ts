@@ -30,6 +30,12 @@ import {
   expandProvider,
 } from "./model-providers-page.test-support.tsx";
 
+const DEFAULTS_REPLACE_PATHS = [
+  "agents.defaults.model.fallbacks",
+  "agents.defaults.utilityModel.fallbacks",
+  "agents.defaults.subagents.model.fallbacks",
+];
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
@@ -431,7 +437,7 @@ describe("ModelProvidersPage agent scope", () => {
           },
         },
         note: "Update defaults from the OpenClaw app",
-        replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
+        replacePaths: DEFAULTS_REPLACE_PATHS,
       });
     },
   );
@@ -458,7 +464,7 @@ describe("ModelProvidersPage agent scope", () => {
         },
       },
       note: "Update defaults from the OpenClaw app",
-      replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
+      replacePaths: DEFAULTS_REPLACE_PATHS,
     });
   });
 
@@ -1013,7 +1019,7 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
         },
       },
       note: "Update defaults from the OpenClaw app",
-      replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
+      replacePaths: DEFAULTS_REPLACE_PATHS,
     });
     expect(request.mock.calls.some(([method]) => method.startsWith("models."))).toBe(false);
   } finally {

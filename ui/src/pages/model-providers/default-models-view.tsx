@@ -4,7 +4,6 @@ import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profi
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
-import { pathForAgentPanel } from "../../app-route-paths.ts";
 import {
   DecisionModelPicker,
   type DecisionModelEntry,
@@ -31,7 +30,6 @@ import {
   type CompletionRoute,
 } from "../../lib/model-runtime-label.ts";
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
-import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type {
   ModelDefaultsSaveField,
@@ -45,6 +43,7 @@ import {
   type DefaultModelSelection,
   type ModelPickerEntry,
 } from "./data.ts";
+import { UtilityOverrides } from "./utility-overrides.tsx";
 import { renderMutationMessage } from "./view-status.tsx";
 
 export type DefaultModelsViewProps = {
@@ -81,6 +80,7 @@ export type DefaultModelsViewProps = {
   onUtilityChange: (model: string | null) => void;
   onUtilityFallbackChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
+  onSubagentChange: (model: string | null) => void;
   onThinkingChange: (level: string) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
@@ -94,6 +94,8 @@ const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
 const UTILITY_MODEL_PICKER_ID = "model-providers-utility-model";
 const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
 const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
+const INHERIT_SUBAGENT_VALUE = "__openclaw_inherit_subagent__";
+const SUBAGENT_MODEL_HELP_ID = "model-providers-subagent-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 function modelOption(
@@ -505,17 +507,25 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     }
     return choices;
   });
+  const subagentValue = createMemo(
+    () => modelSettingPrimary(props.selection.subagentModel ?? null) || INHERIT_SUBAGENT_VALUE,
+  );
+  const subagentOptions = createMemo(() => [
+    { value: INHERIT_SUBAGENT_VALUE, label: t("modelProviders.defaults.subagentInherit") },
+    ...options(),
+  ]);
 
   // Discovery reports on the heading line, so the rows below it never move.
   const catalogProgress = <CatalogProgress {...props} />;
-  // Fallback, utility and decision models stay folded until one of them is set. Once open they
+  // Fallback, subagent, utility and decision models stay folded until one is set. Once open they
   // stay open, so clearing the last one never folds the row under the pointer; a click wins.
   const [moreOpen, setMoreOpen] = createSignal<boolean>(
     (open) =>
       open === true ||
       props.selection.fallbacks.length > 0 ||
       props.selection.utilityModel !== null ||
-      Boolean(props.selection.decisionModel),
+      Boolean(props.selection.decisionModel) ||
+      subagentValue() !== INHERIT_SUBAGENT_VALUE,
   );
   return (
     <SettingsSection
@@ -592,6 +602,33 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           <SettingsRow
             title={
               <HelpTitle
+                title={t("modelProviders.defaults.subagent")}
+                label={t("modelProviders.defaults.subagentHelpLabel")}
+                triggerId={SUBAGENT_MODEL_HELP_ID}
+                paragraphs={[
+                  t("modelProviders.defaults.subagentHelpPurpose"),
+                  t("modelProviders.defaults.subagentHelpInherit"),
+                ]}
+              />
+            }
+            control={
+              <ModelPicker
+                windowed
+                id="model-providers-subagent-model"
+                label={t("modelProviders.defaults.subagent")}
+                value={subagentValue()}
+                options={subagentOptions()}
+                disabled={modelControlsDisabled() || saving()}
+                title={title()}
+                onChange={(value) =>
+                  props.onSubagentChange(value === INHERIT_SUBAGENT_VALUE ? null : value)
+                }
+              />
+            }
+          />
+          <SettingsRow
+            title={
+              <HelpTitle
                 title={t("modelProviders.defaults.utility")}
                 label={t("modelProviders.defaults.utilityHelpLabel")}
                 triggerId={UTILITY_MODEL_HELP_ID}
@@ -658,47 +695,5 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>
-  );
-}
-
-function UtilityOverrides(props: {
-  overrides: AgentUtilityOverride[];
-  basePath: string;
-  onOpen: (agentId: string) => void;
-}) {
-  const selection = (entry: AgentUtilityOverride) =>
-    [
-      entry.model === undefined
-        ? t("modelProviders.defaults.utilityOverrideDefaultModel")
-        : entry.model || t("modelProviders.defaults.disabled"),
-      ...(entry.fallbacks.length
-        ? [
-            t("modelProviders.defaults.utilityOverrideFallbacks", {
-              models: entry.fallbacks.join(", "),
-            }),
-          ]
-        : []),
-    ].join(" · ");
-  return (
-    <span>
-      {t("modelProviders.defaults.utilityOverridesTitle")}
-      <For each={props.overrides}>
-        {(entry) => (
-          <span data-agent-id={entry.agentId}>
-            <br />
-            <a
-              class="model-providers__agent-link"
-              href={pathForAgentPanel(entry.agentId, null, props.basePath)}
-              onClick={(event) => handleNavigationClick(event, () => props.onOpen(entry.agentId))}
-            >
-              {entry.label}
-            </a>
-            {`: ${selection(entry)}`}
-          </span>
-        )}
-      </For>
-      <br />
-      {t("modelProviders.defaults.utilityOverridesOthers")}
-    </span>
   );
 }
