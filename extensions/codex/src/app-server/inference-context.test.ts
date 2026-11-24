@@ -153,15 +153,16 @@ describe("native inference context", () => {
     ]);
     expect(prepare(secondBody).body).toEqual(continued);
 
-    const fork = await forkContext(context);
+    const forkSignal = new AbortController();
+    const fork = await forkContext(context, { signal: forkSignal.signal });
     const forkBody = incrementalRequest(
       fork.generation,
       [...native, nextUser, user("fork-user")],
       "fork",
     );
-    const forked = prepare(forkBody).body;
-    expect(forked.instructions).toBe("turn two");
-    expect(forked.input).toEqual([...(continued.input as JsonObject[]), user("fork-user")]);
+    const forked = prepare(forkBody);
+    expect(forked.body.instructions).toBe("turn two");
+    expect(forked.body.input).toEqual([...(continued.input as JsonObject[]), user("fork-user")]);
 
     const newDeclaration = {
       ...recordedDeclaration,
@@ -177,7 +178,12 @@ describe("native inference context", () => {
     ]);
 
     const replacement = await admit("first persona revised", "turn three");
+    // The HTTP relay checks this again after awaiting upstream response headers.
+    expect(() => forked.assertCurrent()).not.toThrow();
     expect(() => prepare(forkBody)).toThrow("workspace instructions changed");
+    forkSignal.abort(new Error("fork cancelled"));
+    expect(() => forked.assertCurrent()).toThrow();
+    expect(() => prepare(forkBody)).toThrow("no current admitted parent generation");
     expect(
       prepare(incrementalRequest(replacement.generation, [newDeclaration, nextUser])).body.input,
     ).toEqual([newDeclaration, developerMessage("first persona revised"), nextUser]);

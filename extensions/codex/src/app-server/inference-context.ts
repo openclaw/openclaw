@@ -250,6 +250,7 @@ type Registration = {
   streamParams?: CodexInferenceStreamParams;
   controller: AbortController;
   assertCurrent: () => void;
+  assertRequestCurrent?: () => void;
   release: () => void;
 };
 
@@ -278,6 +279,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       workspaceInstructions?: WorkspaceInstructions;
       signal: AbortSignal;
       assertCurrent: () => void;
+      assertRequestCurrent?: () => void;
       retainPrefix?: boolean;
       forkRequest?: PreparedRequest;
       denyToolCalls?: boolean;
@@ -311,6 +313,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
           denyToolCalls: params.denyToolCalls === true,
           streamParams: params.streamParams,
           controller,
+          assertRequestCurrent: params.assertRequestCurrent,
           assertCurrent: () => {
             assertOpen();
             controller.signal.throwIfAborted();
@@ -418,8 +421,10 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         retainPrefix: false,
         denyToolCalls: true,
         signal: params.signal,
-        assertCurrent: () => {
-          params.assertCurrent();
+        assertCurrent: params.assertCurrent,
+        // A new request cannot sample a withdrawn parent prompt. An upstream
+        // response already in flight is governed by the fork's own authority.
+        assertRequestCurrent: () => {
           const current = prefixes.get(params.sourceThreadId);
           if (current !== prefix && (current || prefix.workspaceInstructions)) {
             throw new Error("Codex side-question workspace instructions changed");
@@ -485,6 +490,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         throw new Error("Codex inference has no current admitted parent generation");
       }
       registration.assertCurrent();
+      registration.assertRequestCurrent?.();
       let preparedBody = body;
       let matchedForkPrefix = false;
       let personaGeneration: string | undefined;
