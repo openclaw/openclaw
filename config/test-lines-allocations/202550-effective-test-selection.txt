@@ -1,0 +1,8 @@
+# Effective test selection and native watch ownership.
+# Base: dc1f6a8673aaec652166850c2f35d7eb701d215d.
+# Net test growth: 1595; unchanged allowance: 400; reviewed allocation requested: 1195.
+# Preserves full pattern/config/planner assertions and four relocated policy cases.
+# Covers CLI-process/Infra containment, native project filters, inherited negative/coordinate
+# constraints, empty-project errors, and receipt-driven new-file watch admission.
+# Existing two watcher cases retain their seven-module census and cleanup contracts.
+1195

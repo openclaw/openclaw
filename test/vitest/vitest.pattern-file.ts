@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import {
   narrowIncludePatterns,
   resolveNonBrowserTestPattern,
@@ -290,4 +291,84 @@ export function matchesVitestCliSelection(
       );
     })
   );
+}
+
+/** Prepare native invocation facts once, then discover each eligible project. */
+export function createVitestCliDiscovery(args: string[], root = repoRoot) {
+  // CI imports the planner before installation. Native parsing and discovery
+  // belong to interactive execution, never to the module's import graph.
+  const { parseCLI, createCLI }: typeof import("vitest/node") = require("vitest/node");
+  const parsed = parseVitestExecutionArgs([...args], parseCLI);
+  const normalizePath: unknown = createCLI().globalCommand.hasOption("dir")?.config.type;
+  if (typeof normalizePath !== "function") {
+    throw new Error("Vitest's native directory normalizer is unavailable");
+  }
+  const filters = (parsed?.filter ?? []).map((filter) =>
+    String(normalizePath(`"${filter}"`)).replace(/:\d+$/u, ""),
+  );
+  // Vitest's project grammar is case-insensitive, anchored, and star-only.
+  // File glob matchers would incorrectly interpret ?, [] and extglobs here.
+  const projects = (parsed?.options.project ?? []).map((pattern) => ({
+    excluded: pattern.startsWith("!"),
+    matcher: new RegExp(
+      `^${(pattern.startsWith("!") ? pattern.slice(1) : pattern)
+        .split("*")
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+        .join(".*")}$`,
+      "i",
+    ),
+  }));
+  return {
+    projectStatus(name: string): "native" | "excluded" | "eligible" {
+      if (!parsed) return "native";
+      if (projects.some(({ excluded, matcher }) => excluded && matcher.test(name))) {
+        return "excluded";
+      }
+      const positives = projects.filter(({ excluded }) => !excluded);
+      return !positives.length || positives.some(({ matcher }) => matcher.test(name))
+        ? "eligible"
+        : "excluded";
+    },
+    effectiveDir(scopedDir = "") {
+      return path.resolve(root, parsed?.options.dir ?? scopedDir);
+    },
+    discover(include: string[], dir: string, exclude: readonly string[] = []) {
+      if (!parsed) return { available: [], selected: [] };
+      const { globSync }: typeof import("tinyglobby") = require("tinyglobby");
+      // The caller supplies final canonical scope facts. Re-projecting here
+      // would move inherited exclusions or absolute selections under --dir.
+      const files = globSync(include, {
+        cwd: dir,
+        dot: true,
+        ignore: [...exclude, ...(parsed.options.exclude ?? [])],
+        expandDirectories: false,
+      });
+      const nativeFilters = filters.map((filter) => ({
+        filter,
+        relative: normalizeVitestPath(
+          filter.endsWith("/")
+            ? path.join(path.relative(dir, path.resolve(root, filter)), "/")
+            : path.relative(dir, path.resolve(root, filter)),
+        ).toLocaleLowerCase(),
+      }));
+      const selected = files.filter((file) => {
+        const absoluteFile = normalizeVitestPath(path.resolve(dir, file));
+        const relativeFile = normalizeVitestPath(
+          path.relative(dir, absoluteFile),
+        ).toLocaleLowerCase();
+        return (
+          !nativeFilters.length ||
+          nativeFilters.some(({ filter, relative }) =>
+            path.isAbsolute(filter) && absoluteFile.startsWith(filter)
+              ? true
+              : relativeFile.includes(filter.toLocaleLowerCase()) ||
+                relativeFile.includes(relative),
+          )
+        );
+      });
+      const toRepoPath = (file: string) =>
+        normalizeVitestPath(path.relative(root, path.resolve(dir, file)));
+      return { available: files.map(toRepoPath), selected: selected.map(toRepoPath) };
+    },
+  };
 }

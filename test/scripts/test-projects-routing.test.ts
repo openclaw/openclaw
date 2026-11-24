@@ -211,10 +211,32 @@ describe("test-projects args", () => {
         ...(watch ? [] : ["run"]),
         "--config",
         "test/vitest/vitest.unit.config.ts",
+        ...(watch ? ["--watch"] : []),
         "src/foo.test.ts",
       ]);
     },
   );
+
+  it.each<[string[], boolean]>([
+    [["--watch"], true],
+    [["-w"], true],
+    [["--watch", "true"], true],
+    [["--watch", "false"], false],
+    [["--watch=false"], false],
+    [["--no-watch"], false],
+    [["--watch", "--watch=false"], false],
+    [["--watch=false", "--watch"], true],
+  ])("preserves explicit native watch controls in order: %j", (flags, watchMode) => {
+    const file = "src/foo.test.ts";
+    for (const separator of [[], ["--"]]) {
+      expect(parseArgs([file, ...separator, ...flags])).toEqual({
+        forwardedArgs: [file, ...flags],
+        nonTargetArgs: flags,
+        targetArgs: [file],
+        watchMode,
+      });
+    }
+  });
 
   it("retains the focused UI E2E config loader", () => {
     expect(runSpecs(["test/vitest/vitest.ui-e2e.config.ts"])[0]?.pnpmArgs).toEqual([

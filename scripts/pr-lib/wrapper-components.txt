@@ -2433,6 +2433,7 @@ test/test-home-policy.mts
 test/vitest/vitest.agents-paths.mjs
 test/vitest/vitest.channel-paths.mjs
 test/vitest/vitest.cli-process-paths.mjs
+test/vitest/vitest.cli-paths.mjs
 test/vitest/vitest.commands-light-paths.mjs
 test/vitest/vitest.contracts-paths.mjs
 test/vitest/vitest.database-worker-core-paths.mjs
@@ -2463,12 +2464,14 @@ test/vitest/vitest.include-patterns.ts
 test/vitest/vitest.markdown-paths.mjs
 test/vitest/vitest.package-contract-paths.mjs
 test/vitest/vitest.pattern-file.ts
+test/vitest/vitest.scoped-patterns.ts
 test/vitest/vitest.performance-config.ts
 test/vitest/vitest.plugin-sdk-paths.mjs
 test/vitest/vitest.startup-corpus-paths.mjs
 test/vitest/vitest.test-shards.mjs
 test/vitest/vitest.timeouts.ts
 test/vitest/vitest.tooling-isolated-paths.mjs
+test/vitest/vitest.tooling-paths.mjs
 test/vitest/vitest.ui-isolated-paths.mjs
 test/vitest/vitest.ui-paths.mjs
 test/vitest/vitest.unit-fast-paths.mjs

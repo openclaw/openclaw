@@ -21,3 +21,25 @@ export const toolingTestExclude = [
   ...toolingIsolatedTestFiles,
   ...gatewayPluginTestFiles,
 ];
+
+// Config construction and watch admission share these competing owners.
+// A shared include file must not move a fixture into another owner's pool.
+export const toolingVitestProjectScopes = {
+  tooling: {
+    name: "tooling",
+    include: toolingTestInclude,
+    exclude: toolingTestExclude,
+  },
+  toolingIsolated: {
+    name: "tooling-isolated",
+    include: toolingIsolatedTestFiles,
+    intersectIncludeFile: true,
+    // Explicit isolation wins even when a thin wrapper qualifies as unit-fast.
+    excludeUnitFastTests: false,
+  },
+  toolingDocker: {
+    name: "tooling-docker",
+    include: toolingDockerTestFiles,
+    intersectIncludeFile: true,
+  },
+};

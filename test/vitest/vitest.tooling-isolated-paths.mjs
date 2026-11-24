@@ -19,6 +19,8 @@ export const toolingIsolatedTestFiles = [
   "test/scripts/managed-child-process.termination.test.ts",
   "test/scripts/openclaw-e2e-instance.test.ts",
   "test/scripts/test-projects-build-admission.test.ts",
+  // Copies an executable; sibling threads must not fork while its write FD is open.
+  "test/scripts/upgrade-survivor-native-systemd.test.ts",
   "test/scripts/vitest-fork-shutdown.test.ts",
   "test/scripts/vitest-runner-outcome.test.ts",
 ];
