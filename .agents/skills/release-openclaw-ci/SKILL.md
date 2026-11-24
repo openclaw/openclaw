@@ -7,6 +7,16 @@ description: "Run, watch, debug, and summarize OpenClaw full release CI, release
 
 Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate validation, install/update proof, live-provider checks, and CI recovery.
 
+## Fast-track approval boundary
+
+Agents MUST NOT approve fast-track exceptions, even with a release manager's
+available token. Require explicit approval from another human in the normal
+release-managers group for the exact request/digest and skip or incomplete-FRV
+action; retain its permalink and original FRV results. Generic release authority
+is insufficient. Use the normal environment approval/receipt, not a separate
+Google/Firebase service. These request contracts do not yet enable a publisher
+bypass. Follow the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-approval-is-human-only).
+
 ## Guardrails
 
 ### Scope and authority
@@ -53,9 +63,9 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 
 - FRV separates child dispatch, Release Decision, and Diagnostic Drain. `fail_fast=false` makes **zero** child-cancellation calls; Drain follows selected children to terminal unless cancelled itself or denied GitHub API access. `fail_fast=true` may cancel only the exact active child owning a blocker.
 - Same-parent continuation requires the root's original logged `fail_fast=false`; the controller checks before mutation.
-- A parent that sealed its own candidate artifacts cannot continue: reruns make prior-attempt artifacts unavailable. Keep C/Q frozen, supersede it, and start fresh all-group FRV.
+- A parent that sealed its own candidate artifacts cannot use same-parent continuation: reruns make prior-attempt artifacts unavailable. Before starting fresh all-group FRV, assess [receipt-backed aggregate recovery](#receipt-backed-aggregate-recovery) with frozen C/Q and the original receipts.
 - One immutable execution-plan artifact seals original parent attempt, exact child tuples/titles, coverage, gates, and reuse identity; identical bytes are cached by exact run ID. Decision, Drain, manifests, evidence validation, and final verification consume the current attempt's artifact.
-- Collector retry: restore/validate cached plan, re-upload, adopt the same children. Missing plan is orchestration failure—not permission to reconstruct or redispatch.
+- Collector retry: restore/validate cached plan, re-upload, adopt the same children. Missing plan is orchestration failure—not permission to reconstruct or redispatch. If same-parent recovery is unavailable, use the [receipt-backed recovery decision](#receipt-backed-aggregate-recovery), not another blind parent retry.
 - Before `passed`, Decision rechecks reused evidence: sealed target/evidence SHAs, policy, changed paths, selected/root runs, source manifest, trusted tooling identity, and exact children. Sealing alone is not trust.
 - Parent retry selects newest Decision and Drain independently; both must bind the same immutable plan even if source attempts differ.
 - Child retry stays in-plan only with exact run ID, workflow path/ref/Q, dispatch title/event, target, candidate, and validation inputs. Newer attempts replace matching jobs; absent jobs carry forward. Duplicate identities, missing/regressed attempts, or changed tuples fail closed.
@@ -71,6 +81,29 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 - Candidate rebased/base changed after warmup → stop the task box and warm a fresh one. Relative source sync can otherwise mix old-base files with new diffs and create false lock/Docker failures.
 - Reused Testboxes check recorded source after first successful run. Source-only edits can reuse; base/dependency/wrapper/workflow drift needs a fresh lease. Never use `OPENCLAW_TESTBOX_ALLOW_STALE=1` for release proof.
 - Supported committed-candidate capsule: from C's checkout, run `node scripts/crabbox-wrapper.mjs run --blacksmith-ref main -- <command>`. Capsule preserves C/dependencies; main supplies admission limits. If wrapper contract is absent, use exact-target release validation with separate Validation/Tooling SHAs. Never dispatch candidate Testbox refs or borrow another checkout's wrapper.
+
+## Receipt-backed aggregate recovery
+
+**Check this path before replacing a drained FRV for a sealing/collector failure.** A failed parent, missing execution-plan cache/artifact, or unavailable same-parent continuation does not by itself require rerunning tests. After a reviewed tooling-only repair, `pnpm frv recover` can authenticate the original submission/admission and retained producer/child receipts under current trusted P, without changing C/Q or rebuilding publication artifacts.
+
+`continue --failed` retries eligible failed work and reseals the same parent using its original plan. **`recover` creates a separate receipt-backed aggregate**; it does not turn the original failed parent green. Use the [canonical recovery contract](../../../docs/reference/full-release-validation/evidence.md#receipt-backed-aggregate-recovery), including for originally admitted beta, stable, full, and extended-stable selections.
+
+1. Confirm the original parent and selected work are terminal; classify failures and preserve the original admission, attempts, receipts, artifact identities, and Q grants. Recovery cannot replace missing required coverage, waive failures, change Q, or repair invalid package bytes.
+2. Select the exact current trusted-main P containing the reviewed recovery repair. Let the helper discover and authenticate the original evidence; never hand-reconstruct a plan or recovery request.
+3. Dispatch once with a new private request file:
+
+   ```bash
+   pnpm frv recover --run <original-parent-run-id> \
+     --workflow-sha <exact-trusted-main-P> --request-file <private-request-path> --json
+   ```
+
+4. Retain that file. For an attempted, interrupted, or unconfirmed request, reconcile **only that request**, never submit another:
+
+   ```bash
+   pnpm frv recover --reconcile-request <private-request-path> --json
+   ```
+
+5. Require authenticated, complete recovery and the normal final verification/publication preflight. A dispatched/running recovery is not qualification or publication. Missing evidence, changed attempts, or lost authority fail closed; diagnose that refusal before choosing fresh qualification. Record original and recovery run IDs separately and retain raw waived failures.
 
 ## Repair release tooling without changing the product (C ≠ Q)
 
@@ -217,7 +250,7 @@ An `all` run without soak for an actual beta package on its matching canonical r
   pnpm frv verify --run <successful-parent-run-id>
   ```
 
-- Plans predating attempt-aware evidence cannot continue: settle the owned tree, preserve old receipts, and start fresh all-group FRV. Never reconstruct old state. Attempt-aware plans retain the parent and targeted recovery rules above.
+- Plans predating attempt-aware evidence cannot use same-parent continuation: settle the owned tree and preserve old receipts. Assess [receipt-backed aggregate recovery](#receipt-backed-aggregate-recovery) against its original-admission/receipt requirements before choosing fresh all-group FRV; never reconstruct old state. Attempt-aware plans retain the parent and targeted recovery rules above.
 - Controller retry handles: `ci`, `plugin-prerelease`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`, `performance`. Removed: `release-checks`. `qa` is a direct-child manual aggregate, not a controller retry API.
 - Filters fail closed unless they belong to the selected group. All-group also accepts `cross_os_suite_filter`; e.g. `-f cross_os_suite_filter=ubuntu,macos` excludes Windows. `npm-stable-v1`/`npm-beta-v1` still qualify with explicitly filtered OS omissions if all Linux suites remain selected and other policy requirements hold. Never turn an empty derived filter into an unfiltered broad run.
 - New all-group parents require changed shared orchestration, evidence invalid for the selected tuple, or explicit operator request. Record the invalidating event.
@@ -297,7 +330,7 @@ With `reuse_evidence=true`:
 - Admitted P evaluates retained failures against pinned Q grants using the current candidate version; a matching waiver avoids redispatch after the required initial run. Frozen Q still supplies dispatch-input defaults.
 - Collectors/final verification recheck live attempt/conclusion, closure, tooling lineage, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
 - Current-parent source/publication admission, successful-parent changelog reuse, and artifact producers' sealed receipts are unchanged.
-- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
+- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; eligible P-only repairs may use a separate [receipt-backed aggregate](#receipt-backed-aggregate-recovery), otherwise qualify through a new successful parent.
 
 ### Optional beta performance
 

@@ -707,11 +707,14 @@ it.each(["card", "detail"])(
     };
     const selector =
       surface === "card" ? ".agents-home__template-art" : ".plugin-catalog-detail__icon";
-    // Only the Blobster fallback has two filled eyes; its stroke takes the container's color.
-    const blobsterEyes = `${selector} svg[stroke="currentColor"] circle[fill="currentColor"]`;
+    const blobster = `${selector} svg[stroke="currentColor"]`;
+    const blobsterEyes = `${blobster} circle[fill="currentColor"]`;
     const withoutArtwork = create();
     await waitForSolid(() => expect(withoutArtwork.querySelectorAll(blobsterEyes)).toHaveLength(2));
     expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
+    const fallback = withoutArtwork.querySelector<SVGSVGElement>(blobster)!;
+    expect(fallback.style.strokeWidth).toBe("1.55px");
+    expect(fallback.style.color).toBe("rgb(156, 111, 62)");
 
     const container = create(templateIconUrl);
     await waitForSolid(() =>
@@ -720,9 +723,13 @@ it.each(["card", "detail"])(
     const image = container.querySelector(`${selector} img`)!;
     expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(image.getAttribute("crossorigin")).toBe("anonymous");
+    expect(container.querySelector(blobster)).toBeNull();
     image.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
     expect(container.querySelectorAll(blobsterEyes)).toHaveLength(2);
+    const failedFallback = container.querySelector<SVGSVGElement>(blobster)!;
+    expect(failedFallback.style.strokeWidth).toBe(fallback.style.strokeWidth);
+    expect(failedFallback.style.color).toBe(fallback.style.color);
   },
 );
 

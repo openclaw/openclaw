@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
@@ -25,7 +24,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let createSessionsSpawnTool: typeof import("../../tools/sessions-spawn-tool.js").createSessionsSpawnTool;
   let createAgentsWaitTool: typeof import("../../tools/agents-wait-tool.js").createAgentsWaitTool;
   let finalizeAgentToolAvailability: typeof import("../../agent-tool-availability.js").finalizeAgentToolAvailability;
-  let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
   let observeSwarmSchedulerWork: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").observeSwarmSchedulerWork;
@@ -145,7 +143,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     ({ createSessionsSpawnTool } = await import("../../tools/sessions-spawn-tool.js"));
     ({ createAgentsWaitTool } = await import("../../tools/agents-wait-tool.js"));
     ({ finalizeAgentToolAvailability } = await import("../../agent-tool-availability.js"));
-    decisionWork = await import("../../../audit/execution-decision-work.js");
     identityAdmission = await import("../../../audit/execution-identity-admission.js");
     callerContext = await import("../../tools/gateway-caller-context.js");
   });
@@ -344,7 +341,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       args: { thread: true },
       parentTokens: undefined,
       preparedMode: "fork",
-      operation: "fork",
       changedChildVisibility: undefined,
       disableDrafts: false,
     },
@@ -353,7 +349,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       args: { context: "fork", collect: true, groupId: "receipt-collectors" },
       parentTokens: 150_000,
       preparedMode: "isolated",
-      operation: "create",
       changedChildVisibility: undefined,
       disableDrafts: false,
     },
@@ -362,7 +357,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       args: { context: "fork" },
       parentTokens: undefined,
       preparedMode: "fork",
-      operation: "fork",
       changedChildVisibility: "shared",
       disableDrafts: false,
     },
@@ -371,20 +365,12 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       args: { context: "fork" },
       parentTokens: undefined,
       preparedMode: "fork",
-      operation: "fork",
       changedChildVisibility: undefined,
       disableDrafts: true,
     },
   ] as const)(
     "records the committed context when $scenario",
-    async ({
-      args,
-      parentTokens,
-      preparedMode,
-      operation,
-      changedChildVisibility,
-      disableDrafts,
-    }) => {
+    async ({ args, parentTokens, preparedMode, changedChildVisibility, disableDrafts }) => {
       await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
       visibilityDuringFork = changedChildVisibility;
       disableDraftsDuringFork = disableDrafts;
@@ -396,7 +382,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         await setParentTokens(parentTokens);
       }
       const expectParentUnchanged = await snapshotParent();
-      const work: ExecutionDecisionWork[] = [];
       const token = identityAdmission.createExecutionIdentityAdmissionToken("receipt-parent-run", {
         contextId: "receipt-parent-context",
         executionId: "receipt-parent-execution",
@@ -410,67 +395,40 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       });
       const wait = createAgentsWaitTool({ config, agentSessionKey: parentKey, agentId: "main" });
       finalizeAgentToolAvailability([tool, wait]);
-      const clearSink = decisionWork.configureExecutionDecisionWorkSink((item) => {
-        work.push(decisionWork.parseExecutionDecisionWork(item));
-        return true;
-      });
-      try {
-        const result = await callerContext.withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: parentKey,
-            executionIdentityToken: token,
-            receiptAuthority: () => true,
-          },
-          () => tool.execute("spawn-context-receipt", { task: "inspect parent history", ...args }),
-        );
+      const result = await callerContext.withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: parentKey,
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        () => tool.execute("spawn-context-receipt", { task: "inspect parent history", ...args }),
+      );
 
-        expect(result.details).toMatchObject({ status: "accepted", context: preparedMode });
-        if ("collect" in args) {
-          await vi.waitFor(() => expect(startQueuedSubagentRun).toHaveBeenCalled());
-        }
-        const childSessionKey = expectDefined(
-          (result.details as { childSessionKey?: string }).childSessionKey,
-          "accepted child key",
-        );
-        const child = expectDefined(read(childSessionKey), "accepted child entry");
-        expect(initialForkVisibility).toBe("draft");
-        expect(child.visibility).toBe(changedChildVisibility ?? "draft");
-        expect(prepareSubagentSpawn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            contextMode: preparedMode,
-            childSessionKey,
-          }),
-        );
-        const childHistory = await history(childSessionKey, child.sessionId);
-        if (preparedMode === "fork") {
-          expect(child.forkedFromParent).toBe(true);
-          expectCopiedHistory(childHistory);
-        } else {
-          expect(forkedEntry).toBeUndefined();
-          expect(childHistory).toEqual([]);
-          expect(result.details).toMatchObject({
-            note: expect.stringContaining("Parent context is too large to fork"),
-          });
-        }
-        await expectParentUnchanged();
-        expect(JSON.stringify(result.details)).not.toContain("receipt-parent-context");
-        expect(work).toHaveLength(1);
-        expect(work[0]).toMatchObject({
-          token,
-          receipt: {
-            action: { family: "session", operation },
-            decision: { outcome: "allowed", reasonCode: `session_${operation}_committed` },
-            enforcement: { coverageState: "attribution-only" },
-            source: { owner: "session-action", decisionBoundary: "session-tool.result" },
-          },
-          refs: {
-            target: { namespace: "session", value: JSON.stringify(["main", childSessionKey]) },
-          },
-        });
-      } finally {
-        clearSink();
+      expect(result.details).toMatchObject({ status: "accepted", context: preparedMode });
+      if ("collect" in args) {
+        await vi.waitFor(() => expect(startQueuedSubagentRun).toHaveBeenCalled());
       }
+      const childSessionKey = expectDefined(
+        (result.details as { childSessionKey?: string }).childSessionKey,
+        "accepted child key",
+      );
+      const child = expectDefined(read(childSessionKey), "accepted child entry");
+      expect(initialForkVisibility).toBe("draft");
+      expect(child.visibility).toBe(changedChildVisibility ?? "draft");
+      const childHistory = await history(childSessionKey, child.sessionId);
+      if (preparedMode === "fork") {
+        expect(child.forkedFromParent).toBe(true);
+        expectCopiedHistory(childHistory);
+      } else {
+        expect(forkedEntry).toBeUndefined();
+        expect(childHistory).toEqual([]);
+        expect(result.details).toMatchObject({
+          note: expect.stringContaining("Parent context is too large to fork"),
+        });
+      }
+      await expectParentUnchanged();
+      expect(JSON.stringify(result.details)).not.toContain("receipt-parent-context");
     },
   );
 

@@ -93,7 +93,7 @@ afterEach(async () => {
 
 const patchContext = (
   load: GatewayRequestContext["loadGatewayModelCatalog"],
-  cfg: OpenClawConfig = {},
+  cfg: OpenClawConfig = { agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } } },
 ) => createSessionMutationContext(cfg, load);
 
 async function modelContext(state: OpenClawTestState, store: string) {
@@ -329,10 +329,10 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
       await seedEntry(storedKey, "main", existing);
       await seedEntry(otherKey, "main", { sessionId: "other" });
       const { entered, catalog, load } = pausedCatalog();
-      const cfg: OpenClawConfig =
+      const cfg: OpenClawConfig | undefined =
         change === "alias"
           ? { session: { mainKey: "work" }, agents: { entries: { main: {} } } }
-          : {};
+          : undefined;
       const patch = patchRequest(patchContext(load, cfg));
       const response = vi.fn();
       const pending = patch(

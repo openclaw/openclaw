@@ -215,18 +215,14 @@ test.each([false, true])(
 );
 
 test.each([
-  ["revoked", "agent tool caller authority is no longer active"],
   ["aborted", "Inventory read cancelled"],
   ["replaced", "Gateway instance unavailable for sessions.list"],
 ] as const)("does not disclose title reads after the caller is %s", async (change, error) => {
   await withInventory(async ({ cfg, context, asReader }) => {
     const controller = new AbortController();
-    let current = true;
     let currentGateway: typeof context | undefined = context;
     interceptTitles(() => {
-      if (change === "revoked") {
-        current = false;
-      } else if (change === "aborted") {
+      if (change === "aborted") {
         controller.abort(new Error("Inventory read cancelled"));
       } else {
         currentGateway = undefined;
@@ -236,7 +232,7 @@ test.each([
       agentId: "main",
       sessionKey: "agent:main:requester",
       operationalRunInstance: { instanceId: "inventory-instance", runId: "inventory-run" },
-      receiptAuthority: () => current,
+      receiptAuthority: () => true,
     };
     const invoke = () => list(cfg, { includeLastMessage: true }, {}, controller.signal);
     const pending = asReader(() =>

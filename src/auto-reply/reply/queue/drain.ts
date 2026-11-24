@@ -3,6 +3,8 @@ import { appendCurrentInboundContext } from "../../../agents/embedded-agent-runn
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../../../infra/restart-recovery-errors.js";
 import { PluginInstanceUnavailableError } from "../../../plugins/plugin-instance-error.js";
 import {
   getGatewayRestartDrainSignal,
@@ -30,6 +32,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
+import { bindCommandOwnerAuthority } from "../../command-owner-authority.js";
 import { attachAmbientOverflowContext } from "./ambient-context.js";
 import {
   collectCurrentInboundContext,
@@ -156,7 +159,7 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
   }
   // Mixed or unverifiable people share no downstream sender authority. The
   // opaque admission aggregate records unknown identity at the run boundary.
-  return {
+  const collected = {
     ...source,
     senderId: undefined,
     senderName: undefined,
@@ -165,7 +168,14 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
     senderIsOwner: false,
     traceAuthorized: false,
     ownerNumbers: [],
+    requesterOrigin: source.requesterOrigin
+      ? { ...source.requesterOrigin, senderId: undefined, senderE164: undefined }
+      : undefined,
   };
+  // Spreading the source also copies its private owner grant. Replace it with
+  // a source-free denial so no requester identity or recovery reference survives.
+  bindCommandOwnerAuthority(collected, { isCurrent: () => false });
+  return collected;
 }
 
 /** Executes an already-selected claim. This adapter never chooses a successor. */
@@ -325,13 +335,15 @@ async function executeClaim(
     }
     waitForFreshKick =
       claim.retryBeforeExecution === true &&
-      error instanceof AgentDatabaseExecutionAdmissionClosedError;
+      (error instanceof AgentDatabaseExecutionAdmissionClosedError ||
+        isOperatorAuthorityUnavailable(error) ||
+        (error instanceof GatewayDispatchUnavailableError && error.retryable));
     defaultRuntime.error?.("mailbox execution failed for " + queue.key + ": " + String(error));
   } finally {
     // Only a producer receipt retries within this mailbox. An escaped runner error
     // instead abandons unadopted lifecycle-backed input for durable ingress replay.
     const preparationRefused = claim.retryBeforeExecution === true;
-    if (preparationRefused && !pluginUnavailable) {
+    if (preparationRefused && !pluginUnavailable && !waitForFreshKick) {
       // Every retry yields so failed preparation cannot starve reload or cancellation.
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 250).unref?.();

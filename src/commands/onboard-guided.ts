@@ -383,14 +383,9 @@ async function runGuidedOnboardingFlow(
     }
   } else {
     // Declined discovery: build the manual picker from config/manifests only.
-    const { listManualSetupInferenceOptions } = await import("../system-agent/setup-inference.js");
-    detection = {
-      candidates: [],
-      unavailableCandidates: [],
-      // Install suggestions come from scanning; a declined scan offers none.
-      recommendedInstalls: [],
-      ...(await listManualSetupInferenceOptions()),
-    };
+    const { listManualSetupInferenceDetection } =
+      await import("../system-agent/setup-inference.js");
+    detection = await listManualSetupInferenceDetection();
   }
 
   const resultLines = await runManualStage({

@@ -302,7 +302,9 @@ describe("managed service update handoff", () => {
         }
       }
       if (outcome === "data-at-risk") {
-        expect(result.log).toContain("keep the gateway stopped: data at risk (unreadable-state)");
+        expect(result.log).toContain(
+          "gateway left stopped: data at risk (unreadable-state) recorded and not yet verified; run openclaw update repair to verify the state and restart the gateway",
+        );
       }
       if (outcome === "unsafe") {
         expect(result.log).toContain("runtime-verification-failed");

@@ -481,67 +481,69 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
       return reacquireAndResumeInProcessRestart();
     }
     if (respawn.mode === "supervised") {
-      const restartKind = isUpdateRestart ? "update-process" : "full-process";
-      restartTrace.markGatewayRestartTrace("restart.full-process-handoff", [
-        ["kind", restartKind],
-        ["mode", respawn.mode],
-        ["pid", "none"],
-        ["supervisorMode", supervisorMode ?? "none"],
-      ]);
-      const handoffRequest = activeRestartRequest;
-      const handoffIsCurrent = () =>
-        signals.active && !forcedExitStarted && activeRestartRequest === handoffRequest;
-      let handoff: Awaited<ReturnType<typeof eagerLifecycleRuntime.writeGatewayRestartHandoff>> =
-        null;
-      try {
-        handoff = await eagerLifecycleRuntime.writeGatewayRestartHandoff(
-          {
-            restartKind,
-            reason: restartReason,
-            processInstanceId,
-            supervisorMode: supervisorMode ?? "external",
-            restartTrace: restartTrace.captureGatewayRestartTraceHandoff(),
-          },
-          () => {
-            if (!handoffIsCurrent()) {
-              throw new Error("Gateway restart handoff no longer owns the shutdown request");
-            }
-          },
-        );
-      } catch (error) {
-        if (handoffIsCurrent()) {
-          throw error;
+      // Native service markers belong to the resident launcher, not this child.
+      if (!("supervisor" in restartDecision && restartDecision.supervisor === "launcher")) {
+        restartTrace.markGatewayRestartTrace("restart.full-process-handoff", [
+          ["kind", isUpdateRestart ? "update-process" : "full-process"],
+          ["mode", respawn.mode],
+          ["pid", "none"],
+          ["supervisorMode", supervisorMode ?? "none"],
+        ]);
+        const handoffRequest = activeRestartRequest;
+        const handoffIsCurrent = () =>
+          signals.active && !forcedExitStarted && activeRestartRequest === handoffRequest;
+        let handoff: Awaited<ReturnType<typeof eagerLifecycleRuntime.writeGatewayRestartHandoff>> =
+          null;
+        try {
+          handoff = await eagerLifecycleRuntime.writeGatewayRestartHandoff(
+            {
+              restartKind: isUpdateRestart ? "update-process" : "full-process",
+              reason: restartReason,
+              processInstanceId,
+              supervisorMode: supervisorMode ?? "external",
+              restartTrace: restartTrace.captureGatewayRestartTraceHandoff(),
+            },
+            () => {
+              if (!handoffIsCurrent()) {
+                throw new Error("Gateway restart handoff no longer owns the shutdown request");
+              }
+            },
+          );
+        } catch (error) {
+          if (handoffIsCurrent()) {
+            throw error;
+          }
         }
-      }
-      if (forcedExitStarted || !signals.active) {
-        return;
-      }
-      if (activeRestartRequest !== handoffRequest) {
-        return handleRestartAfterServerClose();
-      }
-      if (supervisorMode === "external" && !handoff) {
-        gatewayLog.warn(
-          `external supervisor restart handoff could not be persisted; ${installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
-        );
-        if (isUpdateRestart) {
-          await markRestartHandoffUnavailable();
+        if (forcedExitStarted || !signals.active) {
+          return;
         }
-        return reacquireAndResumeInProcessRestart();
-      }
-      gatewayLog.info("restart mode: full process restart (supervisor restart)");
-      if (supervisorMode === "launchd") {
-        const spawned = await loopExit.waitForLaunchdRestartHandoff(respawn.handoffSpawned);
-        if (!spawned) {
-          writeStabilityBundle("gateway.restart_handoff_spawn_failed");
+        if (activeRestartRequest !== handoffRequest) {
+          return handleRestartAfterServerClose();
+        }
+        if (supervisorMode === "external" && !handoff) {
           gatewayLog.warn(
-            `launchd restart handoff failed to spawn; ${installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
+            `external supervisor restart handoff could not be persisted; ${installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
           );
           if (isUpdateRestart) {
             await markRestartHandoffUnavailable();
           }
           return reacquireAndResumeInProcessRestart();
         }
+        if (supervisorMode === "launchd") {
+          const spawned = await loopExit.waitForLaunchdRestartHandoff(respawn.handoffSpawned);
+          if (!spawned) {
+            writeStabilityBundle("gateway.restart_handoff_spawn_failed");
+            gatewayLog.warn(
+              `launchd restart handoff failed to spawn; ${installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
+            );
+            if (isUpdateRestart) {
+              await markRestartHandoffUnavailable();
+            }
+            return reacquireAndResumeInProcessRestart();
+          }
+        }
       }
+      gatewayLog.info("restart mode: full process restart (supervisor restart)");
       updateSuccessor.commit(true);
       return finishLoopAfterCleanup(respawn.exitCode ?? 0);
     }
@@ -579,9 +581,8 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     reportBudget: (budget) => {
       reportedBudget = budget;
     },
-    onTimeout: () => {
-      cleanup.retain(forceExitAfterStabilityBundle("gateway.restart_startup_request_timeout"));
-    },
+    onTimeout: () =>
+      cleanup.retain(forceExitAfterStabilityBundle("gateway.restart_startup_request_timeout")),
   });
 
   const runAcceptedRequest = (acceptedRequest: GatewayRunSignalRequest) => {

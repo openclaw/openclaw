@@ -34,6 +34,7 @@ import {
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
+import { createSessionGitHubIssue } from "../github-publication-issue.js";
 import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import {
@@ -189,6 +190,13 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.action",
     validateSessionGitHubActionParams,
     async (options) => {
+      if (options.params.action === "create_issue") {
+        options.respond(
+          true,
+          await createSessionGitHubIssue({ ...options, params: options.params }),
+        );
+        return;
+      }
       if (options.params.action === "prepare_pr") {
         await performSessionGitHubPreparation({ ...options, params: options.params });
         return;
@@ -316,9 +324,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
 
         return;
       }
+      sessionMutationAuthorization?.assertCurrent();
       using selectedSession = await prepareGitHubPublicationSession(sessionKey, {
         agentId,
-        assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
         fields:
           params.workspacePath === undefined
             ? undefined
@@ -349,7 +357,6 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      sessionMutationAuthorization?.assertCurrent();
       const session = {
         sessionKey: loaded.canonicalKey,
         agentId: caller?.agentId ?? loaded.agentId,
@@ -416,6 +423,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
                 options,
                 parent: { ...loaded, entry: loaded.entry! },
                 requester: admitted.requester,
+                operatorAuthority: admitted.authority,
                 source: source.value!,
                 idempotencyKey: params.idempotencyKey,
                 policy: caller.workspacePublicationPolicy,
@@ -476,7 +484,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           ? { expectedRunId: caller.operationalRunInstance.runId }
           : {}),
       });
-      sessionMutationAuthorization?.assertCurrent();
+      admitted.requester.assertCurrent();
+      selectedSession.readCurrent();
       respond(true, result);
     },
   ),

@@ -295,6 +295,7 @@ export const UpdateRunRecordSchema = z.object({
       })
       .optional(),
     sessionKey: text.optional(),
+    noticeSurface: z.literal("app").optional(),
     deliveryContext: z
       .object({
         channel: text.optional(),

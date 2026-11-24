@@ -486,14 +486,28 @@ async function validateWorkloadIdentity(workflowSha, request, deps) {
   const comparison = await deps.github(
     "compare/" + workflowSha + "..." + request.workflowSha + "?per_page=1",
   );
-  // A grant changes the verdict, not the execution. GitHub returns at most 300
-  // changed files; an exact one-file inventory cannot hide a changed workload.
+  // Parent orchestration and current-verdict policy do not change a sealed child
+  // execution. Keep this list explicit: child workflows, harnesses, build inputs,
+  // and shared helpers still require workload equivalence below. #203854 plus a
+  // grant update must not invalidate unchanged child execution. The current
+  // policy, exact inputs, live attempt, and authenticated receipt are checked next.
+  // GitHub caps changed files at 300; a capped inventory cannot prove equivalence.
+  const orchestrationPaths = new Set([
+    RELEASE_VALIDATION_WAIVERS_PATH,
+    ".github/workflows/full-release-validation.yml",
+    "scripts/lib/full-release-child-reuse.mjs",
+    "test/scripts/full-release-child-reuse.test.ts",
+    "docs/reference/full-release-validation/dispatch.md",
+    "docs/reference/full-release-validation/stages.md",
+  ]);
   if (
     comparison?.status === "ahead" &&
     comparison.merge_base_commit?.sha === workflowSha &&
-    comparison.files?.length === 1 &&
-    comparison.files[0].filename === RELEASE_VALIDATION_WAIVERS_PATH &&
-    comparison.files[0].status === "modified"
+    comparison.files?.length > 0 &&
+    comparison.files.length < 300 &&
+    comparison.files.every(
+      (file) => file.status === "modified" && orchestrationPaths.has(file.filename),
+    )
   ) {
     return;
   }
@@ -678,12 +692,15 @@ export async function validateReusableReleaseChild(selection, request, deps = {}
   const normalized = requestValue(request);
   const resolved = dependencies(request.repository, deps);
   if (request.policyTargetVersion) {
-    normalized.waiverPolicy = await readReleaseValidationWaiversAsync(async (sourcePath) =>
-      decodeReleaseValidationSource(
-        await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
-        sourcePath,
-      ),
-    );
+    // Receipt recovery may supply the policy from its separately authenticated admission.
+    normalized.waiverPolicy =
+      deps.waiverPolicy ??
+      (await readReleaseValidationWaiversAsync(async (sourcePath) =>
+        decodeReleaseValidationSource(
+          await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+          sourcePath,
+        ),
+      ));
   }
   requireEvidence(/^[a-f0-9]{64}$/u.test(selection?.receiptSha256), "selection omitted its digest");
   return validateEvidence(selection, normalized, resolved);

@@ -92,10 +92,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/solid/registry-category-icon.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
     case "ui/src/pages/plugins/catalog-skeleton.tsx":
-      // Catalogs load their grid, cards, and loading state together.
+      // Catalogs load these together; shared category icons must not pull in either page.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -153,6 +154,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/creator-sign-in.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":

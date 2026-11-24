@@ -6,10 +6,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../../agents/admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import { createAgentTurnTaintState } from "../../agents/embedded-agent-runner/run/turn-taint-state.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -70,11 +68,10 @@ it.for(["active", "revoked", "non-owner"] as const)(
       const sessionId = "owner-role-write-session";
       replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
       const lifetime = new AbortController();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: GATEWAY_OWNER_PROFILE_ID,
         scopes: ["operator.admin"],
         signal: lifetime.signal,
-        assertCurrent: () => lifetime.signal.throwIfAborted(),
       });
       const operationalRunInstance = createOperationalRunInstanceRef("owner-role-write-run");
       const approvalAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -146,7 +143,6 @@ it.for(["active", "revoked", "non-owner"] as const)(
                   operationalRunInstance,
                   approvalAuthority,
                   operatorAuthority: authority,
-                  receiptAuthority: authority.assertCurrent,
                   gatewayContextResolver: () => context,
                 },
                 async () => {

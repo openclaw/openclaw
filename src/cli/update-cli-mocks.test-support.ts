@@ -580,6 +580,19 @@ vi.mock("../daemon/service.js", async () => {
   };
 });
 
+// Service fixtures model the Gateway; no node service is installed beside it.
+vi.mock("../daemon/node-service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/node-service.js")>();
+  return {
+    ...actual,
+    resolveNodeService: () => ({
+      ...actual.resolveNodeService(),
+      readCommand: async () => null,
+      readRuntime: async () => ({ status: "stopped" }),
+    }),
+  };
+});
+
 vi.mock("./update-cli/update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
     await stop(),

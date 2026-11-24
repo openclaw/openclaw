@@ -28,12 +28,10 @@ type TranscriptScope = {
 };
 
 export async function readPreflightTranscriptContextMessages(
-  scope: TranscriptScope & { contextWindowTokens: number },
+  scope: TranscriptScope,
   signal?: AbortSignal,
 ): Promise<AgentMessage[]> {
-  const limits = resolveEmbeddedSessionContextLimits({
-    contextTokenBudget: scope.contextWindowTokens,
-  });
+  const limits = resolveEmbeddedSessionContextLimits({});
   const readLegacyProjection = async () => {
     signal?.throwIfAborted();
     const messages = (await readSessionMessagesAsync(scope, {

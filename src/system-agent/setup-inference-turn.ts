@@ -117,7 +117,9 @@ export async function runSetupInferenceTurn(params: {
       error:
         status === "timeout"
           ? "The setup response check timed out. Retry setup, or choose another model or runtime. No default model was changed."
-          : error,
+          : status === "rate_limit"
+            ? "The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again."
+            : error,
     };
   };
   const preparedRunAdmission = prepareSystemAgentRunAdmission(

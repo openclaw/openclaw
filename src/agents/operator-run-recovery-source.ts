@@ -32,7 +32,6 @@ export function captureScheduledOperatorSource(
     return undefined;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   const independent = Boolean(authority.openclawIdPrincipal || params.independent);
   const unavailable = () => {
     if (independent) {

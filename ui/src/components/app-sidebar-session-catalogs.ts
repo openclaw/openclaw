@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type {
   SessionCatalog,
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -169,6 +170,7 @@ export function projectSidebarSessionCatalogs(
         // Catalog access and creator attribution do not establish involvement.
         // Only the Gateway-filtered backing roster can admit a catalog row.
         if (
+          !host.profileRelation &&
           involvingSessionKeys &&
           (!session.sessionKey || !involvingSessionKeys.has(session.sessionKey))
         ) {
@@ -180,7 +182,7 @@ export function projectSidebarSessionCatalogs(
         if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
           return false;
         }
-        if (!ownerId) {
+        if (!ownerId || host.profileRelation) {
           return true;
         }
         const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;
@@ -191,8 +193,10 @@ export function projectSidebarSessionCatalogs(
       }
     }
     // Discovery failures may expose an empty catalog, not sessions excluded by the user's filter.
+    // A partially applied relation is the exception: its guidance explains the empty result.
+    const partial = catalog.hosts.some((host) => host.error?.code === "FILTER_PARTIAL");
     return visibleHosts.length > 0 ||
-      (catalog.hosts.every((host) => host.sessions.length === 0) &&
+      ((partial || catalog.hosts.every((host) => host.sessions.length === 0)) &&
         catalogErrorMessages(catalog).length > 0)
       ? [{ ...catalog, visibleHosts }]
       : [];
@@ -219,6 +223,7 @@ export type CatalogSessionMenuRequest = {
   agentId: string;
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
+  profileRelation?: SessionCatalogProfileRelation;
   canOpenTerminal: boolean;
   canDelete: boolean;
   name: string;

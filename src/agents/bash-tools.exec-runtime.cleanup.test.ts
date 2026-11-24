@@ -2,7 +2,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import { readBackgroundProcesses } from "./bash-process-observation.js";
 import type { ProcessSession } from "./bash-process-registry.js";
@@ -87,11 +87,10 @@ function createExecOperatorSource(profileId = "exec-guest") {
   const controller = new AbortController();
   const release = vi.fn();
   const retain = vi.fn(() => release);
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes: ["operator.write"],
     signal: controller.signal,
-    assertCurrent: () => controller.signal.throwIfAborted(),
     retain,
   });
   return { controller, authority, retain, release };
@@ -597,7 +596,7 @@ describe("operator source lifetime", () => {
     const guest = await withGatewayToolCallerIdentity(
       {
         ...caller(source, "agent:main:retained-exec"),
-        receiptAuthority: () => !turn.signal.aborted,
+        receiptAuthority: () => turn.signal.throwIfAborted(),
       },
       () => runTestExecProcess({ command: "retained-source-command", startupSignal: turn.signal }),
     );
@@ -617,7 +616,7 @@ describe("operator source lifetime", () => {
       expect(guest.session).toMatchObject({ finalizing: true, exited: false });
       expect(source.release).not.toHaveBeenCalled();
 
-      expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
+      expect(source.authority.signal?.aborted).toBe(true);
       expect(staff.session.exited).toBe(false);
       cleanup.release();
       await expect(guest.promise).resolves.toMatchObject({

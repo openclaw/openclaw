@@ -18,6 +18,7 @@ import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
 } from "../../infra/question-channel-runtime.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   listSecretStoreEntries,
@@ -180,8 +181,6 @@ export function createQuestionHandlers(
         requester && validateAuthority
           ? () => {
               try {
-                producer?.authority.assertCurrent();
-                operatorAuthority?.assertCurrent();
                 sessionAccess?.assertSourceCurrent();
                 return validateAuthority(requester);
               } catch {
@@ -212,13 +211,6 @@ export function createQuestionHandlers(
         };
       }
       try {
-        // Every question is a retained producer, including secret and sessionless prompts.
-        // Admission failures must not enter the optional session-facts fallback below.
-        producer = await prepareQuestionProducer(options);
-        const questions = await normalizeQuestions(request, authority.assertCurrent);
-        if (narrow && operatorAuthority) {
-          assertAdmittedRunOperatorAuthority(operatorAuthority);
-        }
         const requestedSession = request.sessionKey
           ? resolveRequestedSessionAgentId(
               context.getRuntimeConfig(),
@@ -230,11 +222,21 @@ export function createQuestionHandlers(
           respond(false, undefined, requestedSession.error);
           return;
         }
+        // Every question is a retained producer, including secret and sessionless prompts.
+        // Admission failures must not enter the optional session-facts fallback below.
+        producer = await prepareQuestionProducer(
+          options,
+          requestedSession?.ok ? requestedSession.agentId : request.agentId,
+        );
+        const questions = await normalizeQuestions(request, authority.assertCurrent);
+        if (narrow && operatorAuthority) {
+          assertAdmittedRunOperatorAuthority(operatorAuthority);
+        }
         if (narrow && requestedSession?.ok) {
           // Starting a prompt retains the admitted producer's agent ceiling.
           const agentError = authorizeGatewaySessionCreation({
             cfg: context.getRuntimeConfig(),
-            client,
+            ...(producer ? { authority: producer.authority } : { client }),
             agentId: requestedSession.agentId,
           });
           if (agentError) {
@@ -251,7 +253,6 @@ export function createQuestionHandlers(
               })
             : undefined;
         const create = (prepared?: PreparedQuestionSession) => {
-          producer?.authority.assertCurrent();
           if (sessionKey && requiresSharing()) {
             const authorizationError = prepared?.authorizeMutation(client);
             if (!prepared?.target || authorizationError) {
@@ -420,6 +421,10 @@ export function createQuestionHandlers(
           create();
         }
       } catch (error) {
+        if (error instanceof GatewayOperatorRecoveryAuthorizationError) {
+          respondError(respond, ErrorCodes.FORBIDDEN, error.message);
+          return;
+        }
         if (error instanceof QuestionRequestValidationError) {
           respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
           return;

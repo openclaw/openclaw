@@ -107,7 +107,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
           <Show
             when={indicator() === "dots"}
             fallback={
-              <Show when={indicator() === "brand"} fallback={<Icon name="claw" />}>
+              <Show when={indicator() === "brand"} fallback={<Icon name="workingClaw" />}>
                 <WorkingBrandGlyph branding={props.branding} claw="lobster" />
               </Show>
             }

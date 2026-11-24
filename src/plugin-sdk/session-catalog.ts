@@ -27,6 +27,8 @@ export { importSessionCatalogHistory } from "../plugins/session-catalog-history-
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,
+  SessionCatalogProfileRelation,
+  SessionCatalogSourceProfileRelation,
   SessionCatalogDescriptor,
   SessionCatalogHost,
   SessionCatalogLocator,

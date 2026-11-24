@@ -126,6 +126,41 @@ describe("inline compaction motion", () => {
     }
   });
 
+  it("stacks compaction savings in a narrow pane without splitting either line", () => {
+    mountSolid(
+      () => (
+        <ChatDivider
+          item={buildCompactionDividerItem(
+            { tokensBefore: 101_000, tokensAfter: 52_100 },
+            1_000,
+            0,
+          )}
+        />
+      ),
+      { container },
+    );
+    const textRects = (selector: string) => {
+      const range = document.createRange();
+      range.selectNodeContents(container.querySelector(selector)!);
+      return [...range.getClientRects()];
+    };
+    const title = () => textRects(".chat-divider__title");
+    const metric = () => textRects(".chat-divider__metric");
+    const separator = () => textRects(".chat-divider__separator");
+
+    container.style.width = "260px";
+    expect(title()).toHaveLength(1);
+    expect(metric()).toHaveLength(1);
+    expect(metric()[0]!.top).toBeGreaterThanOrEqual(title()[0]!.bottom);
+    expect(separator()).toHaveLength(0);
+
+    container.style.width = "560px";
+    expect(title()).toHaveLength(1);
+    expect(metric()).toHaveLength(1);
+    expect(metric()[0]!.top).toBeCloseTo(title()[0]!.top);
+    expect(separator()).toHaveLength(1);
+  });
+
   it.each(["active", "cleared"] as const)("preserves the %s fallback pill", async (phase) => {
     mountSolid(
       () =>

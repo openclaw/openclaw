@@ -218,7 +218,7 @@ export function createGatewayChatUserTurnController(params: {
     return { retained, text };
   };
   const workerGoalSource: SessionSourceAssertion | undefined =
-    admission.codexGoalAdmission === "worker"
+    admission.runtimeGoal === "worker"
       ? Object.assign(() => captureWorkerGoalSource()(), {
           prepareSessionSource: prepareWorkerGoalSource,
           prepareSessionSourceScope: prepareWorkerGoalSource,
@@ -254,7 +254,7 @@ export function createGatewayChatUserTurnController(params: {
             runId: session.clientRunId,
             ...params.goalCommitGuard,
             assertCurrent:
-              admission.codexGoalAdmission === "worker"
+              admission.runtimeGoal === "worker"
                 ? composeSessionSourceAssertion([
                     params.goalCommitGuard?.assertCurrent,
                     workerGoalSource,
@@ -288,10 +288,7 @@ export function createGatewayChatUserTurnController(params: {
       ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: composeSessionSourceAssertion([
-      params.assertOriginalInputCommit,
-      admission.operatorAuthority?.assertCurrent,
-    ]),
+    assertOriginalInputCommit: params.assertOriginalInputCommit,
     beforeMessageWrite: (event) => {
       if (recoveredInput) {
         return event.message;
@@ -439,8 +436,8 @@ export function createGatewayChatUserTurnController(params: {
       contextFreeCommand = true;
     }
     // A setup/error fallback must not activate a Goal before placement admission.
-    // The selected native harness promotes staged input through persistApproved.
-    if (admission.codexGoalAdmission && !recorder.hasPersisted()) {
+    // The selected runtime promotes staged input through persistApproved.
+    if (admission.runtimeGoal && !recorder.hasPersisted()) {
       return undefined;
     }
     const persisted = await measureDiagnosticsTimelineSpan(
@@ -467,7 +464,7 @@ export function createGatewayChatUserTurnController(params: {
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
       resumeRequestedSession: request.reconnectResumeRequested,
-      ...(admission.localInputAdmission || admission.codexGoalAdmission
+      ...(admission.localInputAdmission || admission.runtimeGoal
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

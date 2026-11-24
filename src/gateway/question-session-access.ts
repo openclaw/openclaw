@@ -22,8 +22,7 @@ import {
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { retainGatewayOperatorRunAuthority } from "./operator-run-cancellation.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import { usesOwnRunQuestionAccess } from "./question-access.js";
 import {
   QuestionManagerError,
@@ -233,7 +232,6 @@ export async function withPreparedQuestionSessions<T>(
                 throw new Error("Question recipient is no longer current");
               }
               client?.internal?.operatorAccessAuthority?.assertCurrent();
-              client?.internal?.operatorRunAuthority?.assertCurrent();
               let sharing = recipients.get(client);
               if (!sharing) {
                 sharing = prepareQuestionSharing(
@@ -264,7 +262,6 @@ export async function withPreparedQuestionSessions<T>(
                   }
                   if (narrow) {
                     client?.internal?.operatorAccessAuthority?.assertCurrent();
-                    client?.internal?.operatorRunAuthority?.assertCurrent();
                     if (
                       !binding?.canSelect(client) ||
                       authorizeCurrentOperatorRoleScopes(client, cfg) ||
@@ -337,10 +334,12 @@ export async function withPreparedQuestionSessions<T>(
   }
 }
 
-/** Own the question's live source independently of optional session disclosure access. */
-export async function prepareQuestionProducer(options: GatewayRequestHandlerOptions) {
-  const captured = await captureGatewayOperatorRunAuthority(options);
-  return captured && retainGatewayOperatorRunAuthority(captured);
+/** Admit each question producer once, independently of optional session disclosure access. */
+export async function prepareQuestionProducer(
+  options: GatewayRequestHandlerOptions,
+  agentId?: string,
+) {
+  return await captureGatewayOperatorContinuation({ ...options, agentId });
 }
 
 /** Bind the handler-owned producer to the exact admitted row before transferring disclosure access. */
@@ -375,7 +374,6 @@ export async function withQuestionSessionAccess<T>(
       ) {
         return consume(undefined, prepared);
       }
-      source?.assertCurrent();
       const retained = retainSessionHistoryWorkerDatabase(prepared.read.database);
       const identity = prepared.read.result.databaseIdentity;
       const original = {
@@ -395,7 +393,6 @@ export async function withQuestionSessionAccess<T>(
         // Discovery may rotate worker connections normally; the retained host
         // resource, not a worker connection UUID, owns close/reopen revocation.
         retained.owner.assertCurrent();
-        source?.assertCurrent();
         const currentProducer = resolveGatewayOperatorRoleActor(options.client);
         if (
           producer?.kind === "operator" &&
@@ -459,12 +456,7 @@ export async function withQuestionSessionAccess<T>(
         throw error;
       }
     },
-    {
-      assertCurrent: () => {
-        operation.assertCurrent();
-        source?.assertCurrent();
-      },
-    },
+    operation,
   );
 }
 
@@ -610,7 +602,6 @@ export async function prepareQuestionCommitAuthority(
     authorization.assertCurrent();
     callerCommit?.assertCurrent();
     options.client?.internal?.operatorAccessAuthority?.assertCurrent();
-    options.client?.internal?.operatorRunAuthority?.assertCurrent();
     const currentCfg = options.context.getRuntimeConfig();
     const accessRevision = readGatewayAccessRevision();
     let current = facts?.readCurrent(currentCfg);

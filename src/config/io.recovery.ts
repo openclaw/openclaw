@@ -144,6 +144,7 @@ async function recoverConfigJsonRootSuffixUnderLock(
   await replaceFileAtomic({
     filePath: publicationPath,
     content: suffixRecovery.raw,
+    allowDrvfsRenameRecovery: true,
     dirMode:
       stateRootDirectoryMode(
         path.dirname(publicationPath),

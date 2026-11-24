@@ -91,12 +91,14 @@ function runTargetMetadataResolution({
   version = "2026.9.4",
   kovaRef = "",
   contract = "",
+  mode = "",
 }: {
   schema?: string;
   baseSchema?: string;
   version?: string;
   kovaRef?: string;
   contract?: string;
+  mode?: string;
 }) {
   const root = tempDirs.make("openclaw-kova-target-metadata-");
   const git = (...args: string[]) =>
@@ -154,6 +156,7 @@ function runTargetMetadataResolution({
       GITHUB_REF_NAME: "main",
       KOVA_REF_INPUT: kovaRef,
       KOVA_CONFIG_CONTRACT_INPUT: contract,
+      PERFORMANCE_MODE: mode,
       TARGET_CHECKOUT_DIR: root,
       TARGET_REF_INPUT: "fixture-target",
     },
@@ -229,6 +232,63 @@ describe("OpenClaw performance workflow", () => {
     );
   });
 
+  posixIt("admits only the mock lane for Gateway cold-turn calibration", () => {
+    const root = tempDirs.make("openclaw-kova-calibration-");
+    const mode = "gateway-cold-turn-calibration";
+    const workflow = readWorkflow();
+    const run = findStep("Calibrate Gateway cold-turn resources");
+    const decide = (findStep("Decide lane").run ?? "")
+      .replaceAll("${{ github.event_name }}", "workflow_dispatch")
+      .replaceAll("${{ inputs.deep_profile || 'false' }}", "true")
+      .replaceAll("${{ inputs.live_openai_candidate || 'false' }}", "true");
+
+    for (const entry of kovaMatrixEntries()) {
+      const lane = expectDefined(entry.lane, "Kova lane");
+      const output = join(root, lane);
+      const result = spawnSync("bash", ["-c", decide], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          LANE_ID: lane,
+          PERFORMANCE_MODE: mode,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8").trim()).toBe(`run=${lane === "mock-provider"}`);
+    }
+
+    const context = {
+      eventName: "workflow_dispatch",
+      inputs: { mode, dispatch_id: "full-release-validation-calibration", publish_reports: true },
+      releaseRunnerGroup: "release-only",
+    } as const;
+    for (const name of ["resolve_target", "kova"]) {
+      expect(evaluateWorkflowRunner(workflow.jobs?.[name]?.["runs-on"], context)).toBe(
+        "ubuntu-24.04",
+      );
+    }
+    for (const name of ["publish", "source_performance", "seal_release_child_evidence"]) {
+      expect(evaluateWorkflow(workflow.jobs?.[name]?.if, context)).toBe(false);
+    }
+    const { result, outputs, sha } = runTargetMetadataResolution({
+      schema: "    imageGenerationModel: AgentToolModelSchema.optional(),",
+      mode,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs).toMatchObject({
+      kova_ref: workflow.env?.KOVA_COLD_TURN_CALIBRATION_REF,
+      kova_config_contract: "legacy-list",
+      tested_sha: sha,
+    });
+    expect(outputs.kova_ref).toMatch(/^[0-9a-f]{40}$/u);
+    expect(findStep("Run Kova").if).toContain(`inputs.mode != '${mode}'`);
+    expect(run.if).toContain(`inputs.mode == '${mode}'`);
+    expect(run.run).toContain('--target "local-build:$GITHUB_WORKSPACE"');
+    expect(run.run).toContain(`--scenario ${mode} --state mock-openai-provider --auth mock`);
+    expect(run.run).toContain("read-gateway-cold-turn-calibration.mjs");
+  });
+
   it("keeps Vitest pair benchmarking opt-in and exact-head bound", () => {
     const workflow = readWorkflow();
     const inputs = workflow.on?.workflow_dispatch?.inputs;
@@ -245,7 +305,13 @@ describe("OpenClaw performance workflow", () => {
       default: "kova",
       required: false,
       type: "choice",
-      options: ["kova", "vitest-pair", "gateway-concurrency", "gateway-memory-caps"],
+      options: [
+        "kova",
+        "vitest-pair",
+        "gateway-concurrency",
+        "gateway-memory-caps",
+        "gateway-cold-turn-calibration",
+      ],
     });
     expect(inputs?.baseline_ref).toMatchObject({
       default: "",

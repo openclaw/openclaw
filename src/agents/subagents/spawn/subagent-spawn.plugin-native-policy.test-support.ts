@@ -92,10 +92,13 @@ export function registerNativePluginPolicyCases(options: NativePluginSpawnTestOp
                   inheritRuntimeToolAllowlist: true,
                 },
                 operatorAuthority: source.authority,
-                assertCurrent: source.authority.assertCurrent,
+                assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
                 prepareSpawn,
               },
-              { pluginId: "native-test", assertCurrent: source.authority.assertCurrent },
+              {
+                pluginId: "native-test",
+                assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
+              },
             );
             await expect(expectDefined(native.list, "denied native listing")()).rejects.toThrow(
               "agents_wait is not available",
