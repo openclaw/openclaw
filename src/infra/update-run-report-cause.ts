@@ -17,7 +17,9 @@ export function prependUpdateRunCause(
   const detail = refusal?.detail || refusal?.stderrTail;
   if (detail) {
     const cause = `Cause detail: ${detail}`;
-    lines.unshift(cause.length <= 500 ? cause : `${sliceUtf16Safe(cause, 0, 499)}…`);
+    lines.unshift(
+      cause.length <= 500 ? cause : `Cause detail: …${sliceUtf16Safe(detail, detail.length - 485)}`,
+    );
   }
   if (run.status !== "succeeded" && run.origin.cause && run.origin.cause !== "unknown") {
     lines.unshift(`Cause: ${run.origin.cause}`);

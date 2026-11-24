@@ -133,8 +133,8 @@ it.each([
   "projects startup cause detail only for configuration refusal (%s)",
   (reason, visible) => {
     const remedy =
-      "Protected PostgreSQL copy failed. Restore the runtime role's CREATE grant and free space on the PostgreSQL server, then retry the update.";
-    const diagnostic = `${remedy}\n${"x".repeat(800)}`;
+      "53100: The PostgreSQL server has insufficient disk space for the protected database copy. The original PostgreSQL data was not migrated. Free space on the PostgreSQL server, then run openclaw update.";
+    const diagnostic = `${"debug: Gateway startup phase\n".repeat(40)}${remedy}`;
     const report = render({
       status: "failed",
       reason: `${reason}; v2026.9.1 is still running`,
