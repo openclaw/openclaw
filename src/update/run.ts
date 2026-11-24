@@ -144,13 +144,6 @@ export async function prepareUpdate(params: {
   };
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
   try {
-    const trial = await readTrial(prefix);
-    if (trial && ["pending", "trial", "restoring"].includes(trial.phase)) {
-      return await fail(
-        "update-running",
-        "Another update is switching releases. Try again in a few minutes.",
-      );
-    }
     const lock = await acquireUpdateLock(
       { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
       prefix,
@@ -159,6 +152,13 @@ export async function prepareUpdate(params: {
       return await fail("update-running", `Update ${lock.lock.runId} is already running.`);
     }
     try {
+      const trial = await readTrial(prefix);
+      if (trial && ["pending", "trial", "restoring"].includes(trial.phase)) {
+        return await fail(
+          "update-running",
+          "Another update is switching releases. Try again in a few minutes.",
+        );
+      }
       if (lock.previous) {
         await finishUpdateRunAsync(
           lock.previous.runId,

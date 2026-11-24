@@ -149,7 +149,8 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    (exit 78), or when the trial budget ends, it restores the previous release,
    SQLite migration originals, and PostgreSQL anchors.
 6. Preparation records refusals, already-current results, and failures before
-   activation. After activation, only the Gateway that is ready settles the run
+   activation. It checks for an active trial while holding its preparation lock.
+   After activation, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
    records success; restored files alone do not prove that the previous Gateway

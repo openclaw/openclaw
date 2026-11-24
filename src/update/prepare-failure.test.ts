@@ -12,7 +12,7 @@ import {
 import { VERSION } from "../version.js";
 import { node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
-import { readTrial } from "./store.js";
+import { createTrialPending, readTrial } from "./store.js";
 
 it("records one failed terminal run when preparation lock acquisition throws", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
@@ -64,6 +64,41 @@ it("does not publish a trial when preparation outcome bookkeeping throws", async
       phase: "finished",
     });
     expect(await readTrial()).toBeNull();
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  }
+});
+
+it("refuses a trial published before the preparation lock is acquired", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  try {
+    openOpenClawStateDatabase({ env: process.env });
+    const trialRun = await createUpdateRunAsync({ trigger: "cli" });
+    const preparingRun = await createUpdateRunAsync({ trigger: "cli" });
+    const link = fs.link;
+    vi.spyOn(fs, "link").mockImplementationOnce(async (source, destination) => {
+      await createTrialPending({
+        runId: trialRun.runId,
+        target: "releases/new/openclaw",
+        previous: "releases/old/openclaw",
+        version: VERSION,
+      });
+      return await link(source, destination);
+    });
+    expect(
+      await prepareUpdate({
+        runId: preparingRun.runId,
+        runningRoot: root,
+        runningVersion: VERSION,
+        channel: "dev",
+      }),
+    ).toMatchObject({
+      status: "failed",
+      reason: "update-running",
+      message: expect.stringContaining("Another update is switching releases"),
+    });
+    expect(await readTrial()).toMatchObject({ runId: trialRun.runId, phase: "pending" });
   } finally {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
