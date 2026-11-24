@@ -90,6 +90,22 @@ it.each(["single", "batch"] as const)(
     ),
 );
 
+it("admits a background reclamation write nested under a foreground owner", async () => {
+  const root = tempDirs.make("openclaw-nested-reclamation-");
+  const options = { agentId: "usage", path: path.join(root, "agent.sqlite") };
+  await expect(
+    runOpenClawAgentWriteAdmission(options, () =>
+      runOpenClawAgentWorkerWrite(
+        options,
+        async () => "reclaimed",
+        undefined,
+        AbortSignal.timeout(200),
+        "background",
+      ),
+    ),
+  ).resolves.toBe("reclaimed");
+});
+
 it.each([false, true])(
   "defers background writes behind later foreground work (abort=%s)",
   async (abort) => {
