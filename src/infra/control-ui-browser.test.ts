@@ -218,11 +218,12 @@ it.each(["unknown-html", "unsupported-html"])(
     const html = scenario === "unknown-html" ? developer : safari;
     const https = scenario === "unknown-html" ? safari : chrome;
     const apps = [html, https, chrome];
+    const htmlHandlerRef = {};
     const fileUrl = (appPath: string) => ({ path: appPath });
     const bridge = Object.assign((value: unknown) => value, {
       kLSRolesAll: 0xffffffff,
       LSCopyDefaultRoleHandlerForContentType: (type: string, role: number) =>
-        type === "public.html" && role === 0xffffffff ? html.id : undefined,
+        type === "public.html" && role === 0xffffffff ? htmlHandlerRef : undefined,
       NSHomeDirectory: () => "/Users/fixture",
       NSURL: { URLWithString: (value: string) => value, fileURLWithPath: fileUrl },
       NSWorkspace: {
@@ -250,7 +251,11 @@ it.each(["unknown-html", "unsupported-html"])(
       // Execute the actual JXA program against fixed native-boundary responses.
       stdout: runInNewContext(args.at(-1)!, {
         $: bridge,
-        ObjC: { import: () => {}, unwrap: (value: unknown) => value },
+        ObjC: {
+          import: () => {},
+          unwrap: (value: unknown) => value,
+          castRefToObject: (value: unknown) => (value === htmlHandlerRef ? html.id : undefined),
+        },
       }),
       stderr: "",
     }));

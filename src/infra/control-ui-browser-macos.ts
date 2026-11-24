@@ -32,7 +32,9 @@ export async function discoverMacControlUiBrowsers(): Promise<ControlUiBrowserDi
     // Resolve the HTML file's default role, including non-browser handlers.
     // A hypothetical file URL cannot be used: NSWorkspace requires it to exist.
     'var handler = $.LSCopyDefaultRoleHandlerForContentType($("public.html"), $.kLSRolesAll);',
-    "if (handler) describe(workspace.URLForApplicationWithBundleIdentifier(ObjC.unwrap(handler)), true);",
+    // JXA exposes the returned CFString as an opaque reference.
+    "var handlerId = handler && ObjC.unwrap(ObjC.castRefToObject(handler));",
+    "if (handlerId) describe(workspace.URLForApplicationWithBundleIdentifier(handlerId), true);",
     "var specs = " + JSON.stringify(BROWSERS) + ";",
     "specs.forEach(function(spec) {",
     "  try {",
