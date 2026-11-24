@@ -35,7 +35,6 @@ const settings = { "plugin.fixture.status.*": { label: "Status" } };
 function fixture(views: SettingsView[] = [memoryView()]) {
   packaged.push({
     pluginId: "fixture",
-    name: "Fixture",
     revision: "built-revision",
     bundledDistribution: { packageName: "fixture", packageVersion: "1.0.0" },
     activation: "settings-only",

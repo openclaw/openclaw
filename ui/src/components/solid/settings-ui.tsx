@@ -5,7 +5,7 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { ConfigSettingPath } from "../../lib/config-form-utils.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { PluginSettingId } from "../../plugins/control-ui-setting-places.ts";
+import type { PluginSettingId } from "../../plugins/plugin-setting-id.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import { Switch, type SwitchSize } from "./switch.tsx";

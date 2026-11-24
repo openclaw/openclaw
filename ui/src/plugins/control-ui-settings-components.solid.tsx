@@ -14,7 +14,7 @@ import {
   SettingsValue,
 } from "../components/solid/settings-ui.tsx";
 import { listen } from "../lib/reactive/listener.ts";
-import { declaredPluginSetting } from "./control-ui-setting-places.ts";
+import { declaredPluginSetting } from "./plugin-setting-id.ts";
 
 /**
  * Host-drawn Settings components for one plugin view. `settings` is what the view's manifest

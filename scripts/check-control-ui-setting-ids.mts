@@ -58,7 +58,6 @@ const ROW_COMPONENTS = new Set([
 ]);
 /** Classes that draw one row of a Settings page. */
 const ROW_CLASSES = new Set(["settings-row", "provider-row"]);
-const BASELINE = "config/control-ui-setting-ids-baseline.txt";
 const SNAPSHOT = "config/control-ui-setting-ids.txt";
 const guidance = (source: string) =>
   `Give the row \`setting="<id>"\` (raw rows: \`id="<id>"\`) with an ID listed in ${source}, or mark a status, fact or action row \`info\` (raw rows: \`data-settings-info\`).`;
@@ -165,18 +164,11 @@ export function checkSettingIds(
   root = process.cwd(),
   {
     write = false,
-    writeBaseline = false,
     list = { pages: CONTROL_UI_SETTINGS_PAGES, aliases: CONTROL_UI_SETTING_ID_ALIASES },
-  }: { write?: boolean; writeBaseline?: boolean; list?: SettingsList } = {},
+  }: { write?: boolean; list?: SettingsList } = {},
 ): string[] {
   const failures: string[] = [];
   const ids = registryIds(list.pages);
-  const baselinePath = path.join(root, BASELINE);
-  const baseline = new Set(
-    fs.existsSync(baselinePath)
-      ? fs.readFileSync(baselinePath, "utf8").split("\n").filter(Boolean)
-      : [],
-  );
   const aliases = new Set(Object.keys(list.aliases));
   const references = new Map<
     string,
@@ -263,10 +255,7 @@ export function checkSettingIds(
   }
 
   for (const [id, all] of references) {
-    // Files still waiting for their IDs may use `setting` for something else.
-    const places = all
-      .filter((place) => !place.plugin && !baseline.has(place.file))
-      .map((place) => place.at);
+    const places = all.filter((place) => !place.plugin).map((place) => place.at);
     if (places.length === 0) {
       continue;
     }
@@ -305,20 +294,8 @@ export function checkSettingIds(
     }
   }
 
-  for (const [file, problems] of unnamed) {
-    if (!baseline.has(file)) {
-      failures.push(...problems);
-    }
-  }
-  if (writeBaseline) {
-    // Only for adopting the check: the list may shrink afterwards, never grow.
-    fs.writeFileSync(baselinePath, `${[...unnamed.keys()].toSorted().join("\n")}\n`);
-    return checkSettingIds(root, { write, list });
-  }
-  for (const file of baseline) {
-    if (!unnamed.has(file)) {
-      failures.push(`${BASELINE}: ${file} names all its settings now; remove it from the list`);
-    }
+  for (const problems of unnamed.values()) {
+    failures.push(...problems);
   }
 
   // Published IDs stay valid: a listed ID may leave only by becoming an alias.
@@ -351,10 +328,7 @@ export function checkSettingIds(
 }
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
-  const failures = checkSettingIds(root, {
-    write: argv.includes("--write"),
-    writeBaseline: argv.includes("--write-baseline"),
-  });
+  const failures = checkSettingIds(root, { write: argv.includes("--write") });
   if (failures.length > 0) {
     console.error(
       ["Control UI setting IDs:", ...failures.map((failure) => `  ${failure}`)].join("\n"),

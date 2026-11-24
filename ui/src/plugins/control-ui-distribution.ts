@@ -2,7 +2,7 @@ import type { PluginControlUiModule } from "../../../packages/gateway-protocol/s
 
 export type ControlUiPluginDistribution = Pick<
   PluginControlUiModule,
-  "pluginId" | "name" | "revision" | "bundledDistribution"
+  "pluginId" | "revision" | "bundledDistribution"
 > & {
   entry: string;
   styles: string[];

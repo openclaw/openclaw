@@ -152,24 +152,6 @@ describe("check-control-ui-setting-ids", () => {
     expect(unpublished).toEqual([expect.stringContaining("is missing new setting IDs")]);
   });
 
-  it("lets listed files wait but only shrink", () => {
-    const bare = NAMED.replace(
-      `<SettingsRow info title="Status" />`,
-      `<SettingsRow title="Status" />`,
-    );
-    expect(
-      checkSettingIds(
-        fixture(bare, { "config/control-ui-setting-ids-baseline.txt": `${PAGE}\n` }),
-        { list },
-      ),
-    ).toEqual([]);
-    expect(
-      checkSettingIds(
-        fixture(NAMED, { "config/control-ui-setting-ids-baseline.txt": `${PAGE}\n` }),
-        { list },
-      ),
-    ).toEqual([expect.stringContaining(`${PAGE} names all its settings now`)]);
-  });
   it("holds plugin Settings views to the IDs their manifest declares", () => {
     expect(checkSettingIds(pluginFixture(PLUGIN_ROWS), { list })).toEqual([]);
     const undeclared = checkSettingIds(

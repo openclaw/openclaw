@@ -174,10 +174,9 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         }
         const metadata: Pick<
           ControlUiPluginDistribution,
-          "pluginId" | "name" | "revision" | "bundledDistribution"
+          "pluginId" | "revision" | "bundledDistribution"
         > = {
           pluginId,
-          name: normalizeOptionalString(manifest.name) ?? pluginId,
           revision,
           bundledDistribution: { packageName: pkg.name, packageVersion: pkg.version },
         };
