@@ -851,7 +851,7 @@ describe("trigger handling", () => {
       await expectInlineCommandHandledAndStripped({
         home,
         getReplyFromConfig,
-        body: "please /whoami now",
+        body: "/whoami please now",
         stripToken: "/whoami",
         blockReplyContains: "Identity",
         requestOverrides: { SenderId: "12345" },
@@ -866,6 +866,22 @@ describe("trigger handling", () => {
       expect(inlineRunEmbeddedAgentMock).toHaveBeenCalled();
       const prompt = inlineRunEmbeddedAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
       expect(prompt).toContain("/status");
+    });
+  });
+
+  it("preserves a slash command mentioned in ordinary prose without executing it", async () => {
+    await withTempHome(async (home) => {
+      const body = "please /whoami now";
+      const runEmbeddedAgentMock = mockEmbeddedOk();
+      const onBlockReply = vi.fn();
+      const result = await getReplyFromConfig(
+        { Body: body, From: "+1002", To: "+2000", SenderId: "12345", CommandAuthorized: true },
+        { onBlockReply },
+        makeCfg(home),
+      );
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock.mock.calls.at(-1)?.[0]?.prompt).toContain(body);
+      expect(Array.isArray(result) ? result[0]?.text : result?.text).toBe("ok");
     });
   });
 
