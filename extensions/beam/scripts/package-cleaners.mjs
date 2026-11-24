@@ -70,6 +70,11 @@ async function readArchive(cache, entry, offline) {
       throw error;
     }
   }
+  if (pin.candidate) {
+    throw new Error(
+      `The draft Beam cleaner pin is for build qualification. Pre-stage ${entry.archive} from ${pin.candidate.artifact} or use a released OpenClaw revision.`,
+    );
+  }
   if (offline) {
     throw new Error(
       `Missing offline Beam asset ${entry.archive}. Run node extensions/beam/scripts/package-cleaners.mjs --prefetch on a connected build host and reuse its cache.`,

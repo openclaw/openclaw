@@ -14,5 +14,58 @@
     "extensions": [
       "./index.ts"
     ]
+  },
+  "beamNativeRelease": {
+    "version": "0.1.0",
+    "protocol": 1,
+    "platforms": {
+      "darwin-x64": {
+        "archive": "beam-clean_0.1.0_darwin_amd64.gz",
+        "bytes": 1141825,
+        "sha256": "f7e2aae61e4f7804f7850a5d04bccb5618e54b02998a59d165923efdc0aef75b",
+        "executableBytes": 2610176,
+        "executableSha256": "e2390b23ccef4e4019a9e76b307b5c3a8fe3ee2861264e01732f8abe2d3c28d6"
+      },
+      "darwin-arm64": {
+        "archive": "beam-clean_0.1.0_darwin_arm64.gz",
+        "bytes": 1074133,
+        "sha256": "f7ddd445ad35e6581a52e1e87cac2096e499d35ea093153e6cdf79fe6407144c",
+        "executableBytes": 2515378,
+        "executableSha256": "4cf49c98c00af70f2da7383d092c5103d436332ce1cfd7ada4b879492c83a99c"
+      },
+      "linux-x64": {
+        "archive": "beam-clean_0.1.0_linux_amd64.gz",
+        "bytes": 1112595,
+        "sha256": "246376ee77d4e0870d5dd1bb991f1ec1e48cea7654821b219cf1490a9a06b2bb",
+        "executableBytes": 2523320,
+        "executableSha256": "fae585f20ebfc6f2e4f3cdbe4a98bf6cf779b227a8e566637d6d8f93002f282a"
+      },
+      "linux-arm64": {
+        "archive": "beam-clean_0.1.0_linux_arm64.gz",
+        "bytes": 1021344,
+        "sha256": "f7b615c5e75d2a91fbf76010fd10f96cd912527367c3b3120f881038d82acf6a",
+        "executableBytes": 2490552,
+        "executableSha256": "34ed82431069fba7489df9ce04d1ac7aa6a29dd107fe72e5f8131c1bbed8577c"
+      },
+      "win32-x64": {
+        "archive": "beam-clean_0.1.0_windows_amd64.gz",
+        "bytes": 1150404,
+        "sha256": "529f18533e4198eddcd5bb575eaf4b7951d330fc6aa6c97f31f1e3a6b4c27444",
+        "executableBytes": 2633728,
+        "executableSha256": "544b9ae5944860252f06b49dd91f6e3faf530a115d798809a8335b0539c342c3"
+      },
+      "win32-arm64": {
+        "archive": "beam-clean_0.1.0_windows_arm64.gz",
+        "bytes": 1044800,
+        "sha256": "00bda1cae845a2651cd0b2e511fce058f3e21c821d16654372a82d6aee3ff147",
+        "executableBytes": 2470400,
+        "executableSha256": "d04147df4d6cc6b01e5bfc67463c46173cc9a869143af22d3fffed01361e8ec6"
+      }
+    },
+    "candidate": {
+      "source": "14d06dbe7a28106a1977657e88d895177347af8e",
+      "artifact": "https://github.com/openclaw/beam/actions/runs/45372866042/artifacts/14910496924",
+      "zipSha256": "5c87a11518508ab747ca9ecd65dba07d2745289fe6ae4eb57350e95c8024b775"
+    }
   }
 }
