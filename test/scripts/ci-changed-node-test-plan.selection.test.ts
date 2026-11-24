@@ -73,7 +73,7 @@ it.each(["aggressive", "full"] as const)(
   },
 );
 
-it("selects distant consumers of agent owners and restores area coverage in full mode", () => {
+it("bounds protected regressions to nearby consumers and restores area coverage in full mode", () => {
   const source = "src/agents/example/subject.ts";
   const direct = "src/agents/example/subject.test.ts";
   const nearby = "src/infra/device-pairing.test.ts";
@@ -94,11 +94,10 @@ it("selects distant consumers of agent owners and restores area coverage in full
     selectionMode: "aggressive",
     onSelection: (selection) => reasons.push(selection),
   });
-  // Agent owners walk every transitive importer (#204252); other sources stop at depth two.
-  expect(selected).toEqual([direct, nearby, distant]);
+  expect(selected).toEqual([direct, nearby]);
   expect(
     reasons.filter(({ rule }) => rule === "import-consumer").flatMap(({ targets }) => targets),
-  ).toEqual(expect.arrayContaining([nearby, distant]));
+  ).toContain(nearby);
   expect(new Set(reasons.flatMap(({ targets }) => targets))).toEqual(new Set(selected));
   const full = select(cwd, [source], "full");
   expect(full).toEqual([unrelated, direct, nearby, distant].toSorted());

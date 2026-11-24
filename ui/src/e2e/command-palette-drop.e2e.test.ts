@@ -286,6 +286,12 @@ suite.define(() => {
             path.join(suite.artifactDir, "palette-" + width + ".png"),
             frame.elements[0]!.png,
           );
+          const chipBox = (await palette.locator(".chat-attachment-thumb").boundingBox())!;
+          const inputBox = (await input.boundingBox())!;
+          expect(chipBox.x).toBeCloseTo(inputBox.x, 0);
+          const gap = inputBox.y - (chipBox.y + chipBox.height);
+          expect(gap).toBeGreaterThanOrEqual(0);
+          expect(gap).toBeLessThanOrEqual(8);
           await palette.getByRole("button", { name: "Remove launcher.png", exact: true }).click();
           await expect.poll(() => images.count()).toBe(0);
           await attach(surface, "drag");
