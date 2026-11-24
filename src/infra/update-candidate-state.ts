@@ -138,6 +138,7 @@ const UpdateCandidateStateInventorySchema = z
   .transform((entries) => new Map(entries));
 export const UpdateCandidateSnapshotInventorySchema = z.object({
   databases: UpdateCandidateStateInventorySchema,
+  // Keep the released parent protocol: this field budgets every projected non-database file.
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
   // Published candidate workers before named snapshot warnings omit this field.
@@ -316,10 +317,11 @@ export async function readUpdateCandidateStateInventoryInProcess(
       sharedPluginIndex,
       onProgress,
     });
+    const { measureColdArchiveBytes } = await import("./update-candidate-cold-archives.worker.js");
     await fs.writeFile(planPath, JSON.stringify(plugins));
     return {
       databases: files,
-      pluginBytes: plugins.bytes,
+      pluginBytes: plugins.bytes + (await measureColdArchiveBytes(files, input.targetStateDir)),
       pluginPlan: UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
       warnings: plugins.warnings,
     };
@@ -631,6 +633,7 @@ export async function snapshotUpdateCandidateState(
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
+  const { copyColdArchives } = await import("./update-candidate-cold-archives.worker.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
     await import("./update-candidate-plugins.js");
   const plugins = UpdateCandidatePluginPlanSchema.parse(
@@ -677,9 +680,9 @@ export async function snapshotUpdateCandidateState(
       // full image and alter implicit row IDs before candidate migrations run.
       preserveRowIds: true,
       onProgress: progress.onProgress,
-      ...(file === shared
-        ? {
-            transform: (db: DatabaseSync) => {
+      transform:
+        file === shared
+          ? (db: DatabaseSync) => {
               contentVersion = readStateSchemaContentVersion(db);
               const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
               execApprovals.rebaseReceipt(db);
@@ -729,9 +732,8 @@ export async function snapshotUpdateCandidateState(
                     .where("path", "=", stored),
                 );
               }
-            },
-          }
-        : {}),
+            }
+          : (db: DatabaseSync) => copyColdArchives(db, file, target),
     });
     progress.complete((await fs.stat(target)).size);
     inspected.set(identity, {
@@ -749,12 +751,6 @@ export async function snapshotUpdateCandidateState(
     onProgress: createUpdateStateIoReporter(sourceRoot, "plugin snapshot", input.onProgress),
     onCodeLink: (fact) => pluginCodeLinks.push(fact),
   });
-  return {
-    versions,
-    pluginPaths,
-    pluginCodeLinks: await sealUpdateCandidatePluginCodeLinks(
-      input.pluginPlanPath,
-      pluginCodeLinks,
-    ),
-  };
+  const codeLinks = await sealUpdateCandidatePluginCodeLinks(input.pluginPlanPath, pluginCodeLinks);
+  return { versions, pluginPaths, pluginCodeLinks: codeLinks };
 }
