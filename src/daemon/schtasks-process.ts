@@ -418,7 +418,7 @@ export async function readBoundedScheduledTaskProcess(
 export async function terminateScheduledTaskNodeHost(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
-  beforeMutation?: () => Promise<void>,
+  beforeMutation?: () => void | Promise<void>,
 ): Promise<number[]> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   const installedArguments = command?.programArguments;
@@ -451,7 +451,7 @@ export async function terminateScheduledTaskGatewayListeners(
   assertCurrent?: () => void,
   stop?: {
     end: () => Promise<void>;
-    beforeMutation?: () => Promise<void>;
+    beforeMutation?: () => void | Promise<void>;
     restart?: boolean;
     onStopped?: () => void;
     warn: (message: string) => void;

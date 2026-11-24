@@ -267,7 +267,7 @@ describe("Gateway service readiness", () => {
           error: expect.stringContaining("Restored 2026.11.8; Gateway ready."),
         }),
       );
-      expect(waitForReleaseUpdateFailure).toHaveBeenCalledWith("adopted-run");
+      expect(waitForReleaseUpdateFailure).toHaveBeenCalledWith();
     },
   );
 
