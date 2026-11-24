@@ -8,6 +8,7 @@ import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-too
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatActionCard } from "./chat-action-card.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -29,18 +30,12 @@ export function McpConnectCards(props: { groups: readonly MessageGroup[] }) {
   return (
     <For each={actions()} keyed={(action) => action.authorizationUrl}>
       {(action) => (
-        <section
-          class="chat-permission-card filters"
-          aria-label={t("chat.toolCards.signInTo", { server: action().serverName })}
+        <ChatActionCard
+          icon="lock"
+          title={t("chat.toolCards.signInTo", { server: action().serverName })}
+          subtitle={new URL(action().authorizationUrl).host}
+          inline
         >
-          <div class="chat-permission-card__heading">
-            <Icon name="lock" />
-            <div style="overflow-wrap:anywhere">
-              <strong>{t("chat.toolCards.signInTo", { server: action().serverName })}</strong>
-              <br />
-              <small class="muted">{new URL(action().authorizationUrl).host}</small>
-            </div>
-          </div>
           <a
             class="btn primary btn--sm"
             href={action().authorizationUrl}
@@ -50,7 +45,7 @@ export function McpConnectCards(props: { groups: readonly MessageGroup[] }) {
             {t("chat.toolCards.signIn")}
             <Icon name="externalLink" />
           </a>
-        </section>
+        </ChatActionCard>
       )}
     </For>
   );
