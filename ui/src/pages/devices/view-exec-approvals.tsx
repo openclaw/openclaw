@@ -8,6 +8,7 @@ import {
   SettingsStatus,
   SettingsToggle,
   SettingsValue,
+  type SettingIdentifier,
 } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { clampText, formatRelativeTimestamp } from "../../lib/format.ts";
@@ -20,6 +21,7 @@ import {
   type NativeExecApprovalsSnapshot,
 } from "../../lib/nodes/page-operations.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createSettingsTargetReveal } from "../../lib/reactive/settings-target-arrival.ts";
 import {
   agentDisplayName,
   DeviceDisclosure,
@@ -214,10 +216,12 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
   return (
     <>
       <SettingsRow
+        info
         title={t("devices.execApprovals.hostNativePolicy")}
         description={t("devices.execApprovals.hostNativeHint")}
       />
       <SettingsRow
+        info
         title={t("devices.execApprovals.defaultAction")}
         description={props.snapshot.enabled ? undefined : (props.snapshot.message ?? "unavailable")}
         control={
@@ -229,6 +233,7 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
       <For each={rules()}>
         {(rule) => (
           <SettingsRow
+            info
             title={<span class="mono">{rule.pattern}</span>}
             description={
               <>
@@ -262,6 +267,7 @@ function HostRow(props: ExecApprovalsState) {
   const canChoose = () => props.targetNodes.length > 0 || props.target === "node";
   return (
     <SettingsRow
+      setting="devices.execApprovals.host"
       title={t("devices.execApprovals.host")}
       description={
         props.targetNodes.length > 0 || props.nodesPending
@@ -325,9 +331,12 @@ function PolicyScopes(props: ExecApprovalsState) {
   const inherited = createMemo(() =>
     resolveExecApprovalsDefaults(props.form, props.reported, true),
   );
+  const revealDefaults = createSettingsTargetReveal("devices.execApprovals.defaults");
   return (
     <>
       <DeviceDisclosure
+        setting="devices.execApprovals.defaults"
+        revealed={revealDefaults()}
         name={t("devices.execApprovals.defaults")}
         meta={POLICY_FIELDS.slice(0, 2).map((field) =>
           fieldSummary(fieldTitle(field), optionLabel(field, fileDefaults()[field.key])),
@@ -337,7 +346,12 @@ function PolicyScopes(props: ExecApprovalsState) {
           <For each={POLICY_FIELDS}>
             {(field) => <DefaultsField state={props} field={field} values={fileDefaults()} />}
           </For>
-          <AutoAllowField state={props} basePath={["defaults"]} effective={fileDefaults()} />
+          <AutoAllowField
+            setting="devices.execApprovals.defaults.autoAllowSkills"
+            state={props}
+            basePath={["defaults"]}
+            effective={fileDefaults()}
+          />
         </div>
       </DeviceDisclosure>
       <For each={props.agents} keyed={(agent) => agent.id}>
@@ -354,6 +368,7 @@ function DefaultsField(props: {
 }) {
   return (
     <SettingsRow
+      setting={`devices.execApprovals.defaults.${props.field.key}`}
       title={fieldTitle(props.field)}
       description={"hintKey" in props.field ? t(props.field.hintKey) : undefined}
       control={
@@ -411,8 +426,11 @@ function AgentPolicy(props: {
 }) {
   const stored = createMemo(() => props.state.form?.agents?.[props.agent.id]);
   const basePath = () => ["agents", props.agent.id];
+  // Each field of this agent's policy is named under the agent's own row.
+  const setting = () => `devices.execApprovals.agents.${props.agent.id}` as const;
   return (
     <DeviceDisclosure
+      setting={`devices.execApprovals.agents.${props.agent.id}`}
       name={agentDisplayName(props.agent)}
       meta={agentSummary(props.agent, stored())}
     >
@@ -426,6 +444,7 @@ function AgentPolicy(props: {
             const defaultLabel = () => optionLabel(field, props.inherited[field.key]);
             return (
               <SettingsRow
+                setting={`${setting()}.${field.key}`}
                 title={fieldTitle(field)}
                 description={"hintKey" in field ? t(field.hintKey) : undefined}
                 control={
@@ -460,6 +479,7 @@ function AgentPolicy(props: {
           }}
         </For>
         <AutoAllowField
+          setting={`${setting()}.autoAllowSkills`}
           state={props.state}
           basePath={basePath()}
           override={stored()?.autoAllowSkills}
@@ -477,6 +497,7 @@ function AgentPolicy(props: {
 }
 
 function AutoAllowField(props: {
+  setting: SettingIdentifier;
   state: ExecApprovalsState;
   basePath: string[];
   override?: boolean;
@@ -485,6 +506,7 @@ function AutoAllowField(props: {
   const overridden = () => typeof props.override === "boolean";
   return (
     <SettingsRow
+      setting={props.setting}
       title={t("devices.execApprovals.autoAllowSkills")}
       description={t("devices.execApprovals.autoAllowSkillsHint")}
       control={

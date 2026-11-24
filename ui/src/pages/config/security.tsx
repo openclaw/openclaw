@@ -99,6 +99,7 @@ function GatewayAccessSection(props: SecurityViewProps) {
   return (
     <SettingsSection title={t("quickSettings.security.accessTitle")}>
       <SettingsNavRow
+        setting="securityPage.gatewayAuth"
         title={t("quickSettings.security.gatewayAuth")}
         control={
           // Older Gateways' reported mode can miss a startup --auth, so only a real report reassures.
@@ -113,6 +114,7 @@ function GatewayAccessSection(props: SecurityViewProps) {
         onClick={() => props.onOpenGatewaySettings?.()}
       />
       <SettingsNavRow
+        setting="securityPage.networkAccess"
         title={t("quickSettings.security.networkAccess")}
         description={networkAccessDetail(props.security.networkAccess)}
         control={
@@ -125,6 +127,7 @@ function GatewayAccessSection(props: SecurityViewProps) {
         onClick={() => props.onOpenGatewaySettings?.()}
       />
       <SettingsNavRow
+        setting="securityPage.devices"
         title={t("tabs.devices")}
         description={t("quickSettings.security.devicesDescription")}
         onClick={() => props.onOpenDevices?.()}
@@ -151,6 +154,7 @@ function AgentCapabilitiesSection(props: SecurityViewProps) {
   return (
     <SettingsSection title={t("quickSettings.security.agentsTitle")}>
       <SettingsNavRow
+        setting="securityPage.execPolicy"
         title={t("quickSettings.security.execPolicy")}
         description={
           EXEC_POLICY_VALUES.includes(execPolicy()) && execPolicy() !== "unknown"
@@ -165,6 +169,7 @@ function AgentCapabilitiesSection(props: SecurityViewProps) {
         onClick={() => props.onOpenDevices?.()}
       />
       <SettingsRow
+        setting="tools.profile"
         title={t("quickSettings.security.toolProfile")}
         description={profileDescription()}
         stackedOnNarrow
@@ -179,12 +184,14 @@ function AgentCapabilitiesSection(props: SecurityViewProps) {
         }
       />
       <SettingsToggleRow
+        setting="browser.enabled"
         title={t("quickSettings.security.browserEnabled")}
         checked={props.security.browserEnabled}
         disabled={props.configBusy}
         onChange={(enabled) => props.onBrowserEnabledToggle?.(enabled)}
       />
       <SettingsNavRow
+        setting="securityPage.approvals"
         title={t("tabs.approvals")}
         description={t("quickSettings.security.approvalsDescription")}
         onClick={() => props.onOpenApprovals?.()}

@@ -73,18 +73,20 @@ export function RecordedAttempt(
               }
             >
               <SettingsRow
+                info
                 title={t("updates.page.failedStep")}
                 description={props.update.updateStatusBanner?.text}
               />
             </Show>
           }
         >
-          <div class="settings-row settings-row--stacked">
+          <div class="settings-row settings-row--stacked" data-settings-info>
             <UpdateRunView run={run()} connected={props.connected} serving={serving()} />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
           <SettingsRow
+            info
             title={t("updates.page.recoveryActions")}
             stackedOnNarrow
             control={
@@ -167,6 +169,7 @@ export function RecordedAttempt(
             }
           >
             <SettingsRow
+              info
               title={t("updates.page.cliFallback")}
               description={t("updates.triage.hostHint")}
               stacked
@@ -218,6 +221,7 @@ function UpdateFailureReportNoticeView(props: { notice: UpdateFailureReportNotic
   };
   return (
     <SettingsRow
+      info
       title={t("updates.page.reportResult")}
       stacked
       control={

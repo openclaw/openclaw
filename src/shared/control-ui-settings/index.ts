@@ -1,4 +1,6 @@
 import type { ControlUiSettingEntry, ControlUiSettingsPage } from "./define.js";
+import { ADVANCED_SETTINGS } from "./pages/advanced.js";
+import { AGENT_DEFAULTS_SETTINGS } from "./pages/agent-defaults.js";
 import {
   AGENT_MEMORY_SETTINGS,
   AGENT_OVERVIEW_SETTINGS,
@@ -8,16 +10,24 @@ import {
 import { APPEARANCE_SETTINGS } from "./pages/appearance.js";
 import { CHANNELS_SETTINGS } from "./pages/channels.js";
 import { CLOUD_WORKERS_SETTINGS } from "./pages/cloud-workers.js";
+import { COMMUNICATIONS_SETTINGS } from "./pages/communications.js";
 import { CONNECTION_SETTINGS } from "./pages/connection.js";
+import { DEVICE_PERMISSIONS_SETTINGS, DEVICE_SETTINGS } from "./pages/device.js";
+import { DEVICES_SETTINGS } from "./pages/devices.js";
+import { INFRASTRUCTURE_SETTINGS } from "./pages/infrastructure.js";
 import { LABS_SETTINGS } from "./pages/labs.js";
 import { MCP_SETTINGS } from "./pages/mcp.js";
+import { MEMORY_SETTINGS } from "./pages/memory.js";
 import { MODELS_SETTINGS } from "./pages/models.js";
 import { NOTIFICATIONS_SETTINGS } from "./pages/notifications.js";
 import { PLUGINS_SETTINGS } from "./pages/plugins.js";
 import { PROFILE_SETTINGS } from "./pages/profile.js";
 import { SEARCH_SETTINGS } from "./pages/search.js";
 import { SECRETS_SETTINGS } from "./pages/secrets.js";
+import { SECURITY_SETTINGS } from "./pages/security.js";
 import { SKILLS_SETTINGS } from "./pages/skills.js";
+import { TALK_SETTINGS } from "./pages/talk.js";
+import { UPDATES_SETTINGS } from "./pages/updates.js";
 
 /**
  * Every setting on the hand-built Settings pages, by page. Settings the generic config form
@@ -43,6 +53,17 @@ export const CONTROL_UI_SETTINGS_PAGES = [
   SKILLS_SETTINGS,
   SECRETS_SETTINGS,
   LABS_SETTINGS,
+  COMMUNICATIONS_SETTINGS,
+  TALK_SETTINGS,
+  DEVICES_SETTINGS,
+  MEMORY_SETTINGS,
+  AGENT_DEFAULTS_SETTINGS,
+  SECURITY_SETTINGS,
+  INFRASTRUCTURE_SETTINGS,
+  UPDATES_SETTINGS,
+  ADVANCED_SETTINGS,
+  DEVICE_SETTINGS,
+  DEVICE_PERMISSIONS_SETTINGS,
 ] as const;
 
 type PageIds<Page> = Page extends ControlUiSettingsPage<infer Ids> ? Ids : never;

@@ -307,6 +307,7 @@ function InventoryEntry(props: {
     warnings().length > 0 || (liveStats() !== undefined && liveStats() !== null);
   return (
     <DeviceDisclosure
+      setting={`devices.device.${props.entry.id}`}
       deviceId={props.entry.id}
       name={props.entry.name}
       meta={entryMeta(props.entry, rowConnected())}
@@ -503,6 +504,7 @@ function GatewayEntry(props: { entry: PresenceEntry; devices: DevicesProps }) {
   });
   return (
     <DeviceDisclosure
+      setting="devices.gateway"
       name={name()}
       meta={meta()}
       status={<SettingsStatus kind={"ok"} label={t("devices.inventory.connected")} />}
@@ -568,7 +570,7 @@ function UnpairedEntry(props: { entry: PresenceEntry }) {
     return result;
   });
   return (
-    <div class="settings-row device-entry">
+    <div class="settings-row device-entry" data-settings-info>
       <div class="settings-row__text">
         <span class="settings-row__title">{title()}</span>
         <MetaLine parts={parts()} />

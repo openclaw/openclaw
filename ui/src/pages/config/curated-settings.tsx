@@ -13,6 +13,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { configSettingId } from "../../lib/config-form-utils.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import {
@@ -27,6 +28,8 @@ registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerCronEnglish);
 
 type CuratedSettingsProps = {
+  /** Config path of the section the fields are relative to. */
+  sectionPath: readonly string[];
   document: Record<string, unknown> | null;
   values: Record<string, unknown> | null;
   disabled: boolean;
@@ -91,6 +94,7 @@ function CuratedField(props: {
       ? t(value ? "common.enabled" : "common.disabled")
       : String(value);
   };
+  const setting = () => configSettingId([...props.settings.sectionPath, ...props.spec.path]);
   const row = {
     title: <>{t(props.row?.titleKey ?? props.spec.labelKey)}</>,
     description: <>{t(props.row?.descriptionKey ?? props.spec.helpKey)}</>,
@@ -117,6 +121,7 @@ function CuratedField(props: {
       <Match when={props.spec.kind === "toggle"}>
         <SettingsToggleRow
           {...row}
+          setting={setting()}
           checked={checked()}
           disabled={props.settings.disabled}
           actions={props.row?.actions}
@@ -126,6 +131,7 @@ function CuratedField(props: {
       <Match when={props.spec.kind === "model"}>
         <SettingsRow
           {...row}
+          setting={setting()}
           control={
             <ModelPicker
               label={t(props.spec.labelKey)}
@@ -156,6 +162,7 @@ function CuratedField(props: {
       <Match when={props.spec.kind === "segmented"}>
         <SettingsRow
           {...row}
+          setting={setting()}
           stacked={true}
           control={
             <SettingsSegmented<string>
@@ -183,6 +190,7 @@ function CuratedField(props: {
       <Match when={true}>
         <SettingsRow
           {...row}
+          setting={setting()}
           control={
             <input
               class="settings-input"
@@ -281,6 +289,7 @@ function CuratedSections(props: {
     };
   });
   const settings: CuratedSettingsProps = {
+    sectionPath: initialSectionPath,
     get document() {
       return props.config;
     },
@@ -343,6 +352,7 @@ export function CuratedSettingsPanel(props: {
       {props.support === "unsupported" ? (
         <SettingsSection title={t(props.presentation.unsupported.titleKey)} description={intro}>
           <SettingsRow
+            info
             title={t(props.presentation.unsupported.rowTitleKey)}
             description={t(props.presentation.unsupported.descriptionKey, props.messageParameters)}
           />

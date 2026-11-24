@@ -4,7 +4,7 @@ import { ConfigNode } from "../../components/config-form.node.tsx";
 import { ConfigTierGroups } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import { containsRedactedSentinel } from "../../lib/config-form-utils.ts";
+import { configSettingId, containsRedactedSentinel } from "../../lib/config-form-utils.ts";
 import { MCP_SERVER_NAME_PATTERN, type McpServerSummary } from "../../lib/config/mcp-servers.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
@@ -151,6 +151,7 @@ export function McpServerEditor(props: {
             commonPrelude={
               <>
                 <SettingsRow
+                  setting={configSettingId(path())}
                   title={t("mcpServers.nameLabel")}
                   description={
                     <Show when={renameError()}>
@@ -175,6 +176,7 @@ export function McpServerEditor(props: {
                 />
                 <Show when={stdio()}>
                   <SettingsRow
+                    setting={configSettingId([...path(), "command"])}
                     title={t("mcpServers.fieldCommand")}
                     control={
                       <input
@@ -198,6 +200,7 @@ export function McpServerEditor(props: {
                     }
                   />
                   <SettingsRow
+                    setting={configSettingId([...path(), "args"])}
                     stacked
                     title={t("mcpServers.fieldArgs")}
                     description={t("mcpServers.fieldArgsHint")}
@@ -227,6 +230,7 @@ export function McpServerEditor(props: {
                 </Show>
                 <Show when={!stdio()}>
                   <SettingsRow
+                    setting={configSettingId([...path(), "transport"])}
                     title={t("mcpServers.transportLabel")}
                     control={
                       <SettingsSegmented<"streamable-http" | "sse">

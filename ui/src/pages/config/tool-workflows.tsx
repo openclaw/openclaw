@@ -35,6 +35,7 @@ export function ToolWorkflows(props: {
   return (
     <>
       <SettingsToggleRow
+        setting="tools.codeMode.enabled"
         title={t("configView.toolWorkflows.codeMode")}
         description={t("configView.toolWorkflows.codeModeDescription")}
         checked={codeModeEnabled()}
@@ -47,6 +48,7 @@ export function ToolWorkflows(props: {
         }
       />
       <SettingsSelectRow
+        setting="tools.codeMode.executor"
         nested
         title={t("configView.toolWorkflows.executor")}
         description={t("configView.toolWorkflows.executorDescription")}
@@ -65,6 +67,7 @@ export function ToolWorkflows(props: {
         }}
       />
       <SettingsToggleRow
+        setting="tools.toolSearch.enabled"
         title={t("configView.toolWorkflows.toolSearch")}
         description={t("configView.toolWorkflows.toolSearchDescription")}
         checked={toolSearchEnabled()}

@@ -165,6 +165,7 @@ function StatusRow(props: TalkViewProps) {
   // The first catalog reply supplies this line without moving the schema editor below it.
   return (
     <SettingsRow
+      info
       title={t("talkPage.status.title")}
       description={status().description ?? "\u00a0"}
       control={<SettingsStatus kind={status().kind} label={status().label} />}
@@ -175,6 +176,7 @@ function StatusRow(props: TalkViewProps) {
 function ConfiguredTalkValue(props: { field: "provider" | "model" | "voice"; value: string }) {
   return (
     <SettingsRow
+      info
       title={t(`talkPage.${props.field}.title`)}
       description={t(`talkPage.${props.field}.description`)}
       control={<SettingsValue mono value={props.value} />}
@@ -202,6 +204,7 @@ function ProviderRow(props: TalkViewProps) {
         />
       ) : (
         <SettingsRow
+          setting="talk.realtime.provider"
           title={t("talkPage.provider.title")}
           description={t("talkPage.provider.description")}
           stacked
@@ -250,6 +253,7 @@ function ModelRow(props: TalkViewProps) {
     <>
       {provider() ? (
         <SettingsRow
+          setting="talk.realtime.model"
           title={t("talkPage.model.title")}
           description={t("talkPage.model.description")}
           control={
@@ -312,6 +316,7 @@ function VoiceRow(props: TalkViewProps) {
         <ConfiguredTalkValue field="voice" value={state().voice ?? t("talkPage.voice.default")} />
       ) : (
         <SettingsSelectRow
+          setting="talk.realtime.speakerVoice"
           title={t("talkPage.voice.title")}
           description={
             state().unsupported
@@ -339,6 +344,7 @@ function ModelFamilyRow(props: TalkViewProps) {
     <Show when={settings()}>
       {(family) => (
         <SettingsRow
+          info
           title={t(family().hint.titleKey)}
           description={t(family().hint.descriptionKey)}
           control={

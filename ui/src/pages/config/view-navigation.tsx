@@ -97,6 +97,7 @@ export function ConfigAccordionNav(props: {
           return (
             <div class="config-accordion-group">
               <button
+                data-settings-info
                 type="button"
                 class="settings-row settings-row--nav config-accordion-group__header"
                 aria-expanded={expanded() ? "true" : "false"}
@@ -119,6 +120,7 @@ export function ConfigAccordionNav(props: {
                 <For each={category().sections} keyed={(section) => section.key}>
                   {(section) => (
                     <button
+                      data-settings-info
                       type="button"
                       class={[
                         "settings-row settings-row--nav config-accordion-group__item",

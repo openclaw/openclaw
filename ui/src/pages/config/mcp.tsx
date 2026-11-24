@@ -35,13 +35,14 @@ export function Mcp(props: McpViewProps) {
       {props.editor}
       <SettingsPage>
         <SettingsDisclosure
+          setting="mcpPage.operatorCommands"
           class="mcp-page__commands"
           title={t("mcpPage.operatorCommands")}
           description={t("mcpPage.operatorCommandsHint")}
         >
           <For each={OPERATOR_COMMANDS}>
             {(command) => (
-              <div class="settings-row mcp-command">
+              <div class="settings-row mcp-command" data-settings-info>
                 <code>{command}</code>
                 <CopyButton text={command} idleLabel={t("common.copy")} iconFeedback />
               </div>

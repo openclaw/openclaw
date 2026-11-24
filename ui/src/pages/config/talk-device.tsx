@@ -99,6 +99,7 @@ function VoiceWakeSection(props: {
   return (
     <SettingsSection title={t("configPage.deviceTalk.triggerWords")} notice={props.notice}>
       <SettingsRow
+        setting="talkPage.triggerWords"
         title={
           <span class="row">
             {t("configPage.deviceTalk.triggerWords")}
@@ -251,6 +252,7 @@ function DeviceVoiceSettings(props: {
       />
       {hasLocale() && (
         <SettingsSelectRow
+          setting="device.voice.locale.primary"
           title={t("configPage.deviceTalk.primaryLanguage")}
           value={locale()!.primary}
           options={locale()!.available.map(({ id, name }) => ({ value: id, label: name }))}
@@ -271,6 +273,7 @@ function DeviceVoiceSettings(props: {
       )}
       {hasLocale() && (
         <SettingsRow
+          setting="device.voice.locale.additional"
           title={t("configPage.deviceTalk.additionalLanguages")}
           stacked
           control={
@@ -362,6 +365,7 @@ function DeviceVoiceSettings(props: {
       )}
       {microphone() && (
         <SettingsRow
+          setting="talkPage.microphoneTest"
           title={t("configPage.deviceTalk.microphoneTest")}
           control={
             <button
@@ -389,7 +393,10 @@ export function DeviceTalk(props: {
     <>
       {props.capability && (
         <SettingsSection title={t(deviceSettingsGroupLabelKey(props.snapshot))}>
-          <Loading on={props.capability} fallback={<SettingsRow title={t("common.loading")} />}>
+          <Loading
+            on={props.capability}
+            fallback={<SettingsRow info title={t("common.loading")} />}
+          >
             {(props.snapshot ?? initialSnapshot()) && (
               <DeviceVoiceSettings
                 presentationRetired={props.presentationRetired}

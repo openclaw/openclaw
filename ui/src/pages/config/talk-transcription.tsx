@@ -218,6 +218,7 @@ function TalkRow(props: { catalog: CatalogState; preferredProviderId: string | u
   };
   return (
     <SettingsRow
+      setting="talkPage.talkTranscription"
       title={t("talkPage.transcription.talkTitle")}
       description={state().description}
       control={
@@ -314,6 +315,7 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
         }
       />
       <SettingsRow
+        setting="tools.media.audio.preferredModel"
         title={t("talkPage.transcription.voiceNotesTitle")}
         description={
           rejectedModel() === null

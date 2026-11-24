@@ -19,6 +19,7 @@ export function LaunchAtLoginSetting(props: {
   return (
     <Show when={props.app.launchAtLogin !== undefined}>
       <SettingsToggleRow
+        setting="device.app.launchAtLogin"
         title={t("configPage.deviceSettings.launchAtLogin")}
         checked={props.app.launchAtLogin ?? false}
         disabled={props.app.launchAtLoginAvailable === false}

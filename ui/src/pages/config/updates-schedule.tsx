@@ -69,6 +69,7 @@ export function UpdatesSchedule(props: {
   return (
     <>
       <SettingsRow
+        setting="update.auto.schedule"
         title={t("updates.page.schedule")}
         description={t("updates.page.scheduleDescription")}
         stacked
@@ -87,6 +88,7 @@ export function UpdatesSchedule(props: {
       />
       <Show when={preset() === "daily" || preset() === "weekly"}>
         <SettingsRow
+          setting="updates.scheduleTime"
           title={t("updates.page.scheduleTime")}
           control={
             <input
@@ -102,6 +104,7 @@ export function UpdatesSchedule(props: {
       </Show>
       <Show when={preset() === "weekly"}>
         <SettingsRow
+          setting="updates.scheduleDay"
           title={t("updates.page.scheduleDay")}
           control={
             <select
@@ -122,6 +125,7 @@ export function UpdatesSchedule(props: {
       </Show>
       <Show when={preset() === "custom"}>
         <SettingsRow
+          setting="updates.scheduleCron"
           title={t("updates.page.scheduleCron")}
           description={t("updates.page.scheduleCronHint")}
           stacked

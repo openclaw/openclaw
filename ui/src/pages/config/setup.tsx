@@ -29,6 +29,7 @@ export function SetupSection(props: {
     <SettingsPage>
       <SettingsDisclosure
         id="config-section-wizard"
+        setting="advanced.setupWizard"
         class="config-advanced-disclosure"
         title={t("configForm.sections.wizard.label")}
         description={t("configForm.sections.wizard.description")}
@@ -58,6 +59,7 @@ export function SetupSection(props: {
           {(key) => (
             <Show when={typeof wizard()[key()] === "string" && wizard()[key()]}>
               <SettingsRow
+                info
                 title={
                   localizedHintForPath(["wizard", key()], props.config.uiHints)?.label ??
                   props.schema.properties?.[key()]?.title ??

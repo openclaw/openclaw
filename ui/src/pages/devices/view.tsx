@@ -185,6 +185,7 @@ function Bindings(props: BindingState) {
       ) : (
         <>
           <SettingsRow
+            setting="tools.exec.node"
             title={t("devices.binding.defaultBinding")}
             description={
               supportsBinding() || nodesPending() ? (
@@ -209,6 +210,7 @@ function Bindings(props: BindingState) {
 function AgentBinding(props: BindingState & { agent: BindingAgent }) {
   return (
     <SettingsRow
+      setting={`devices.agentBinding.${props.agent.id}`}
       title={agentDisplayName(props.agent)}
       description={props.agent.isDefault ? t("devices.binding.defaultAgent") : undefined}
       control={<BindingSelect {...props} agent={props.agent} />}

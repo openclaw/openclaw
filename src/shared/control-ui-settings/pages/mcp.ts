@@ -5,5 +5,6 @@ export const MCP_SETTINGS = defineSettingsPage({
   title: "MCP",
   settings: {
     "mcp.apps.enabled": { label: "MCP Apps" },
+    "mcpPage.operatorCommands": { label: "Command line" },
   },
 });

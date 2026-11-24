@@ -5,7 +5,7 @@ import { createSignal, For, onSettled, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { SettingsStatus, type SettingIdentifier } from "../../components/solid/settings-ui.tsx";
 import { formatList } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -151,6 +151,9 @@ export function MetaLine(props: { parts: readonly string[]; plain?: boolean }) {
 
 /** One expandable row: what it is at a glance, everything else on demand. */
 export function DeviceDisclosure(props: {
+  setting: SettingIdentifier;
+  /** A link names a setting inside, so the body renders for the link to open it. */
+  revealed?: boolean;
   deviceId?: string;
   name: string;
   meta: readonly string[];
@@ -185,7 +188,7 @@ export function DeviceDisclosure(props: {
         }
       }}
     >
-      <summary class="settings-row settings-row--nav device-entry__summary">
+      <summary id={props.setting} class="settings-row settings-row--nav device-entry__summary">
         <span class="settings-row__text">
           <span class="settings-row__title">{props.name}</span>
           <span class="device-entry__line">
@@ -202,7 +205,7 @@ export function DeviceDisclosure(props: {
           </span>
         </span>
       </summary>
-      <Show when={hasOpened()}>
+      <Show when={hasOpened() || props.revealed}>
         <div class="device-entry__body">{props.children}</div>
       </Show>
     </details>
@@ -217,7 +220,7 @@ export function PolicyActionRow(props: {
   children?: JSX.Element;
 }) {
   return (
-    <div class={["settings-row", "device-policy__action", props.class]}>
+    <div class={["settings-row", "device-policy__action", props.class]} data-settings-info>
       <div class="settings-row__text">
         <Show when={props.title}>
           <span class="settings-row__title">{props.title}</span>

@@ -11,6 +11,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  type SettingIdentifier,
 } from "../../components/solid/settings-ui.tsx";
 import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
@@ -172,9 +173,18 @@ const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
 const MEMORY_ENGINE_OFF = "";
 
 /** Row to a page in Settings; a link so it keeps open-in-new-tab, drawn like the other nav rows. */
-function SettingsLinkRow(props: { title: string; description?: string; href: string }) {
+function SettingsLinkRow(props: {
+  setting: SettingIdentifier;
+  title: string;
+  description?: string;
+  href: string;
+}) {
   return (
-    <a class="settings-row settings-row--nav memory-page__nav-row" href={props.href}>
+    <a
+      id={props.setting}
+      class="settings-row settings-row--nav memory-page__nav-row"
+      href={props.href}
+    >
       <span class="settings-row__text">
         <span class="settings-row__title">{props.title}</span>
         {props.description ? (
@@ -218,6 +228,7 @@ function EngineSection(props: MemoryViewProps) {
     >
       <>
         <SettingsRow
+          setting="plugins.slots.memory"
           title={t("memoryPage.engine.rowTitle")}
           description={
             !available() && props.catalog.kind !== "loading"
@@ -249,6 +260,7 @@ function EngineSection(props: MemoryViewProps) {
         {available() ? <DisabledEngineRow {...props} engineDisabled={blocked()} /> : undefined}
         {!available() || props.engineOutcome === null ? undefined : (
           <SettingsRow
+            info
             title={t(
               props.engineOutcome.kind === "error"
                 ? "memoryPage.engine.changeFailed"
@@ -285,6 +297,7 @@ function DisabledEngineRow(props: MemoryViewProps) {
     <>
       {!props.enginePending && engineId() !== null && state() === "disabled" && (
         <SettingsRow
+          setting="memoryPage.enableEngine"
           title={t("memoryPage.engine.disabledTitle")}
           description={t("memoryPage.engine.disabledHint")}
           control={
@@ -328,6 +341,7 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
       props.owner.catalog.mutationAllowed &&
       (props.addon.state === "enabled" || props.addon.state === "disabled") ? (
         <SettingsToggleRow
+          setting={`memoryPage.addons.${props.addon.id}`}
           title={props.addon.label}
           ariaLabel={t("memoryPage.addons.toggleAriaLabel", { plugin: props.addon.label })}
           description={props.addon.description}
@@ -337,6 +351,7 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
         />
       ) : (
         <SettingsRow
+          info
           title={props.addon.label}
           description={props.addon.description}
           control={<AddonStatus state={props.addon.state} />}
@@ -344,6 +359,7 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
       )}
       {latest(error) === null ? undefined : (
         <SettingsRow
+          info
           title={t("memoryPage.addons.changeFailed", { plugin: props.addon.label })}
           description={error()}
           control={<SettingsStatus kind="danger" label={t("common.failed")} />}
@@ -351,6 +367,7 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
       )}
       {props.addon.notice === null ? undefined : (
         <SettingsRow
+          info
           title={t("pluginsPage.needsAttention")}
           description={props.addon.notice}
           control={<SettingsStatus kind="warn" label={t("pluginsPage.needsAttention")} />}
@@ -370,7 +387,11 @@ function AddonsSection(props: MemoryViewProps) {
       <For each={addons()} keyed={(addon) => addon.id}>
         {(addon) => <AddonRow addon={addon()} owner={props} />}
       </For>
-      <SettingsLinkRow title={t("memoryPage.addons.manage")} href={props.pluginsHref} />
+      <SettingsLinkRow
+        setting="memoryPage.allPlugins"
+        title={t("memoryPage.addons.manage")}
+        href={props.pluginsHref}
+      />
     </SettingsSection>
   );
 }
@@ -408,12 +429,14 @@ function SettingsTab(props: MemoryViewProps) {
         <SettingsSection title={t("memoryPage.import.title")}>
           {props.canImportMemory ? (
             <SettingsLinkRow
+              setting="memoryPage.importMemory"
               title={t("tabs.memoryImport")}
               description={t("subtitles.memoryImport")}
               href={props.memoryImportHref}
             />
           ) : (
             <SettingsRow
+              info
               title={t("tabs.memoryImport")}
               description={t("subtitles.memoryImport")}
               control={<SettingsValue value={t("memoryImport.adminRequired")} />}

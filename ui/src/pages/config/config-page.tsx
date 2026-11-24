@@ -162,6 +162,7 @@ function ConfigBody(props: {
         }
       >
         <SettingsToggleRow
+          setting="local.openLinksInControlUiBrowser"
           title={t("browserLinkPreferences.openInControlUi")}
           checked={props.config.openLinksInControlUiBrowser === true}
           onChange={(enabled) =>

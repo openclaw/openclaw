@@ -45,6 +45,7 @@ export function DevicePermissionsPage() {
                   permission().status === "notDetermined";
                 return (
                   <SettingsRow
+                    setting={`device.permissions.${permission().id}`}
                     title={permissionTitle()}
                     description={t(`configPage.deviceSettings.permissions.${permission().id}.hint`)}
                     stackedOnNarrow
@@ -111,6 +112,7 @@ export function DevicePermissionsPage() {
         <Show when={Boolean(location())}>
           <SettingsSection title={t("configPage.deviceSettings.location")}>
             <SettingsRow
+              setting="device.permissions.location.mode"
               title={t("configPage.deviceSettings.locationAccess")}
               description={
                 <>
@@ -138,6 +140,7 @@ export function DevicePermissionsPage() {
               when={preciseEditable()}
               fallback={
                 <SettingsRow
+                  info
                   title={t("configPage.deviceSettings.preciseLocation")}
                   description={t("configPage.deviceSettings.preciseLocationReadOnlyHint")}
                   stackedOnNarrow
@@ -166,6 +169,7 @@ export function DevicePermissionsPage() {
               }
             >
               <SettingsToggleRow
+                setting="device.permissions.location.precise"
                 title={t("configPage.deviceSettings.preciseLocation")}
                 description={t("configPage.deviceSettings.preciseLocationHint")}
                 checked={location()!.precise}
@@ -178,6 +182,7 @@ export function DevicePermissionsPage() {
         <Show when={props.snapshot.capabilities?.activeComputerPresenceEnabled !== undefined}>
           <SettingsSection title={t("configPage.deviceSettings.privacy")}>
             <SettingsToggleRow
+              setting="device.capabilities.activeComputerPresenceEnabled"
               title={t("configPage.deviceSettings.activePresence")}
               description={t("configPage.deviceSettings.activePresenceHint")}
               checked={props.snapshot.capabilities?.activeComputerPresenceEnabled ?? false}
