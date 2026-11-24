@@ -10,6 +10,7 @@ import {
 } from "../../scripts/lib/ci-test-runtime.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
+import * as patternFile from "../vitest/vitest.pattern-file.ts";
 import { createUnitFastFakeTimersVitestConfig } from "../vitest/vitest.unit-fast-fake-timers.config.ts";
 import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
 
@@ -21,6 +22,48 @@ const timerConfig = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
 const supportConfig = "test/vitest/vitest.agents-support.config.ts";
 
 describe("CI runtime job inventory", () => {
+  it("projects literal inventories with linear pattern work and preserves Node exclusions", () => {
+    const files = [
+      nodeOnly,
+      ...Array.from({ length: 256 }, (_, index) => `src/infra/inventory-${index}.test.ts`),
+    ];
+    const matcher = vi.spyOn(patternFile, "matchesVitestCliSelection");
+    onTestFinished(() => matcher.mockRestore());
+    const rows = resolveCiTestRuntimeInventory(
+      timerConfig,
+      files,
+      {},
+      "bun-all",
+      { configs: [timerConfig], includePatterns: files },
+      files,
+    );
+    expect(rows?.map((row) => row && [row.runtime, row.files])).toEqual([
+      ["node", [nodeOnly]],
+      ["bun", files.slice(1)],
+    ]);
+    if (process.platform === "linux") {
+      expect(matcher).toHaveBeenCalled();
+      const examined = matcher.mock.calls.reduce(
+        (sum, call) => sum + (call[5]?.length ?? call[1].length),
+        0,
+      );
+      expect(examined).toBeLessThanOrEqual(files.length * 2);
+    }
+  });
+
+  it.each([
+    ["src/infra/plain.test.ts", "src/infra/other.test.ts"],
+    ["src/infra/[literal].test.ts", "src/infra/unicode-\u00e9.test.ts"],
+    ["./src/infra/plain.test.ts", "src/infra/../infra/other.test.ts"],
+  ])("preserves scalar glob semantics for inventory %j", (...files) => {
+    const expected = files.filter((file) =>
+      patternFile.matchesVitestCliSelection(file, [file], [], "", {}, files),
+    );
+    expect(resolveCiTestRuntimeInventory(timerConfig, files, {}, "node")).toEqual([
+      { runtime: "node", engine: "vitest", args: [], files: expected },
+    ]);
+  });
+
   it.each([timerConfig, supportConfig])(
     "reuses complete %s ownership for accounting without per-exception planning",
     (ownerConfig) => {
