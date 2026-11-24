@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { buildControlUiCatalogSharePath } from "openclaw/plugin-sdk/session-catalog-runtime";
-import { BEAM_SESSION_SHARE_ROUTE, type BeamHandoff, type BeamStoredSession } from "./types.js";
+import { snapshotRevision } from "./packet-state.js";
+import { BEAM_SESSION_SHARE_ROUTE, type BeamHandoff } from "./types.js";
 
 export const BEAM_V2_API = "/api/v2/beam";
 
@@ -13,43 +13,14 @@ export function parsePublicationId(
   return match ? { beamId: match[1]!, publicationGeneration: match[2]! } : undefined;
 }
 
-/** V1 control fields and host identities never enter a portable representation. */
-export function snapshotBytes(row: BeamStoredSession): string {
-  return JSON.stringify({
-    version: 2,
-    beamId: row.beamId,
-    source: row.source,
-    title: row.title,
-    updatedAt: row.updatedAt,
-    completed: row.completed,
-    ...(row.truncated ? { truncated: true } : {}),
-    ...(row.sourceModel
-      ? { sourceModel: { provider: row.sourceModel.provider, model: row.sourceModel.model } }
-      : {}),
-    items: row.items.map(({ type, text }) => ({ type, text })),
-  });
-}
-
-export function packetDigest(entity: string): string {
-  return `sha256:${createHash("sha256").update(entity).digest("hex")}`;
-}
-
 export function publicationHead(
-  row: BeamHandoff,
+  row: Pick<BeamHandoff, "beamId" | "title" | "revision" | "publicationId" | "handoffId">,
   digest: string,
   basePath: string | undefined,
   requestPath: string,
 ) {
   const publicationId = row.publicationId ? `${row.beamId}.${row.publicationId}` : undefined;
-  // Existing rows have no revision until their next accepted write. The tag still
-  // names their exact representation and, where available, their original generation.
-  const revision = `"${
-    row.revision ??
-    createHash("sha256")
-      .update(row.publicationId ?? "legacy")
-      .update(digest)
-      .digest("hex")
-  }"`;
+  const revision = snapshotRevision(row, digest);
   const view = buildControlUiCatalogSharePath({
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
     threadId: row.beamId,

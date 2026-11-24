@@ -4,7 +4,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createBeamExecutableResolver } from "./src/executable.js";
 import { createBeamV2Handler } from "./src/http-v2.js";
-import { createBeamRequestHandler } from "./src/http.js";
+import { createBeamIngressLimits, createBeamRequestHandler } from "./src/http.js";
 import { registerBeamMirror } from "./src/mirror-service.js";
 import { createBeamOwnedViewHandler } from "./src/owned-view.js";
 import { createBeamSessionCatalog } from "./src/session-catalog.js";
@@ -34,6 +34,7 @@ export default definePluginEntry({
       return;
     }
     const store = createBeamStore(api.runtime);
+    const limits = createBeamIngressLimits();
     api.registerSessionCatalog(createBeamSessionCatalog(store));
     for (const operation of ["list", "read", "resolve", "continue"] as const) {
       api.registerGatewayMethod(
@@ -51,6 +52,7 @@ export default definePluginEntry({
       auth: "gateway",
       match: "exact",
       handler: createBeamRequestHandler({
+        limits,
         store,
         resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
@@ -60,7 +62,9 @@ export default definePluginEntry({
       auth: "gateway",
       match: "prefix",
       handler: createBeamV2Handler({
+        limits,
         readPublication: store.readPublication,
+        putSnapshot: store.putSnapshot,
         currentAuthority: getGatewayRequestAuthorityV1,
         controlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
