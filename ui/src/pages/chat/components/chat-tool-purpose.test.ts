@@ -23,9 +23,9 @@ it.each([
 );
 
 it.each([
-  ["wait", { runId: "cm_test" }, "Wait"],
+  ["wait", { runId: "cm_test" }, "Waited for tool result"],
   ["ask_user", { questions: [{ question: "Do not repeat this prompt" }] }, "Asked you a question"],
-  ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Wait"],
+  ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Waited for tool result"],
   ["custom_tool", { text: "Inspect the workspace" }, "Custom Tool"],
   [
     "ToolSearch",
