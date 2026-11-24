@@ -146,12 +146,18 @@ export function createBeamTestCatalog(
     id,
     processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
     assertCurrent: () => {},
-    list: async ({ threadId }) => {
+    list: async ({ source }) => {
       await params.onList?.();
       const visible = typeof params.sessions === "function" ? params.sessions() : params.sessions;
       for (const row of visible ?? []) catalogHistory.set(row.threadId, row);
-      const sessions =
-        threadId && catalogHistory.has(threadId) ? [catalogHistory.get(threadId)!] : visible;
+      const known = source && catalogHistory.get(source.threadId);
+      const sessions = source
+        ? known &&
+          source.hostId === (params.hostId ?? "gateway:local") &&
+          known.sourceHomeId === source.sourceHomeId
+          ? [known]
+          : []
+        : visible;
       return [
         {
           hostId: params.hostId ?? "gateway:local",
