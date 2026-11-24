@@ -163,9 +163,15 @@ instead of falling back to the generic artwork. To publish without an avatar,
 ask the agent to remove it from the proposal. Changing the image after review
 requires a fresh review before **Publish**.
 
-Sign in with `clawhub login` on the Gateway host. Select **Publish** on the card
-or in the preview dialog to upload the exact reviewed artifact using that
-account. Opening the preview is optional. An agent turn cannot authorize publication.
+If you are signed out of ClawHub, select **Sign in** on the private draft card.
+When the code appears, select **Copy & open ClawHub**, paste the code, and
+approve. The same conversation shows the unpublished draft when it is ready.
+Cancelling or letting sign-in expire leaves the draft private.
+
+**Preview** lets you inspect the reviewed artifact without uploading it. Select
+**Publish** on the card or in the preview dialog to upload that exact artifact.
+Neither signing in nor an agent turn authorizes publication.
+
 The card stays in the conversation and shows **Pending** while ClawHub checks
 the submission. Select **View submission** to follow its progress on ClawHub.
 While pending, the open card checks again 30 seconds after each response. Checks stop after

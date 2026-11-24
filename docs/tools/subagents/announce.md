@@ -58,9 +58,11 @@ the channel.
 When the completion turn cannot run or does not consume the result (the wake is
 refused, aborted before admission, or the requester's delivery path fails),
 OpenClaw appends the child's end state to the requester transcript once, as
-model-visible history, and settles the delivery. There is no retry ladder,
-suspension, expiry or user-visible delivery error. The entry is not shown as a
-chat row; the user sees the parent's own reply and the child card.
+model-visible history, and settles the delivery. This applies on the first
+failure to every child that owes a completion, including legacy rows without an
+explicit completion mode. There is no retry ladder, suspension, expiry or
+user-visible delivery error. The entry is not shown as a chat row; the user sees
+the parent's own reply and the child card.
 
 The entry names the child label, session and run, and its status:
 
@@ -75,7 +77,8 @@ The entry names the child label, session and run, and its status:
 The parent reads the entry on its next turn and decides whether to tell the user,
 resume the child, start a new child or ignore it. A yielded requester whose
 continuation never ran ends as an ordinary run; the entry is in its history.
-A deleted or stopped requester receives nothing.
+Stopping the parent's turn does not discard a finished child's entry; a deleted
+requester receives nothing.
 
 Completion rows that older builds parked as suspended are settled the same way
 once, on the next registry sweep, without a wake.
@@ -258,11 +261,8 @@ their payloads until those obligations settle.
 Restart recovery includes finished results whose requester has already settled,
 even when that requester has no interrupted-run marker. Lost process-local custody
 does not block delivery: recovery uses the System baseline when no live same-source
-custody remains. Retryable delivery is not eligible for completed-run retention
-cleanup. Existing wakes resume through startup recovery. An older build may already
-have removed a wake and suppressed completion delivery while leaving a retryable label.
-Upgrading does not recreate that retired wake or replay its possibly consumed input;
-those results require explicit recovery.
+custody remains. Pending delivery is not eligible for completed-run retention
+cleanup. Existing wakes resume through startup recovery.
 
 Registry removal records a `child_delivery_removed` session-state event in the
 same transaction. It identifies the run, its delivered, suspended, or discarded

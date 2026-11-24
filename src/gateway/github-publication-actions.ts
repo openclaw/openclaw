@@ -116,9 +116,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   const assertRequester = () => {
     target.assertCurrent();
     admitted.requester.assertCurrent();
-    if (requiresOperatorWrite) {
-      callerOperator?.assertCurrent();
-    }
     if (
       requiresOperatorWrite &&
       !roleScopesAllow({

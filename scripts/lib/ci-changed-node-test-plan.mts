@@ -438,6 +438,11 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
   return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
 }
 
+// Agent, compaction, prompt and transport behavior tests sit 3-10 imports from these owners
+// (#204252), past the two-import walk. Their importer closure reaches most runtime suites.
+const TRANSITIVE_IMPORTER_OWNERS =
+  /^(?:src\/agents\/|src\/auto-reply\/reply\/agent-runner|packages\/agent-core\/src\/harness\/compaction\/|packages\/ai\/src\/transports\/)/u;
+
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
   changedPaths: string[],
@@ -455,7 +460,13 @@ export function resolveChangedNodeTestTargets(
     broad: false,
     boundedOwners: true,
     baseRef: options.baseRef,
-    aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
+    aggressive: aggressive
+      ? {
+          maxDirectImporters: 20,
+          maxDirectoryTests: 30,
+          transitiveOwners: TRANSITIVE_IMPORTER_OWNERS,
+        }
+      : undefined,
     adaptiveMarkdown: options.adaptiveMarkdown
       ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
       : undefined,

@@ -222,10 +222,7 @@ export function recordRequesterDelivery(
   if (delivery.requesterDelivery?.state !== "consumed") {
     delivery.requesterDelivery = fact;
   }
-  if (
-    delivery.disposition !== "ambiguous" &&
-    (delivery.status === "pending" || delivery.status === "in_progress")
-  ) {
+  if (delivery.status === "pending" || delivery.status === "in_progress") {
     delivery.disposition = undefined;
     delivery.lastError = undefined;
   }
@@ -261,15 +258,21 @@ export function isDeliveryTerminalForRequesterSettle(
     entry.delivery?.status === "delivered" ||
     (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
     entry.delivery?.status === "discarded" ||
-    entry.delivery?.disposition === "delivered" ||
-    entry.delivery?.disposition === "intentional_non_delivery" ||
-    entry.delivery?.disposition === "permanent_failure"
+    entry.delivery?.disposition === "delivered"
   );
 }
 
-/** Older builds parked undelivered results; the sweeper settles each one into history once. */
-export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
-  return entry.delivery?.status === "suspended";
+/**
+ * Older builds parked undelivered results as suspended or failed; nothing writes either now.
+ * The sweeper settles each one into requester history once.
+ */
+export function isDeliverySuspended(
+  entry: Pick<SubagentRunRecord, "delivery" | "expectsCompletionMessage">,
+): boolean {
+  return (
+    entry.delivery?.status === "suspended" ||
+    (entry.delivery?.status === "failed" && entry.expectsCompletionMessage !== false)
+  );
 }
 
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {

@@ -25,6 +25,7 @@ const cases = [
   ["no-raw-window-open-call", "boundary-calls.test-harness.tsx", 0],
   ["no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0],
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
+  ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
 

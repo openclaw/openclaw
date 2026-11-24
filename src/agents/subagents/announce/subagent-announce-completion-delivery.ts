@@ -36,15 +36,11 @@ import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../i
 import type { ReplyExpectation } from "../../reply-completion.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
-  hasAnnounceSendEvidence,
   SourceOwnerChangedError,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import { tryResolveSubagentRequesterAgentId } from "./subagent-announce-delivery.runtime.js";
-import {
-  sourceOwnerChangedResult,
-  type SubagentAnnounceDeliveryResult,
-} from "./subagent-announce-dispatch.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
@@ -215,9 +211,7 @@ export function resolvePrivateCompletionDeliveryResult(
     return {
       delivered: false,
       path: "direct",
-      terminal: true,
       reason: "delivery_suppressed",
-      disposition: "intentional_non_delivery",
       error: "private requester continuation was cancelled",
     };
   }
@@ -231,7 +225,6 @@ export function resolvePrivateCompletionDeliveryResult(
           path: "direct",
           reason: "completion_handoff_pending",
           error: "private requester turn has not completed successfully",
-          disposition: "retryable",
         };
   const result = getGatewayAgentResult(response);
   if (
@@ -419,7 +412,7 @@ export async function deliverCompletionDirect(params: {
   };
   try {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
-      return sourceOwnerChangedResult();
+      return { delivered: false, path: "none", reason: "source_owner_changed" };
     }
     if (params.signal?.aborted) {
       return { delivered: false, path: "none" };
@@ -470,38 +463,22 @@ export async function deliverCompletionDirect(params: {
       return committedDelivery;
     }
     if (sendResult.deliveryStatus === "suppressed") {
-      const ambiguous = sendResult.suppressionReason === "adapter_returned_no_identity";
       return {
         delivered: false,
         path: "direct",
-        reason: ambiguous ? undefined : "delivery_suppressed",
-        error: ambiguous
-          ? "text completion direct delivery could not be confirmed: adapter returned no identity"
-          : `text completion direct delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
-        ...(ambiguous
-          ? { disposition: "ambiguous" as const }
-          : { disposition: "intentional_non_delivery" as const, terminal: true }),
+        reason: "delivery_suppressed",
+        error: `text completion direct delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
       };
     }
     return { delivered: true, path: "direct" };
   } catch (err) {
     if (committedDelivery) {
       // Post-send bookkeeping must never turn an identified delivery into a
-      // retryable failure and send the same completion twice.
+      // failure and send the same completion twice.
       return committedDelivery;
     }
-    if (hasAnnounceSendEvidence(err)) {
-      params.onDeliveryError?.(err);
-      return {
-        delivered: false,
-        path: "direct",
-        terminal: true,
-        disposition: "permanent_failure",
-        error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
-      };
-    }
     if (err instanceof SourceOwnerChangedError) {
-      return sourceOwnerChangedResult();
+      return { delivered: false, path: "none", reason: "source_owner_changed" };
     }
     if (params.signal?.aborted) {
       return { delivered: false, path: "none" };

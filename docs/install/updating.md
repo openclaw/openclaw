@@ -2155,11 +2155,31 @@ serves. Dev-channel installs on `main` builds from 2026-11-17 until this change 
 version 2026.11.5; no published release has the release layout) keep the link and releases under
 `git-install/lib/node_modules/openclaw`, where Node refuses to load a bundled plugin's
 TypeScript sources ([#201874](https://github.com/openclaw/openclaw/issues/201874)). When a
-web search provider is configured, their Gateway fails at startup. The old release cannot run
-its own updater either, so update from a terminal with the checkout's `openclaw`, not from the
-Control UI or another Gateway-started update. Run `openclaw update` twice: the older build
-runs the first update and moves the checkout to this change; the second, run by this change,
-rebuilds the serving commit at the new path and removes the old link.
+web search provider is configured, their Gateway fails at startup.
+
+The updater in a checkout built from `main` between 2026-11-17 and 2026-11-19 (it builds
+releases under `git-install/releases/<release>/build`) never rebuilds the checkout, so after a
+database migration neither it nor the checkout's `openclaw` command can open the migrated data.
+When the new release would migrate state, its check stops that update before the release is
+switched, leaves the Gateway untouched, and prints a one-time rebuild to run from the checkout:
+
+```sh
+git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }
+```
+
+The rebuild moves the service back to the checkout, which ends the startup failure above. The
+reinstalled service starts the rebuilt Gateway, which migrates state at boot. If an earlier step
+fails, the command starts the previous service again and exits non-zero; a failed `pnpm build`
+can leave the checkout's build incomplete, so fix the reported error and run the line again.
+PostgreSQL-backed stores are not covered: follow the stopped-writer Doctor procedure in
+[PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
+Later `openclaw update` runs use the rebuilt checkout's updater; their first trial falls back to
+the rebuilt checkout. The older layout's `git-install/lib/node_modules/openclaw` link and the
+release it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove
+the release directory the link names, then the link, then run `git worktree prune` in the
+checkout. Updates that change no schema still go through the older updater; when its Gateway
+fails at startup (the web search case above), run them from a terminal with the checkout's
+`openclaw`, not from the Control UI.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no

@@ -439,7 +439,6 @@ export async function prepareAgentRunDispatch(
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
     assertRequesterCurrent?.();
-    userTurn?.assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
     if (!resumedTaskAdopted) {
       followupSuccessor?.assertCurrent();
@@ -490,7 +489,6 @@ export async function prepareAgentRunDispatch(
       freshChildStorePath: params.freshChild ? lifecycleStorePath : undefined,
       resolvedThreadId,
     });
-    userTurn.assertRequesterCurrent?.();
     if (userTurn.recorder) {
       // Accepted input owns these media references before it enters the transcript.
       // Later admission rejection must preserve the files retained by that custody.
@@ -571,7 +569,6 @@ export async function prepareAgentRunDispatch(
       return await operatorAdmission;
     }
     assertInputOwnerCurrent();
-    capturedOperator.authority?.assertCurrent();
   } catch (error) {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
       userTurn,
@@ -588,7 +585,6 @@ export async function prepareAgentRunDispatch(
         return await registrationAdmission;
       }
       assertInputOwnerCurrent();
-      capturedOperator.authority?.assertCurrent();
     }
   } catch (error) {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
@@ -623,7 +619,6 @@ export async function prepareAgentRunDispatch(
         assertInputOwnerCurrent();
         params.assertGatewayWorkAdmissionAllowed();
         activeRunAbort.controller.signal.throwIfAborted();
-        capturedOperator.authority?.assertCurrent();
       } catch (err) {
         const failure = await releasePreparedAgentRunUserTurnAfterFailure(
           userTurn,

@@ -52,7 +52,6 @@ const uiClient: GatewayClient = {
     operatorRunAuthority: createTestOperatorAuthority({
       profileId: "synthetic-operator",
       scopes: ["operator.cron"],
-      assertCurrent() {},
     }),
   },
 };
