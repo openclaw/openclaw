@@ -9,7 +9,6 @@ import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.as
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { projectAgentToolsExecPolicy } from "../agents/agent-tools.execution-policy.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
-import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
@@ -38,10 +37,8 @@ import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
   hasRestrictiveAllowPolicy,
-  mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
   replaceWithEffectiveToolAllowlist,
-  resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
@@ -74,6 +71,7 @@ import {
   resolveGatewayRequesterToolPolicies,
   resolveGatewaySenderAuthority,
 } from "./tool-resolution-authority.js";
+import { resolveGatewayConfiguredToolPolicies } from "./tool-resolution-policy.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -173,32 +171,15 @@ export async function resolveGatewayScopedTools(
       ? "message_tool_only"
       : undefined);
   const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
-  function resolveConfiguredToolPolicies(config: OpenClawConfig) {
-    const effective = resolveEffectiveToolPolicy({
+  const resolveConfiguredToolPolicies = (config: OpenClawConfig) =>
+    resolveGatewayConfiguredToolPolicies({
       config,
       sessionKey: runtimePolicySessionKey,
       agentId: runtimePolicyAgentId,
       modelProvider: params.modelProvider,
       modelId: params.modelId,
+      alsoAllow: [...gatewayRequestedTools, ...runtimeAlsoAllow],
     });
-    const profilePolicy = resolveToolProfilePolicy(effective.profile);
-    const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
-    return {
-      ...effective,
-      profilePolicy,
-      providerProfilePolicy,
-      profilePolicyWithAlsoAllow: mergeAlsoAllowPolicy(profilePolicy, [
-        ...(effective.profileAlsoAllow ?? []),
-        ...gatewayRequestedTools,
-        ...runtimeAlsoAllow,
-      ]),
-      providerProfilePolicyWithAlsoAllow: mergeAlsoAllowPolicy(providerProfilePolicy, [
-        ...(effective.providerProfileAlsoAllow ?? []),
-        ...gatewayRequestedTools,
-        ...runtimeAlsoAllow,
-      ]),
-    };
-  }
   const configuredToolPolicies = resolveConfiguredToolPolicies(params.cfg);
   const {
     agentId: resolvedPolicyAgentId,
