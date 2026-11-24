@@ -1,9 +1,10 @@
 # Spec section 11 acceptance tests (v1-draft, OCF-274)
 
 **Status: v1-draft.** The catalog is `SPEC_11_ACCEPTANCE` in `src/testing/acceptance.ts`
-(exported from `@openclaw/openclaw-id-protocol/testing`). Protocol-level tests live in
-`src/acceptance/` and use `acceptanceTitle(id)` as their describe title, so failures name the
-spec test. Run: `pnpm test packages/openclaw-id-protocol`.
+(exported from `@openclaw/openclaw-id-protocol/testing`). Protocol-level coverage lives in
+`src/acceptance/` and the supporting suites named below. Acceptance suites use
+`acceptanceTitle(id)` as their describe title, so failures name the spec test.
+Run: `pnpm test packages/openclaw-id-protocol`.
 
 Integration tests are listed by exact name for the integration worker. They are not
 written as skipped or todo tests (the repo lint forbids both); the catalog test checks that
@@ -20,7 +21,7 @@ every spec test has protocol coverage or a named integration test.
 | 7   | Relayed root ceremony                         | `linkClaw` over `tunnel` or `mailbox` -> `not_local_operator`                                                                                                                                                      | `id-e2e: root ceremony through the tunnel child is refused; direct loopback succeeds` (gateway)                |
 | 8   | Kit enrollment                                | kit decode -> R; new device recorded as approved by `root`; `kit_used` notice event; new device admitted                                                                                                           | `id-e2e: kit enrollment notifies every online owner device` (control-ui)                                       |
 | 9   | Root changes only by owner reset              | another root's binding -> `root_mismatch`; `root_epoch` other than 1 or `RootRotation` -> `malformed`; another root's signature -> `not_an_owner`; K_gw-vouched reset -> `owner_reset` (`reset.test.ts`)           | `id-e2e: a descriptor naming a new root is refused by the loader` (loader)                                     |
-| 10  | Invite link                                   | secret is only in the fragment (request target is `/join`); second redemption -> `invite_used`                                                                                                                     | `id-e2e: invite fragment never appears in Gateway, tunnel child, Discovery or relay logs` (discovery)          |
+| 10  | Invite link                                   | `invites.test.ts`: fragment-only secret and `/join` request target; `authority/invite-replay.test.ts`: second pending redemption -> `invite_used`                                                                  | `id-e2e: invite fragment never appears in Gateway, tunnel child, Discovery or relay logs` (discovery)          |
 | 11  | Redemption without approval                   | pending admits nothing; approval via mailbox -> `not_direct`; mismatched account, peer or exact role (either direction) -> `target_mismatch`; wrong audience -> `audience_mismatch`; deny consumes                 | `id-e2e: approval injected through the real mailbox is refused; pending expires after 7 days` (gateway)        |
 | 12  | Removing a member mid-run                     | removal emits `cancel_runs` for the account                                                                                                                                                                        | `id-e2e: removing a member mid-run cancels the run and keeps the transcript` (gateway)                         |
 
