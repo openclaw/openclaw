@@ -10,7 +10,6 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
 import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import { readOwedKind } from "./session-pending-input-value.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 function resolvePendingInputRequestHash(
@@ -105,15 +104,8 @@ export function preparePendingInputRequest(params: PendingInputRequest) {
 /** Reconcile saved input variations only against their complete accepted hash. */
 export function resolvePendingInputReplayRequest(
   prepared: ReturnType<typeof preparePendingInputRequest>,
-  accepted?: Pick<SessionPendingInputRow, "request_hash" | "run_id"> &
-    Partial<Pick<SessionPendingInputRow, "message_json" | "state">>,
-): {
-  message: PersistedUserTurnMessage;
-  stableMessage: Omit<PersistedUserTurnMessage, "timestamp">;
-  requestHash: string;
-  /** The turn adopts a queued owed row; its stored bytes are the input. */
-  owed?: true;
-} {
+  accepted?: Pick<SessionPendingInputRow, "request_hash" | "run_id">,
+) {
   const { message, replaySourceSessionKeys } = prepared;
   const original = {
     message,
@@ -121,14 +113,6 @@ export function resolvePendingInputReplayRequest(
     requestHash: prepared.requestHash,
   };
   if (!replaySourceSessionKeys) {
-    // A turn of the owed kind adopts the queued owed row that carries its key.
-    const owedKind =
-      accepted?.state === "queued" && accepted.message_json
-        ? readOwedKind(accepted.message_json)
-        : undefined;
-    if (accepted && owedKind && owedKind === message.provenance?.sourceTool) {
-      return { ...original, requestHash: accepted.request_hash, owed: true };
-    }
     if (
       accepted?.run_id === prepared.runId &&
       accepted.request_hash !== prepared.requestHash &&

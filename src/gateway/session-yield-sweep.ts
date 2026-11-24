@@ -2,8 +2,6 @@ import { hasExecYieldWake } from "../agents/bash-tools.exec-notify.js";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { hasAgentRunContextExecutionOwner } from "../infra/agent-run-registry.js";
-import { chatRef } from "../sessions/chat-ref.js";
-import { shouldWake } from "../sessions/owed.js";
 import { hasSessionControllerQueuedWork } from "../sessions/session-controller.context.js";
 import { isSessionControllerWorkActive } from "../sessions/session-controller.lifecycle-observation.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -41,8 +39,7 @@ export async function sweepUnreachableSessionYields(
       ) ||
       hasRetainedSessionContinuation(sessionKey, agentId, resolveGatewayContext) ||
       hasExecYieldWake({ sessionKey, agentId }) ||
-      resolveSessionYieldWait(sessionKey, entry, agentId) !== "unreachable" ||
-      (await shouldWake(chatRef({ agentId, storePath: storeTarget.storePath, sessionKey })))
+      resolveSessionYieldWait(sessionKey, entry, agentId) !== "unreachable"
     ) {
       continue;
     }
