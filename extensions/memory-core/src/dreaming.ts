@@ -69,7 +69,7 @@ async function runShortTermDreamingPromotion(params: {
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
   narrativeTimeoutMs: number;
   consolidationTimeoutMs?: number;
-}): Promise<{ handled: true; reason: string } | undefined> {
+}) {
   const recencyHalfLifeDays = params.config.recencyHalfLifeDays;
   const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
   // Each completion uses its workspace owner's model and credentials. The triggering
@@ -116,7 +116,9 @@ async function runShortTermDreamingPromotion(params: {
   let totalCandidates = 0;
   let totalApplied = 0;
   let failedWorkspaces = 0;
+  let firstWorkspaceError: string | undefined;
   let degradedNarratives = 0;
+  let firstNarrativeError: string | undefined;
   let pendingNarratives = 0;
   const pluginConfig = params.cfg ? resolveMemoryDreamingPluginConfig(params.cfg) : undefined;
   const [
@@ -153,6 +155,7 @@ async function runShortTermDreamingPromotion(params: {
       });
     } catch (err) {
       failedWorkspaces += 1;
+      firstWorkspaceError ??= formatErrorMessage(err);
       params.logger.error(
         `memory-core: dreaming sweep failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
       );
@@ -162,6 +165,7 @@ async function runShortTermDreamingPromotion(params: {
     const { narratives, failed } = phaseResult;
     if (failed) {
       failedWorkspaces += 1;
+      firstWorkspaceError ??= phaseResult.error;
     } else {
       try {
         const reportLines: string[] = [];
@@ -287,6 +291,7 @@ async function runShortTermDreamingPromotion(params: {
       } catch (err) {
         failedWorkspaces += 1;
         const error = formatErrorMessage(err);
+        firstWorkspaceError ??= error;
         params.logger.error(
           `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${error}`,
         );
@@ -345,26 +350,32 @@ async function runShortTermDreamingPromotion(params: {
       });
       if (narrativeOutcome.status === "degraded") {
         degradedNarratives += 1;
+        firstNarrativeError ??= narrativeOutcome.error;
       } else if (narrativeOutcome.status === "pending") {
         pendingNarratives += 1;
       }
     }
   }
-  // A summary that reads identically whether the sweep worked or failed everywhere is how
-  // a broken pipeline stays unnoticed; escalate when no workspace produced anything.
+  // Finish every workspace before reporting synchronous failures to the scheduled-run owner.
+  // Detached narratives are still healthy pending work, not settled failures.
   const summary = `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}, degraded=${degradedNarratives}, narrativesPending=${pendingNarratives}).`;
-  if (failedWorkspaces === workspaces.length || degradedNarratives > 0) {
+  if (failedWorkspaces > 0 || degradedNarratives > 0) {
     params.logger.warn(summary);
-  } else {
-    params.logger.info(summary);
+    const error = firstWorkspaceError ?? firstNarrativeError;
+    return {
+      handled: true,
+      reason: "memory-core: short-term dreaming degraded",
+      reply: {
+        isError: true,
+        text: `memory-core: dreaming sweep failed: ${failedWorkspaces} of ${workspaces.length} workspaces failed; ${degradedNarratives} narrative(s) degraded.${error ? ` First error: ${error}` : ""}`,
+      },
+    };
   }
+  params.logger.info(summary);
 
   return {
     handled: true,
-    reason:
-      degradedNarratives > 0
-        ? "memory-core: short-term dreaming degraded"
-        : "memory-core: short-term dreaming processed",
+    reason: "memory-core: short-term dreaming processed",
   };
 }
 

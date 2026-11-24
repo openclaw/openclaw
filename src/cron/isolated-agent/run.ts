@@ -513,8 +513,13 @@ async function runCronIsolatedAgentTurnInTrace(
               if (finalized.status === "error") {
                 outcome = "error";
                 outcomeError = finalized.error;
+                // A hook-handled turn never contacted the provider. Its error text
+                // must not become a provider auth failure or transient retry signal.
                 finalized.errorClassification =
-                  resolveCronAgentErrorClassification(terminalOutcome);
+                  resolveCronAgentErrorClassification(terminalOutcome) ??
+                  (execution.runResult.meta.providerStarted === false
+                    ? { kind: "reason", reason: "unknown" }
+                    : undefined);
                 finalized.interruptedByRestart =
                   resolveAgentRunErrorLifecycleFields(undefined, abortSignal).stopReason ===
                   "restart";

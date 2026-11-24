@@ -1150,13 +1150,14 @@ async function prepareRemDreaming(
 
 export async function runDreamingSweepPhases(
   params: DreamingSweepParams,
-): Promise<{ narratives: PreparedDreamNarrative[]; failed: boolean }> {
+): Promise<{ narratives: PreparedDreamNarrative[]; failed: boolean; error?: string }> {
   // All phases in one sweep share the same observation and report timestamp.
   const sweepNowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
   const narratives: PreparedDreamNarrative[] = [];
   let failed = false;
+  let error: string | undefined;
   async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
     phase: "light" | "rem",
     config: TConfig,
@@ -1194,15 +1195,16 @@ export async function runDreamingSweepPhases(
         narratives.push({ data, timezone: config.timezone, model: config.execution?.model });
       }
     } catch (err) {
+      error = formatErrorMessage(err);
       await appendFailedDreamingEvent({
         workspaceDir: params.workspaceDir,
         phase,
-        error: formatErrorMessage(err),
+        error,
         storageMode: config.storage.mode,
         nowMs: sweepNowMs,
         logger: params.logger,
       });
-      params.logger.error(`memory-core: ${phase} dreaming failed: ${formatErrorMessage(err)}`);
+      params.logger.error(`memory-core: ${phase} dreaming failed: ${error}`);
       failed = true;
     }
   }
@@ -1210,7 +1212,7 @@ export async function runDreamingSweepPhases(
   if (!failed) {
     await runPhase("rem", resolveMemoryRemDreamingConfig(params), prepareRemDreaming);
   }
-  return { narratives, failed };
+  return { narratives, failed, ...(error ? { error } : {}) };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
