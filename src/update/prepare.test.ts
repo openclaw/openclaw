@@ -1,150 +1,46 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processCensus from "../infra/openclaw-process-census.js";
-import * as openclawRoot from "../infra/openclaw-root.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   getUpdateRunAsync,
   getUpdateRunStatusAsync,
   listUpdateRunsAsync,
 } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
+import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import { defaultRuntime } from "../runtime.js";
-import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-schema-versions.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
+import { settleRunFromTrial } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { prepareGit } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
+import { bin, executable, node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
 import { readTrial, resolvePrefix } from "./store.js";
 import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
 const exec = promisify(execFile);
-let root: string;
-let bin: string;
-let node: string;
-const originalPath = process.env.PATH;
-
-async function executable(name: string, source: string) {
-  const file = path.join(bin, name);
-  await fs.writeFile(file, `#!${process.execPath}\n${source}\n`, { mode: 0o755 });
-  return file;
-}
-
-beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prepare-"));
-  bin = path.join(root, "bin");
-  await fs.mkdir(bin);
-  node = path.join(bin, "node");
-  await fs.symlink(process.execPath, node);
-  vi.stubEnv("PATH", `${bin}${path.delimiter}${originalPath}`);
-  const access = fs.access.bind(fs);
-  vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-    if (file === "/.dockerenv") {
-      throw Object.assign(new Error("No container marker in this fixture"), { code: "ENOENT" });
-    }
-    return access(file, mode);
-  });
-  for (const key of ["container", "DOCKER_CONTAINER", "OPENCLAW_CONTAINER", "IN_NIX_SHELL"]) {
-    vi.stubEnv(key, "");
-  }
-  // Every update reclaims earlier updaters' runtimes; keep that scan inside this fixture.
-  const tmp = path.join(root, "tmp");
-  await fs.mkdir(tmp);
-  for (const key of ["TMPDIR", "TMP", "TEMP"]) {
-    vi.stubEnv(key, tmp);
-  }
-  vi.stubEnv("OPENCLAW_HOME", root);
-  vi.spyOn(openclawRoot, "resolveOpenClawPackageRootsSync").mockReturnValue([]);
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  await fs.rm(root, { recursive: true, force: true });
-});
-
-async function repository(
-  failBuild = false,
-  engine = ">=1",
-  releaseAware = false,
-  schemaVersions?: OpenClawSchemaVersions,
-) {
-  const source = path.join(root, "source");
-  const bare = path.join(root, "remote.git");
-  const checkout = path.join(root, "checkout");
-  await fs.mkdir(source);
-  const git = (...args: string[]) => exec("git", ["-C", source, ...args]);
-  await git("init", "-b", "main");
-  await git("config", "user.email", "prepare@example.invalid");
-  await git("config", "user.name", "Prepare Fixture");
-  await fs.writeFile(
-    path.join(source, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "2026.11.21",
-      engines: { node: engine },
-      scripts: { build: "node build.cjs", "ui:build": "node ui.cjs" },
-      ...(schemaVersions ? { openclaw: { schemaVersions } } : {}),
-    }),
-  );
-  await fs.writeFile(path.join(source, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-  if (releaseAware) {
-    await fs.mkdir(path.join(source, "src", "update"), { recursive: true });
-    await fs.writeFile(path.join(source, "src", "update", "check-release.ts"), "");
-  }
-  await fs.writeFile(
-    path.join(source, "openclaw.mjs"),
-    `if (process.argv[3] === 'check-release') {
-      ${releaseAware ? "console.log(JSON.stringify({ok:true,surfaces:[]}));" : "throw new Error('unsupported command');"}
-    } else console.log(JSON.stringify({status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
-  );
-  await fs.writeFile(
-    path.join(source, "build.cjs"),
-    failBuild
-      ? "process.stderr.write('\\x1b[33mwarning: build notice\\x1b[0m\\n'.repeat(400) + '\\x1b[31mfixture build failed\\x1b[0m\\n'); process.exit(42);"
-      : "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.writeFileSync('dist/build-info.json', JSON.stringify({buildId:'fixture-build'}));",
-  );
-  await fs.writeFile(
-    path.join(source, "ui.cjs"),
-    "require('node:fs').writeFileSync('dist/ui-built', 'ready');",
-  );
-  await git("add", ".");
-  await git("commit", "-m", "fixture");
-  await exec("git", ["clone", "--bare", source, bare]);
-  await exec("git", ["clone", bare, checkout]);
-  const sha = (await exec("git", ["-C", source, "rev-parse", "HEAD"])).stdout.trim();
-  await executable(
-    "pnpm",
-    `
-const fs = require('node:fs');
-const cp = require('node:child_process');
-const args = process.argv.slice(2);
-if (args[0] === '--version') { console.log('10.0.0'); process.exit(0); }
-fs.appendFileSync('steps.txt', args.join(' ') + '\\n');
-if (args[0] === 'install') {
-  if (args.join(' ') !== 'install --frozen-lockfile') process.exit(9);
-  process.exit(0);
-}
-const pkg = JSON.parse(fs.readFileSync('package.json'));
-const result = cp.spawnSync(pkg.scripts[args[0]], {shell:true, stdio:'inherit'});
-process.exit(result.status ?? 1);
-`,
-  );
-  return { checkout, sha };
-}
-
 describe("release preparation", () => {
   it("keeps the repository HEAD recognizable as release-aware", async () => {
     const checkout = await fs.realpath(new URL("../../", import.meta.url));
@@ -238,6 +134,11 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
       });
       const { lastRun } = await getUpdateRunStatusAsync();
       expect(lastRun).toMatchObject({ status: "failed", reason: "build-failed" });
+      expect(lastRun?.steps.find(({ step }) => step === "prepare:install")).toMatchObject({
+        status: "completed",
+        endedAtMs: expect.any(Number),
+      });
+      expect(lastRun?.steps.find(({ step }) => step === "prepare:build")?.status).toBe("failed");
       const detail = lastRun?.steps.find(({ step }) => step === "outcome")?.detail;
       expect(detail).toContain("fixture build failed");
       expect(detail).not.toContain("\x1b");
@@ -250,6 +151,127 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+    }
+  });
+
+  it.each([
+    { version: "2026.11.6", maintained: true },
+    { version: VERSION, maintained: false },
+  ])(
+    "maintains plugins before a trial only for a downgrade ($version)",
+    async ({ version, maintained }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+      const marker = path.join(root, "plugin-maintained");
+      const { checkout } = await repository(
+        false,
+        ">=1",
+        true,
+        undefined,
+        `fs.writeFileSync(${JSON.stringify(marker)}, 'maintained');
+       console.log(JSON.stringify({status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
+        version,
+      );
+      try {
+        const run = await createUpdateRunAsync({ trigger: "cli", before: { version: VERSION } });
+        expect(
+          await prepareUpdate({
+            runId: run.runId,
+            runningRoot: checkout,
+            runningVersion: "2026.11.5",
+            channel: "dev",
+            node,
+          }),
+        ).toMatchObject({ status: "pending" });
+        expect(await fs.readFile(marker, "utf8").catch(() => null)).toBe(
+          maintained ? "maintained" : null,
+        );
+        const record = await getUpdateRunAsync(run.runId);
+        expect(record?.steps.filter(({ step }) => step === "plugins")).toMatchObject(
+          maintained ? [{ status: "completed" }] : [],
+        );
+        expect(await readTrial()).toMatchObject({ phase: "pending", version });
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
+
+  it("defers candidate plugin maintenance while the old Gateway owns an older state schema", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("GIT_COMMIT", "");
+    const lifecycleUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.lifecycleLease);
+    const database = openOpenClawStateDatabase({ env: process.env });
+    // Exercise the candidate's real plugin lease and schema admission, not plugin-result JSON.
+    const admission = `
+      import { withPluginLifecycleLease } from ${JSON.stringify(lifecycleUrl.href)};
+      import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(
+        resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href,
+      )};
+      try {
+        await withPluginLifecycleLease({waitMs:0}, async (lease) => lease.assertOwned());
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+      }
+    `;
+    const { checkout } = await repository(
+      false,
+      ">=1",
+      true,
+      { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+      `const child = spawnSync(process.execPath, ${JSON.stringify([
+        ...resolveRuntimeWorkerArgv(lifecycleUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        admission,
+      ])}, {stdio:'inherit'});
+       process.exit(child.status ?? 1);`,
+      VERSION,
+    );
+    const owner = acquireGatewayStateOwner({
+      databasePath: database.path,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(root, "openclaw.json"),
+        processNamespace: readGatewayLockProcessNamespace(),
+        role: "gateway",
+      },
+    });
+    try {
+      await owner.run(async () => {
+        const run = await createUpdateRunAsync({
+          trigger: "cli",
+          before: { version: "2026.11.6" },
+        });
+        // Keep the serving handles and ledger alive, but expose an older on-disk schema
+        // to the separate candidate process, whose compiled schema contract is current.
+        database.db.exec(`
+          PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+          UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1} WHERE meta_key = 'primary';
+        `);
+        const outcome = await prepareUpdate({
+          runId: run.runId,
+          runningRoot: checkout,
+          runningVersion: "2026.11.6",
+          channel: "dev",
+          node,
+          acceptCapabilities: true,
+        });
+        expect(outcome).toMatchObject({ status: "pending" });
+        const record = await getUpdateRunAsync(run.runId);
+        expect(record?.steps.filter(({ step }) => step === "plugins")).toEqual([]);
+        expect(await readTrial()).toMatchObject({ phase: "pending", acceptCapabilities: true });
+        owner.assertCurrent();
+      });
+    } finally {
+      database.db.exec(`
+        PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+        UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION} WHERE meta_key = 'primary';
+      `);
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      owner.release();
     }
   });
 
@@ -593,6 +615,14 @@ if (process.argv[2] !== 'install') {
           channel: "stable",
           node: runner,
         });
+        // Preparation owns these facts before the trial (or a later refusal) can settle.
+        const preparedRun = await getUpdateRunAsync(run.runId);
+        for (const name of ["pack", "install"]) {
+          expect(preparedRun?.steps.find(({ step }) => step === `prepare:${name}`)).toMatchObject({
+            status: "completed",
+            endedAtMs: expect.any(Number),
+          });
+        }
         if (!releaseAware) {
           expect(outcome).toMatchObject({
             status: "failed",
@@ -614,7 +644,7 @@ if (process.argv[2] !== 'install') {
         }
         expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
         expect(await fs.readFile(path.join(root, "release-commands"), "utf8")).toBe(
-          `check-release:${runtime}\nplugins:${runtime}\n`,
+          `check-release:${runtime}\n`,
         );
         expect(await readTrial(prefix)).toMatchObject({
           phase: "pending",
@@ -628,6 +658,20 @@ if (process.argv[2] !== 'install') {
           expect(result.stdout.trim()).toBe("running");
         }
         expect((await readTrial(prefix))?.phase).toBe("pending");
+        await settleRunFromTrial({
+          ...(await readTrial(prefix))!,
+          phase: "rolled-back",
+          outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
+        });
+        const rolledBack = await getUpdateRunAsync(run.runId);
+        expect(rolledBack?.status).toBe("failed");
+        for (const name of ["pack", "install"]) {
+          expect(rolledBack?.steps.find(({ step }) => step === `prepare:${name}`)).toMatchObject({
+            status: "completed",
+            startedAtMs: expect.any(Number),
+            endedAtMs: expect.any(Number),
+          });
+        }
       } finally {
         await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
@@ -651,10 +695,11 @@ describe("already-current update", () => {
 
   it.each([
     {
-      name: "a change",
+      name: "a change despite a runtime security warning",
       result: pluginResult({ changed: true }),
       changed: true,
       detail: undefined,
+      exitCode: 0,
     },
     {
       // The existing updater's warning result is a note, not a failed step.
@@ -671,6 +716,22 @@ describe("already-current update", () => {
       }),
       changed: false,
       detail: linked,
+      exitCode: 0,
+    },
+    {
+      name: "a plugin failure without failing the core update",
+      result: pluginResult({ status: "error", reason: "fixture plugin update failed" }),
+      changed: false,
+      detail: "fixture plugin update failed\nRun `openclaw plugins update --all` to retry.",
+      exitCode: 0,
+    },
+    {
+      name: "the CLI refusal after a runtime security warning",
+      result: pluginResult({ status: "error" }),
+      changed: false,
+      detail:
+        "OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\nRun `openclaw plugins update --all` to retry.",
+      exitCode: 1,
     },
   ])("still maintains plugins with the serving code and records $name", async (expected) => {
     const { checkout, sha } = await repository();
@@ -683,7 +744,11 @@ describe("already-current update", () => {
       [
         "import fs from 'node:fs';",
         "fs.writeFileSync('plugins-argv.json', JSON.stringify(process.argv.slice(2)));",
-        `console.log(${JSON.stringify(JSON.stringify(expected.result))});`,
+        "process.stderr.write('openclaw: SECURITY WARNING: upgrade Node to the recommended security patch level.\\n');",
+        expected.exitCode === 0
+          ? `console.log(${JSON.stringify(JSON.stringify(expected.result))});`
+          : "process.stderr.write('[openclaw] The CLI command failed.\\n[openclaw] Reason: OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\\n[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again.\\n');",
+        `process.exitCode = ${expected.exitCode};`,
       ].join("\n"),
     );
     try {
@@ -696,7 +761,7 @@ describe("already-current update", () => {
         channel: "dev",
         sha,
         node,
-        acceptCapabilities: expected.name === "a change",
+        acceptCapabilities: expected.changed,
       });
       expect(outcome).toMatchObject({ status: "current", pluginsChanged: expected.changed });
       expect(
@@ -709,12 +774,12 @@ describe("already-current update", () => {
         "dev",
         "--timeout",
         expect.stringMatching(/^\d+$/),
-        ...(expected.name === "a change" ? ["--accept-capabilities"] : []),
+        ...(expected.changed ? ["--accept-capabilities"] : []),
       ]);
       const record = await getUpdateRunAsync(run.runId);
       expect(record).toMatchObject({ status: "skipped", reason: "already-current" });
       const plugins = record?.steps.find(({ step }) => step === "plugins");
-      expect(plugins?.status).toBe("completed");
+      expect(plugins?.status).toBe(expected.result.status === "error" ? "failed" : "completed");
       expect(plugins?.detail).toBe(expected.detail);
     } finally {
       await closeOpenClawStateDatabaseAsync();
@@ -787,39 +852,6 @@ describe("update preflight", () => {
       }),
     ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
   });
-
-  it.each(["supported", "unsupported"] as const)(
-    "checks Bun capabilities (%s), not the target's Node engine",
-    async (status) => {
-      const bun = path.join(bin, "bun");
-      vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-        status,
-        version: "1.4.5",
-        sqliteVersion: status === "supported" ? "3.51.3" : "3.50.0",
-        nodeSharedSqlite: false,
-        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
-      });
-      const result = await preflight({
-        kind: "package",
-        target: {
-          kind: "package",
-          spec: "openclaw@2026.11.21",
-          version: "2026.11.21",
-          engines: { node: ">=999" },
-        },
-        prefix: root,
-        stateDir: root,
-        node: bun,
-        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
-      });
-      expect(result).toMatchObject(
-        status === "supported" ? { ok: true } : { ok: false, reason: "bun-runtime-unsupported" },
-      );
-      if (!result.ok) {
-        expect(result.message).toContain("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required.");
-      }
-    },
-  );
 
   it("uses an artifact target's engine metadata without querying it as a registry version", async () => {
     await executable(

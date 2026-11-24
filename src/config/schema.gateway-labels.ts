@@ -89,6 +89,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.roles.definitions.*.modelPolicy.allow": "Operator Role Allowed Models",
   "gateway.roles.definitions.*.modelPolicy.deny": "Operator Role Excluded Models",
   "gateway.roles.definitions.*.scopes": "Operator Role Scope Ceiling",
+  "gateway.roles.definitions.*.projects": "Operator Role Projects",
   "gateway.roles.definitions.*.workerProfiles": "Operator Role Worker Profiles",
   "gateway.roles.definitions.*.accessPolicyPlugin": "Operator Role Access Policy Plugin",
   "gateway.trustedProxies": "Gateway Trusted Proxy CIDRs",

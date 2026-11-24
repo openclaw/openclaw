@@ -50,7 +50,6 @@ export {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
-  checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
   resolveOpenAiCompatibleHttpSenderIsOwner,

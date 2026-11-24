@@ -58,7 +58,6 @@ it("admits an untiered person's session work only through their recorded, curren
     try {
       // The original connection's scopes, never an administrator substitute.
       expect(admitted.authority.scopes).toEqual(["operator.write"]);
-      expect(admitted.authority.assertCurrent).not.toThrow();
     } finally {
       admitted.release();
     }

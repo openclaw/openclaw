@@ -1,4 +1,7 @@
-import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
+import {
+  AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -524,6 +527,51 @@ export async function executeJobCoreWithTimeout(
   job: CronJob,
   opts?: CronCoreRunOptions,
 ) {
-  const result = await executeJobCoreWithTimeoutUnfinalized(state, job, opts);
+  let result = await executeJobCoreWithTimeoutUnfinalized(state, job, opts);
+  if (
+    job.payload.kind === "script" &&
+    result.interruptedByRestart &&
+    resolveCronDeliveryPlan(job).mode === "webhook" &&
+    result.deliveryState?.status === "not-delivered"
+  ) {
+    // The payload stays aborted. Its terminal notice belongs to the still-admitted
+    // scheduler run, with a short delivery budget inside the shutdown drain.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      const error = new Error("cron restart webhook delivery deadline exceeded");
+      error.name = "TimeoutError";
+      controller.abort(error);
+    }, 5_000);
+    timeout.unref?.();
+    try {
+      const fence = opts?.runReceipt
+        ? createCronCompletionDeliveryFence({
+            state,
+            job,
+            handle: opts.runReceipt,
+            activeJobMarker: opts.activeJobMarker,
+            signal: controller.signal,
+            settlingRestart: true,
+          })
+        : undefined;
+      result = await deliverPrimaryWebhook(
+        state,
+        job,
+        {
+          ...result,
+          error:
+            "Gateway restarted during the run. The script was not rerun. | " +
+            AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+        },
+        controller.signal,
+        {},
+        undefined,
+        opts?.activeJobMarker,
+        fence,
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
   return authorCronRunCompletion(job, result);
 }

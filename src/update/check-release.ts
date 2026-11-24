@@ -36,7 +36,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { listStateDatabases } from "./preflight.js";
 
-export type ReleaseSurface = { plugin: string; surface: string; error?: string };
+type ReleaseSurface = { plugin: string; surface: string; error?: string };
 export type CheckReleaseResult = { ok: boolean; reason?: string; surfaces: ReleaseSurface[] };
 
 /** No canonical state open: even a valid older schema must pass without migration. */

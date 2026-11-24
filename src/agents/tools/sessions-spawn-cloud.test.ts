@@ -157,7 +157,6 @@ describe("visible session placement and authority", () => {
         operatorAuthority: createTestOperatorAuthority({
           profileId: request.user,
           scopes: ["operator.write"],
-          assertCurrent: () => {},
         }),
       });
       const result = await withGatewayToolCallerIdentity(

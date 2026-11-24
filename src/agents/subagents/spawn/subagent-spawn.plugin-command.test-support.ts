@@ -172,11 +172,11 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
         },
         getPreDispatchAbortSignal: () => undefined,
         getDispatchAbortSignal: () => activeSignal,
-        assertProgressCurrent: source.authority.assertCurrent,
+        assertProgressCurrent: () => activeSignal?.throwIfAborted(),
         assertCurrentBindingRoute: async () => {
-          source.authority.assertCurrent();
+          activeSignal?.throwIfAborted();
         },
-        turnAdoption: { assertCurrent: source.authority.assertCurrent, adopt },
+        turnAdoption: { assertCurrent: () => activeSignal?.throwIfAborted(), adopt },
       };
       const params = buildCommandTestParams("/pstack-review", bound.cfg, ctx, { workspaceDir });
       params.sessionKey = parentSessionKey;

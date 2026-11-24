@@ -1,16 +1,22 @@
 import { isDeepStrictEqual } from "node:util";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
 import type { AssistantHistoryMessage, Context, Model } from "@openclaw/llm-core";
+import { extractSummaryText } from "../../../../packages/agent-core/src/harness/compaction/utils.js";
+import { consumeAgentCoreStream } from "../../../../packages/agent-core/src/runtime-deps.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { decideContextPressure } from "../../context-pressure.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../../session-raw-append-message.js";
-import { agentSessionRunProviderCompaction } from "../../sessions/agent-session-types.js";
+import {
+  agentSessionRunProviderCompaction,
+  agentSessionRunWarmCompaction,
+} from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
@@ -31,43 +37,69 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 
-/** Only the native ChatGPT request path owns V2; proxies keep their existing policy. */
-export function isChatGPTV2CompactionEligible(params: {
+/**
+ * How the request boundary compacts: the native ChatGPT checkpoint, or a warm text
+ * summary sent as the session's next request plus one summarize instruction.
+ */
+export type RequestBoundaryCompaction = "native-checkpoint" | "text";
+
+/**
+ * The boundary compacts sessions whose summary may come from the session's own
+ * model and history. Context engines, registered providers, a separate
+ * compaction model and memory-flush runs keep their own compaction owners.
+ */
+export function requestBoundaryOwnsCompaction(params: {
   config?: OpenClawConfig;
-  model: Pick<Model, "api" | "provider" | "baseUrl">;
-  extraParams: Record<string, unknown>;
   compactionEnabled: boolean;
-  compactionReplayEnabled: boolean;
   contextEngineOwnsCompaction?: boolean;
   operation?: string;
+  trigger?: string;
 }): boolean {
   return (
     params.compactionEnabled &&
-    params.compactionReplayEnabled &&
     !params.contextEngineOwnsCompaction &&
     !params.config?.agents?.defaults?.compaction?.model?.trim() &&
     !params.config?.agents?.defaults?.compaction?.provider &&
     params.operation !== "settled-tool-finalization" &&
-    params.extraParams.responsesCompactEndpoint !== false &&
-    params.extraParams.responsesServerCompaction !== false &&
-    usesNativeOpenAICodexResponsesBackend(params.model)
+    params.trigger !== "memory"
   );
 }
 
+/** Capability, not provider identity, selects the native checkpoint variant. */
+export function resolveRequestBoundaryCompaction(
+  params: Parameters<typeof requestBoundaryOwnsCompaction>[0] & {
+    model: Pick<Model, "api" | "provider" | "baseUrl">;
+    extraParams: Record<string, unknown>;
+    compactionReplayEnabled: boolean;
+  },
+): RequestBoundaryCompaction | undefined {
+  if (!requestBoundaryOwnsCompaction(params)) {
+    return undefined;
+  }
+  return params.compactionReplayEnabled &&
+    params.extraParams.responsesCompactEndpoint !== false &&
+    params.extraParams.responsesServerCompaction !== false &&
+    usesNativeOpenAICodexResponsesBackend(params.model)
+    ? "native-checkpoint"
+    : "text";
+}
+
 /** One attempt-local boundary, called only after the normal prompt projections have settled. */
-export function createChatGPTV2CompactionBoundary(params: {
+export function createRequestBoundaryCompaction(params: {
+  variant: RequestBoundaryCompaction;
   session: AgentSession;
   config?: OpenClawConfig;
   contextTokenBudget: number;
   reserveTokens: number;
   runId?: string;
-  /** Soft V2 fallbacks may stop only where the tool batch can continue. */
+  /** Soft fallbacks and text commits may stop only where the tool batch can continue. */
   isToolBoundarySafe?: () => boolean;
   timeoutMs: number;
   authProfileId?: string;
   assertActive: () => void;
   withTranscriptWrite: <T>(write: () => Promise<T>) => Promise<T>;
-  onFallback: (request: MidTurnPrecheckRequest) => void;
+  /** Receives the precheck request that ends this attempt for the run's recovery. */
+  onPrecheck: (request: MidTurnPrecheckRequest) => void;
   hookContext?: Pick<
     Parameters<typeof runCompactionHooks>[0],
     | "sessionId"
@@ -89,9 +121,12 @@ export function createChatGPTV2CompactionBoundary(params: {
 ) => Promise<AssistantHistoryMessage | undefined> {
   let failed = false;
   return async (streamFn, model, context, options, requestAnchor, fixedTokenPressure) => {
-    if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {
+    if (params.session.isCompacting) {
       return undefined;
     }
+    const native =
+      params.variant === "native-checkpoint" && usesNativeOpenAICodexResponsesBackend(model);
+    const label = native ? "ChatGPT V2" : "Warm request";
     const requestOptions = { ...options, authProfileId: params.authProfileId };
     const assertActive = () => {
       requestOptions.signal?.throwIfAborted();
@@ -124,50 +159,173 @@ export function createChatGPTV2CompactionBoundary(params: {
     const outgoing = preflight
       ? (preflight.compactionReplay ?? preflight)
       : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
-    // V2 must send the complete window plus its trigger. Leave room for the
-    // next tool result instead of waiting for the client's reserve-based limit.
+    // The boundary sends the complete window plus its summary request. It starts at
+    // the client threshold ratio, capped by the reserve-based prompt budget, so every
+    // route compacts at the same occupancy and the summary request keeps headroom.
     const contextTokens = Math.min(
       params.contextTokenBudget,
       model.contextWindow ?? params.contextTokenBudget,
     );
     const softTriggerTokens = Math.min(
       outgoing.promptBudgetBeforeReserve,
-      Math.max(1, Math.floor(contextTokens * 0.9)),
+      Math.max(
+        1,
+        resolveCompactionThreshold({ contextWindowTokens: contextTokens, reserveTokensFloor: 0 }),
+      ),
     );
     if (outgoing.estimatedPromptTokens < softTriggerTokens) {
       return undefined;
     }
     const fallback = (reason: string) => {
-      // The early V2 trigger must not move the client's compaction threshold, and a
-      // soft fallback waits for a boundary where the tool batch can continue.
+      // The V2 trigger must not move the client's compaction threshold, and a
+      // soft fallback waits for a boundary where the tool batch can continue. The
+      // text variant replaces the client threshold, so its maintenance is due.
+      const maintenanceDue = !native || outgoing.route !== "fits";
       const pressure = decideContextPressure({
         estimatedPromptTokens: outgoing.estimatedPromptTokens,
         windowTokens: model.contextWindow ?? params.contextTokenBudget,
-        maintenanceDue: outgoing.route !== "fits",
-        boundarySafe: outgoing.route !== "fits" && (params.isToolBoundarySafe?.() ?? false),
+        maintenanceDue,
+        boundarySafe: maintenanceDue && (params.isToolBoundarySafe?.() ?? false),
         runId: params.runId,
       });
       if (!pressure) {
         return undefined;
       }
-      log.warn(`ChatGPT V2 compaction unavailable; falling back to client compaction: ${reason}`);
+      log.warn(`${label} compaction unavailable; falling back to client compaction: ${reason}`);
       const request: MidTurnPrecheckRequest = {
         ...outgoing,
         pressure,
         // V2 exhausted this boundary. Route to the existing durable client compactor.
         route: "compact_only",
       };
-      params.onFallback(request);
+      params.onPrecheck(request);
       throw new MidTurnPrecheckSignal(request);
     };
     if (outgoing.estimatedPromptTokens > (model.contextWindow ?? params.contextTokenBudget)) {
       return fallback("the outgoing request exceeds the model context window");
     }
     if (failed) {
-      return fallback("an earlier V2 attempt in this run failed");
+      return fallback(`an earlier ${label} attempt in this run failed`);
     }
     if (params.session.agent.state.pendingToolCalls.size > 0) {
       return fallback("tool calls are still pending");
+    }
+    if (!native) {
+      // A commit ends this attempt so its retry starts from the compacted transcript.
+      // The shared pressure owner allows that only at a settled tool boundary and
+      // not after this run declined maintenance that could not reduce context.
+      const pressure = decideContextPressure({
+        estimatedPromptTokens: outgoing.estimatedPromptTokens,
+        windowTokens: model.contextWindow ?? params.contextTokenBudget,
+        maintenanceDue: true,
+        boundarySafe: params.isToolBoundarySafe?.() ?? false,
+        runId: params.runId,
+      });
+      if (pressure !== "maintenance") {
+        return undefined;
+      }
+      const hooks =
+        params.hookContext || params.postCompaction
+          ? await import("../compaction-hooks.js")
+          : undefined;
+      if (params.hookContext) {
+        await hooks!.runCompactionHooks({
+          ...params.hookContext,
+          assertActive,
+          phase: "before",
+          metrics: {
+            messageCountOriginal: context.messages.length,
+            messageCountBefore: context.messages.length,
+            tokenCountOriginal: outgoing.estimatedPromptTokens,
+            tokenCountBefore: outgoing.estimatedPromptTokens,
+          },
+        });
+      }
+      let failure = "compaction did not complete";
+      const compacted = await params.session[agentSessionRunWarmCompaction](
+        async (instructions, signal) => {
+          try {
+            const response = await compactWithSafetyTimeout(
+              (timeoutSignal) =>
+                // The unchanged request plus one instruction reads the warm prompt cache;
+                // the instruction is never replayed, so it takes no cache checkpoint.
+                consumeAgentCoreStream(
+                  streamFn(
+                    model,
+                    {
+                      ...context,
+                      messages: [
+                        ...context.messages,
+                        {
+                          role: "user",
+                          content: [{ type: "text", text: instructions }],
+                          timestamp: Date.now(),
+                          cacheCheckpoint: false,
+                        },
+                      ],
+                    },
+                    { ...requestOptions, signal: timeoutSignal },
+                  ),
+                ),
+              params.timeoutMs,
+              {
+                abortSignal: requestOptions.signal
+                  ? AbortSignal.any([signal, requestOptions.signal])
+                  : signal,
+              },
+            );
+            recordSessionModelUsage(params.session.sessionManager, response.usage);
+            const summary =
+              response.stopReason === "stop" &&
+              !response.content.some((block) => block.type === "toolCall")
+                ? extractSummaryText(response)
+                : undefined;
+            if (summary === undefined) {
+              throw new Error(
+                `the reply ended with ${response.stopReason} and no usable summary${
+                  response.errorMessage ? `: ${response.errorMessage}` : ""
+                }`,
+              );
+            }
+            return summary;
+          } catch (error) {
+            failure = formatErrorMessage(error);
+            throw error;
+          }
+        },
+        Boolean(params.hookContext),
+      );
+      assertActive();
+      if (!compacted) {
+        failed = true;
+        return fallback(failure);
+      }
+      if (params.postCompaction) {
+        await hooks!.runPostCompactionSideEffects({ ...params.postCompaction, assertActive });
+      }
+      if (params.hookContext) {
+        await hooks!.runCompactionHooks({
+          ...params.hookContext,
+          assertActive,
+          phase: "after",
+          messageCountAfter: params.session.agent.state.messages.length,
+          tokensAfter: compacted.tokensAfter,
+          compactedCount: context.messages.length,
+          tokensBefore: compacted.result.tokensBefore,
+          firstKeptEntryId: compacted.result.firstKeptEntryId,
+          summaryLength: compacted.result.summary.length,
+          sessionFile: params.session.sessionFile ?? "",
+        });
+      }
+      // The loop still holds the uncompacted context. Stop at this settled boundary;
+      // the run continues from the compacted transcript without compacting again.
+      const request: MidTurnPrecheckRequest = {
+        ...outgoing,
+        pressure: "maintenance",
+        route: "compact_only",
+      };
+      params.onPrecheck(request);
+      throw new MidTurnPrecheckSignal(request);
     }
     const manager = params.session.sessionManager;
     const coveredLeaf = manager.getLeafId();

@@ -1,5 +1,6 @@
 import { zstdDecompressSync } from "node:zlib";
 import { createApiRegistry } from "@openclaw/ai";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import { Type } from "typebox";
@@ -24,11 +25,11 @@ import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
-import {
-  createChatGPTV2CompactionBoundary,
-  isChatGPTV2CompactionEligible,
-} from "./chatgpt-v2-compaction.js";
 import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
+import {
+  createRequestBoundaryCompaction,
+  resolveRequestBoundaryCompaction,
+} from "./request-boundary-compaction.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -273,6 +274,7 @@ async function fixture(
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withSessionManagerWrite(sessionManager, write);
   const boundaryParams = {
+    variant: "native-checkpoint" as const,
     session,
     contextTokenBudget,
     reserveTokens: 2_000,
@@ -282,11 +284,11 @@ async function fixture(
     authProfileId: "fixture-profile",
     assertActive: () => {},
     withTranscriptWrite,
-    onFallback,
+    onPrecheck: onFallback,
   };
   const onModelRequest =
     vi.fn<NonNullable<Parameters<typeof submitEmbeddedAttemptPrompt>[0]["onModelRequest"]>>();
-  const boundary = createChatGPTV2CompactionBoundary(boundaryParams);
+  const boundary = createRequestBoundaryCompaction(boundaryParams);
   const submit = (prompt = "current request") =>
     submitEmbeddedAttemptPrompt({
       attempt: { sessionId: session.sessionId },
@@ -397,7 +399,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(reopened.execute).not.toHaveBeenCalled();
   });
 
-  it("compacts a settled 90% window before a large tool result reaches the next boundary", async () => {
+  it("compacts a settled window above the trigger before a large tool result reaches the next boundary", async () => {
     const f = await largeWindowFixture();
     const manager = f.sessionManager;
     f.execute.mockResolvedValue({
@@ -435,13 +437,11 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
   });
 
   it.each([
-    { window: 500_000, reserve: 20_000, tokens: 449_000, compact: false },
-    { window: 500_000, reserve: 20_000, tokens: 450_000, compact: true },
     { window: 32_000, reserve: 8_000, tokens: 23_900, compact: false },
     { window: 32_000, reserve: 8_000, tokens: 24_000, compact: true },
-  ])("uses the earlier V2 threshold at $tokens / $window tokens", async (test) => {
+  ])("caps the V2 threshold by the reserve at $tokens / $window tokens", async (test) => {
     const f = await fixture(SessionManager.inMemory(), false);
-    const boundary = createChatGPTV2CompactionBoundary({
+    const boundary = createRequestBoundaryCompaction({
       ...f.boundaryParams,
       contextTokenBudget: test.window,
       reserveTokens: test.reserve,
@@ -458,9 +458,45 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(f.onFallback).not.toHaveBeenCalled();
   });
 
+  it.each(["native-checkpoint", "text"] as const)(
+    "%s boundary compaction starts at the client threshold on a 200k window",
+    async (variant) => {
+      const threshold = resolveCompactionThreshold({
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 20_000,
+      });
+      expect(threshold).toBe(170_000);
+      for (const tokens of [threshold - 1_000, threshold]) {
+        requests = [];
+        const f = await fixture(SessionManager.inMemory(), variant === "text");
+        // The text summary needs history older than the retained tail.
+        f.session.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 500 } });
+        const boundary = createRequestBoundaryCompaction({
+          ...f.boundaryParams,
+          variant,
+          contextTokenBudget: 200_000,
+          reserveTokens: 20_000,
+        });
+        await boundary(
+          f.session.agent.streamFn,
+          { ...model, contextWindow: 200_000 },
+          { messages: [] },
+          { sessionId: f.session.sessionId },
+          { requestIndex: 1, messageCount: 0, contextTokens: tokens },
+        ).catch((error: unknown) => {
+          // The text variant ends the attempt after committing its summary.
+          if (!(error instanceof MidTurnPrecheckSignal)) {
+            throw error;
+          }
+        });
+        expect(requests, `${variant} at ${tokens}`).toHaveLength(tokens < threshold ? 0 : 1);
+      }
+    },
+  );
+
   it("skips soft compaction while tools are pending without lowering the client threshold", async () => {
     const f = await fixture(SessionManager.inMemory(), false);
-    const boundary = createChatGPTV2CompactionBoundary({
+    const boundary = createRequestBoundaryCompaction({
       ...f.boundaryParams,
       contextTokenBudget: 500_000,
       reserveTokens: 20_000,
@@ -491,7 +527,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
 
   it("sends a fitting request over the client threshold while its tool batch is open", async () => {
     const f = await fixture(SessionManager.inMemory(), false);
-    const boundary = createChatGPTV2CompactionBoundary({
+    const boundary = createRequestBoundaryCompaction({
       ...f.boundaryParams,
       contextTokenBudget: 500_000,
       reserveTokens: 20_000,
@@ -542,7 +578,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     const f = await fixture(SessionManager.inMemory(), false);
     // Mirrors the mid-turn admission contract: a measured 15,000-token request with
     // long unchanged instructions plus a 12,000-character tool result fits 24,576.
-    const boundary = createChatGPTV2CompactionBoundary({
+    const boundary = createRequestBoundaryCompaction({
       ...f.boundaryParams,
       contextTokenBudget: 32_768,
       reserveTokens: 8_192,
@@ -606,7 +642,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       );
       const f = await fixture(manager, false, { nativeProvider });
       const warn = vi.spyOn(log, "warn");
-      const boundary = createChatGPTV2CompactionBoundary({
+      const boundary = createRequestBoundaryCompaction({
         ...f.boundaryParams,
         contextTokenBudget: 32_000,
       });
@@ -694,7 +730,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
 
   it("preserves retained input despite configured log redaction patterns", async () => {
     const f = await fixture();
-    const boundary = createChatGPTV2CompactionBoundary({
+    const boundary = createRequestBoundaryCompaction({
       ...f.boundaryParams,
       config: { logging: { redactPatterns: ["PRIVATE_VALUE"] } },
     });
@@ -716,7 +752,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
   it("never falls back after a committed checkpoint or caller abort", async () => {
     const f = await fixture();
     const failure = new Error("write handle release failed");
-    const boundary = createChatGPTV2CompactionBoundary({
+    const boundary = createRequestBoundaryCompaction({
       ...f.boundaryParams,
       withTranscriptWrite: async (write) => {
         await f.boundaryParams.withTranscriptWrite(write);
@@ -768,27 +804,32 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     ).toBe(true);
   });
 
-  it("keeps explicit opt-outs, proxy routes and custom compaction owners out of V2", () => {
+  it("selects the native checkpoint by capability and leaves custom compaction owners alone", () => {
     const eligible = {
       model,
       extraParams: {},
       compactionEnabled: true,
       compactionReplayEnabled: true,
     };
-    expect(isChatGPTV2CompactionEligible(eligible)).toBe(true);
+    expect(resolveRequestBoundaryCompaction(eligible)).toBe("native-checkpoint");
     for (const override of [
-      { compactionEnabled: false },
       { compactionReplayEnabled: false },
       { extraParams: { responsesCompactEndpoint: false } },
       { extraParams: { responsesServerCompaction: false } },
+      { model: { ...model, baseUrl: "https://proxy.invalid" } },
+      { model: { ...model, api: "openai-responses" } },
+    ]) {
+      expect(resolveRequestBoundaryCompaction({ ...eligible, ...override })).toBe("text");
+    }
+    for (const override of [
+      { compactionEnabled: false },
       { contextEngineOwnsCompaction: true },
       { config: { agents: { defaults: { compaction: { model: "other/model" } } } } },
       { config: { agents: { defaults: { compaction: { provider: "custom" } } } } },
       { operation: "settled-tool-finalization" },
-      { model: { ...model, baseUrl: "https://proxy.invalid" } },
-      { model: { ...model, api: "openai-responses" } },
+      { trigger: "memory" },
     ]) {
-      expect(isChatGPTV2CompactionEligible({ ...eligible, ...override })).toBe(false);
+      expect(resolveRequestBoundaryCompaction({ ...eligible, ...override })).toBeUndefined();
     }
   });
 });

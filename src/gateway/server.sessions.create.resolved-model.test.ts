@@ -52,7 +52,6 @@ const operatorAuthority = (
     profileId,
     scopes: ["operator.write"],
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({ cfg, policy }),
   });
 
