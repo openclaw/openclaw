@@ -93,12 +93,12 @@ export async function tryAdoptInstalledPackageForGateway(opts: {
   return prepared?.phase === "pending" ? prepared.runId : undefined;
 }
 
-/** The launcher owns adoption's outcome; observing it must not reopen the state store. */
-export async function waitForReleaseUpdateFailure(runId: string): Promise<string | undefined> {
+/** Preparation serializes one trial; its launcher-owned outcome is observed without opening state. */
+export async function waitForReleaseUpdateFailure(): Promise<string | undefined> {
   let deadline = Date.now() + TRIAL_BUDGET_MS;
   for (;;) {
     const trial = await readTrial();
-    if (!trial || trial.runId !== runId) {
+    if (!trial) {
       return "The update trial is no longer available. Run `openclaw update status` to see the result.";
     }
     if (trial.phase === "committed") {

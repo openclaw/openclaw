@@ -91,7 +91,12 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import { assertGatewayServiceActionAllowed, renderGatewayServiceStartHints } from "./shared.js";
+import {
+  assertGatewayServiceActionAllowed,
+  renderGatewayServiceStartHints,
+  renderGatewayServiceStopHints,
+  renderGatewayServiceUninstallHints,
+} from "./shared.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -204,19 +209,6 @@ function isGatewaySignalRestartResult(
   return result !== null && "pid" in result && typeof result.pid === "number";
 }
 
-function renderGatewayServiceStopHints(): string[] {
-  return [
-    `Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the service, then retry.`,
-  ];
-}
-
-function renderGatewayServiceUninstallHints(): string[] {
-  return [
-    ...renderGatewayServiceStopHints(),
-    "To remove the service manually, see https://docs.openclaw.ai/install/uninstall#manual-service-removal-cli-not-installed",
-  ];
-}
-
 /** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceActionAllowed("uninstall", "uninstall the gateway service");
@@ -265,10 +257,15 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   }
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
   let context = await resolveGatewayLifecycleContext(service);
-  await releaseOpenClawStateDatabaseCustody();
+  const beforeServiceMutation = () => {
+    assertGatewayServiceActionAllowed("start", "start the gateway");
+    return releaseOpenClawStateDatabaseCustody();
+  };
+  await beforeServiceMutation();
   return await runServiceStart({
     serviceNoun: "Gateway",
     service,
+    beforeServiceMutation,
     renderStartHints: renderGatewayServiceStartHints,
     onNotLoaded:
       process.platform === "darwin"
@@ -292,6 +289,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         warn,
         state,
         issues,
+        beforeServiceMutation,
       });
       if (result) {
         context = createGatewayLifecycleContext(service, result.lifecycle);
@@ -340,11 +338,11 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         }
         if (preparedRunId) {
           const trial = await readTrial();
-          if (trial?.runId === preparedRunId && trial.phase === "pending") {
+          if (trial?.phase === "pending") {
             warnings.push(`OpenClaw ${trial.version} is prepared. Run: openclaw gateway restart`);
             return;
           }
-          const failure = await waitForReleaseUpdateFailure(preparedRunId);
+          const failure = await waitForReleaseUpdateFailure();
           if (failure) {
             fail(failure);
           }
@@ -471,6 +469,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartWaitMs = restartHealthAttempts * DEFAULT_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
   let unmanagedRestartWait: ReturnType<typeof resolveRestartListenerHealthWait> | undefined;
+  const beforeServiceMutation = () => {
+    assertGatewayServiceActionAllowed("restart", "restart the gateway");
+    return releaseOpenClawStateDatabaseCustody();
+  };
 
   return runServiceRestart({
     serviceNoun: "Gateway",
@@ -482,10 +484,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     readDriftContext: () => ({ config: callerConfig ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
-    beforeServiceMutation: () => {
-      assertGatewayServiceActionAllowed("restart", "restart the gateway");
-      return releaseOpenClawStateDatabaseCustody();
-    },
+    beforeServiceMutation,
     restartOwnedProcess: preserveDefinition
       ? undefined
       : async () => {
@@ -541,6 +540,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             warn,
             state,
             issues,
+            beforeServiceMutation,
           });
           // Repair publishes its replacement definition and auth before native activation.
           if (result) {
@@ -641,7 +641,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (preparedRunId) {
-        const failure = await waitForReleaseUpdateFailure(preparedRunId);
+        const failure = await waitForReleaseUpdateFailure();
         if (failure) {
           fail(failure);
         }
@@ -684,6 +684,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             env: process.env,
             stdout,
             warn,
+            beforeMutation: beforeServiceMutation,
             onMutation: createGatewayLifecycleMutationAudit({ action: "restart" }),
           });
           if (retryRestart.outcome === "scheduled") {

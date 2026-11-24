@@ -60,6 +60,7 @@ vi.mock("./lifecycle-core.js", () => ({
   runServiceStop: vi.fn(),
   runServiceUninstall: vi.fn(),
 }));
+// mock-isolation: lifecycle observations use synthetic repair facts and must not install a real service.
 vi.mock("./start-repair.js", () => ({ repairLoadedGatewayServiceForStart }));
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
@@ -174,6 +175,7 @@ describe("Gateway service readiness", () => {
         activated = true;
         await params.postRestartCheck?.({
           ...createDaemonActionContext({ action: "restart", json: true }),
+          json: true,
           activationAccepted: true,
         });
         return true;

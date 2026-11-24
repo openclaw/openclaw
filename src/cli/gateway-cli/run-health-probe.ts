@@ -8,8 +8,15 @@ export function isGatewayHealthzResponse(statusCode: number | undefined, body: s
     return false;
   }
   try {
-    const payload = JSON.parse(body) as { ok?: unknown; status?: unknown };
-    return payload.ok === true && payload.status === "live";
+    const payload: unknown = JSON.parse(body);
+    return (
+      typeof payload === "object" &&
+      payload !== null &&
+      "ok" in payload &&
+      payload.ok === true &&
+      "status" in payload &&
+      payload.status === "live"
+    );
   } catch {
     return false;
   }

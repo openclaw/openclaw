@@ -12,7 +12,7 @@ vi.mock("../../daemon/runtime-pin-state.js", () => ({
   readDaemonRuntimePin: pinSnapshotMock,
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayServiceState } from "../../daemon/service.js";
+import type { GatewayService, GatewayServiceState } from "../../daemon/service.js";
 import { requireMockCallArg } from "./lifecycle.test-helpers.js";
 
 const buildGatewayInstallPlanMock = vi.hoisted(() =>
@@ -82,6 +82,7 @@ vi.mock("../../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken: resolveGatewayInstallTokenMock,
 }));
 
+// mock-isolation: config handoff must stay in-memory and reject reads after synthetic activation.
 vi.mock("../../config/io.js", () => ({
   readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
   createConfigIO: () => ({ readBestEffortConfig: readBestEffortConfigMock }),
@@ -121,7 +122,10 @@ const homeEnv = { HOME: "/home/openclaw" };
 type ServiceCommand = NonNullable<GatewayServiceState["command"]>;
 
 function repairFixture(command: Partial<ServiceCommand> = {}, loaded = true) {
-  const service = { install: vi.fn(async () => {}), isLoaded: vi.fn(async () => loaded) };
+  const service = {
+    install: vi.fn<GatewayService["install"]>(async () => {}),
+    isLoaded: vi.fn(async () => loaded),
+  };
   const state: GatewayServiceState = {
     installed: true,
     loadState: { status: "loaded" },
@@ -181,22 +185,28 @@ describe("repairLoadedGatewayServiceForStart", () => {
     "publishes planned command and newly generated auth before %s activation",
     async (action) => {
       const { service, params } = repairFixture();
+      let custodyHeld = true;
+      const beforeServiceMutation = async () => {
+        custodyHeld = false;
+      };
       const config = { gateway: { auth: { token: "fresh-repair-token" } } };
       resolveGatewayInstallTokenMock.mockImplementation(async () => {
         readBestEffortConfigMock.mockResolvedValue(config);
         return { warnings: [] };
       });
-      service.install.mockImplementation(async () => {
+      service.install.mockImplementation(async (args) => {
         readBestEffortConfigMock.mockRejectedValue(new Error("Config custody was handed off."));
         readConfigFileSnapshotForWriteMock.mockRejectedValue(
           new Error("Source config custody was handed off."),
         );
+        await args.beforeMutation?.();
+        expect(custodyHeld).toBe(false);
       });
 
       const result =
         action === "restart"
-          ? await repairLoadedGatewayServiceForStart({ ...params, action })
-          : await repairLoadedGatewayServiceForStart(params);
+          ? await repairLoadedGatewayServiceForStart({ ...params, action, beforeServiceMutation })
+          : await repairLoadedGatewayServiceForStart({ ...params, beforeServiceMutation });
 
       expect(result.lifecycle.config).toBe(config);
       expect(result.lifecycle).toMatchObject({

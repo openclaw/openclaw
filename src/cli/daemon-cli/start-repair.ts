@@ -19,6 +19,7 @@ import {
   readDaemonRuntimePin,
 } from "../../daemon/runtime-pin-state.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
+import type { GatewayServiceEnvironmentValueSource } from "../../daemon/service-types.js";
 import {
   assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
@@ -46,6 +47,7 @@ type GatewayServiceRepairParams = {
   json: boolean;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
+  beforeServiceMutation?: () => void | Promise<void>;
 };
 
 type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
@@ -273,16 +275,24 @@ export async function repairLoadedGatewayServiceForStart(
   const plannedCommand = {
     programArguments,
     workingDirectory,
-    environment,
-    environmentValueSources,
+    environment: Object.fromEntries(
+      Object.entries(environment).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+    environmentValueSources: Object.fromEntries(
+      Object.entries(environmentValueSources ?? {}).filter(
+        (entry): entry is [string, GatewayServiceEnvironmentValueSource] => entry[1] !== undefined,
+      ),
+    ),
   };
   let command: GatewayServiceCommandConfig = plannedCommand;
   const previousCommand = params.state.command;
   if (previousCommand?.managedOverrides?.environment) {
-    const effectiveEnvironment = { ...environment };
-    const effectiveSources = { ...environmentValueSources };
+    const effectiveEnvironment = { ...plannedCommand.environment };
+    const effectiveSources = { ...plannedCommand.environmentValueSources };
     for (const key of new Set([
-      ...Object.keys(environment ?? {}),
+      ...Object.keys(plannedCommand.environment),
       ...Object.keys(previousCommand.environment ?? {}),
     ])) {
       if (!hasGatewayServiceEnvironmentOverride(previousCommand, [key])) {
@@ -322,6 +332,7 @@ export async function repairLoadedGatewayServiceForStart(
     env: installEnv,
     stdout: params.stdout,
     warn: params.warn,
+    beforeMutation: params.beforeServiceMutation,
     programArguments,
     workingDirectory,
     environment,

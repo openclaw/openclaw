@@ -21,7 +21,6 @@ import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
-import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -41,11 +40,7 @@ import {
 } from "./response.js";
 import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
-import type { DaemonLifecycleOptions } from "./types.js";
-
-type ServiceLifecycleOptions = DaemonLifecycleOptions & {
-  restartIntent?: GatewayRestartIntent;
-};
+import type { ServiceLifecycleOptions } from "./types.js";
 
 type ServiceTarget = {
   serviceNoun: string;
@@ -207,6 +202,7 @@ export async function runServiceStart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: ServiceLifecycleOptions;
+  beforeServiceMutation?: () => void | Promise<void>;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"started"> | null>;
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
@@ -297,6 +293,7 @@ export async function runServiceStart(params: {
         env: process.env,
         stdout,
         warn,
+        beforeMutation: params.beforeServiceMutation,
         onMutation: createServiceLifecycleMutationAudit({
           serviceNoun: params.serviceNoun,
           action: "start",
@@ -680,6 +677,7 @@ export async function runServiceRestart(params: {
           env: process.env,
           stdout,
           warn,
+          beforeMutation: params.beforeServiceMutation,
           onMutation: gatewayRestartAudit,
         });
       } catch (err) {

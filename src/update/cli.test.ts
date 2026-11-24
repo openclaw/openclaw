@@ -616,20 +616,14 @@ it.each([
     runsGet.push(() => {
       throw new Error("An adoption waiter must not call the Gateway");
     });
-    expect(await waitForReleaseUpdateFailure(trial.runId)).toBe(expected);
+    expect(await waitForReleaseUpdateFailure()).toBe(expected);
     expect(readRun).not.toHaveBeenCalled();
     expect(runsGet).toHaveLength(1);
   },
 );
 
-it("does not settle an adopted restart from another run's trial", async () => {
-  await createTrialPending({
-    runId: "another-run",
-    target: "releases/new/openclaw",
-    previous: "releases/old/openclaw",
-    version: "2026.11.10",
-  });
-  expect(await waitForReleaseUpdateFailure("adopted-run")).toBe(
+it("reports when the sole prepared trial is no longer available", async () => {
+  expect(await waitForReleaseUpdateFailure()).toBe(
     "The update trial is no longer available. Run `openclaw update status` to see the result.",
   );
 });
@@ -648,7 +642,7 @@ it.each(["pending", "trial", "restoring"] as const)(
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(now)
       .mockReturnValue(now + TRIAL_BUDGET_MS);
-    expect(await waitForReleaseUpdateFailure(trial.runId)).toBe(
+    expect(await waitForReleaseUpdateFailure()).toBe(
       "The update did not finish in time. Run `openclaw update status` to see it.",
     );
   },
@@ -665,6 +659,6 @@ it("waits for activation of an old pending trial instead of expiring its prepara
     .spyOn(releaseStore, "readTrial")
     .mockResolvedValueOnce({ ...trial, createdAt: Date.now() - 2 * TRIAL_BUDGET_MS })
     .mockResolvedValue({ ...trial, phase: "committed" });
-  expect(await waitForReleaseUpdateFailure(trial.runId)).toBeUndefined();
+  expect(await waitForReleaseUpdateFailure()).toBeUndefined();
   expect(readTrial).toHaveBeenCalledTimes(2);
 });
