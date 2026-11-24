@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -149,6 +150,14 @@ it("keeps an all-cold catalog disabled with provider setup", async () => {
       } satisfies Pick<ModelCatalogEntry, "available" | "unavailableReason">),
     ),
   );
+  context.settingsAgentSelection = createAgentSelectionCapability(
+    {
+      connection: { gatewayUrl: "ws://fixture" },
+      snapshot: { assistantAgentId: "main" },
+      subscribe: () => () => {},
+    },
+    { state: { agentsList: null }, subscribe: () => () => {} },
+  );
   control.load(context, "main", true);
   await vi.waitFor(() =>
     expect(draw().querySelector("[data-chat-model-auth-state]")).not.toBeNull(),
@@ -163,7 +172,10 @@ it("keeps an all-cold catalog disabled with provider setup", async () => {
     "Sign-in needed",
   );
   find("model-setup", "true")!.click();
-  expect(navigate).toHaveBeenCalledWith("model-setup");
+  expect(context.settingsAgentSelection.state.selectedId).toBe("main");
+  expect(navigate).toHaveBeenCalledWith("model-providers", {
+    search: "?provider=openai&connect=1",
+  });
 });
 
 it("does not restore a stale preference when picker-open recovery succeeds", async () => {

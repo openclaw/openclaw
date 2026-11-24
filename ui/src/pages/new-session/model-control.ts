@@ -722,7 +722,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.contextWindow = value;
         this.notify();
       },
-      onModelSetup: () => options.context?.navigate("model-setup"),
+      onModelSetup: (provider) =>
+        navigateToModelProvider(options.context, options.agentId, provider, { connect: true }),
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
       onModelPickerOpen: () => {
