@@ -141,7 +141,7 @@ suite.define(() => {
       const profileSelect = profileRow.getByRole("combobox", { name: "Available tools" });
       await browserRow.getByRole("switch", { name: "Browser tools", exact: true }).waitFor();
       await expectQuietDefault(browserRow);
-      expect(await profileSelect.inputValue()).toBe("minimal");
+      await expect.poll(() => profileSelect.inputValue()).toBe("minimal");
 
       const securitySavesBefore = (await gateway.getRequests("config.set")).length;
       await browserRow.locator(".settings-row__title").click();
