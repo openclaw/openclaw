@@ -34,13 +34,13 @@ import {
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
-  createUiTestShardGroups,
   resolveCanonicalTargetInventory,
   type CompactNodeTestShard,
   type NodeTestShard,
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
+import { createUiTestShardGroups } from "./ci-ui-test-plan.mts";
 import { createWindowsTestShards } from "./ci-windows-test-plan.mts";
 import {
   createExtensionTestShards,
