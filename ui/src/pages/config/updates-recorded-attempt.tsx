@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { action, createOptimistic, For, Show } from "solid-js";
 import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
 import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
-import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
+} from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
   isReportableUpdateRun,
@@ -46,7 +49,8 @@ export function RecordedAttempt(
     if (
       currentRun?.status !== "succeeded" ||
       currentRun.verification.serviceRunning !== true ||
-      !live
+      !live ||
+      isUpdateRepairRun(currentRun)
     ) {
       return null;
     }

@@ -631,6 +631,34 @@ describe("renderUpdates", () => {
     },
   );
 
+  it("keeps the completed standalone repair heading after the Gateway identity changes", () => {
+    renderUpdates({
+      gatewayVersion: "2026.11.5",
+      gatewayBuildId: "new-build",
+      update: {
+        updateRun: createUpdateRunFixture({
+          trigger: "cli",
+          phase: "finished",
+          status: "succeeded",
+          target: { kind: "package", version: "2026.9.5" },
+          before: {},
+          after: { version: "2026.9.5" },
+          verification: {
+            serviceRunning: true,
+            runningVersion: "2026.9.5",
+            runningBuildId: "old-build",
+          },
+          steps: [{ step: "repairing", status: "completed" }],
+          finishedAtMs: 10,
+        }),
+      },
+    });
+
+    expect(container.querySelector(".update-run-view h3")?.textContent).toBe(
+      "✅ OpenClaw repair completed for 2026.9.5.",
+    );
+  });
+
   it.each([
     { status: "succeeded", reason: null, recovery: false, reconciled: false },
     { status: "failed", reason: "build-failed", recovery: true, reconciled: false },
