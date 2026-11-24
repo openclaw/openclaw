@@ -6,6 +6,10 @@ import AppKit
 import UIKit
 #endif
 
+extension EnvironmentValues {
+    @Entry public var openClawChatTextScale: CGFloat = 1
+}
+
 enum OpenClawChatTypography {
     // The 17 pt system body is too large for a dense transcript on a phone, and leaves the smallest
     // Dynamic Type setting at 14 pt, the Control UI's default chat size. Chat sizes shrink by one ratio;
@@ -25,20 +29,20 @@ enum OpenClawChatTypography {
         display(size: 17, weight: .semibold, relativeTo: .headline)
     }
 
-    static func heading(level: Int) -> Font {
+    static func heading(level: Int, textScale: CGFloat = 1) -> Font {
         switch level {
         case 1:
-            self.display(size: 24, weight: .bold, relativeTo: .title2)
+            self.display(size: 24, weight: .bold, relativeTo: .title2, textScale: textScale)
         case 2:
-            self.display(size: 21, weight: .bold, relativeTo: .title3)
+            self.display(size: 21, weight: .bold, relativeTo: .title3, textScale: textScale)
         case 3:
-            self.display(size: 19, weight: .semibold, relativeTo: .headline)
+            self.display(size: 19, weight: .semibold, relativeTo: .headline, textScale: textScale)
         case 4:
-            self.body(size: 17, weight: .semibold, relativeTo: .body)
+            self.body(size: 17, weight: .semibold, relativeTo: .body, textScale: textScale)
         case 5:
-            self.body(size: 16, weight: .semibold, relativeTo: .callout)
+            self.body(size: 16, weight: .semibold, relativeTo: .callout, textScale: textScale)
         default:
-            self.body(size: 15, weight: .semibold, relativeTo: .subheadline)
+            self.body(size: 15, weight: .semibold, relativeTo: .subheadline, textScale: textScale)
         }
     }
 
@@ -60,8 +64,12 @@ enum OpenClawChatTypography {
 
     #if os(iOS)
     static var bodyUIFont: UIFont {
-        let base = UIFont(name: self.bodyPostScriptName, size: self.bodySize) ??
-            UIFont.systemFont(ofSize: self.bodySize)
+        self.bodyUIFont(textScale: 1)
+    }
+
+    static func bodyUIFont(textScale: CGFloat) -> UIFont {
+        let size = self.bodySize * textScale
+        let base = UIFont(name: self.bodyPostScriptName, size: size) ?? UIFont.systemFont(ofSize: size)
         return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
     }
     #endif
@@ -90,9 +98,11 @@ enum OpenClawChatTypography {
         self.body(size: size, weight: .bold, relativeTo: .caption)
     }
 
-    static func body(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
+    static func body(
+        size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle, textScale: CGFloat = 1) -> Font
+    {
         #if os(iOS)
-        Font.custom(self.bodyPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
+        Font.custom(self.bodyPostScriptName, size: self.scaled(size) * textScale, relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -100,9 +110,11 @@ enum OpenClawChatTypography {
         #endif
     }
 
-    static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
+    static func display(
+        size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle, textScale: CGFloat = 1) -> Font
+    {
         #if os(iOS)
-        Font.custom(self.displayPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
+        Font.custom(self.displayPostScriptName, size: self.scaled(size) * textScale, relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else

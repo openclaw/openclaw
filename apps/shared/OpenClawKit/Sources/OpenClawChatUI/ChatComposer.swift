@@ -110,6 +110,7 @@ struct OpenClawChatComposer: View {
     }
 
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.openClawChatTextScale) private var textScale
     @Environment(\.dynamicTypeSize) var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -857,7 +858,8 @@ struct OpenClawChatComposer: View {
             #if !os(macOS)
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(self.placeholderText)
-                    .font(OpenClawChatTypography.body)
+                    .font(OpenClawChatTypography.body(
+                        size: 17, weight: .regular, relativeTo: .body, textScale: self.textScale))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)

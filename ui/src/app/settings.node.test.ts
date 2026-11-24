@@ -161,6 +161,33 @@ describe("gateway settings and layout persistence", () => {
     );
   });
 
+  it("retains iOS text size across fresh web views and resets it explicitly", () => {
+    let nativeScale = 100;
+    const postMessage = vi.fn((value: number) => {
+      nativeScale = value;
+    });
+    const mount = () => {
+      localStorage.clear();
+      vi.stubGlobal("window", {
+        __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone", textScale: nativeScale },
+        webkit: { messageHandlers: { openclawTextScale: { postMessage } } },
+      });
+    };
+    mount();
+    patchSettings({ textScale: 125 });
+    expect(loadSettings().textScale).toBe(125);
+
+    mount();
+    expect(loadSettings().textScale).toBe(125);
+    patchSettings({ composerHoldToRecord: false });
+    expect(postMessage.mock.calls).toEqual([[125]]);
+    patchSettings({ textScale: undefined });
+
+    mount();
+    expect(loadSettings().textScale ?? 100).toBe(100);
+    expect(postMessage.mock.calls).toEqual([[125], [100]]);
+  });
+
   it("keeps development credentials scoped to the upstream when the Vite target changes", () => {
     setTestLocation({ protocol: "http:", host: "localhost:5173", pathname: "/" });
     vi.stubGlobal("OPENCLAW_UI_DEV_SERVER", true);

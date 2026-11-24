@@ -375,6 +375,7 @@ private struct ChatBubbleShape: InsettableShape {
 
 @MainActor
 struct ChatMessageBubble: View, @MainActor Equatable {
+    @Environment(\.openClawChatTextScale) private var textScale
     @Environment(\.openClawChatColumn) private var column
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
@@ -605,7 +606,8 @@ extension ChatMessageBubble {
 
         if let preview, !self.userMessageExpanded {
             Text(preview)
-                .font(OpenClawChatTypography.body)
+                .font(OpenClawChatTypography.body(
+                    size: 17, weight: .regular, relativeTo: .body, textScale: self.textScale))
                 .foregroundStyle(textColor)
                 .fixedSize(horizontal: false, vertical: true)
         } else {

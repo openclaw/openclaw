@@ -22,6 +22,7 @@ import {
 import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme } from "./custom-theme.ts";
+import { readIosTextScale, writeIosTextScale } from "./native-text-scale.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveProfileAppearanceProfileId } from "./server-prefs-profile.ts";
 import {
@@ -365,6 +366,7 @@ export function loadUiPreferences(
       : undefined);
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
 
+  const iosTextScale = readIosTextScale();
   const defaults: UiPreferences = {
     gatewayUrl: targetGatewayUrl ?? defaultUrl,
     sessionKey: "main",
@@ -378,6 +380,7 @@ export function loadUiPreferences(
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
+    textScale: iosTextScale === UI_APPEARANCE_DEFAULTS.textScale ? undefined : iosTextScale,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarAgentsMode: "chip",
@@ -412,7 +415,7 @@ export function loadUiPreferences(
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme(parsed.customTheme);
     const { theme, mode } = parseThemeSelection(parsed.theme, parsed.themeMode);
-    const textScale = normalizeTextScale(parsed.textScale);
+    const textScale = iosTextScale ?? normalizeTextScale(parsed.textScale);
     const parsedRecord = asOptionalRecord(parsed) ?? {};
     const profileId = resolveProfileAppearanceProfileId(gatewayUrl);
     const personalNavigation = profileId ? profileNavigation(parsed, profileId) : null;
@@ -511,6 +514,9 @@ export function patchSettings(
 ): UiSettings {
   const previous = loadSettings(patch.gatewayUrl);
   const next = { ...previous, ...patch };
+  if (Object.hasOwn(patch, "textScale")) {
+    writeIosTextScale(normalizeTextScale(patch.textScale));
+  }
   saveSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
     writeShortcuts: Object.hasOwn(patch, "sidebarEntries"),

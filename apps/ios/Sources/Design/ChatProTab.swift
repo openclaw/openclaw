@@ -26,6 +26,8 @@ struct ChatProTab: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
+    @AppStorage(AuthenticatedControlUIWebViewCoordinator.textScalePreferenceKey)
+    private var textScale = 100
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
     private var chatTraceDisplayOptions: OpenClawChatDisplayOptions {
@@ -196,6 +198,7 @@ struct ChatProTab: View {
                     \.openClawEmbeddedBrowserUnavailableReason,
                     self.appModel.activeGatewayConnectConfig?.ingressAuthorization == nil ? nil :
                         "This widget needs browser access. Use native chat or open Gateway settings.")
+                .environment(\.openClawChatTextScale, CGFloat(self.textScale) / 100)
                 .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {

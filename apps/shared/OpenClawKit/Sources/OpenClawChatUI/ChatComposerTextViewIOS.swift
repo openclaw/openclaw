@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct ChatComposerTextViewIOS: UIViewRepresentable {
+    @Environment(\.openClawChatTextScale) private var textScale
     @Environment(\.isEnabled) private var effectiveEnvironmentEnabled
     @Binding var text: String
     var focusRequested: Bool
@@ -27,7 +28,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> ChatComposerUITextView {
-        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView(textScale: self.textScale)
         textView.delegate = context.coordinator
         textView.text = self.text
         self.configureInputHandlers(textView)
@@ -251,10 +252,10 @@ enum ChatComposerPasteSupport {
 enum ChatComposerTextViewIOSFactory {
     /// Internal for @testable import coverage of native multiline input defaults.
     @MainActor
-    static func makeConfiguredTextView() -> ChatComposerUITextView {
+    static func makeConfiguredTextView(textScale: CGFloat = 1) -> ChatComposerUITextView {
         let textView = ChatComposerUITextView()
         textView.backgroundColor = .clear
-        textView.font = OpenClawChatTypography.bodyUIFont
+        textView.font = OpenClawChatTypography.bodyUIFont(textScale: textScale)
         textView.adjustsFontForContentSizeCategory = true
         textView.allowsEditingTextAttributes = false
         textView.isScrollEnabled = true

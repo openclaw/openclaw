@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 import Observation
 import OpenClawKit
@@ -432,7 +433,34 @@ final class DashboardEmbedCompatibility {
 }
 
 @MainActor
-final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
+final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    static let textScalePreferenceKey = "openclaw.chat.textScale"
+    static let textScaleMessageName = "openclawTextScale"
+
+    static func validatedTextScale(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let scale = Int(exactly: number.doubleValue),
+              [90, 100, 110, 125, 140].contains(scale)
+        else { return nil }
+        return scale
+    }
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == Self.textScaleMessageName,
+              self.usesNativeEmbed, self.isAccessAdmissionCurrent(),
+              message.frameInfo.isMainFrame,
+              message.webView === self.nativeAuthWebView,
+              let expectedOrigin = self.expectedOrigin,
+              let sourceURL = message.frameInfo.request.url,
+              let currentURL = self.nativeAuthWebView?.url,
+              GatewayTLSAuthority(url: sourceURL) == expectedOrigin,
+              GatewayTLSAuthority(url: currentURL) == expectedOrigin,
+              let scale = Self.validatedTextScale(message.body)
+        else { return }
+        UserDefaults.standard.set(scale, forKey: Self.textScalePreferenceKey)
+    }
+
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
     let nativeAuth: ControlUINativeGatewayAuthHandler
     private let embedCompatibility: DashboardEmbedCompatibility?
@@ -560,8 +588,13 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 
     static func embedScript(url: URL, isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad) -> String? {
         let formFactor = isPad ? "pad" : "phone"
+        let scale = Self.validatedTextScale(UserDefaults.standard.object(forKey: Self.textScalePreferenceKey)) ?? 100
         return IOSDeviceSettingsBridge.originGatedScript(
-            "window.__OPENCLAW_NATIVE_EMBED__ = { platform: 'ios', formFactor: '\(formFactor)' };", url: url)
+            """
+            window.__OPENCLAW_NATIVE_EMBED__ = {
+                platform: 'ios', formFactor: '\(formFactor)', textScale: \(scale)
+            };
+            """, url: url)
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -901,6 +934,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         context.coordinator.installUserScripts(in: configuration.userContentController)
+        if self.usesNativeEmbed {
+            configuration.userContentController.add(
+                context.coordinator, name: AuthenticatedControlUIWebViewCoordinator.textScaleMessageName)
+        }
         if self.nativeGatewayAuthProvider != nil {
             configuration.userContentController.addScriptMessageHandler(
                 context.coordinator.nativeAuth,
@@ -1009,6 +1046,8 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             forName: IOSDeviceSettingsBridge.messageHandlerName, contentWorld: .page)
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: ControlUINativeGatewayAuthHandler.name, contentWorld: .page)
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: AuthenticatedControlUIWebViewCoordinator.textScaleMessageName)
         webView.stopLoading()
         webView.navigationDelegate = nil
     }

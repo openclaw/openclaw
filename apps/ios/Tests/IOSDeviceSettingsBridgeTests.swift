@@ -228,6 +228,16 @@ struct IOSDeviceSettingsBridgeTests {
         #expect(AuthenticatedControlUIWebViewCoordinator.embedScript(url: url, isPad: true)?.contains("'pad'") == true)
     }
 
+    @Test func `embedded text size accepts only supported percentages`() {
+        typealias Coordinator = AuthenticatedControlUIWebViewCoordinator
+        for scale in [90, 100, 110, 125, 140] {
+            #expect(Coordinator.validatedTextScale(NSNumber(value: scale)) == scale)
+        }
+        for invalid: Any in [true, "125", 125.5, 150] {
+            #expect(Coordinator.validatedTextScale(invalid) == nil)
+        }
+    }
+
     @Test func `native consent covers capability enables and only always location escalation`() {
         for key in [DeviceSettingKey.wakeEnabled, .cameraEnabled, .healthSummaryEnabled] {
             #expect(IOSDeviceSettingsConsent.required(for: key, value: .boolean(true), locationMode: .off) != nil)
