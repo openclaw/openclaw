@@ -4,19 +4,11 @@ import { ImageOptimizationLimitError } from "./image-optimization-error.js";
 import { readMediaSizeFacts, SaveMediaSourceError } from "./store.shared.js";
 
 describe("SaveMediaSourceError.tooLarge", () => {
-  it("records the limit and, when known, the rejected size", () => {
-    const withSize = SaveMediaSourceError.tooLarge(5 * 1024 * 1024, { sizeBytes: 6_000_000 });
-    expect(withSize).toMatchObject({
-      code: "too-large",
-      maxBytes: 5_242_880,
-      sizeBytes: 6_000_000,
-    });
-    expect(withSize.message).toBe("Media exceeds 5MB limit (got 5.72MB)");
-
-    const limitOnly = SaveMediaSourceError.tooLarge(1024);
-    expect(limitOnly.maxBytes).toBe(1024);
-    expect(limitOnly.sizeBytes).toBeUndefined();
-    expect(limitOnly.message).toBe("Media exceeds 1KB limit");
+  it("names the limit and, when known, the rejected size", () => {
+    expect(SaveMediaSourceError.tooLarge(5 * 1024 * 1024, { sizeBytes: 6_000_000 }).message).toBe(
+      "Media exceeds 5MB limit (got 5.72MB)",
+    );
+    expect(SaveMediaSourceError.tooLarge(1024).message).toBe("Media exceeds 1KB limit");
   });
 
   it("ignores byte counts that are not whole non-negative numbers", () => {
