@@ -154,7 +154,7 @@ it("compares a warm Responses continuation and its cold replay as the same prefi
       content: [{ type: "output_text", text: "private answer", annotations: [] }],
     },
   ];
-  const cold = [
+  const cold: unknown[] = [
     warm[0],
     { type: "reasoning", summary: [], encrypted_content: "ciphertext" },
     { type: "function_call", call_id: "call_1", name: "read", arguments: "{}" },
@@ -206,7 +206,7 @@ it("compares a warm Responses continuation and its cold replay as the same prefi
       },
       "assistant content",
     ],
-  ] as const) {
+  ] satisfies Array<[number, Record<string, unknown>, string]>) {
     expect(() =>
       assertStableProviderPrefix(snapshot(warm), snapshot(cold.with(index, item)), { label }),
     ).toThrow(new RegExp(`history\\[${index}\\]`));
