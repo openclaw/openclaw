@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
@@ -53,5 +54,23 @@ it.each(["nested", "message-only"])(
         : "[openclaw] For help, run `openclaw doctor`.",
     ]);
     expect(error.message).toContain("Wait for the other OpenClaw process to finish, then retry.");
+  },
+);
+
+it.each(["direct", "wrapped"])(
+  "shows the %s Gateway namespace refusal during Matrix recovery",
+  (kind) => {
+    const refusal = new GatewayLockNamespaceError({ pid: 42, host: "gateway" });
+    const error = kind === "direct" ? refusal : new Error("Startup failed", { cause: refusal });
+    const lines = formatCliFailureLines({
+      title: "The CLI command failed.",
+      argv: ["node", "openclaw", "matrix", "doctor", "recover"],
+      env: {},
+      error,
+    });
+    expect(lines).toEqual([
+      "[openclaw] The CLI command failed.",
+      `[openclaw] Reason: ${refusal.message}`,
+    ]);
   },
 );
