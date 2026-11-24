@@ -1,13 +1,12 @@
 {
-  "originHash" : "b94c1778fcc222d1036fd9338fa244818b91afd990f8a7630c22873537f1db8b",
+  "originHash" : "ec03145e2eb46c91c4615116b45abb4b0248a151d9e94bc9d77d61521e47176a",
   "pins" : [
     {
       "identity" : "axorcist",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/AXorcist.git",
       "state" : {
-        "revision" : "56b7913b90de6d1514fc7df1670983b2d57f4b93",
-        "version" : "0.2.3"
+        "revision" : "9c4116ca858067fb0d2c3d3d2bc761cc89665ad9"
       }
     },
     {
@@ -15,8 +14,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/Commander.git",
       "state" : {
-        "revision" : "3f5a3cb1f19ce7ca79fdc2111a09dfb3da200c1c",
-        "version" : "0.3.0"
+        "revision" : "e8572b84fae01c250d2d54396825a1adf052cb51",
+        "version" : "0.3.1"
       }
     },
     {

@@ -20,6 +20,10 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1"),
         .package(url: "https://github.com/openclaw/Peekaboo.git", exact: "4.9.10"),
+        // Override Peekaboo's AXorcist pin so the app can share Commander 0.3.1 with Swabble.
+        .package(
+            url: "https://github.com/openclaw/AXorcist.git",
+            revision: "9c4116ca858067fb0d2c3d3d2bc761cc89665ad9"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.4.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
