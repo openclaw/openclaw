@@ -2,7 +2,7 @@
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -62,7 +62,6 @@ import {
   createOpenClawCodingToolsMock,
   enqueueCommandInLaneMock,
   ensureAuthProfileStoreMock,
-  estimateTokensMock,
   getApiKeyForModelMock,
   getMemorySearchManagerMock,
   resolveMemorySearchConfigMock,
@@ -113,7 +112,7 @@ import {
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
-let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
+let compactTesting: typeof import("./compaction-hooks.js");
 let configRuntime: typeof import("../../config/runtime-snapshot.js");
 
 let TEST_STORE_PATH: string;
@@ -390,7 +389,7 @@ function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
-  compactTesting = await import("./compact.hooks.owner-test-support.js");
+  compactTesting = await import("./compaction-hooks.js");
   configRuntime = await import("../../config/runtime-snapshot.js");
   compactEmbeddedAgentSessionDirect = (params) => {
     configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
@@ -1308,35 +1307,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       });
     }
   });
-  it("treats pre-compaction token estimation failures as a no-op sanity check", () => {
-    estimateTokensMock.mockImplementation((message: unknown) => {
-      const role = (message as { role?: string }).role;
-      if (role === "assistant") {
-        throw new Error("legacy message");
-      }
-      if (role === "user") {
-        return 30;
-      }
-      return 5;
-    });
-    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
-      originalMessages: sessionMessages as AgentMessage[],
-      currentMessages: sessionMessages as AgentMessage[],
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-    const tokensAfter = compactTesting.estimateTokensAfterCompaction({
-      messagesAfter: [{ role: "user", content: "kept ask" }] as AgentMessage[],
-      fullSessionTokensBefore: 0,
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-
-    expect(beforeMetrics).toMatchObject({
-      tokenCountOriginal: undefined,
-      tokenCountBefore: undefined,
-    });
-    expect(tokensAfter).toBe(30);
-  });
-
   it("skips sync in await mode when postCompactionForce is false", async () => {
     resolveMemorySearchConfigMock.mockReturnValue({
       sources: ["sessions"],

@@ -14,6 +14,7 @@ import {
   type PublicationSelection,
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
+  buildReleaseExecutionPlan,
   composeReleaseAttemptJobs,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
@@ -46,6 +47,7 @@ export function candidatePublicationFixture(
     qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
     publicationArtifactSource?: { runId: string; runAttempt: number };
     reuseEvidence?: boolean;
+    rerunGroup?: "all" | "build-only";
     releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
@@ -122,8 +124,8 @@ export function candidatePublicationFixture(
       options.targetContextRef ??
       (extended ? "extended-stable/" : "release/") + version.split("-")[0],
     release_profile: profile,
-    reuse_evidence: String(options.reuseEvidence ?? true),
-    rerun_group: "all",
+    reuse_evidence: String(options.reuseEvidence ?? options.rerunGroup !== "build-only"),
+    rerun_group: options.rerunGroup ?? "all",
     mode: "both",
     run_release_soak: String(profile !== "beta"),
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
@@ -175,7 +177,10 @@ export function candidatePublicationFixture(
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
       PUBLICATION_TARGET_SHA: c,
       PUBLICATION_COVERAGE_POLICY:
-        extended || profile === "full" || (beta && profile !== "beta")
+        options.rerunGroup === "build-only" ||
+        extended ||
+        profile === "full" ||
+        (beta && profile !== "beta")
           ? ""
           : beta
             ? "npm-beta-v1"
@@ -279,6 +284,7 @@ export function candidatePublicationFixture(
   });
   const plan = Object.assign(mapped(fixture.executionPlan), admissionFields, {
     releaseProfile: profile,
+    rerunGroup: inputs.rerun_group,
     targetVersion: version,
     coveragePolicy: source.coverage.coverage_policy || undefined,
     candidate: candidateBinding,
@@ -287,7 +293,37 @@ export function candidatePublicationFixture(
   if (plan.coveragePolicy === undefined) {
     delete plan.coveragePolicy;
   }
-  plan.children = plan.children.filter((child) => child.selected);
+  plan.children = plan.children.filter((entry) => entry.selected);
+  if (options.rerunGroup === "build-only") {
+    plan.gates = buildReleaseExecutionPlan({
+      parentRunId: runId,
+      parentRunAttempt: 1,
+      rerunGroup: "build-only",
+      releaseProfile: profile,
+      qualificationCoverage: coverage,
+      workflowRef: branch,
+      workflowSha: q,
+      childPhaseVersion: 3,
+      candidateRequired: true,
+      resolveTargetResult: "success",
+      npmPreparationResult: "success",
+      npmQualificationResult: "success",
+      dockerPreparationResult: "success",
+      candidateAcquisitionResult: "success",
+    }).gates;
+    for (const child of plan.children) {
+      Object.assign(child, {
+        required: false,
+        selected: false,
+        result: "skipped",
+        runId: "",
+        runAttempt: null,
+        url: "",
+        source: "fresh",
+        sourceParentAttempt: null,
+      });
+    }
+  }
   const qualificationSources = new Map<string, string>();
   const qualificationSource = (path: string) => {
     const bytes = admission.sources.get(q + ":" + path) ?? readFileSync(path, "utf8");
@@ -299,14 +335,34 @@ export function candidatePublicationFixture(
     const child = coverage.children.find((entry) => entry.key === planned?.key);
     const names =
       requestedRunId === runId
-        ? coverage.requiredParentJobs
+        ? [
+            ...coverage.requiredParentJobs,
+            ...(options.rerunGroup === "build-only"
+              ? plan.gates
+                  .filter((gate) => gate.required)
+                  .map((gate) => gate.name)
+                  .filter((name) => !coverage.requiredParentJobs.includes(String(name)))
+              : []),
+          ]
         : expectDefined(child, "covered child").requiredJobs;
-    return names.map((name, index) =>
-      Object.assign(mapped(fixture.parentJob), { id: 600 + index, name }),
-    );
+    return [
+      ...names.map((name, index) =>
+        Object.assign(mapped(fixture.parentJob), { id: 600 + index, name }),
+      ),
+      ...(requestedRunId === runId && options.rerunGroup === "build-only"
+        ? coverage.children.map((spec, index) =>
+            Object.assign(mapped(fixture.parentJob), {
+              id: 700 + index,
+              name: spec.parentJobName,
+              conclusion: "skipped",
+            }),
+          )
+        : []),
+    ];
   };
   const manifest = Object.assign(mapped(fixture.manifest), {
     releaseProfile: profile,
+    rerunGroup: inputs.rerun_group,
     // Fresh qualification uses its own sealed candidate, not reused evidence.
     candidateBinding,
     evidenceReuse: undefined,
@@ -338,7 +394,18 @@ export function candidatePublicationFixture(
     inputs.target_context_ref,
     "normalized target context ref",
   );
-  for (const child of plan.children) {
+  if (options.rerunGroup === "build-only") {
+    manifest.childEvidence = {};
+    manifest.childRuns = Object.fromEntries(plan.children.map((entry) => [entry.key, ""]));
+    for (const exemption of coverage.exemptions ?? []) {
+      manifest.childRuns[exemption.childRole] = {
+        disposition: exemption.disposition,
+        runId: "",
+        supportingEvidence: exemption.supportingEvidence,
+      };
+    }
+  }
+  for (const child of plan.children.filter((entry) => entry.selected)) {
     const composite = composeReleaseAttemptJobs([{ jobs: jobsFor(child.runId), runAttempt: 1 }], {
       effectiveRunAttempt: 1,
       plannedRunAttempt: 1,
@@ -480,7 +547,16 @@ export function candidatePublicationFixture(
     jobName: "Qualify prepared npm package",
   };
   const npmManifest = {
-    version: 3,
+    version: options.rerunGroup === "build-only" ? 4 : 3,
+    ...(options.rerunGroup === "build-only"
+      ? {
+          npmDistTag: selection.npmDistTag,
+          validation: {
+            mode: "build-only",
+            skipped: ["source", "sdk", "dependencies", "contents"],
+          },
+        }
+      : {}),
     releaseSha: c,
     releaseTag: `v${version}`,
     tarballName: "openclaw.tgz",
@@ -511,7 +587,10 @@ export function candidatePublicationFixture(
     expires_at: "2099-01-01T00:00:00Z",
   };
   const npmQualified = {
-    schema: "openclaw.qualified-npm-preflight/v1",
+    schema:
+      options.rerunGroup === "build-only"
+        ? "openclaw.sealed-npm-preflight/v1"
+        : "openclaw.qualified-npm-preflight/v1",
     source: { sha: c },
     producer: npmProducer,
     manifestSha256: hash(npmManifestBytes),

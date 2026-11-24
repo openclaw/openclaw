@@ -21,6 +21,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { readUpgradeConfig } from "./state-upgrade-config.js";
 import { isStateUpgradePending } from "./state-upgrade-databases.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
 import { applyPlan, copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
@@ -374,6 +375,131 @@ describe("createDoctorChain", () => {
 });
 
 describe("upgradeStateDirectory external config", () => {
+  it.each([
+    "chain",
+    "fallback",
+    "refused",
+    "trial",
+    "deep-trial",
+    "workspace-trial",
+    "mounted-chain",
+    "mounted-fallback",
+  ])("keeps nested absolute include migration private through %s publication", async (mode) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-includes-"));
+    dirs.push(root);
+    const stateDir = path.join(root, "state");
+    const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+    const workspaceTrial = mode === "deep-trial" || mode === "workspace-trial";
+    const mountedWorkspace = mode === "mounted-chain" || mode === "mounted-fallback";
+    const fallback = mode === "fallback" || mode === "mounted-fallback";
+    const configDir = workspaceTrial || mountedWorkspace ? stateDir : path.join(root, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const includeRelative =
+      mode === "deep-trial"
+        ? "workspace/repo/apps/service/config/agents.json"
+        : workspaceTrial || mountedWorkspace
+          ? "workspace/agents.json"
+          : "nested/agents.json";
+    const includePath = path.join(configDir, includeRelative);
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.mkdirSync(path.dirname(includePath), { recursive: true });
+    const authored = JSON.stringify({
+      gateway: { mode: "local" },
+      agents: { $include: includePath },
+    });
+    const workspace = path.join(stateDir, "workspace");
+    const original = JSON.stringify({ defaults: { workspace, maxConcurrent: 2 } });
+    const migrated = JSON.stringify({ defaults: { workspace, maxConcurrent: 3 } });
+    fs.writeFileSync(configPath, authored);
+    fs.writeFileSync(includePath, original);
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.writeFileSync(path.join(workspace, "unrelated.txt"), "not an input");
+    {
+      using db = new DatabaseSync(statePath);
+      db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      db.exec("PRAGMA user_version = " + (OPENCLAW_STATE_SCHEMA_VERSION - 1));
+    }
+    const before = fs.readFileSync(statePath);
+    if (mountedWorkspace) {
+      const workspaceStat = fs.statSync(workspace);
+      let directorySynced = false;
+      const sync = fs.fsyncSync;
+      vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+        const stat = fs.fstatSync(fd);
+        if (stat.dev === workspaceStat.dev && stat.ino === workspaceStat.ino) {
+          directorySynced = true;
+        }
+        sync(fd);
+      });
+      const rename = fs.renameSync;
+      vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (process.platform !== "win32" && path.basename(String(destination)) === "plan.json") {
+          expect(directorySynced).toBe(true);
+        }
+        if (
+          String(destination).startsWith(`${workspace}${path.sep}`) &&
+          !String(source).startsWith(`${workspace}${path.sep}`)
+        ) {
+          throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+        }
+        rename(source, destination);
+      });
+    }
+    if (mode === "trial" || workspaceTrial) {
+      await createTrialPending(
+        { runId: "include-test", target: "next", previous: "previous", version: "test" },
+        path.join(stateDir, "git-install"),
+      );
+    }
+    const result = await upgradeStateDirectory({
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+      log: { info() {}, warn() {} },
+      runChain: async (shadow) => {
+        const config = readUpgradeConfig(shadow.configPath).config;
+        expect(config.agents?.defaults?.maxConcurrent).toBe(2);
+        expect(fs.existsSync(path.join(shadow.stateDir, "workspace", "unrelated.txt"))).toBe(false);
+        const shadowInclude = path.join(path.dirname(shadow.configPath), includeRelative);
+        fs.writeFileSync(shadowInclude, migrated);
+        if (mountedWorkspace) {
+          fs.writeFileSync(`${shadowInclude}.bak`, original);
+        }
+        if (fallback) {
+          throw new ChainStepError("injected", "after include migration");
+        }
+        using db = new DatabaseSync(path.join(shadow.stateDir, "state", "openclaw.sqlite"));
+        db.exec("PRAGMA user_version = " + OPENCLAW_STATE_SCHEMA_VERSION);
+        return { warnings: [] };
+      },
+      admitConfig: async (shadow) => {
+        expect(readUpgradeConfig(shadow.configPath).config.agents?.defaults?.maxConcurrent).toBe(3);
+        expect(fs.readFileSync(includePath, "utf8")).toBe(original);
+        return mode === "refused" ? "injected invalid migrated config" : undefined;
+      },
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(authored);
+    if (mode === "refused" || mode === "trial" || mode === "deep-trial") {
+      expect(result.status).toBe("refused");
+      expect(fs.readFileSync(includePath, "utf8")).toBe(original);
+      expect(fs.readFileSync(statePath)).toEqual(before);
+    } else {
+      expect(result).toMatchObject({
+        status: "upgraded",
+        mode: fallback ? "fallback" : "chain",
+      });
+      expect(fs.readFileSync(includePath, "utf8")).toBe(migrated);
+      if (mode === "mounted-chain") {
+        expect(fs.readFileSync(`${includePath}.bak`, "utf8")).toBe(original);
+      }
+      expect(
+        fs.readdirSync(path.dirname(includePath)).some((name) => name.startsWith(".agents.json")),
+      ).toBe(false);
+      const backup = fs
+        .readdirSync(path.dirname(includePath))
+        .find((name) => name.startsWith("agents.json.pre-"));
+      expect(backup).toBeDefined();
+      expect(fs.readFileSync(path.join(path.dirname(includePath), backup!), "utf8")).toBe(original);
+    }
+  });
   it("publishes a config outside the state directory by a rename within its directory", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-config-"));
     dirs.push(root);

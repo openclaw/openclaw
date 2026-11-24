@@ -28,12 +28,12 @@ import {
   type SetAsideRow,
   type SqliteSwapReport,
 } from "./sqlite-copy-swap.js";
+import { copyUpgradeConfigInputs, readUpgradeConfig } from "./state-upgrade-config.js";
 import {
   discoverDatabases,
   expectedVersion,
   outdatedDatabases,
   stateUpgradeRefusal,
-  readUpgradeConfig,
   readVersion,
   type DatabaseTarget,
 } from "./state-upgrade-databases.js";
@@ -57,6 +57,7 @@ import {
   diffTree,
   fsyncPath,
   isSqliteFile,
+  isUpgradeRestorePath,
   listTreeFiles,
   normalizeSqliteText,
   pruneGenerations,
@@ -292,7 +293,7 @@ export async function upgradeStateDirectory(params: {
   if (!fs.existsSync(stateDir)) {
     return { status: "current" };
   }
-  const config = readUpgradeConfig(configPath);
+  const { config, files: configFiles } = readUpgradeConfig(configPath);
   const trial = await readTrial(resolvePrefix(env));
   let restore: StateUpgradeRestore | undefined;
   try {
@@ -403,6 +404,7 @@ export async function upgradeStateDirectory(params: {
   const trialGenerations = new Set<string>();
   const trialAnchors: string[] = [];
   let planWritten = false;
+  const stagedConfigs = new Set<string>();
   try {
     fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
     params.log.info(
@@ -413,14 +415,17 @@ export async function upgradeStateDirectory(params: {
     const copyScope = await copyTree(stateDir, shadowRoot, skip, baseline, {
       targets,
       log: params.log,
-      additionalCopyBytes: configInside
-        ? 0
-        : (fs.statSync(configPath, { throwIfNoEntry: false })?.size ?? 0),
+      additionalCopyBytes: [...configFiles.values()].reduce(
+        (bytes, { raw }) => bytes + Buffer.byteLength(raw),
+        0,
+      ),
     });
-    if (!configInside && fs.existsSync(configPath)) {
-      fs.mkdirSync(path.dirname(shadowConfig), { recursive: true });
-      fs.copyFileSync(configPath, shadowConfig);
-    }
+    const configInputs = copyUpgradeConfigInputs({
+      configPath,
+      shadowConfig,
+      files: configFiles,
+      baseline: configInside ? baseline : undefined,
+    });
     if (postgres.length > 0) {
       params.log.info(
         `Preparing a protected PostgreSQL copy for OpenClaw ${VERSION}. The previous data will stay available for recovery.`,
@@ -449,8 +454,16 @@ export async function upgradeStateDirectory(params: {
       }
     }
     // Absolute paths into the live tree must resolve to the shadow during the run.
-    if (fs.existsSync(shadowConfig)) {
-      rewriteFilePrefix(shadowConfig, stateDir, shadowRoot);
+    for (const target of configInputs.values()) {
+      if (!fs.existsSync(target)) {
+        continue;
+      }
+      rewriteFilePrefix(target, stateDir, shadowRoot);
+      if (!configInside) {
+        for (const [source, shadow] of configInputs) {
+          rewriteFilePrefix(target, source, shadow);
+        }
+      }
     }
     let mode: "chain" | "fallback" = "chain";
     let failedStep: string | undefined;
@@ -523,6 +536,17 @@ export async function upgradeStateDirectory(params: {
         mismatches.push(...report.conservationMismatches.map((t) => `${report.label}:${t}`));
       }
     }
+    // Admit the private graph while absolute includes still address the migrated copies.
+    let refusal: string | undefined;
+    try {
+      refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(toShadow(liveState));
+    }
+    if (refusal !== undefined) {
+      params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);
+      return { status: "refused", reason: refusal };
+    }
     // Paths the run wrote into the shadow point at the live tree again. Only files the
     // run wrote can hold them; the rest of the copy is never read again.
     const written = changedShadowFiles(shadowRoot, baseline);
@@ -543,8 +567,15 @@ export async function upgradeStateDirectory(params: {
         rewriteFilePrefix(file, shadowRoot, stateDir);
       }
     }
-    if (fs.existsSync(shadowConfig) && !configInside) {
-      rewriteFilePrefix(shadowConfig, shadowRoot, stateDir);
+    if (!configInside) {
+      for (const target of configInputs.values()) {
+        if (fs.existsSync(target)) {
+          rewriteFilePrefix(target, shadowRoot, stateDir);
+          for (const [source, shadow] of configInputs) {
+            rewriteFilePrefix(target, shadow, source);
+          }
+        }
+      }
     }
     const pinned = mode === "fallback" || mismatches.length > 0;
     const setAsideCount = setAside.reduce((sum, entry) => sum + entry.rows.length, 0);
@@ -572,33 +603,53 @@ export async function upgradeStateDirectory(params: {
     ) {
       ops.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
     }
-    if (mode === "fallback" && configInside && fs.existsSync(shadowConfig)) {
-      const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
-      if (!original?.equals(fs.readFileSync(shadowConfig))) {
-        ops.push({ kind: original ? "replace" : "add", live: configPath, next: shadowConfig });
-      }
-    }
-    // A config outside the state directory may be on another filesystem; its new
-    // bytes are staged beside it so the plan's rename stays on one filesystem.
-    let stagedConfig: string | undefined;
-    if (!configInside && fs.existsSync(shadowConfig)) {
-      const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
-      if (!original?.equals(fs.readFileSync(shadowConfig))) {
-        stagedConfig = path.join(
-          path.dirname(configPath),
-          `.${path.basename(configPath)}.upgrade-${VERSION}`,
-        );
-        ops.push({ kind: original ? "replace" : "add", live: configPath, next: stagedConfig });
+    // Include changes participate in the same durable plan as the root config.
+    const publishedConfigTargets = new Set<string>();
+    if (mode === "fallback" || !configInside) {
+      for (const [file, target] of configInputs) {
+        if (!fs.existsSync(target)) {
+          continue;
+        }
+        const original = fs.existsSync(file) ? fs.readFileSync(file) : undefined;
+        if (original?.equals(fs.readFileSync(target))) {
+          continue;
+        }
+        const destination =
+          file === configPath ? file : (configFiles.get(file)?.canonicalPath ?? file);
+        if (publishedConfigTargets.has(destination)) {
+          continue;
+        }
+        publishedConfigTargets.add(destination);
+        ops.push({ kind: original ? "replace" : "add", live: destination, next: target });
       }
     }
     for (let index = ops.length - 1; index >= 0; index--) {
       const op = ops[index]!;
-      if (op.live === configPath && !configInside) {
+      if (publishedConfigTargets.has(op.live)) {
         continue;
       }
       if (fs.lstatSync(op.live, { throwIfNoEntry: false }) && !baseline.has(toShadow(op.live))) {
         warn(`Left uncopied live file unchanged: ${path.relative(stateDir, op.live)}`);
         ops.splice(index, 1);
+      }
+    }
+    if (protectedTrial) {
+      const includedTargets = new Set(
+        [...configFiles].flatMap(([file, { canonicalPath }]) =>
+          file === configPath ? [] : [file, canonicalPath],
+        ),
+      );
+      const uncovered = ops.find(
+        (op) =>
+          op.kind !== "add" &&
+          includedTargets.has(op.live) &&
+          !isUpgradeRestorePath(stateDir, op.live),
+      );
+      if (uncovered) {
+        return {
+          status: "refused",
+          reason: `The release trial cannot restore changed included config ${uncovered.live}. Run openclaw doctor --fix before retrying the update. Nothing live was changed.`,
+        };
       }
     }
     const retired = copyScope.retiredBackups;
@@ -624,26 +675,28 @@ export async function upgradeStateDirectory(params: {
     );
     checkpointShadowDatabases([toShadow(liveState)]);
     ops.push(...companionRemovals(ops));
+    // A workspace include can be on another filesystem even when the root is not.
+    // Stage its planned writes (including Doctor backups) beside their destinations.
+    const configDirectories = new Set(
+      [...configInputs.keys()].flatMap((file) => [
+        path.dirname(file),
+        path.dirname(configFiles.get(file)?.canonicalPath ?? file),
+      ]),
+    );
     for (const op of ops) {
+      if (op.next && configDirectories.has(path.dirname(op.live)) && !isSqliteFile(op.next)) {
+        const staged = path.join(
+          path.dirname(op.live),
+          `.${path.basename(op.live)}${path.basename(workDir)}`,
+        );
+        stagedConfigs.add(staged);
+        fs.cpSync(op.next, staged, { verbatimSymlinks: true });
+        op.next = staged;
+      }
       if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
         fsyncPath(op.next);
+        fsyncPath(path.dirname(op.next), true);
       }
-    }
-    let refusal: string | undefined;
-    try {
-      refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
-    } finally {
-      // Config admission can retain a reader on the successor inode. Retire it before
-      // rename: its old shadow pathname cannot find the first live writer's WAL/SHM.
-      await closeOpenClawStateDatabaseByPathAsync(toShadow(liveState));
-    }
-    if (refusal !== undefined) {
-      params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);
-      return { status: "refused", reason: refusal };
-    }
-    if (stagedConfig) {
-      fs.copyFileSync(shadowConfig, stagedConfig);
-      fsyncPath(stagedConfig);
     }
     await params.beforeSwap?.();
     const recovery = publishStateUpgradeRestore(restore, { ops });
@@ -708,6 +761,11 @@ export async function upgradeStateDirectory(params: {
     }
     throw error;
   } finally {
+    if (!planWritten) {
+      for (const staged of stagedConfigs) {
+        fs.rmSync(staged, { force: true });
+      }
+    }
     if (!planWritten && (await discardPrivatePostgres(workDir, stateDir, config, params.log))) {
       for (const anchor of trialAnchors) {
         fs.rmSync(anchor, { force: true });

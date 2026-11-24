@@ -39,82 +39,114 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 it.each([
-  { name: "without a key", apiKey: undefined, trial: false },
-  { name: "with a key", apiKey: "synthetic-provider-key", trial: false },
-  { name: "during a managed trial", apiKey: undefined, trial: true },
-])("reopens published state after provider config admission $name", async ({ apiKey, trial }) => {
-  vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("gateway");
-  const stateDir = dirs.make("state-upgrade-reader-");
-  const env = {
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    OPENCLAW_LAUNCHER_IPC: trial ? "1" : undefined,
-  };
-  fs.writeFileSync(
-    env.OPENCLAW_CONFIG_PATH,
-    JSON.stringify({
-      gateway: { mode: "local" },
-      models: {
-        providers: {
-          openai: { baseUrl: "https://api.openai.com/v1", apiKey, models: [] },
-        },
-      },
-    }),
-  );
-  fs.mkdirSync(path.join(stateDir, "state"));
-  {
-    using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
-    db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-      "auth.sharedStore",
-      JSON.stringify({ location: "state-db" }),
-      1,
-    );
-  }
-  const target = path.join("releases", "startup-release", "openclaw");
-  const manifestFile = path.join(resolvePrefix(env), "releases", "startup-release", ".restore");
-  if (trial) {
-    fs.mkdirSync(path.join(resolvePrefix(env), target), { recursive: true });
-    const pending = await createTrialPending(
-      {
-        runId: "startup-trial",
-        target,
-        previous: stateDir,
-        version: VERSION,
-        buildId: resolveRuntimeServiceBuildId() ?? undefined,
-      },
-      resolvePrefix(env),
-    );
-    await writeTrial({ ...pending, phase: "trial" }, resolvePrefix(env));
-  }
-
-  await withLiveStateReads(async () => {
-    await upgradeStateOnGatewayStart(env, ({ mode }) => mode === "local");
-    expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(false);
-    if (trial) {
-      const encoded = fs.readFileSync(manifestFile, "utf8");
-      const manifest = JSON.parse(encoded);
-      expect(manifest.runId).toBe("startup-trial");
-      const previous = manifest.files.find(
-        (entry: { live: string }) => entry.live === path.join(stateDir, "state", "openclaw.sqlite"),
-      ).preimage;
-      using original = new DatabaseSync(previous, { readOnly: true });
-      expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION - 1,
-      );
-      await upgradeStateOnGatewayStart(env, () => true);
-      expect(fs.readFileSync(manifestFile, "utf8")).toBe(encoded);
-    } else {
-      expect(fs.existsSync(manifestFile)).toBe(false);
+  { name: "without a key", apiKey: undefined, layout: "inline", trial: false },
+  { name: "with a key", apiKey: "synthetic-provider-key", layout: "inline", trial: false },
+  { name: "beside an external config", apiKey: undefined, layout: "external", trial: false },
+  { name: "inside the workspace", apiKey: undefined, layout: "workspace", trial: false },
+  { name: "with a missing include", apiKey: undefined, layout: "missing", trial: false },
+  { name: "during a managed trial", apiKey: undefined, layout: "inline", trial: true },
+])(
+  "reopens published state after provider config admission $name",
+  async ({ apiKey, layout, trial }) => {
+    vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("gateway");
+    const root = dirs.make("state-upgrade-reader-");
+    const stateDir = path.join(root, "state");
+    const configDir = layout === "external" ? path.join(root, "config") : stateDir;
+    const workspace = path.join(stateDir, "workspace");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(workspace, { recursive: true });
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(configDir, "openclaw.json"),
+      OPENCLAW_LAUNCHER_IPC: trial ? "1" : undefined,
+    };
+    const models = {
+      providers: { openai: { baseUrl: "https://api.openai.com/v1", apiKey, models: [] } },
+    };
+    const include = layout === "external" ? "models.json" : "workspace/models.json";
+    const includePath = path.join(configDir, include);
+    if (layout !== "inline" && layout !== "missing") {
+      fs.writeFileSync(includePath, JSON.stringify(models));
     }
-    // Startup reopens the published database in WAL mode before preparing secrets.
-    using runtime = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-    runtime.exec("PRAGMA journal_mode = WAL");
-    await expect(prepareSharedAuthStoreOwnership(env)).resolves.toEqual({ location: "state-db" });
-  });
-});
+    const authored = JSON.stringify({
+      gateway: { mode: "local" },
+      agents: { defaults: { workspace } },
+      models: layout === "inline" ? models : { $include: include },
+    });
+    fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, authored);
+    fs.mkdirSync(path.join(stateDir, "state"));
+    {
+      using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+      db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+        "auth.sharedStore",
+        JSON.stringify({ location: "state-db" }),
+        1,
+      );
+    }
+    const target = path.join("releases", "startup-release", "openclaw");
+    const manifestFile = path.join(resolvePrefix(env), "releases", "startup-release", ".restore");
+    if (trial) {
+      fs.mkdirSync(path.join(resolvePrefix(env), target), { recursive: true });
+      const pending = await createTrialPending(
+        {
+          runId: "startup-trial",
+          target,
+          previous: stateDir,
+          version: VERSION,
+          buildId: resolveRuntimeServiceBuildId() ?? undefined,
+        },
+        resolvePrefix(env),
+      );
+      await writeTrial({ ...pending, phase: "trial" }, resolvePrefix(env));
+    }
+
+    await withLiveStateReads(async () => {
+      if (layout === "missing") {
+        await expect(
+          upgradeStateOnGatewayStart(env, ({ mode }) => mode === "local"),
+        ).rejects.toMatchObject({
+          code: 78,
+        });
+        using original = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+        expect(original.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: OPENCLAW_STATE_SCHEMA_VERSION - 1,
+        });
+        expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authored);
+        return;
+      }
+      await upgradeStateOnGatewayStart(env, ({ mode }) => mode === "local");
+      expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(false);
+      expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authored);
+      if (layout !== "inline") {
+        expect(fs.readFileSync(includePath, "utf8")).toBe(JSON.stringify(models));
+      }
+      if (trial) {
+        const encoded = fs.readFileSync(manifestFile, "utf8");
+        const manifest = JSON.parse(encoded);
+        expect(manifest.runId).toBe("startup-trial");
+        const previous = manifest.files.find(
+          (entry: { live: string }) =>
+            entry.live === path.join(stateDir, "state", "openclaw.sqlite"),
+        ).preimage;
+        using original = new DatabaseSync(previous, { readOnly: true });
+        expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION - 1,
+        );
+        await upgradeStateOnGatewayStart(env, () => true);
+        expect(fs.readFileSync(manifestFile, "utf8")).toBe(encoded);
+      } else {
+        expect(fs.existsSync(manifestFile)).toBe(false);
+      }
+      // Startup reopens the published database in WAL mode before preparing secrets.
+      using runtime = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+      runtime.exec("PRAGMA journal_mode = WAL");
+      await expect(prepareSharedAuthStoreOwnership(env)).resolves.toEqual({ location: "state-db" });
+    });
+  },
+);
 
 it.each([true, false])(
   "publishes an empty no-upgrade trial plan only for an admitted start (%s)",

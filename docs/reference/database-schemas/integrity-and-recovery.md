@@ -704,7 +704,10 @@ still use private snapshots. Neither optimization changes schemas, stored record
 retention, or update migrations.
 
 Live snapshots use SQLite's online-backup owner and a read transaction to pin
-committed pages while writers continue. Native readers may update existing SHM
+committed pages only during acquisition while writers continue. Integrity and
+caller validation inspect the raw private image before journal normalization,
+transforms, or compaction, so verification does not prolong the live read pin.
+The final published image is checked separately. Native readers may update existing SHM
 read marks, so artifact-preserving planning and Doctor scopes use raw copies
 instead. A WAL copy captures main first, then a bounded WAL prefix, and verifies
 both within the same pinned WAL generation. Appended frames are allowed; resets,
@@ -723,8 +726,8 @@ Verified snapshot publication retains the original image digest through an owned
 same-file transfer and verifies the final published bytes. Distinct physical copies
 also receive their own byte comparison before publication. Moving a verified
 snapshot into the original capture's payload directory preserves its digest without
-rehashing the rename. Source and output integrity checks, durable backup publication,
-and recovery ownership remain unchanged.
+rehashing the rename. Raw-image and output integrity checks, durable backup publication,
+and recovery ownership remain intact.
 Doctor's legacy transcript-label inspection uses stored navigation metadata to skip
 expanding compressed events outside user and assistant messages. A detected repair
 still reads the complete exact transcript and revalidates it before writing;

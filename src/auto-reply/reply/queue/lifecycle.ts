@@ -184,7 +184,7 @@ export async function prepareFollowupRunOperatorAuthority(
     const restored = await restore({
       context,
       agentId: run.run.agentId,
-      source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
+      source: captureQueuedOperatorRecoverySource(run.operatorAuthority) ?? { kind: "unavailable" },
       liveAuthority: run.operatorAuthority,
       operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),
       assertCurrent: () => {
