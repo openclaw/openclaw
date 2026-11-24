@@ -348,12 +348,36 @@ defineDiscordVoiceTests(
       expect(trailingSilence?.equals(Buffer.alloc(33_600))).toBe(true);
     });
 
-    it("ignores realtime capture during playback when barge-in is disabled", async () => {
+    it("admits provider-controlled interruption without local barge-in", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
       const { entry, manager, player } = await createJoinedBidiFixture({
         allowFrom: ["discord:u1"],
-        voice: { realtime: { bargeIn: false } },
+        voice: {
+          realtime: {
+            bargeIn: false,
+            providers: { openai: { interruptResponseOnInputAudio: true } },
+          },
+        },
+      });
+      player.state.status = "playing";
+      await handleSpeakingStart(manager, entry, "u1");
+      expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+      expect(player.stop).not.toHaveBeenCalled();
+      expect(connection.receiver.subscribe).toHaveBeenCalledWith("u1", expect.any(Object));
+    });
+
+    it("ignores realtime capture during playback when both interruption policies are disabled", async () => {
+      const connection = createConnectionMock();
+      joinVoiceChannelMock.mockReturnValueOnce(connection);
+      const { entry, manager, player } = await createJoinedBidiFixture({
+        allowFrom: ["discord:u1"],
+        voice: {
+          realtime: {
+            bargeIn: false,
+            providers: { openai: { interruptResponseOnInputAudio: false } },
+          },
+        },
       });
       player.state.status = "playing";
 

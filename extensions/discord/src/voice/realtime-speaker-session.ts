@@ -91,6 +91,7 @@ export class DiscordRealtimeSpeakerSession {
   private closeCompletion: Promise<void> | undefined;
   private activeOperations = 0;
   private outputEnabled = true;
+  private interruptResponseOnInputAudio = false;
   private selection: RealtimeVoiceSelectionInfo | undefined;
   private readonly inputIdleListeners = new Set<() => void>();
   private lastActivityAt = Date.now();
@@ -221,6 +222,7 @@ export class DiscordRealtimeSpeakerSession {
     this.selection = selection;
     const capabilities = resolved.capabilities;
     this.policy = sessionPolicy;
+    this.interruptResponseOnInputAudio = interruptResponseOnInputAudio;
     const { toolPolicy, consultPolicy, autoRespondToAudio } = sessionPolicy;
     const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
     const onReady = () => {
@@ -593,7 +595,11 @@ export class DiscordRealtimeSpeakerSession {
   }
 
   canReceiveDuringPlayback(): boolean {
-    return this.bridge?.bridge.outputAudioMode === "continuous" || this.playback.isBargeInEnabled();
+    return (
+      this.bridge?.bridge.outputAudioMode === "continuous" ||
+      this.interruptResponseOnInputAudio ||
+      this.playback.isBargeInEnabled()
+    );
   }
 
   private get realtimeConfig(): DiscordRealtimeVoiceConfig {
