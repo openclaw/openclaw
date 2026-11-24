@@ -9,6 +9,7 @@ import {
   ChatTopbarNoticesContent,
 } from "./chat-view-notices-content.tsx";
 import "../../styles.css";
+import "../../styles/chat/conversation-notices.css";
 import "../../styles/chat/layout.css";
 
 const box = (root: Element, selector: string) =>
@@ -82,76 +83,118 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
 });
 
-it("keeps the recovery action beside the title with a visible dismiss", async () => {
-  const dismiss = vi.fn();
-  const view = mountSolid(() => (
-    <ChatComposerNoticesContent
-      sessionKey="agent:main:main"
-      connected
-      messages={[]}
-      runError={{
-        runId: "run-1",
-        summary: "Error: Restore failed.\nprovider reported lease destroyed",
-      }}
-      onRefresh={() => {}}
-      onDismissRunError={dismiss}
-    />
-  ));
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
-  );
-  const offset = () =>
-    box(view.container, ".chat-error__refresh").top -
-    box(view.container, ".app-toast__message").top;
-  const closed = offset();
-  expect(Math.abs(closed)).toBeLessThan(8);
-  view.container.querySelector("details")!.open = true;
-  await waitForSolid(() => expect(offset()).toBe(closed));
-  const close = view.container.querySelector<HTMLButtonElement>(".app-toast__dismiss")!;
-  expect(getComputedStyle(close).opacity).toBe("1");
-  close.click();
-  expect(dismiss).toHaveBeenCalledOnce();
-});
+const longError =
+  "Restore failed because the provider reported that the lease was destroyed before the reply finished.\n" +
+  "diagnostic ".repeat(40).trim();
 
-it.each([300, 500])("keeps recovery and reporting clickable at %ipx", async (width) => {
+async function atWidth(width: number, run: () => Promise<void>) {
   const previous = { width: window.innerWidth, height: window.innerHeight };
   await page.viewport(width, previous.height);
   try {
-    const view = mountSolid(() => (
-      <ChatComposerNoticesContent
-        sessionKey="agent:main:main"
-        connected
-        messages={[]}
-        runError={{
-          runId: "synthetic-run",
-          summary: "Error: Restore failed.\nprovider reported lease destroyed",
-        }}
-        onRefresh={() => {}}
-      />
-    ));
-    await waitForSolid(() => {
-      const recovery = view.container.querySelector<HTMLElement>(".chat-error__refresh")!;
-      const report = view.container.querySelector<HTMLAnchorElement>("a.report-issue-link")!;
-      const a = recovery.getBoundingClientRect(),
-        b = report.getBoundingClientRect();
-      expect(a.width).toBeGreaterThan(0);
-      expect(b.width).toBeGreaterThan(0);
-      expect(a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top).toBe(
-        false,
-      );
-      for (const target of [recovery, report]) {
-        const bounds = target.getBoundingClientRect();
-        expect(
-          target.contains(
-            document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-          ),
-        ).toBe(true);
-      }
-    });
+    await run();
   } finally {
     await page.viewport(previous.width, previous.height);
   }
+}
+
+it("shows a short reply error whole, with no control to open it", async () => {
+  await atWidth(820, async () => {
+    const dismiss = vi.fn();
+    const view = mountSolid(() => (
+      <ChatComposerNoticesContent
+        connected
+        messages={[]}
+        runError={{ runId: "run-1", summary: "Error: Restore failed." }}
+        onRefresh={() => {}}
+        onDismissRunError={dismiss}
+      />
+    ));
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
+    );
+    const message = view.getByRole("alert");
+    const chevron = view.container.querySelector<HTMLButtonElement>(".chat-reply-notice__chevron")!;
+    expect(message.scrollWidth).toBeLessThanOrEqual(message.clientWidth);
+    expect(chevron).toMatchObject({ disabled: true });
+    expect(getComputedStyle(chevron).visibility).toBe("hidden");
+    const height = message.getBoundingClientRect().height;
+    message.click();
+    await waitForSolid(() => expect(message.getBoundingClientRect().height).toBe(height));
+    const recovery = box(view.container, ".chat-error__refresh");
+    expect(recovery.left).toBeGreaterThanOrEqual(message.getBoundingClientRect().right);
+    view.getByRole("button", { name: "Dismiss error", exact: true }).click();
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
 });
+
+it.each([820, 400, 300])(
+  "keeps a long reply error on one line and opens it in place at %ipx",
+  async (width) => {
+    await atWidth(width, async () => {
+      const onRefresh = vi.fn();
+      const [summary, setSummary] = createSignal(longError);
+      const view = mountSolid(() => (
+        <ChatComposerNoticesContent
+          connected
+          messages={[]}
+          runError={{ runId: "run-1", summary: summary() }}
+          onRefresh={onRefresh}
+        />
+      ));
+      const chevron = () =>
+        view.container.querySelector<HTMLButtonElement>(".chat-reply-notice__chevron")!;
+      await waitForSolid(() => expect(chevron()).toMatchObject({ disabled: false }));
+      const notice = view.container.querySelector<HTMLElement>(".chat-reply-notice")!;
+      const message = view.getByRole("alert");
+      const recovery = view.getByRole("button", { name: "Refresh", exact: true });
+      const closed = message.getBoundingClientRect().height;
+      const actionsTop = recovery.getBoundingClientRect().top;
+      expect(closed).toBeLessThanOrEqual(32);
+      expect(message.scrollWidth).toBeGreaterThan(message.clientWidth);
+      expect(message.textContent).toBe(longError);
+      expect(recovery.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        message.getBoundingClientRect().right,
+      );
+
+      message.click();
+      await waitForSolid(() => expect(chevron().getAttribute("aria-expanded")).toBe("true"));
+      expect(message.getBoundingClientRect().height).toBeGreaterThan(closed * 2);
+      expect(message.scrollWidth).toBeLessThanOrEqual(message.clientWidth);
+      expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
+      // Opened text uses the width under the actions instead of a narrow column.
+      expect(message.getBoundingClientRect().right).toBeGreaterThan(
+        recovery.getBoundingClientRect().left,
+      );
+      expect(recovery.getBoundingClientRect().top).toBe(actionsTop);
+      const bounds = recovery.getBoundingClientRect();
+      expect(
+        recovery.contains(
+          document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+        ),
+      ).toBe(true);
+      recovery.click();
+      expect(onRefresh).toHaveBeenCalledOnce();
+
+      // Selecting the error to copy it leaves it open.
+      getSelection()!.selectAllChildren(message);
+      message.click();
+      await waitForSolid(() => expect(chevron().getAttribute("aria-expanded")).toBe("true"));
+      getSelection()!.removeAllRanges();
+      chevron().click();
+      await waitForSolid(() => expect(message.getBoundingClientRect().height).toBe(closed));
+
+      message.click();
+      await waitForSolid(() => expect(chevron().getAttribute("aria-expanded")).toBe("true"));
+      setSummary("A different failure. " + longError);
+      await waitForSolid(() => {
+        expect(chevron().getAttribute("aria-expanded")).toBe("false");
+        expect(message.getBoundingClientRect().height).toBe(closed);
+      });
+      setSummary("Short failure.");
+      await waitForSolid(() => expect(chevron()).toMatchObject({ disabled: true }));
+    });
+  },
+);
 
 it("keeps discard recovery below the full warning on mobile", async () => {
   const previous = { width: window.innerWidth, height: window.innerHeight };

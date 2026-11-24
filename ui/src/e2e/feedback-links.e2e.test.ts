@@ -15,85 +15,97 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it.each([1280, 820, 400])(
-    "keeps failed-reply copy compact with reachable feedback at %ipx",
-    async (width) => {
-      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page, context }) => {
-        const sessionKey = "agent:main:main";
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          sessions: [
-            {
-              key: sessionKey,
-              status: "failed",
-              hasActiveRun: false,
-              lastRunId: "failed-run",
-              lastRunError: "Synthetic reply failure for layout verification.",
-            },
-          ],
-          historyMessages: [{ role: "user", content: "Check the example operation." }],
-        });
-        await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
-        const notice = page.locator(".chat-error");
-        const title = notice.locator(".app-toast__message");
-        const description = notice.locator(".app-toast__description");
-        const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
-        const report = notice.getByRole("link", { name: "Report a bug", exact: true });
-        await report.waitFor();
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          notice,
-          [title, description, refresh, report],
-          {
-            elements: [notice, title, description, refresh, report],
-            animations: "disabled",
-          },
-        );
-        const bounds = frame.elements.map((element) => element.bounds);
-        const [cardBox, titleBox, descriptionBox] = bounds;
-        const fontSize = await report.evaluate((element) => getComputedStyle(element).fontSize);
-        await writeFile(path.join(suite.artifactDir, `layout-${width}.png`), frame.png);
-        await writeFile(
-          path.join(suite.artifactDir, `layout-${width}.json`),
-          JSON.stringify(
-            {
-              viewport: page.viewportSize(),
-              bounds,
-              fontSize,
-              gap: descriptionBox!.y - titleBox!.y - titleBox!.height,
-            },
-            null,
-            2,
-          ),
-        );
-        const gap = descriptionBox!.y - titleBox!.y - titleBox!.height;
-        expect.soft(gap).toBeGreaterThanOrEqual(2);
-        expect.soft(gap).toBeLessThanOrEqual(6);
-        expect
-          .soft(fontSize)
-          .toBe(await description.evaluate((element) => getComputedStyle(element).fontSize));
-        if (width === 1280) {
-          expect.soft(cardBox!.height).toBeLessThanOrEqual(104);
-        }
-        await context.route("https://github.com/**", (route) =>
-          route.fulfill({ body: "Issue form destination verified" }),
-        );
-        const popupPromise = page.waitForEvent("popup");
-        await report.click();
-        const popup = await popupPromise;
-        await popup.waitForLoadState();
-        expect(new URL(popup.url()).pathname).toBe("/openclaw/openclaw/issues/new");
-        await popup.close();
-        await notice.locator("summary").press("Enter");
-        await notice.getByLabel("Error details", { exact: true }).waitFor();
-        expect(await notice.locator("details").getAttribute("open")).not.toBeNull();
-        const reads = (await gateway.getRequests("chat.history")).length;
-        await refresh.click();
-        await gateway.waitForRequest("chat.history", { after: reads });
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await notice.getByRole("button", { name: "Dismiss error", exact: true }).click();
-        await notice.waitFor({ state: "hidden" });
-      });
+  it.each([
+    [1280, false],
+    [400, true],
+  ] as const)(
+    "keeps a long reply error on one line until it is opened at %ipx",
+    async (width, touch) => {
+      await suite.withPage(
+        {
+          viewport: { width, height: 800 },
+          colorScheme: "light",
+          ...(touch ? { hasTouch: true, isMobile: true } : {}),
+        },
+        async ({ page }) => {
+          const sessionKey = "agent:main:main";
+          const error =
+            "The model provider interrupted the connection before the reply finished. The example gateway returned upstream status 502.\nRequest ID: example-7942.";
+          const draft = "Can you also pull out the action items?";
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            sessions: [
+              {
+                key: sessionKey,
+                status: "failed",
+                hasActiveRun: false,
+                lastRunId: "failed-run",
+                lastRunError: error,
+              },
+            ],
+            historyMessages: [
+              { role: "user", content: "Summarize the notes from our planning session." },
+            ],
+          });
+          await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
+          const notice = page.locator(".chat-error");
+          const message = notice.getByRole("alert");
+          const chevron = notice.getByRole("button", { name: "Error details", exact: true });
+          const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
+          const input = page.locator(".agent-chat__input textarea");
+          await message.waitFor();
+          expect(await message.textContent()).toBe(error);
+          await input.fill(draft);
+          await expect.poll(() => chevron.isEnabled()).toBe(true);
+          const capture = async (name: string) => {
+            const directory = process.env.OPENCLAW_REPLY_PROOF_DIR;
+            if (directory) {
+              const frame = await takeControlUiScreenshotFrame(page, notice, [message, refresh], {
+                elements: [notice, message, refresh],
+                animations: "disabled",
+              });
+              await writeFile(path.join(directory, name + "-" + width + ".png"), frame.png);
+            }
+          };
+          const opacity = () => chevron.evaluate((element) => getComputedStyle(element).opacity);
+          const closed = (await message.boundingBox())!;
+          // The card is anchored above the composer, so it grows upward when opened.
+          const actionsOffset = async () =>
+            (await refresh.boundingBox())!.y - (await notice.boundingBox())!.y;
+          const actionsTop = await actionsOffset();
+          expect(closed.height).toBeLessThanOrEqual(32);
+          if (touch) {
+            // Touch has no hover, so the control is visible from the start.
+            expect(await opacity()).toBe("1");
+            await capture("closed");
+            await message.tap();
+          } else {
+            await page.mouse.move(0, 0);
+            await expect.poll(opacity).toBe("0");
+            await capture("closed");
+            await message.hover();
+            await expect.poll(opacity).toBe("1");
+            await capture("hover");
+            await message.click();
+          }
+          await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("true");
+          expect((await message.boundingBox())!.height).toBeGreaterThan(closed.height);
+          expect(await actionsOffset()).toBe(actionsTop);
+          expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+          await capture("open");
+          const reads = (await gateway.getRequests("chat.history")).length;
+          await refresh.click();
+          await gateway.waitForRequest("chat.history", { after: reads });
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await input.inputValue()).toBe(draft);
+          expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+          await chevron.press("Enter");
+          await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+          expect((await message.boundingBox())!.height).toBe(closed.height);
+          await notice.getByRole("button", { name: "Dismiss error", exact: true }).click();
+          await notice.waitFor({ state: "hidden" });
+        },
+      );
     },
   );
   it("opens the appropriate public issue template without attaching runtime data", async () => {

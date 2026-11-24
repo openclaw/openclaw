@@ -6,7 +6,7 @@ import { assert, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { exactButton, polledClipboard, polledVisible } from "./chat-presentation.test-support.ts";
+import { exactButton } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI chat error details" });
@@ -195,7 +195,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a rejected session-change message visible with recovery guidance and diagnostic details", async () => {
+  it("keeps a rejected session-change message visible with the complete redacted error", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const prompt = "Continue reviewing the example project";
       const skillPath = "/home/operator/.openclaw/projects/example/.agents/skills/review";
@@ -226,21 +226,13 @@ suite.define(() => {
       });
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      expect(await alert.locator(".app-toast__message").textContent()).toBe(
-        "Couldn't finish this reply.",
-      );
-      expect(await alert.locator("summary").textContent()).not.toContain(skillPath);
-      expect(await alert.locator("summary").textContent()).not.toContain("INVALID_BUNDLE");
-      expect(await alert.locator(".lazy-view-error__detail").isVisible()).toBe(false);
+      const message = alert.getByRole("alert");
+      await message.waitFor();
+      expect(await message.textContent()).toBe(safeError);
+      expect(await message.innerText()).not.toContain("synthetic-password");
+      expect(await alert.locator("details").count()).toBe(0);
       expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
-      await alert.locator("summary").click();
-      const details = alert.locator(".lazy-view-error__detail");
-      await polledVisible(details).toBe(true);
-      expect(await details.textContent()).toBe(safeError);
-      await exactButton(alert, "Copy error").click();
-      await polledClipboard(page).toBe(safeError);
       await expectMobileFit(page, alert);
-      await alert.locator("summary").click();
       const input = page.locator(".agent-chat__input textarea");
       await input.fill("A newer draft stays here");
       const historyCount = (await gateway.getRequests("chat.history")).length;

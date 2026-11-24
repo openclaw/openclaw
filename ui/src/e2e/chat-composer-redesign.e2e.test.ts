@@ -131,7 +131,9 @@ suite.define(() => {
         sessionKey: "main",
         state: "error",
       });
-      await polledText(page.locator(".chat-error")).toContain(message);
+      const notice = page.locator(".chat-reply-notice");
+      await polledText(notice.getByRole("alert")).toContain(message);
+      expect(await exactButton(notice, "Refresh").count()).toBe(0);
       await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
       const textarea = page.locator(".agent-chat__input textarea");
       await expect.poll(() => textarea.isDisabled()).toBe(false);
@@ -139,6 +141,8 @@ suite.define(() => {
       await expect.poll(() => exactButton(page, "Send message").isDisabled()).toBe(true);
       expect(await textarea.inputValue()).toBe("Try the message again.");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await exactButton(notice, "Open Models").click();
+      await page.waitForURL("**/settings/model-providers");
     });
   });
 

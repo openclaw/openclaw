@@ -1536,7 +1536,6 @@ const startupEnglish = {
     cloudWorkerFailed: "Couldn’t continue this session. Check its device and try again. {error}",
     errorDetails: "Error details",
     errorSummary: "Couldn’t complete this action. Try again.",
-    errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",
     historyUnavailableTitle: "Couldn’t load this conversation",
     historyUnavailableBody: "Try again to load its messages.",
@@ -1556,8 +1555,6 @@ const startupEnglish = {
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
-    errorBusySummary: "OpenClaw is busy. Check status before trying again.",
-    errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
     errorStartSummary: "Couldn’t start this session. Try again.",
     checkStatus: "Check status",
     details: "Details",

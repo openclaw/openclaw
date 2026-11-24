@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal, createUniqueId } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -19,13 +19,16 @@ import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-sess
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiErrorDetails } from "../../lib/format-error.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { ToastNotice } from "../../lib/toast-notice.tsx";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
+import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -303,7 +306,6 @@ function ChatErrorNotice(props: {
   detail?: unknown;
   action?: JSX.Element;
   displayError?: string;
-  tone?: "danger" | "warn";
   summary?: string;
   onDismiss?: () => void;
 }) {
@@ -327,14 +329,12 @@ function ChatErrorNotice(props: {
           diagnostic && diagnostic !== message.trim()
             ? (props.detail ?? displayError())
             : undefined,
-        severity: props.tone === "warn" ? ("warning" as const) : ("error" as const),
+        severity: "error" as const,
       };
     },
     {
       equals: (previous, next) =>
-        previous.message === next.message &&
-        previous.detail === next.detail &&
-        previous.severity === next.severity,
+        previous.message === next.message && previous.detail === next.detail,
     },
   );
   // The toast reads its action for presence and rendering; retain one DOM slot.
@@ -382,6 +382,122 @@ export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
   );
 }
 
+function ChatReplyErrorNotice(props: {
+  error: ChatRunError;
+  connected?: boolean;
+  onRefresh?: () => void;
+  onDismiss?: () => void;
+}) {
+  const app = useOptionalApplication();
+  const messageId = createUniqueId();
+  const busy = () => props.error.kind === "state_contention";
+  const signIn = () => props.error.kind === "auth_refresh";
+  const message = createMemo(() =>
+    formatUiErrorDetails(formatWebUiIconErrorText(props.error.summary)).trim(),
+  );
+  const [line, setLine] = createSignal<HTMLElement>();
+  const [truncated, setTruncated] = createSignal(false);
+  // A different error starts on one line; history refreshes keep it open.
+  const [expanded, setExpanded] = createSignal(() => {
+    message();
+    return false;
+  });
+  const expandable = () => expanded() || truncated();
+  createResizeObserver(
+    () => {
+      // Replacement text can keep the same box, so it needs its own measurement.
+      message();
+      const element = line();
+      return element ? [element] : [];
+    },
+    ([entry]) => {
+      // Open text always fits; it keeps its control until the closed line is measured.
+      if (entry && !expanded()) {
+        setTruncated(entry.target.scrollWidth > entry.target.clientWidth);
+      }
+    },
+  );
+
+  return (
+    <div
+      class={[
+        "chat-error chat-composer-neighbor-card chat-reply-notice",
+        busy() ? "chat-composer-neighbor-card--warn" : "chat-composer-neighbor-card--danger",
+        { "chat-reply-notice--expanded": expanded() },
+      ]}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && props.onDismiss) {
+          event.stopPropagation();
+          props.onDismiss();
+        }
+      }}
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+        <Icon name={busy() ? "alertTriangle" : "circleAlert"} />
+      </span>
+      <div class="chat-reply-notice__body">
+        {/* Actions come first so the opened text wraps beside them, then below. */}
+        <div class="row chat-reply-notice__actions">
+          <button
+            type="button"
+            class="chat-reply-notice__chevron"
+            disabled={!expandable()}
+            aria-label={t("chat.errorDetails")}
+            aria-expanded={expanded() ? "true" : "false"}
+            aria-controls={messageId}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
+          </button>
+          <Show when={signIn() ? app : props.onRefresh}>
+            <button
+              type="button"
+              class="btn btn--sm chat-error__refresh"
+              disabled={!signIn() && !props.connected}
+              onClick={() => (signIn() ? app?.navigate("model-providers") : props.onRefresh?.())}
+            >
+              {t(
+                signIn()
+                  ? "chat.recovery.openModels"
+                  : busy()
+                    ? "chat.checkStatus"
+                    : "common.refresh",
+              )}
+            </button>
+          </Show>
+          <Show when={props.onDismiss}>
+            <button
+              type="button"
+              class="chat-error__dismiss"
+              aria-label={t("chat.actions.dismissError")}
+              onClick={() => props.onDismiss?.()}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
+        </div>
+        <div
+          id={messageId}
+          ref={setLine}
+          class={[
+            "chat-reply-notice__message",
+            { "chat-reply-notice__message--expandable": expandable() },
+          ]}
+          role={busy() ? "status" : "alert"}
+          onClick={() => {
+            // Selecting the text to copy it must not close the line.
+            if (expandable() && !getSelection()?.toString()) {
+              setExpanded((value) => !value);
+            }
+          }}
+        >
+          {message()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   const hasTranscriptFailure = () =>
     Boolean(
@@ -391,7 +507,6 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
           readRunFailureNotice(message, { audience: "desktop" })?.runId === props.runError?.runId,
       ),
     );
-  const contention = () => props.runError?.kind === "state_contention";
   const usageLimit = (): "business" | "consumer" | undefined =>
     props.runError?.kind === "chatgpt_business_usage_limit"
       ? "business"
@@ -406,7 +521,7 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
         disabled={!props.connected}
         onClick={() => props.onRefresh?.()}
       >
-        {t(contention() ? "chat.checkStatus" : "common.refresh")}
+        {t("common.refresh")}
       </button>
     </Show>
   );
@@ -424,25 +539,23 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
       </Show>
       <Show when={!hasTranscriptFailure() && !usageLimit() && props.runError}>
         {(error) => (
-          <>
-            <ChatErrorNotice
-              error={error().summary}
-              action={refresh}
+          <Show
+            when={error().kind !== "stop"}
+            fallback={
+              <ChatErrorNotice
+                error={error().summary}
+                action={refresh}
+                onDismiss={props.onDismissRunError}
+              />
+            }
+          >
+            <ChatReplyErrorNotice
+              error={error()}
+              connected={props.connected}
+              onRefresh={props.onRefresh}
               onDismiss={props.onDismissRunError}
-              tone={contention() ? "warn" : "danger"}
-              summary={
-                error().kind === "stop"
-                  ? undefined
-                  : t(
-                      contention()
-                        ? "chat.errorBusySummary"
-                        : error().kind === "auth_refresh"
-                          ? "chat.errorSignInSummary"
-                          : "chat.errorReplySummary",
-                    )
-              }
             />
-          </>
+          </Show>
         )}
       </Show>
       <Show when={props.workspaceConflict}>

@@ -368,9 +368,9 @@ suite.define(() => {
         expect(startup.params).toMatchObject({ sessionKey });
         const composer = page.locator(".agent-chat__input textarea");
         const sendButton = page.getByRole("button", { name: "Send message" });
-        const alert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
+        const alert = page.locator(".chat-reply-notice").filter({ hasText: renderedDiagnostic });
         const stop = page.getByRole("button", { name: "Stop", exact: true });
-        const details = alert.getByLabel("Error details", { exact: true });
+        const message = alert.getByRole("alert");
         await composer.fill("Try again");
         expect(await sendButton.isEnabled()).toBe(true);
         if (retryTiming === "before history") {
@@ -398,13 +398,8 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe("Try again");
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
-          await alert
-            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
-            .waitFor();
-          expect(await alert.locator("details").getAttribute("open")).toBeNull();
-          await alert.locator("summary").click();
-          await details.waitFor();
-          expect(await details.textContent()).toContain(renderedDiagnostic);
+          await message.waitFor();
+          expect(await message.textContent()).toContain(renderedDiagnostic);
           await sendButton.click();
         }
         const send = await gateway.waitForRequest("chat.send");

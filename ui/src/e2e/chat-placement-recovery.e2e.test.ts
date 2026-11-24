@@ -29,18 +29,9 @@ function recoverySession(id: string, label: string) {
 }
 async function openFailure(page: Page, message: string) {
   const failure = page.locator(".chat-error").filter({ hasText: message });
-  await failure
-    .locator(".app-toast__message")
-    .getByText("Couldn't finish this reply.", { exact: true })
-    .waitFor();
-  await failure
-    .locator(".app-toast__description")
-    .getByText("Check the conversation before trying again.", { exact: true })
-    .waitFor();
-  await failure.locator("summary").click();
-  const details = failure.getByLabel("Error details", { exact: true });
-  await details.waitFor();
-  expect(await details.textContent()).toBe(
+  const error = failure.getByRole("alert");
+  await error.waitFor();
+  expect(await error.textContent()).toBe(
     `Couldn’t continue this session. Check its device and try again. ${message}`,
   );
   return failure;

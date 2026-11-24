@@ -322,22 +322,9 @@ suite.define(() => {
       state: "error",
       errorMessage: diagnostic,
     });
-    const failedAlert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
+    const failedAlert = page.locator(".chat-reply-notice").filter({ hasText: renderedDiagnostic });
     await failedAlert.waitFor();
-    await failedAlert
-      .locator(".app-toast__message")
-      .getByText("Couldn't finish this reply.", { exact: true })
-      .waitFor();
-    await failedAlert
-      .locator(".app-toast__description")
-      .getByText("Check the conversation before trying again.", { exact: true })
-      .waitFor();
-    expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
-    await failedAlert.locator("summary").click();
-    await failedAlert.getByLabel("Error details", { exact: true }).waitFor();
-    expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toContain(
-      renderedDiagnostic,
-    );
+    expect(await failedAlert.getByRole("alert").textContent()).toContain(renderedDiagnostic);
     expect(await page.locator(".chat-group.assistant").count()).toBe(0);
     expect(await stopButton(page).count()).toBe(0);
 
@@ -812,7 +799,7 @@ suite.define(() => {
             after: readsBeforeError,
             match: readMatch,
           });
-          await page.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
+          await page.locator(".chat-reply-notice").filter({ hasText: diagnostic }).waitFor();
           // Home stays a navigation button; the shared row owns terminal attention.
           await expect
             .poll(() =>
@@ -937,9 +924,10 @@ suite.define(() => {
       state: "aborted",
     });
 
-    const alert = page.getByRole("alert").filter({ hasText: diagnostic });
-    await alert.waitFor();
-    expect((await alert.textContent())?.trim()).toContain(`Error: ${diagnostic}`);
+    const notice = page.locator(".chat-reply-notice");
+    const message = notice.getByRole("alert");
+    await message.waitFor();
+    expect(await message.textContent()).toContain(`Error: ${diagnostic}`);
     expect(await page.getByLabel("Run status: Interrupted").count()).toBe(0);
     expect(await stopButton(page).count()).toBe(0);
   });
