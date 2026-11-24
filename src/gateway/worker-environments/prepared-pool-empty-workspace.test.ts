@@ -287,6 +287,40 @@ describe("empty workspace prepared worker reserves", () => {
       );
     },
   );
+
+  it("retains standing image reserves while demand validation is unavailable", async () => {
+    integrationState.enabled = true;
+    const owner = createIntentOwner();
+    const warn = vi.fn();
+    let policyUnavailable = false;
+    const pool = createPool(owner, warn, {
+      resolveHumanPresenceDemand: () => ({
+        profileId: "development",
+        executionMode: "worker-turn",
+        repository: { agentId: "main", url: "https://github.com/acme/private-repo.git" },
+      }),
+      assertIntentCurrent: (profileId, intent) => {
+        if (policyUnavailable) {
+          throw new Error("Image policy could not be evaluated");
+        }
+        owner.assertPreparedIntentCurrent(profileId, intent);
+      },
+    });
+    await fixture.schedule(pool);
+    const [reserve] = available();
+    expect(reserve?.preparation).toMatchObject({
+      purpose: "reserve",
+      expiresAtMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    policyUnavailable = true;
+    await expect(fixture.schedule(pool)).rejects.toThrow("Image policy could not be evaluated");
+    expect(fixture.store.get(reserve!.environmentId)).toMatchObject({
+      state: "ready",
+      destroyRequestedAtMs: null,
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("demand is unavailable"));
+  });
 });
 
 const integrationState = vi.hoisted(() => ({

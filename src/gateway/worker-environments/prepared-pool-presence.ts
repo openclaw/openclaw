@@ -24,6 +24,11 @@ type StandingImageDemand = {
   retireAtMs: null;
 };
 type EffectivePreparedDemand = PreparedPoolPresenceDemand | StandingImageDemand;
+/** A demand read separates "no demand" from "demand could not be read". */
+export type PreparedPoolDemandObservation = {
+  demand: EffectivePreparedDemand | undefined;
+  unavailable: boolean;
+};
 
 export function preparedDemandSourceKey(demand: EffectivePreparedDemand): string {
   return "sourceKey" in demand ? demand.sourceKey : demand.project.key;
@@ -370,10 +375,10 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     return state;
   };
 
-  const currentDemand = (): EffectivePreparedDemand | undefined => {
+  const observeDemand = (): PreparedPoolDemandObservation => {
     try {
       if (getRepositoryIntegration()?.preparedCapacity === "image") {
-        return readStanding();
+        return { demand: readStanding(), unavailable: false };
       }
       // A held repository admission must not extend the last browser's grace.
       // Persistence catches up through maintain; reads use the same observed departure.
@@ -381,20 +386,24 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
         const absentAtMs = humanPresenceObserved
           ? humanPresenceChangedAtMs
           : demand.lastPresentAtMs;
-        return { ...demand, retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS };
+        return {
+          demand: { ...demand, retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS },
+          unavailable: false,
+        };
       }
-      return demand;
+      return { demand, unavailable: false };
     } catch {
       // Unavailable policy refuses demand, never inventory expiry or physical cleanup.
       // maintain still reports the admission failure and owns its retry/settlement.
-      return undefined;
+      return { demand: undefined, unavailable: true };
     }
   };
 
   return {
     maintain,
     ready: read,
-    current: currentDemand,
+    current: () => observeDemand().demand,
+    observe: observeDemand,
     captureImagePolicy,
     // A pass keeps its reconstruction observation until it finishes, even if admission
     // settles meanwhile. This preserves inventory only, never authorizes provider I/O.
@@ -409,7 +418,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       return options.schedule();
     },
     isDemandActive: () => {
-      const active = currentDemand();
+      const active = observeDemand().demand;
       return active?.retireAtMs === null && (humanPresent || "sourceKey" in active);
     },
   };

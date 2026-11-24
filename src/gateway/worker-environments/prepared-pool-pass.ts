@@ -274,7 +274,8 @@ export async function runPreparedPoolPass(
   const { store, signal } = options;
   await store.ready();
   signal.throwIfAborted();
-  const activeDemand = presence.current();
+  const observation = presence.observe();
+  const activeDemand = observation.demand;
   const presenceDeferred = !isAdmitted();
   const inventory = store.list();
   const ctx: PassContext = {
@@ -289,6 +290,22 @@ export async function runPreparedPoolPass(
     oldestFirst: inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs),
     reportRefill,
   };
+  if (observation.unavailable) {
+    // An unreadable demand observation proves neither presence nor absence. It can
+    // refuse new capacity, but it must never retire the inventory it cannot evaluate.
+    options.warn(
+      "Prepared capacity demand is unavailable; retaining prepared inventory until the next maintenance pass",
+    );
+    await reconcileAll(
+      ctx,
+      new Map(),
+      inventory.filter(
+        (record) =>
+          record.destroyRequestedAtMs !== null && record.preparation?.consumedAtMs === null,
+      ),
+    );
+    return;
+  }
   const eligible = pool.admitSources(ctx);
   // Expiry and disabled/surplus capacity need no source or artifact admission.
   // Drain that cleanup first so unrelated GitHub latency cannot hold its owner.
