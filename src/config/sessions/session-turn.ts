@@ -23,9 +23,8 @@ import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
 } from "./session-accessor.types.js";
-import type { SessionActorAuthority, SessionActorPhaseResults } from "./session-actor-contract.js";
+import type { SessionActorAuthority } from "./session-actor-contract.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
-import { runSessionActorCommand } from "./session-actor-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
@@ -38,7 +37,6 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
   completeSessionTurnPublication,
@@ -130,7 +128,6 @@ export async function appendSessionTurnInWorker(
     relocation: custody?.relocation,
   };
   const actor = inputActor?.actor;
-  let inputExpectedState = options.expectedSessionState;
   const fixedVoiceTranscript =
     !actor &&
     !memory &&
@@ -258,9 +255,6 @@ export async function appendSessionTurnInWorker(
           }
           if (ownerSource) {
             acceptSessionSourceValidation(ownerSource, prepared.ownerSourceValidation);
-          }
-          if (actor) {
-            inputExpectedState ??= prepared.expectedSessionState;
           }
           return prepared;
         };
@@ -458,54 +452,30 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            let expectedState = inputExpectedState;
+            inputActor.assertCurrent();
             let candidate: SessionTurnCommitted | undefined;
-            const actorOutcome = await runSessionActorCommand<
-              SessionActorPhaseResults["acceptInput" | "adoptRun"]
-            >(
-              { ...actor, snapshot: (current) => inputActor.snapshot(current) },
-              authority,
-              async (snapshot) => {
-                // Metadata may advance; the writer checks the captured lifecycle at commit.
-                if (snapshot) {
-                  expectedState ??= buildRestartRecoveryExpectedState(
-                    snapshot.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
-                  );
-                }
-                if (!expectedState) {
-                  throw new Error("Input preparation omitted its lifecycle expectation");
-                }
-                const record = (turn: SessionTurnCommitted | undefined) => {
-                  if (!turn) {
-                    throw new Error("Input actor omitted its committed turn");
-                  }
-                  candidate = turn;
-                  operation.onAcknowledged(turn);
-                };
-                const phase = options.initialSessionEntry ? "acceptInput" : inputActor.phase;
-                const command = {
-                  commandId: randomUUID(),
-                  phaseId: `${phase}:${options.expectedSessionId}`,
-                  expectedState,
-                  lifecycle: {},
-                  turn: plan,
-                };
-                return phase === "acceptInput"
-                  ? actor.acceptInput(command, authority, {
-                      committed: (commit) => record(commit.value.turn),
-                    })
-                  : actor.adoptRun(
-                      {
-                        ...command,
-                        sessionId: options.expectedSessionId,
-                      },
-                      authority,
-                      {
-                        committed: (commit) => record(commit.value),
-                      },
-                    );
-              },
-            );
+            const record = (turn: SessionTurnCommitted | undefined) => {
+              if (!turn) {
+                throw new Error("Input actor omitted its committed turn");
+              }
+              candidate = turn;
+              operation.onAcknowledged(turn);
+            };
+            const phase = options.initialSessionEntry ? "acceptInput" : inputActor.phase;
+            const command = {
+              commandId: randomUUID(),
+              phaseId: `${phase}:${options.expectedSessionId}`,
+              expectedState: options.expectedSessionState,
+              lifecycle: {},
+              turn: plan,
+            };
+            const actorOutcome = await (phase === "acceptInput"
+              ? actor.acceptInput(command, authority, {
+                  committed: (commit) => record(commit.value.turn),
+                })
+              : actor.adoptRun({ ...command, sessionId: options.expectedSessionId }, authority, {
+                  committed: (commit) => record(commit.value),
+                }));
             if (actorOutcome.kind !== "committed") {
               throwSessionInputActorFailure(actorOutcome, authorityFailure);
             }

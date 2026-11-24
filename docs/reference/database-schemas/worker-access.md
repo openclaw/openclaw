@@ -321,12 +321,13 @@ The reported `phases.sqlMs` includes synchronous JavaScript work inside the
 transaction; it is not a sum of SQLite statement timings.
 
 Cold input preparation uses the turn planner instead of fetching a full actor
-replica first. The planner carries its recovery expectation into the input
-command; prepared, explicit, and warm replica expectations remain fixed across
-version retries. Transcript input and restart recovery still
-commit atomically under the existing writer FIFO, source checks, final host
-COMMIT authorization, and receipt settlement. Schemas, durability, and update
-behavior are unchanged.
+replica first. Ordinary transcript input selects its implicit lifecycle expectation
+inside the owning actor command, after preceding run completion can settle. This
+applies to durable and memory sessions. Caller-supplied lifecycle expectations stay
+fixed, including restart recovery and queued-input adoption. Transcript input and
+restart recovery still commit atomically under the existing writer FIFO, source
+checks, final host COMMIT authorization, and receipt settlement. Schemas,
+durability, and update behavior are unchanged.
 
 Session memory indexing is background work. It batches transcript changes after
 30 seconds without transcript changes or running turns. Pending work keeps its

@@ -188,6 +188,7 @@ export async function getSessionInputActor(scope: { agentId: string; sessionKey:
         snapshot(authority: SessionActorAuthority) {
           return memory.actor.snapshot(authority);
         },
+        assertCurrent: () => memory.actor.assertCurrent(),
       };
     }
     return undefined;
@@ -202,23 +203,25 @@ export async function getSessionInputActor(scope: { agentId: string; sessionKey:
     throw new Error("Input actor differs from the recorder's admitted target");
   }
   const custody = captureSessionPendingInputWorkerCustody();
+  const guard = <T>(operation: () => T): T => {
+    try {
+      return operation();
+    } catch (error) {
+      // A closed input actor must remain a custody refusal, not enable fallback.
+      if (custody) {
+        throw new SessionPendingInputCustodyError("Pending input actor is unavailable", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  };
   return {
     ...acquired,
     phase: binding.phase,
     storageAuthority: acquired.storageAuthority ?? getSessionActorStorageBinding(scope)?.authority,
-    snapshot(authority: SessionActorAuthority) {
-      try {
-        return acquired.actor.snapshot(authority);
-      } catch (error) {
-        // A closed input actor must remain a custody refusal, not enable fallback.
-        if (custody) {
-          throw new SessionPendingInputCustodyError("Pending input actor is unavailable", {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-    },
+    assertCurrent: () => guard(() => acquired.actor.assertCurrent()),
+    snapshot: (authority: SessionActorAuthority) => guard(() => acquired.actor.snapshot(authority)),
   };
 }
 

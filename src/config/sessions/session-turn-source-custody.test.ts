@@ -15,6 +15,7 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
 afterEach(() => {
@@ -105,9 +106,13 @@ it.each([
       const prepare = vi.fn<
         NonNullable<Parameters<typeof createUserTurnTranscriptRecorder>[0]["beforeMessageWrite"]>
       >(({ message: preparedMessage }) => preparedMessage);
+      const entry = expectDefined(f.read(), "initial session entry");
       const recorder = createUserTurnTranscriptRecorder({
         message,
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: entry },
+        ...(change === "lifecycle"
+          ? { expectedSessionState: buildRestartRecoveryExpectedState(entry) }
+          : {}),
         beforeMessageWrite: prepare,
         updateMode: "none",
         onPersistenceError() {},
@@ -156,6 +161,87 @@ it.each([
           expect(f.read()).toMatchObject({ abortedLastRun: true });
         }
         expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
+
+it.each([
+  { phase: "acceptInput", explicit: false },
+  { phase: "acceptInput", explicit: true },
+  { phase: "adoptRun", explicit: false },
+  { phase: "adoptRun", explicit: true },
+] as const)(
+  "admits $phase after prior-run completion unless its lifecycle was explicit (explicit=$explicit)",
+  async ({ phase, explicit }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const expectedState = { status: undefined, abortedLastRun: false };
+      await patchSessionEntryCore(f.scope, () => ({
+        ...expectedState,
+        lifecycleRevision: "same-session",
+        activeWriterRunId: "preceding-run",
+      }));
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...f.scope, target: f.target },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "durable input actor",
+      );
+      const authority = { assertCurrent() {}, authorize() {} };
+      let completion: ReturnType<typeof input.actor.completeTurn> | undefined;
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Follow up after completion.",
+          timestamp: 2,
+          idempotencyKey: "next-input",
+        },
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: undefined },
+        ...(explicit ? { expectedSessionState: expectedState } : {}),
+        beforeMessageWrite: ({ message }) => {
+          // Queue settlement after preparation, ahead of the input actor command.
+          completion = input.actor.completeTurn(
+            {
+              commandId: "preceding-run-complete",
+              phaseId: "completion",
+              bookkeeping: {
+                sessionId: f.scope.sessionId,
+                lifecycleRevision: "same-session",
+                writerRunId: "preceding-run",
+                expectedState,
+                lifecycle: { status: "done", abortedLastRun: false },
+              },
+            },
+            authority,
+          );
+          return message;
+        },
+        updateMode: "none",
+      });
+      bindUserTurnInputActor(recorder, { phase, acquire: async () => input });
+      try {
+        const persistence = recorder.persistApproved();
+        if (explicit) {
+          await expect(persistence).rejects.toThrow(
+            "Session actor turn was refused by its current owner",
+          );
+          expect(f.events().filter((event) => event.type === "message")).toEqual([]);
+        } else {
+          await expect(persistence).resolves.toMatchObject({ appended: true });
+          expect(f.events().filter((event) => event.type === "message")).toHaveLength(1);
+        }
+        await expect(completion).resolves.toMatchObject({ kind: "committed" });
+        expect(f.read()).toMatchObject({
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: "same-session",
+          status: "done",
+          abortedLastRun: false,
+        });
       } finally {
         await input.actor.release();
       }
