@@ -246,7 +246,7 @@ it("recovers the first durable duplicate only within its existing Cron partition
 it("rearms parked retention from a committed worker history write", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "cron-maintenance-receipt-" },
-    async () => {
+    async (state) => {
       resetGatewayWorkAdmission();
       const now = Date.now();
       const clock = createGatewaySchedulerClock(now);
@@ -255,6 +255,8 @@ it("rearms parked retention from a committed worker history write", async () => 
         .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
         .mockReturnValue(false);
       try {
+        // Keep-warm retains its own deadlines across maintenance lifecycles.
+        await state.writeConfig({ agents: { defaults: { promptCacheKeepWarm: false } } });
         await captureRuntimeConfigAsyncReader()();
         startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
         await clock.advanceBy(5_000);

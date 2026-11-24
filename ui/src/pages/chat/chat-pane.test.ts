@@ -886,7 +886,6 @@ describe("chat pane history pagination intent", () => {
     const { pane, state } = fixture;
     state.handleChatScroll = vi.fn();
     pane.transcriptScrollTop = 100;
-    pane.syncHistoryObserver = vi.fn();
     const thread = document.createElement("div");
     Object.defineProperties(thread, {
       scrollHeight: { value: 1000 },
@@ -904,9 +903,6 @@ describe("chat pane history pagination intent", () => {
     pane.hasOlderMessages = vi.fn(() => true);
     pane.loadOlderMessages = vi.fn(async () => true);
     const thread = document.createElement("div");
-    const sentinel = thread.appendChild(document.createElement("div"));
-    sentinel.className = "chat-history-sentinel";
-    pane.historySentinel = sentinel;
     pane.append(thread);
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     return { pane, thread };
@@ -921,7 +917,7 @@ describe("chat pane history pagination intent", () => {
     pane.handleTranscriptScroll(event);
 
     expect(pane.historyAutoLoadBlocked).toBe(false);
-    expect(pane.syncHistoryObserver).toHaveBeenCalledOnce();
+    expect(pane.historyReaderIntent).toBe(true);
     expect(state.handleChatScroll).toHaveBeenCalledWith(event);
   });
 
@@ -934,7 +930,7 @@ describe("chat pane history pagination intent", () => {
     thread.scrollTop = 80;
     pane.handleTranscriptScroll(event);
 
-    expect(pane.syncHistoryObserver).not.toHaveBeenCalled();
+    expect(pane.historyReaderIntent).toBe(false);
     expect(state.handleChatScroll).toHaveBeenCalledTimes(2);
   });
 

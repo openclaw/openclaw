@@ -87,7 +87,7 @@ compare actual operands: changing the command cannot turn normal admission into 
 
 Use executable tooling recovery only for diagnosed qualification/orchestration
 defects—not product failures or unexplained red jobs. Local controller updates
-cannot retrofit frozen workflows. For an explicitly authorized failed-job grant,
+cannot retrofit frozen workflows. For an explicitly authorized waiver,
 use the [Q-only ledger procedure](/reference/full-release-validation/evidence#release-tooling-waivers):
 commit directly to Q without a grant PR to `main` or a C change, then use a fresh
 request/admission with that exact Q. Its ledger-only delta permits eligible raw

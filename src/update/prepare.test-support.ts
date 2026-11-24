@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as openclawRoot from "../infra/openclaw-root.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 
 const exec = promisify(execFile);
@@ -46,6 +47,7 @@ beforeEach(async () => {
   vi.spyOn(openclawRoot, "resolveOpenClawPackageRootsSync").mockReturnValue([]);
 });
 afterEach(async () => {
+  await closeDefaultRetainedNativeWorkerSource();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
