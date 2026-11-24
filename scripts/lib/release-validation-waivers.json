@@ -174,6 +174,125 @@
       "jobName": "Kova mock provider performance",
       "reason": "Operator accepts memory threshold findings and short-lived CPU threshold spikes for this release; latency, correctness, crashes, isolation, data integrity and execution/evidence failures remain blocking. Preserve raw measurements.",
       "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "targetSha": "2d4ab292114df2ab9670c91c9b846f701c565bd7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-24 (node)",
+      "reason": "Operator accepts the investigated worker startup/recovery timing flake (passed previously, no related changes) for this release. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "targetSha": "2d4ab292114df2ab9670c91c9b846f701c565bd7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-37 (node)",
+      "reason": "Operator accepts the investigated worker startup/recovery timing flake (passed previously, no related changes) for this release. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "targetSha": "2d4ab292114df2ab9670c91c9b846f701c565bd7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-3 (bun)",
+      "reason": "Operator accepts the investigated Bun CONNECT known flake for this release; the SQLite backup race in the same family is fixed in this candidate. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "targetSha": "2d4ab292114df2ab9670c91c9b846f701c565bd7",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 2/4)",
+      "reason": "Operator accepts the hook-token reload test-fixture race (fenced approval outcome delivered to the next queued callback) for this release; fixture fix follows on main. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "targetSha": "2d4ab292114df2ab9670c91c9b846f701c565bd7",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / UI and plugin E2E / Repo E2E (UI 3/4)",
+      "reason": "Operator accepts the Daybreak toggle click/re-render known flake (passed on prior candidates, no UI changes) for this release. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "targetSha": "2d4ab292114df2ab9670c91c9b846f701c565bd7",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Docker live suites (Docker live ACP bind)",
+      "reason": "Operator accepts the Docker live ACP bind fixture failure (unpinned Codex install registry 404 before assertions) for this release. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "targetSha": "2d4ab292114df2ab9670c91c9b846f701c565bd7",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway",
+      "reason": "Operator accepts Windows-node stable E2E runner loss (infrastructure, no step failure) for this release. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "windows_node_stable_e2e ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
     }
   ]
 }
