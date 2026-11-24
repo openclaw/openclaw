@@ -1,7 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import {
-  action,
-  createOptimistic,
   createMemo,
   createSignal,
   createStore,
@@ -31,16 +29,11 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
-import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
@@ -52,6 +45,7 @@ import {
 } from "./cloud-worker-config.ts";
 import { CloudWorkerEnvironments } from "./cloud-worker-environments.tsx";
 import { CloudWorkerMachineClass } from "./cloud-worker-machine-class.tsx";
+import { useCloudWorkerConfig } from "./use-cloud-worker-config.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
@@ -64,15 +58,8 @@ export function CloudWorkersPage() {
     editor: null,
     draft: createCloudWorkerDraft(),
   });
-  const configSave = new CloudWorkerConfigSave(() => saveProjection.publish());
-  const saveProjection = projectMutableSource(configSave, (owner) => owner.state);
-  const saveState = saveProjection.read;
-  let saveLifetime = Promise.withResolvers<void>();
-  function retireSavePresentation() {
-    saveLifetime.resolve();
-    saveLifetime = Promise.withResolvers<void>();
-  }
-  const configProjection = projectRuntimeConfig(context.runtimeConfig);
+  const configSave = useCloudWorkerConfig(clearPresentation, refreshCatalog);
+  const { gateway, runtime: configProjection, state: saveState, busy: saving } = configSave;
   const [catalog, setCatalog] = createSignal<{
     profiles: Map<string, ProfileSummary>;
     appliedHash: ReturnType<typeof catalogReceipt>[3];
@@ -82,7 +69,7 @@ export function CloudWorkersPage() {
   let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
   let catalogRequest: AbortController | undefined;
   function clearPresentation() {
-    retireSavePresentation();
+    catalogRequest?.abort();
     setView((state) => {
       state.editor = null;
       state.draft = createCloudWorkerDraft();
@@ -90,53 +77,7 @@ export function CloudWorkersPage() {
     setCatalog(undefined);
     setCatalogLoad(null);
   }
-  const gateway = useGatewayPage({
-    getGateway: () => context.gateway,
-    onIdentityChange: clearPresentation,
-    onSnapshot: ({ snapshot }) => {
-      if (
-        snapshot.phase === "connected" &&
-        !canCallGatewayMethod(snapshot, "config.patch", "operator.admin")
-      ) {
-        gateway.invalidate();
-        configSave.update({ busy: false, error: null, notice: null });
-        clearPresentation();
-      }
-      refreshCatalog();
-    },
-    invalidateRequests: () => {
-      retireSavePresentation();
-      catalogRequest?.abort();
-      configSave.update({ busy: false });
-    },
-  });
-  const saveScope = createMemo(() => {
-    saveState();
-    return saveLifetime;
-  });
-  const savePresentation = createMemo(() => {
-    const retired = saveScope().promise;
-    const [saving, setSaving] = createOptimistic(false);
-    return { retired, saving, setSaving };
-  });
-  const saving = () => savePresentation().saving() || saveState().busy;
-  const presentSave = action(function* (
-    current: ReturnType<typeof savePresentation>,
-    pending: Promise<boolean>,
-  ) {
-    if (current.retired === saveLifetime.promise) {
-      current.setSaving(true);
-    }
-    yield Promise.race([pending, current.retired]);
-  });
-  async function saveConfig(...args: Parameters<CloudWorkerConfigSave["save"]>) {
-    const current = savePresentation();
-    const pending = configSave.save(...args);
-    // The plain owner admits the patch before Solid presents its progress.
-    await Promise.resolve();
-    return presentSave(current, pending);
-  }
-  void context.runtimeConfig.ensureLoaded();
+  void configSave.ensureLoaded();
   function catalogReceipt() {
     const snapshot = context.gateway.snapshot;
     return [
@@ -204,20 +145,13 @@ export function CloudWorkersPage() {
   onSettled(() => {
     // Applied-config receipts abort the prior catalog request before refreshing profiles.
     const stop = configProjection.subscribe(refreshCatalog);
-    const stopRoute = context.router.subscribe(() => {
-      retireSavePresentation();
-      saveProjection.publish();
-    });
     refreshCatalog();
     return () => {
       stop();
-      stopRoute();
-      saveLifetime.resolve();
+      catalogRequest?.abort();
     };
   });
-  function editableConfig(): Record<string, unknown> | null {
-    return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
-  }
+  const editableConfig = configSave.config;
 
   const profiles = createMemo(() => readCloudWorkerProfiles(editableConfig()));
 
@@ -226,14 +160,7 @@ export function CloudWorkersPage() {
   }
 
   function canManage(): boolean {
-    const configState = configProjection.read().state;
-    return Boolean(
-      hasManageAccess() &&
-      configState.configSnapshot?.hash &&
-      !configState.configLoading &&
-      !configState.configSaving &&
-      !saveState().busy,
-    );
+    return configSave.editable() && !configSave.loading();
   }
 
   function openEditor(profile?: ConfiguredCloudWorkerProfile) {
@@ -269,11 +196,9 @@ export function CloudWorkersPage() {
   }
 
   async function saveProfile(draft: CloudWorkerProfileDraft) {
-    const scope = gateway.capture();
-    const runtimeConfig = context.runtimeConfig;
     const editingId = view.editor?.kind === "edit" ? view.editor.profileId : null;
     const config = editableConfig();
-    if (!scope || !view.editor || !config || !canManage()) {
+    if (!view.editor || !config || !canManage()) {
       return;
     }
     const currentProfiles = Object.fromEntries(
@@ -285,11 +210,9 @@ export function CloudWorkersPage() {
       return;
     }
     const profileId = editingId ?? draft.id;
-    const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await saveConfig(runtimeConfig, isCurrent, {
+    await configSave.save({
       build: (base) => buildCloudWorkerUpsertPatch(base, draft, editingId),
       note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
-      canDispatch: isCurrent,
       failed: () => t("cloudWorkersPage.errors.saveFailed"),
       success: () => {
         setView((state) => {
@@ -328,11 +251,9 @@ export function CloudWorkersPage() {
       configSave.update({ error: t("cloudWorkersPage.errors.deleteFailed") });
       return;
     }
-    const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await saveConfig(runtimeConfig, isCurrent, {
+    await configSave.save({
       build: (base) => buildCloudWorkerDeletePatch(base, profile.id),
       note: `cloud workers: delete ${profile.id}`,
-      canDispatch: isCurrent,
       failed: () => t("cloudWorkersPage.errors.deleteFailed"),
       success: () => {
         if (view.editor?.kind === "edit" && view.editor.profileId === profile.id) {
