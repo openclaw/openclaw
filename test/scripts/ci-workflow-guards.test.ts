@@ -2062,6 +2062,8 @@ AFTER_CD
       ".artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json",
       ".artifacts/upgrade-survivor/release-update-survivor/crash/rows-after.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/update-runs.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/gateway-launcher.log",
     ]) {
       expect(uploaded(file), file).toBe(true);
     }

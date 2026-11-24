@@ -286,6 +286,54 @@ try {
     servingSchema: expected.schema,
     rowCount: after.length,
   });
+} catch (error) {
+  for (const [name, source] of [
+    ["trial.json", path.join(state, "git-install", "releases", ".trial")],
+    ["crash-after-migration.json", path.join(path.dirname(database), "crash-after-migration.json")],
+  ]) {
+    try {
+      if (fs.existsSync(source)) {
+        fs.copyFileSync(source, path.join(artifacts, name));
+      }
+    } catch (captureError) {
+      console.error(`Could not preserve ${name}: ${captureError.message}`);
+    }
+  }
+  try {
+    save(
+      "update-runs.json",
+      readDatabase(database, (db) =>
+        db.prepare("SELECT * FROM update_runs ORDER BY created_at_ms DESC LIMIT 20").all(),
+      ),
+    );
+  } catch (captureError) {
+    console.error(`Could not preserve update rows: ${captureError.message}`);
+  }
+  try {
+    save("summary.json", {
+      head: fixture.previous.commit,
+      status: "failed",
+      case: crash ? "crash" : "healthy",
+      ready: await ready(),
+      error: error.message,
+      servingSchema: readDatabase(
+        database,
+        (db) => db.prepare("PRAGMA user_version").get().user_version,
+      ),
+    });
+  } catch (captureError) {
+    console.error(`Could not preserve update state: ${captureError.message}`);
+  }
+  try {
+    // The foreground launcher inherits Gateway stdout/stderr: this is their shared journal.
+    fs.writeFileSync(
+      path.join(artifacts, "gateway-launcher.log"),
+      fs.readFileSync(path.join(artifacts, "gateway.log")).subarray(-65536),
+    );
+  } catch (captureError) {
+    console.error(`Could not preserve Gateway/launcher journal: ${captureError.message}`);
+  }
+  throw error;
 } finally {
   tlsRelay?.closeAllConnections();
   tlsRelay?.close();

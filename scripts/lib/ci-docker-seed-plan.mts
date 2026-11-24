@@ -10,7 +10,10 @@ const OWNER_DOCKER_SEED_LANES = [
 
 export function resolveDockerSeedLanes(options: { includeReleaseOnly: boolean }) {
   return options.includeReleaseOnly
-    ? [...MAIN_DOCKER_SEED_LANES, ...OWNER_DOCKER_SEED_LANES]
+    ? [
+        ...MAIN_DOCKER_SEED_LANES,
+        ...OWNER_DOCKER_SEED_LANES.filter((lane) => lane !== "release-update-survivor"),
+      ]
     : [...MAIN_DOCKER_SEED_LANES];
 }
 

@@ -10,7 +10,7 @@ it("keeps the published-driver update tripwire in the main tier", () => {
   ]);
 });
 
-it("retains every Docker seed owner in full release validation", () => {
+it("keeps the manual seed profile within its existing budget", () => {
   expect(resolveDockerSeedLanes({ includeReleaseOnly: true })).toEqual([
     "published-upgrade-survivor",
     "mcp-channels",
@@ -18,7 +18,6 @@ it("retains every Docker seed owner in full release validation", () => {
     "mcp-code-mode-gateway",
     "mcp-docker-custody",
     "update-channel-switch",
-    "release-update-survivor",
   ]);
 });
 
