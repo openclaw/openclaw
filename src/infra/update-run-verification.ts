@@ -14,23 +14,6 @@ export function isUpdateRunVerificationConfirmed(
     verification.pluginErrors?.length === 0
   );
 }
-/** Serving observation is independent of permission to restart or roll back. */
-export function resolveUpdateRunVerifiedServingVersion(
-  verification: UpdateRunRecord["verification"],
-  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
-): string | undefined {
-  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
-    return undefined;
-  }
-  const { recovery } = verification;
-  return recovery?.serviceRestartSafe && recovery.service === "healthy"
-    ? recovery.version
-    : verification.versionMatch &&
-        (verification.coreReady ?? verification.readyz) &&
-        verification.settled
-      ? verification.runningVersion
-      : undefined;
-}
 
 export function recordUpdateRunVerificationRecord(
   record: UpdateRunRecord,

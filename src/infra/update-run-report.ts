@@ -21,6 +21,7 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { resolveUpdateRunVerifiedServingVersion } from "./update-run-notice.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -31,7 +32,6 @@ import {
 import { prependUpdateRunCause } from "./update-run-report-cause.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
-import { resolveUpdateRunVerifiedServingVersion } from "./update-run-verification.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
