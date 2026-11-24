@@ -418,6 +418,25 @@ it("coalesces adjacent active and confirmed lifecycle calls without changing the
   ).toEqual(["Stopping 3 agents"]);
 });
 
+it.each([true, false])("explains a capacity rejection with runActive=%s", async (runActive) => {
+  const { container, render } = harness();
+  const key = "agents.defaults.subagents.maxChildrenPerAgent";
+  const receipt =
+    '{"status":"forbidden","error":"sessions_spawn has reached max active children for this session (5/5; agents.defaults.subagents.maxChildrenPerAgent)."}';
+  const groups = single(
+    pair("cap", "sessions_spawn", { label: "Worker 6" }, receipt),
+    runActive ? { __openclawToolStreamLive: true, __openclawToolStreamResultReceived: true } : {},
+  );
+
+  expect(await render(groups, { runActive })).toEqual([
+    "Worker 6 couldn't start. This session has 5 of 5 active subagents. Wait for one to finish, then retry.",
+  ]);
+  expect(container.textContent).not.toContain(key);
+
+  await render(groups, { runActive, isToolExpanded: () => true });
+  expect(container.textContent).toContain(key);
+});
+
 it("names a stop from the roster or its recorded launch, keeping its outcome", async () => {
   const { render } = harness();
   const worker = child("roster-only", { label: "Cinder", activeRunIds: ["child-run"] });

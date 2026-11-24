@@ -1,9 +1,6 @@
-// HTTP request authority retains admitted policy and response lifetime through awaited work.
+// HTTP request lifetime: one disconnect-aware scope per request, and its terminal outcomes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isDeepStrictEqual } from "node:util";
-import { ToolAuthorizationError } from "../agents/tool-input-error.js";
-import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { emitInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -13,27 +10,16 @@ import {
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
-import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
-import { isGatewayAuthPolicyCurrent, captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendUnauthorized } from "./http-common.js";
 import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
-import {
-  GatewayOperatorAccessDeniedError,
-  hasCurrentGatewayOperatorAccess,
-} from "./operator-access-policy.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
-import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
-import { sourceRolePolicies } from "./operator-role-source-policy.js";
+import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 export type GatewayHttpRequestLifetime = Pick<
   GatewayRequestContext,
@@ -114,9 +100,6 @@ export function runGatewayHttpRequest(
   return context ? context.trackExecution(run) : run();
 }
 
-/** Authority ended; its response has already been answered or closed. */
-export class GatewayHttpRequestAuthorityError extends Error {}
-
 /** Request owners consume authority outcomes; unexpected failures keep their own diagnostics. */
 export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unknown): boolean {
   const signal = getAsyncWorkSignal();
@@ -140,7 +123,7 @@ export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unkn
     );
     return true;
   }
-  return error instanceof GatewayHttpRequestAuthorityError;
+  return false;
 }
 
 export type GatewayHttpRequestAuthOptions = {
@@ -152,96 +135,3 @@ export type GatewayHttpRequestAuthOptions = {
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 };
-
-export type GatewayHttpRequestAuthority = {
-  hasCurrentClientAuthority: () => boolean;
-};
-
-export type GatewayHttpResponseAuthority = GatewayHttpRequestAuthority & {
-  assertCurrent: () => void;
-  revalidate: () => Promise<void>;
-};
-
-export function assertGatewayHttpRequestCurrent(requestAuth: {
-  hasCurrentClientAuthority?: () => boolean;
-}): void {
-  if (requestAuth.hasCurrentClientAuthority?.() === false) {
-    throw new ToolAuthorizationError("Gateway requester authority changed");
-  }
-}
-
-export function captureHttpRequestAuthority(
-  params: GatewayHttpRequestAuthOptions & { req: IncomingMessage },
-): () => boolean {
-  const cfg = params.cfg ?? getRuntimeConfig();
-  // HTTP scopes come from credential/header grants and role ceilings, never identityScopes.
-  const policy = captureGatewayAuthPolicy(cfg, null);
-  const authGeneration = resolveSharedGatewaySessionGeneration(
-    params.auth,
-    params.trustedProxies ?? cfg.gateway?.trustedProxies,
-  );
-  const roles = cfg.gateway?.roles;
-  const rolePolicy = sourceRolePolicies(roles);
-  const roleRevision = isNamedOperatorRoleEnforcementEnabled(cfg)
-    ? readOperatorRolePolicyRevision()
-    : undefined;
-  const aliasRevision = readUserProfileAliasRevision();
-  const ingress = getRemoteControlUiIngressContext(params.req);
-  return () => {
-    if (ingress) {
-      try {
-        assertRemoteControlUiIngressCurrent(ingress);
-      } catch {
-        return false;
-      }
-    }
-    const current = params.getRuntimeConfig?.() ?? getRuntimeConfig();
-    return (
-      !params.req.socket?.destroyed &&
-      isGatewayAuthPolicyCurrent(policy, current) &&
-      // HTTP preparation retains its role-policy fence independently of WS transport policy.
-      (roles === current.gateway?.roles ||
-        isDeepStrictEqual(rolePolicy, sourceRolePolicies(current.gateway?.roles))) &&
-      (roleRevision === undefined || roleRevision === readOperatorRolePolicyRevision()) &&
-      aliasRevision === readUserProfileAliasRevision() &&
-      authGeneration ===
-        resolveSharedGatewaySessionGeneration(
-          params.getResolvedAuth?.() ?? params.auth,
-          params.trustedProxies ?? current.gateway?.trustedProxies,
-        )
-    );
-  };
-}
-
-export function bindHttpResponseAuthority<T>(
-  auth: T & {
-    operatorAccessAuthority?: PluginGatewayAccessAuthority | null;
-    hasCurrentProfileAuthority?: () => boolean;
-  },
-  res: ServerResponse,
-  hasCurrentClientAuthority: () => boolean,
-): T & GatewayHttpResponseAuthority {
-  const assertCurrent = () => {
-    if (res.writableEnded || res.destroyed) {
-      throw new GatewayHttpRequestAuthorityError("HTTP request authority expired");
-    }
-    if (!hasCurrentGatewayOperatorAccess(auth.operatorAccessAuthority)) {
-      throw new GatewayOperatorAccessDeniedError();
-    }
-    if (!hasCurrentClientAuthority() || auth.hasCurrentProfileAuthority?.() === false) {
-      sendUnauthorized(res);
-      throw new GatewayHttpRequestAuthorityError("Unauthorized");
-    }
-  };
-  return {
-    ...auth,
-    hasCurrentClientAuthority: () =>
-      !res.writableEnded &&
-      !res.destroyed &&
-      hasCurrentClientAuthority() &&
-      auth.hasCurrentProfileAuthority?.() !== false &&
-      hasCurrentGatewayOperatorAccess(auth.operatorAccessAuthority),
-    assertCurrent,
-    revalidate: async () => assertCurrent(),
-  };
-}

@@ -288,6 +288,8 @@ type SessionEntryCore = SessionEntryProvenance &
     /** Ordinary Template admission owns this exact pending incarnation until verified setup. */
     templateInitialization?: {
       source: { packageName: string; version?: string };
+      /** The original Add's zone follows this admission through reviewed or chat setup. */
+      deviceTimeZone?: string;
       agentConfig: import("../types.agents.js").AgentEntryConfig;
       workspaceIdentity: string;
       /** Verified intent recorded before instructions or config can change. */
@@ -301,11 +303,10 @@ type SessionEntryCore = SessionEntryProvenance &
       configured?: { planDigest: string; sourceIntegrity: string };
     };
     /** Creation is finished; Retry continues only this hidden Template setup turn. */
-    templateSetup?: {
+    templateSetup?: import("../../templates/conversation.js").TemplateSetupOpening & {
       source: { packageName: string; version?: string };
-      report: import("../../templates/conversation.js").TemplateSetupReport;
-      /** Workspace is ready; dependency installation can overlap the first conversation turn. */
-      dependenciesPending?: true;
+      /** From the verified manifest, never inferred from the agent's editable workspace. */
+      requiredAutomationIds?: string[];
       /** Avoid replaying the greeting when Retry only needs to report dependency results. */
       openingComplete?: true;
     };
@@ -615,6 +616,21 @@ type SessionEntryCore = SessionEntryProvenance &
     /** A committed lossy compaction affected this history; cleared with a new session. */
     compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
+    /**
+     * Last read-only prompt-cache prewarm (`agents.defaults.promptCacheKeepWarm`). It keeps a
+     * keep-warm series and the cache-TTL pruning clock across Gateway restarts. Readers ignore it
+     * unless its reply is still in the transcript they read and the route matches.
+     */
+    promptCacheKeepWarm?: {
+      /** Transcript entry of the provider reply whose cached prefix the pings keep warm. */
+      anchorEntryId: string;
+      provider: string;
+      model: string;
+      /** Request start of the last successful prewarm. */
+      lastPingAt: number;
+      /** Successful prewarms since the last human turn. */
+      pings: number;
+    };
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
     /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */

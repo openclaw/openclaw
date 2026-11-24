@@ -51,7 +51,10 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
-import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
+import {
+  restoreScheduledAutomationOperator,
+  type RestoredGatewayOperatorAuthority,
+} from "./operator-run-recovery.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type ScheduledRequest = Parameters<CronServiceDeps["runIsolatedAgentJob"]>[0];
@@ -253,7 +256,7 @@ export async function runPluginCommandScheduledTurn(params: {
       ],
       isActive: () => active && !request.abortSignal?.aborted,
     });
-    let restored: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
+    let restored: RestoredGatewayOperatorAuthority | undefined;
     let inference: Awaited<ReturnType<typeof acquireCronInferenceAuthorization>> | undefined;
     let modelLease: ReturnType<typeof bindOperatorModelExecution>;
     let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
@@ -281,7 +284,7 @@ export async function runPluginCommandScheduledTurn(params: {
       // Restoration owns the original operator source, not the invocation lifetime.
       // Every scheduled effect separately composes assertParent below; accepted children
       // retain the native operator lease without inheriting a closed occurrence callback.
-      restored = await restoreGatewayQueuedOperatorRecovery({
+      restored = await restoreScheduledAutomationOperator({
         agentId: params.agentId,
         source: schedule.operatorSource,
         operatorSource:
@@ -298,14 +301,11 @@ export async function runPluginCommandScheduledTurn(params: {
       });
       assertParent();
       const operatorAuthority = restored.authority;
-      const assertCurrent = composeSessionSourceAssertion(
-        [assertParent, operatorAuthority.assertCurrent],
-        (assertSources) => {
-          assertSources();
-          inference?.assertCurrent();
-          modelLease?.assertCurrent();
-        },
-      );
+      const assertCurrent = composeSessionSourceAssertion([assertParent], (assertSources) => {
+        assertSources();
+        inference?.assertCurrent();
+        modelLease?.assertCurrent();
+      });
       assertCurrent();
       const model = resolveSessionModelRef(cfg, entry, schedule.parent.agentId);
       modelLease = bindOperatorModelExecution(operatorAuthority, model);

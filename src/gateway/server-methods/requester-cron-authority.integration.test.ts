@@ -20,8 +20,7 @@ import {
 } from "../../agents/subagents/requester-cron-authority.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
@@ -90,14 +89,7 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
       ? {
           runId: originalRunId,
           callerOrigin: { kind: "unknown" as const },
-          managementEntitlement: {
-            source: "channel-owner" as const,
-            isCurrent: () =>
-              isConfiguredCommandOwner(getRuntimeConfig(), {
-                channel: "discord",
-                senderId: "owner-1",
-              }),
-          },
+          managementEntitlement: { source: "channel-owner" as const },
         }
       : admission(originalRunId, requester);
   if (admin === "channel-owner") {
@@ -476,7 +468,7 @@ describe("requester continuation persisted automation management", () => {
     }
   });
 
-  it.each(["fresh user turn", "session reset", "global owner removal"])(
+  it.each(["fresh user turn", "session reset"])(
     "rejects %s during update validation",
     async (reason) => {
       const entered = createDeferred();
@@ -490,10 +482,7 @@ describe("requester continuation persisted automation management", () => {
         return [];
       });
       hold = true;
-      const update = withSuccessor(
-        reason === "global owner removal" ? "channel-owner" : true,
-        fixture.update,
-      );
+      const update = withSuccessor(true, fixture.update);
       try {
         await awaitGateBeforeSettlement(
           entered.promise,
@@ -501,9 +490,7 @@ describe("requester continuation persisted automation management", () => {
           "Update returned before service validation",
         );
         expect(await fixture.read()).toEqual(fixture.before);
-        if (reason === "global owner removal") {
-          setRuntimeConfigSnapshot(cfg);
-        } else if (reason === "fresh user turn") {
+        if (reason === "fresh user turn") {
           const requester = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
           requester.internal = {};
           admission("new-user-turn", requester);

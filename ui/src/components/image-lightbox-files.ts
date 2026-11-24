@@ -67,8 +67,10 @@ export async function downloadLightboxImage(
     downloadBlobFile(title, new Blob([blob], { type: "application/octet-stream" }), 30_000);
     return;
   }
-  if (!BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
+  // A rendered JPEG preview can represent an original that the browser cannot open.
+  const heifOriginal = mimeType === "image/heic" || mimeType === "image/heif";
+  if (!heifOriginal && !BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
     throw new Error("Unsupported image download");
   }
-  downloadImageBlob(blob, title);
+  downloadImageBlob(blob, title, { attachmentOnly: heifOriginal });
 }

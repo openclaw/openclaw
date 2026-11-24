@@ -80,8 +80,12 @@ async function withCaller<T>(
     return await withGatewayToolCallerIdentity(
       {
         ...caller,
-        receiptAuthority: () =>
-          validateAgentRunDelegatedAuthority(authority) && caller.receiptAuthority?.() !== false,
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(authority)) {
+            throw new Error("agent run authority is no longer active");
+          }
+          caller.receiptAuthority?.();
+        },
       },
       () => run(caller, authority),
     );

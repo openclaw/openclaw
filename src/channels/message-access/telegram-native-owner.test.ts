@@ -6,7 +6,6 @@ import { configureNativeAcp, installNativeAcpRuntime } from "./native-acp-owner.
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
 const denied = "You are not authorized to use this command.";
-const failed = "⚠️ Command failed. Please try again later.";
 const topicOwner = {
   senderIsOwner: true,
   agentId: "topic-owner",
@@ -69,7 +68,8 @@ it.each([
     }, authority === "asserted"),
 );
 
-it("rejects stale native plugin owner authority after demotion", () =>
+// The owner decision is fixed when the command starts; a started command may finish.
+it("lets a started native plugin command finish after the owner is demoted", () =>
   withTelegramNativeOwners(async ({ invoke, handler, admins, driver }) => {
     const entered = createDeferredCore();
     const finish = createDeferredCore();
@@ -92,9 +92,11 @@ it("rejects stale native plugin owner authority after demotion", () =>
       setUserProfileRole(admins[0]!.profile.id, "member");
       finish.resolve();
       await pending;
-      expect(effects).toBe(0);
+      expect(effects).toBe(1);
       expect(driver.deliveries()).toEqual([
-        expect.objectContaining({ replies: [expect.objectContaining({ text: failed })] }),
+        expect.objectContaining({
+          replies: [expect.objectContaining({ text: "TELEGRAM-OWNER-OK" })],
+        }),
       ]);
     } finally {
       finish.resolve();
@@ -141,10 +143,8 @@ it("lets a started login finish after the owner is demoted", () =>
     }
   }));
 
-const unavailable = "Configured ACP binding is unavailable right now. Please try again.";
-
 it.each(["current", "capability lookup", "accepted control"])(
-  "retains native Telegram owner authority during configured ACP preparation: %s",
+  "finishes a started configured ACP preparation after the owner is demoted: %s",
   (phase) =>
     withTelegramNativeOwners(async ({ cfg, state, admins, invokeTopic, handler, driver }) => {
       cfg.channels!.telegram!.groups = { "-10012345": { groupPolicy: "open" } };
@@ -161,7 +161,6 @@ it.each(["current", "capability lookup", "accepted control"])(
       try {
         await seed({ model: "fixture/previous", thinking: "off" });
         effects.length = 0;
-        const before = manager.resolveSession(target);
         pause();
         pending = invokeTopic();
         if (phase !== "current") {
@@ -171,25 +170,14 @@ it.each(["current", "capability lookup", "accepted control"])(
         }
         await pending;
         const after = manager.resolveSession(target);
-        if (phase === "current") {
-          expect(effects).toEqual(["configure:model", "configure:thinking"]);
-          expect(handler).toHaveBeenCalledOnce();
-          expect(driver.deliveries()).toEqual([{ replies: [{ text: "TELEGRAM-OWNER-OK" }] }]);
-        } else {
-          expect(handler).not.toHaveBeenCalled();
-          expect(driver.sentMessages()).toEqual([{ chatId: -10012345, text: unavailable }]);
-          expect(driver.deliveries()).toEqual([]);
-          expect(effects).toEqual(phase === "capability lookup" ? [] : ["configure:model"]);
-        }
-        if (phase === "capability lookup") {
-          expect(after).toEqual(before);
-        } else {
-          const runtimeOptions = {
-            model: spec.model,
-            thinking: phase === "current" ? "high" : "off",
-          };
-          expect(after).toMatchObject({ kind: "ready", meta: { runtimeOptions } });
-        }
+        // The owner decision is fixed when the command starts; a started command finishes.
+        expect(effects).toEqual(["configure:model", "configure:thinking"]);
+        expect(handler).toHaveBeenCalledOnce();
+        expect(driver.deliveries()).toEqual([{ replies: [{ text: "TELEGRAM-OWNER-OK" }] }]);
+        expect(after).toMatchObject({
+          kind: "ready",
+          meta: { runtimeOptions: { model: spec.model, thinking: "high" } },
+        });
       } finally {
         finish.resolve();
         try {

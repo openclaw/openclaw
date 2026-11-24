@@ -223,8 +223,8 @@ openclaw-terminal-panel {
     background: transparent;
     color: var(--text);
     text-align: left;
-    font-size: 13px;
-    line-height: 20px;
+    font-size: calc(13px * var(--control-ui-text-scale));
+    line-height: calc(20px * var(--control-ui-text-scale));
   }
   .tp-session + .tp-session::before {
     content: "";
@@ -247,8 +247,18 @@ openclaw-terminal-panel {
     width: 18px;
     height: 18px;
   }
-  .tp-session__identity {
+  .tp-session__body {
+    display: flex;
     flex: 1;
+    flex-wrap: wrap;
+    align-items: center;
+    min-width: 0;
+    column-gap: inherit;
+    row-gap: 2px;
+  }
+  /* Keep status beside a name and path that fit; otherwise give the identity the whole line. */
+  .tp-session__identity {
+    flex: 1 1 auto;
     min-width: 0;
   }
   .tp-session__name,
@@ -258,14 +268,13 @@ openclaw-terminal-panel {
   }
   .tp-session__cwd,
   .tp-session__state {
-    font-size: 12px;
-    line-height: 18px;
+    font-size: var(--control-ui-text-sm);
+    line-height: 1.5;
     color: var(--muted);
   }
   .tp-session__state {
     flex: none;
-    max-width: 30%;
-    text-align: right;
+    max-width: 100%;
     overflow-wrap: anywhere;
   }
   .tp-session__indicator {
@@ -481,13 +490,6 @@ openclaw-terminal-panel {
     left: 49px;
     right: 12px;
     background: color-mix(in srgb, var(--border-strong) 65%, transparent);
-  }
-  .tp--mobile .tp-session__name {
-    overflow: hidden;
-    white-space: nowrap;
-  }
-  .tp--mobile .tp-session__name[data-scrollable="true"] {
-    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
   }
   .tp--mobile .tp-session__indicator.is-current {
     color: var(--ok);

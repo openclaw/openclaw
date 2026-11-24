@@ -89,7 +89,6 @@ export async function prepareSessionPrincipalRunAuthority(
     return {
       authority: createAdmittedRunOperatorAuthority({
         ...original,
-        assertCurrent: source.assertCurrent,
         signal: source.signal,
       }),
       release: source.release,
@@ -179,7 +178,6 @@ async function prepareSessionPrincipalRunAccess(params: {
     if (params.recoveredOperatorAuthority) {
       const authority = params.recoveredOperatorAuthority;
       assertAdmittedRunOperatorAuthority(authority);
-      authority.assertCurrent();
       if (authority.profileId !== params.profileId) {
         throw new Error("Interrupted requester identity changed.");
       }
@@ -227,7 +225,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       },
     };
     const assertPrincipalCurrent = composeSessionSourceAssertion(
-      [params.assertCurrent, recorded?.authority.assertCurrent],
+      [params.assertCurrent],
       undefined,
       { synchronousCheck: true },
     );
@@ -344,6 +342,10 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  // Goal Resume retains session access across transcript writer handoffs.
+  const sessionAccessOnly =
+    params.method === "chat.send" ||
+    (params.method === "sessions.goal.update" && requestPreparation.authorizesAgentRun);
   const chatParams =
     params.method === "chat.send" ? asOptionalRecord(params.requestParams) : undefined;
   const chatMessage =
@@ -431,7 +433,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         allowMissing: true,
         followLifecycle: params.method === "chat.send",
         followTranscript: params.method === "chat.send",
-        sessionAccessOnly: params.method === "chat.send",
+        sessionAccessOnly,
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
@@ -567,7 +569,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             membership: new Set(),
           });
           creationReleases.push(retained.release);
-          const readScope = params.method === "chat.send" ? "session-access" : "sharing";
+          const readScope = sessionAccessOnly ? "session-access" : "sharing";
           const read = () => {
             const current = retained.readCurrent(readScope);
             if (!active || !current?.entry) {

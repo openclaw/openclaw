@@ -539,21 +539,6 @@ async function executeDoctorLint(
     stateView.progress.check(index, total, check.id),
   );
   stateView.progress.phase("finishing report");
-  const detectedFindings: readonly HealthFinding[] = [
-    ...result.findings,
-    ...coreChecks
-      .filter((check) => stateView.deferredCheckIds?.has(check.id))
-      .map((check): HealthFinding => ({
-        checkId: check.id,
-        source: "doctor",
-        severity: "warning",
-        errorCode: "update-inspection-deferred",
-        requirement: "update-validation-scope",
-        message:
-          "Advisory inspection deferred until after update activation; required migration, config, plugin, and Gateway readiness checks remain enabled.",
-        fixHint: `Run \`openclaw doctor --lint --only ${check.id}\` after activation to complete this inspection.`,
-      })),
-  ];
   const advisoryChecks = new Set(
     coreChecks
       .filter(
@@ -563,12 +548,12 @@ async function executeDoctorLint(
       .map((check) => check.id),
   );
   const findings = isUpdateDoctorLintPass(stateView.sourceEnv)
-    ? detectedFindings.map((finding) =>
+    ? result.findings.map((finding) =>
         finding.severity === "error" && advisoryChecks.has(finding.checkId)
           ? { ...finding, severity: "warning" as const }
           : finding,
       )
-    : detectedFindings;
+    : result.findings;
   const databaseStores = findings.flatMap((finding) =>
     finding.checkId === "core/doctor/database-engine" && finding.details ? [finding.details] : [],
   );

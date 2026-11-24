@@ -120,7 +120,6 @@ export async function prepareSessionPatchTargets(params: {
   const ready = params.operatorAuthority
     ? params.operatorAuthority.then((captured) => {
         operatorAuthority = captured?.authority;
-        operatorAuthority?.assertCurrent();
       })
     : Promise.resolve();
   const selected = params.operatorAuthority ? params.prepared : [];
@@ -138,7 +137,6 @@ export async function prepareSessionPatchTargets(params: {
           guards: [originalCommitGuards[target.index]!],
           archiveTransitions: [],
         });
-        operatorAuthority?.assertCurrent();
       },
       followRegistration: (change) =>
         params.followSharingRegistration?.(
@@ -217,7 +215,6 @@ export async function prepareSessionPatchTargets(params: {
             guards: [originalGuard],
             archiveTransitions: [],
           });
-          operatorAuthority?.assertCurrent();
           if ("error" in result) {
             throw result.error instanceof Error
               ? result.error

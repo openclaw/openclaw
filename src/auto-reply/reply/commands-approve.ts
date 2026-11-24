@@ -270,13 +270,6 @@ export async function handleApproveCommandFromContext(
       if (!isSystemAgentApproval) {
         throw new Error("unknown or expired approval id");
       }
-      if (systemAgentNeedsOwner) {
-        try {
-          params.command.assertOwnerCurrent?.();
-        } catch {
-          throw new Error("your owner authority changed; send /approve again");
-        }
-      }
     }
     const request = {
       cfg: params.cfg,

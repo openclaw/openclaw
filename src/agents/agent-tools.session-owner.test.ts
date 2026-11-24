@@ -61,12 +61,7 @@ it.each([false, undefined])("limits assignment for owner=%s", async (senderIsOwn
   expect(gateway).toHaveBeenCalledWith({
     method: assignmentOnly ? "sessions.assignOwner" : "sessions.patch",
     params: { key: sessionKey, ...(assignmentOnly ? { owner } : { label: "Scheduled session" }) },
-    ...(assignmentOnly
-      ? {
-          agentToolCaller: { agentId: "main", sessionKey },
-          assertDispatchCurrent: expect.any(Function),
-        }
-      : {}),
+    ...(assignmentOnly ? { agentToolCaller: { agentId: "main", sessionKey } } : {}),
   });
   const denied = assemble({
     config: { tools: { allow: ["sessions"], deny: ["sessions"] } },
@@ -78,7 +73,6 @@ it("lists creation without operator authority while preserving explicit denies a
     profileId: "profile-requester",
     scopes: ["operator.sessions.write"],
     signal: new AbortController().signal,
-    assertCurrent: () => {},
   });
   const gateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest").mockResolvedValue({});
   expect(assemble().find((tool) => tool.name === "sessions_create")).toBeDefined();

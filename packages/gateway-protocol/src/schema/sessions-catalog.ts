@@ -4,9 +4,14 @@ import { closedObject } from "./closed-object.js";
 import { AgentActivityItemSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionCatalogProfileRelationSchema } from "./session-catalog-query.js";
 import { SessionParticipantSchema } from "./session-participant.js";
 import { SessionCreatedActorSchema } from "./sessions-row.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
+export type {
+  SessionCatalogProfileRelation,
+  SessionCatalogSourceProfileRelation,
+} from "./session-catalog-query.js";
 
 const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: NonEmptyString });
 
@@ -19,6 +24,7 @@ export const SessionCatalogLocatorSchema = closedObject({
 });
 
 export const SessionCatalogCapabilitiesSchema = closedObject({
+  profileRelation: Type.Optional(Type.Literal(true)),
   continueSession: Type.Boolean(),
   archive: Type.Boolean(),
   createSession: Type.Optional(
@@ -90,6 +96,8 @@ export const SessionCatalogSessionSchema = closedObject({
 });
 
 export const SessionCatalogHostSchema = closedObject({
+  /** Relationship actually applied by this host; absent on legacy fallback. */
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   hostId: NonEmptyString,
   label: NonEmptyString,
   kind: stringLiteralUnion(["gateway", "node"]),
@@ -112,6 +120,7 @@ export const SessionCatalogSchema = closedObject({
 });
 
 const SessionsCatalogListCommonProperties = {
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   agentId: Type.Optional(NonEmptyString),
   progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   /** Opt into pending hosts completed by incremental publications for this progressId. */
@@ -173,6 +182,7 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
 });
 
 export const SessionsCatalogReadParamsSchema = closedObject({
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   cursor: Type.Optional(Type.String()),
@@ -190,7 +200,13 @@ export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
+export const SessionsCatalogResolveResultSchema = Type.Union([
+  closedObject({ sessionKey: NonEmptyString, sessionId: NonEmptyString }),
+  Type.Null(),
+]);
+
 export const SessionsCatalogImportParamsSchema = closedObject({
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
   displayName: Type.Optional(
     Type.String({
@@ -253,6 +269,7 @@ export type SessionsCatalogReadParams = Static<typeof SessionsCatalogReadParamsS
 export type SessionsCatalogReadResult = Static<typeof SessionsCatalogReadResultSchema>;
 export type SessionsCatalogContinueParams = Static<typeof SessionsCatalogContinueParamsSchema>;
 export type SessionsCatalogContinueResult = Static<typeof SessionsCatalogContinueResultSchema>;
+export type SessionsCatalogResolveResult = Static<typeof SessionsCatalogResolveResultSchema>;
 export type SessionsCatalogImportParams = Static<typeof SessionsCatalogImportParamsSchema>;
 export type SessionsCatalogImportResult = Static<typeof SessionsCatalogImportResultSchema>;
 export type SessionsCatalogArchiveParams = Static<typeof SessionsCatalogArchiveParamsSchema>;

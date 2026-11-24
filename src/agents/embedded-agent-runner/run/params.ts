@@ -1,3 +1,4 @@
+import type { ProviderStateScope } from "@openclaw/ai/internal/runtime";
 import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
@@ -69,6 +70,10 @@ export type RunEmbeddedAgentParams = Pick<
   memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
+  /** The session's last cache prewarm, which its cache-TTL clock counts; a fork passes its source's. */
+  promptCacheKeepWarm?: import("../../../config/sessions/types.js").SessionEntry["promptCacheKeepWarm"];
+  /** Set only by the writer claim at lane admission; owns the conversation's provider state. */
+  providerStateScope?: ProviderStateScope;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
   sessionTarget?: AgentRunSessionTarget;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */

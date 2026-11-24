@@ -33,7 +33,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "./prepared-model-runtime-auth.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
@@ -896,7 +899,9 @@ describe("prepared runtime generation admission", () => {
     const previousSnapshot = readSnapshot(previousInput);
 
     await using outerLease = scopePreparedModelRuntimeLease(await acquirePrevious());
-    expect(outerLease.snapshot).toBe(previousSnapshot);
+    // Run projections retain inventory ownership while carrying their own admitted policy.
+    expect(outerLease.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(outerLease.snapshot)?.()).toBe(previousConfig);
 
     await refresh(committedConfig, publicationOptions);
     const committedSnapshot = readSnapshot(committedInput);
@@ -912,12 +917,17 @@ describe("prepared runtime generation admission", () => {
           acquirePrevious,
         );
 
-        expect(resumed.snapshot).toBe(previousSnapshot);
+        expect(resumed.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+        expect(getPreparedModelRuntimePolicyConfigReader(resumed.snapshot)).toBe(
+          getPreparedModelRuntimePolicyConfigReader(outerLease.snapshot),
+        );
         expect(readSnapshot(committedInput)).toBe(committedSnapshot);
         await resumed[Symbol.asyncDispose]();
         {
-          await using cloned = await acquirePrevious(runInput(structuredClone(previousConfig)));
-          expect(cloned.snapshot).toBe(previousSnapshot);
+          const clonedConfig = structuredClone(previousConfig);
+          await using cloned = await acquirePrevious(runInput(clonedConfig));
+          expect(cloned.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+          expect(getPreparedModelRuntimePolicyConfigReader(cloned.snapshot)?.()).toBe(clonedConfig);
         }
         for (const [input, requestedGeneration] of [
           [{ ...previousInput, workspaceDir: "/tmp/different-workspace" }, generation],
@@ -940,7 +950,10 @@ describe("prepared runtime generation admission", () => {
     expect(readSnapshot(committedInput)).toBe(committedSnapshot);
 
     await using next = await acquireRun(committedInput);
-    expect(next.snapshot).toBe(committedSnapshot);
+    expect(next.snapshot.catalogOwner).toBe(committedSnapshot?.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(next.snapshot)).toBe(
+      getPreparedModelRuntimePolicyConfigReader(committedSnapshot),
+    );
   });
   it("does not let a stale dynamic lease authorize a replacement generation", async () => {
     const config = {};

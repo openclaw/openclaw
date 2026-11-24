@@ -168,6 +168,12 @@ export default definePluginEntry({
   policy checks, rollback, and untrusted-content wrapping. The provider supplies
   transcript text through `read(...)`; it must not write the destination session.
 
+  A provider with a durable continuation can implement `resolveGatewayConversation`.
+  After checking source and destination read access and the destination’s stored
+  origin, `sessions.catalog.resolve` returns its `sessionKey` and current
+  `sessionId`. An unbound source returns `null`. Looking up a destination starts
+  no session and sends no message.
+
   A read-only catalog of sessions published by another Gateway may set
   `audience: "session-viewers"`. Viewers need `operator.read`; configured roles
   must also allow viewing others' sessions (`sessions.others: "view"`,
@@ -308,3 +314,16 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

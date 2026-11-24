@@ -48,7 +48,6 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
   const operatorAuthority = options.expectedTarget
     ? readSessionEventTargetOperatorAuthority(options.expectedTarget)
     : undefined;
-  operatorAuthority?.assertCurrent();
   const cfg = getSessionEventRuntimeConfig();
   const agentId = normalizeAgentId(options.agentId);
   resolveConfiguredAgentId(cfg, agentId);
@@ -232,7 +231,7 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "sourceRunId" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "completedToolCall" | "scheduledAutomation"
   >;
   readmissionAttempt?: number;
   occurrenceId: string;
@@ -261,6 +260,9 @@ export function buildSessionEventContext(params: {
     InputProvenance: {
       kind: "internal_system",
       sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
+      ...(!automation && options.source === "tool_handoff" && options.completedToolCall
+        ? { completedToolCall: options.completedToolCall }
+        : {}),
       ...(automation && automation.job.state.runningAtMs !== undefined
         ? {
             jobId: automation.job.id,
@@ -326,26 +328,20 @@ export function buildSessionEventContext(params: {
     // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
-      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
       },
-      // Work that outlives this occurrence keeps only the live operator source.
+      // Work that outlives this occurrence keeps the operator source admitted at its start.
       successor: {
         operatorAuthority,
-        sourceAssertion: operatorAuthority.assertCurrent,
-        isCurrent: () => {
-          operatorAuthority.assertCurrent();
-          return true;
-        },
+        isCurrent: () => true,
       },
     });
   } else if (requesterOwner?.owner) {
     bindCommandOwnerAuthority(ctx, {
       channelPrincipal: requesterPrincipal,
       recoveryReference: requesterOwner.recoveryReference,
-      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
@@ -353,7 +349,6 @@ export function buildSessionEventContext(params: {
       successor: {
         channelPrincipal: requesterPrincipal,
         recoveryReference: requesterOwner.recoveryReference,
-        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
           return true;
@@ -373,7 +368,6 @@ export function buildSessionEventContext(params: {
       bindCommandOwnerAuthority(ctx, {
         channelPrincipal,
         recoveryReference: authority.recoveryReference,
-        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
           return true;
@@ -381,7 +375,6 @@ export function buildSessionEventContext(params: {
         successor: {
           channelPrincipal,
           recoveryReference: authority.recoveryReference,
-          sourceAssertion: params.assertCurrent,
           isCurrent: () => {
             params.assertCurrent();
             return true;

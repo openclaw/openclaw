@@ -67,6 +67,7 @@ export type ModelSetupWizardRecovery = {
   sessionId: string;
   authChoice: string;
   authKind?: ProviderLoginOption["kind"];
+  selectModel?: boolean;
 };
 
 type ModelSetupWizardPhase =
@@ -102,7 +103,6 @@ export type ModelSetupState = {
   manualApiKey: string;
   manualError: string | null;
   moreSignInOpen: boolean;
-  nativeSessionCatalogsEnabled: boolean;
   iconUrls: Record<string, string>;
   setupRefreshWarning: string | null;
   detectionRequest: object | null;
@@ -121,7 +121,6 @@ export function createModelSetupState(): ModelSetupState {
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
-    nativeSessionCatalogsEnabled: false,
     iconUrls: {},
     setupRefreshWarning: null,
     detectionRequest: null,

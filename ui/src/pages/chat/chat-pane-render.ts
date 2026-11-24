@@ -411,6 +411,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       readProviderReview,
+      hideComposerSessionCards: this.inputRegion === "dock" && !this.onBackToSubagents,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
       progressCardLifetime: progressPresentation?.lifetime,
@@ -433,7 +434,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
-        prompts: conversationAttention.gatewayQuestionPrompts,
         sendActions: createChatPaneSendActions(state, {
           canSend: composerAvailability.canSend,
           modelRequiredReason: composerAvailability.modelRequiredReason,
