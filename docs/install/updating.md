@@ -201,6 +201,32 @@ trial exits 78 and the launcher restores the previous release. Ordinary non-tria
 starts, including manual package upgrades, keep their existing migration-on-open
 behavior: a store's size alone never prevents that Gateway from starting.
 
+The candidate also publishes write-ahead restore intent at
+`<prefix>/releases/.restore`: `{v:1,runId,files:[{live,preimage}]}`. Paths are
+absolute; a null pre-image means remove that file on rollback. The complete
+manifest and its images are durable before the replayable swap plan or any
+schema/config publication. A retry reuses the same run's original images; a
+different plan cannot append to or replace them. A known no-upgrade trial records
+an empty plan. Only the target build in the active trial writes this intent.
+
+Under exclusive native-store custody, SQLite originals are checkpointed and
+closed before their main files are hard-linked as adjacent
+`*.pre-restore-<runId>` images. The checkpoint changes physical representation,
+not logical contents. The subsequent swap renames a different prepared inode
+over the live path, leaving the image immutable. WAL, SHM, journal and seal paths
+are explicit removals because committed frames are already in the main image.
+This hard-link rule is for rename-based publication, not in-place migration.
+Ordinary files and leaf symlinks retain their original contents and link targets.
+If the filesystem cannot create a hard link, preparation logs the byte-copy
+fallback and its cause; normal adjacent images need no additional database copy.
+
+Legacy `*.pre-<generation>` recovery remains unchanged while the launcher moves
+to the manifest reader. External-path restrictions above therefore still apply.
+After confirmed committed IPC, the candidate removes only that run's manifest
+images, not pinned legacy recovery. It leaves one bounded manifest receipt for
+the next trial to replace, avoiding a cleanup race with a newer run. Cleanup
+failures are advisory and name retained recovery files; they do not undo success.
+
 Each protected PostgreSQL schema-changing update changes the affected store's
 namespace name and lengthens the restart. Plan for the original and private server
 copies, indexes, WAL, temporary work, and retained recovery generations. Keep namespace

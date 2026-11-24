@@ -43,6 +43,11 @@ import {
   UPGRADE_WORK_PREFIX as WORK_PREFIX,
 } from "./state-upgrade-receipts.js";
 import {
+  beginStateUpgradeRestore,
+  publishStateUpgradeRestore,
+  type StateUpgradeRestore,
+} from "./state-upgrade-restore.js";
+import {
   applyPlan,
   companionRemovals,
   changedShadowFiles,
@@ -288,6 +293,13 @@ export async function upgradeStateDirectory(params: {
     return { status: "current" };
   }
   const config = readUpgradeConfig(configPath);
+  const trial = await readTrial(resolvePrefix(env));
+  let restore: StateUpgradeRestore | undefined;
+  try {
+    restore = await beginStateUpgradeRestore(env, trial);
+  } catch (error) {
+    return { status: "refused", reason: formatErrorMessage(error) };
+  }
   const resumedFiles = new Set<string>();
   const resumedGenerations = new Set<string>();
   // A durable plan from an interrupted swap is finished before anything else.
@@ -301,6 +313,14 @@ export async function upgradeStateDirectory(params: {
     if (plan) {
       // Environment selection may already hold the shared database being replaced.
       await params.beforeSwap?.();
+      try {
+        publishStateUpgradeRestore(restore, plan, true);
+      } catch (error) {
+        return { status: "refused", reason: formatErrorMessage(error) };
+      }
+      if (restore) {
+        resumedGenerations.add(restore.generation);
+      }
       applyPlan(plan);
       for (const op of plan.ops) {
         if (isSqliteFile(op.live)) {
@@ -331,6 +351,7 @@ export async function upgradeStateDirectory(params: {
   }
   const outdated = outdatedDatabases(targets);
   if (outdated.length === 0) {
+    publishStateUpgradeRestore(restore, { ops: [] });
     if (resumed) {
       await finish(
         stateDir,
@@ -346,7 +367,6 @@ export async function upgradeStateDirectory(params: {
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
-  const trial = await readTrial(resolvePrefix(env));
   const protectedTrial = trial?.phase === "pending" || trial?.phase === "trial";
   const upgradeRefusal = stateUpgradeRefusal(inventory, stateDir);
   if (upgradeRefusal) {
@@ -626,6 +646,18 @@ export async function upgradeStateDirectory(params: {
       fsyncPath(stagedConfig);
     }
     await params.beforeSwap?.();
+    const recovery = publishStateUpgradeRestore(restore, { ops });
+    if (restore) {
+      trialGenerations.add(restore.generation);
+      params.log.info(
+        `Prepared update recovery manifest: ${recovery.linked} new hard links, ${recovery.copied.length} byte-copy fallbacks, ${recovery.symlinks} symlinks.`,
+      );
+      if (recovery.copied.length > 0) {
+        params.log.warn(
+          `Recovery hard links were unavailable; copied ${recovery.copied.join(", ")}.`,
+        );
+      }
+    }
     writePlan(workDir, { appVersion: generation(), ops });
     planWritten = true;
     applyPlan({ appVersion: generation(), ops });
