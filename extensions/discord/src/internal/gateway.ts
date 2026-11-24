@@ -313,17 +313,19 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     );
   }
 
-  private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
-    await sharedGatewayIdentifyLimiter.wait();
+  private identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
     const socket = sourceSocket ?? this.ws;
-    if (!socket || socket !== this.ws) {
-      return;
-    }
-    if (socket.readyState !== READY_STATE_OPEN) {
-      this.scheduleReconnect({ reason: "identify", preferResume: false });
-      return;
-    }
-    this.identify();
+    return sharedGatewayIdentifyLimiter.schedule(() => {
+      if (!socket || socket !== this.ws) {
+        return false;
+      }
+      if (socket.readyState !== READY_STATE_OPEN) {
+        this.scheduleReconnect({ reason: "identify", preferResume: false });
+        return false;
+      }
+      this.identify();
+      return true;
+    });
   }
 
   send(payload: GatewaySendPayload | GatewayReceivePayload, skipRateLimit = false): void {
