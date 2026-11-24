@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { workerData } from "node:worker_threads";
-const close = DatabaseSync.prototype.close;
+// Capture the native method without a source import; every call below passes its receiver.
+const close = Reflect.get(DatabaseSync.prototype, "close");
 let failed = false;
 DatabaseSync.prototype.close = function () {
   if (!failed && this.location() === workerData.databasePath) {

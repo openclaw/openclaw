@@ -13,7 +13,6 @@ import {
   type RouteId,
 } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
-import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -45,51 +44,6 @@ function isPersistedSessionLanding(location: RouteLocation, basePath: string): b
     isDefaultChatLanding(location, basePath) &&
     !/^\/chat\/main\/?$/u.test(location.pathname.slice(basePath.length))
   );
-}
-
-async function normalizeReleasedSessionQueryLocation(params: {
-  location: RouteLocation;
-  basePath: string;
-  gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
-  agentsList: () => AgentsListResult | null;
-  selectedAgentId?: string | null;
-  signal: AbortSignal;
-}): Promise<RouteLocation | null> {
-  const released = releasedSessionQuery(params.location, params.basePath);
-  if (!released) {
-    return null;
-  }
-  const defaultsKnown = Boolean(
-    params.agentsList()?.mainKey?.trim() ||
-    (params.gateway.snapshot.phase === "connected" && params.gateway.snapshot.hello),
-  );
-  const parsed = parseAgentSessionKey(released.sessionKey);
-  if (released.sessionKey && !defaultsKnown) {
-    await waitForGatewayClient(params.gateway, params.signal);
-  }
-  const defaults = {
-    agentsList: params.agentsList(),
-    hello: params.gateway.snapshot.hello,
-  };
-  const agentId =
-    parsed?.agentId ??
-    (resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
-      resolveUiDefaultAgentId(defaults));
-  const mainKey = resolveUiConfiguredMainKey(defaults);
-  const pathname = released.sessionKey
-    ? pathForSession(released.face, agentId, released.sessionKey, params.basePath, {
-        mainKey,
-      })
-    : null;
-  const search = new URLSearchParams(params.location.search);
-  search.delete("session");
-  search.delete("face");
-  const nextSearch = search.toString();
-  return {
-    ...params.location,
-    pathname: pathname ?? pathForRoute(released.face, params.basePath),
-    search: nextSearch ? `?${nextSearch}` : "",
-  };
 }
 
 export function normalizeInitialApplicationLocation(
@@ -233,9 +187,26 @@ export async function resolveInitialApplicationLocation(params: {
   selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation> {
-  const releasedLocation = await normalizeReleasedSessionQueryLocation(params);
-  if (releasedLocation) {
-    return releasedLocation;
+  const released = releasedSessionQuery(params.location, params.basePath);
+  if (released) {
+    const { gateway, basePath, location } = params;
+    if (
+      released.sessionKey &&
+      !params.agentsList()?.mainKey?.trim() &&
+      !(gateway.snapshot.phase === "connected" && gateway.snapshot.hello)
+    ) {
+      await waitForGatewayClient(gateway, params.signal);
+    }
+    const defaults = { agentsList: params.agentsList(), hello: gateway.snapshot.hello };
+    const mainKey = resolveUiConfiguredMainKey(defaults);
+    const fallbackAgent =
+      resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ??
+      resolveUiDefaultAgentId(defaults);
+    return {
+      ...location,
+      pathname: released.path(fallbackAgent, mainKey) ?? pathForRoute(released.face, basePath),
+      search: released.search,
+    };
   }
   if (!isPersistedSessionLanding(params.location, params.basePath)) {
     return params.location;

@@ -237,6 +237,46 @@ describe("chat tool icon ownership", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it("uses an installed MCP wrapper’s icon when it has no activity artwork", async () => {
+    const { icon, request } = setup();
+    const logo = vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue("blob:linear");
+    const group = catalog.groups[0]!;
+    const tool = { ...group.tools[0]!, source: "mcp" as const };
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: [
+              ...plugins.plugins,
+              { ...plugins.plugins[0]!, id: "linear-wrapper", hasActivityIcon: false },
+            ],
+          }
+        : {
+            ...catalog,
+            groups: [
+              {
+                ...group,
+                tools: [
+                  { ...tool, id: "linear__list_issues", pluginId: "linear-wrapper" },
+                  { ...tool, id: "unowned__list_issues", pluginId: "bundle-mcp" },
+                  { ...tool, id: "wrapper_native", pluginId: "linear-wrapper", source: "plugin" },
+                  { ...tool, id: "meetings__list", pluginId: "meetings" },
+                  { ...tool, id: "web_search", pluginId: "linear-wrapper" },
+                ],
+              },
+            ],
+          },
+    );
+    await vi.waitFor(() => expect(icon("linear__list_issues")?.url).toBe("blob:linear"));
+    expect(logo).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ pluginId: "linear-wrapper" }),
+    );
+    expect(icon("unowned__list_issues")).toBeUndefined();
+    expect(icon("wrapper_native")).toBeUndefined();
+    expect(icon("web_search")).toBeUndefined();
+    await vi.waitFor(() => expect(icon("meetings__list")?.branding).toBe(false));
+  });
+
   it("uses activity artwork when a third-party logo cannot be fetched", async () => {
     const { icon, request, fetch } = setup();
     vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue(null);

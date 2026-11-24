@@ -1621,10 +1621,13 @@ div.shell.shell--onboarding {
   margin-inline-start: calc(var(--sidebar-lead) + 5px);
 }
 
-.sidebar-session-tree__loading {
-  min-height: var(--sidebar-session-row-min-height);
-  margin-inline: calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset)) 4px;
-  clip-path: inset(calc((100% - 10px) / 2) 0 round var(--radius-sm));
+.sidebar-view-loading__rows {
+  pointer-events: none;
+}
+
+.sidebar-session-tree__loading .skeleton-line {
+  height: 10px;
+  max-inline-size: 12rem;
 }
 
 .sidebar-session-tree__show-more {
@@ -2218,7 +2221,8 @@ div.shell.shell--onboarding {
 }
 
 /* Automations section: New automation and Run history, then grouped rows with a byline. */
-.sidebar-automations {
+.sidebar-automations,
+.sidebar-view-loading__rows {
   display: flex;
   flex-direction: column;
   gap: 2px;

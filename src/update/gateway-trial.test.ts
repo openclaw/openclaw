@@ -116,7 +116,9 @@ afterEach(async () => {
   }
 });
 
-it("lets a launcher child exit naturally while its IPC peer remains connected", async () => {
+it("lets a launcher child exit naturally while its IPC peer remains connected", async ({
+  signal,
+}) => {
   const child = spawn(
     process.execPath,
     [
@@ -142,11 +144,13 @@ it("lets a launcher child exit naturally while its IPC peer remains connected", 
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = once(child, "exit", { signal: AbortSignal.timeout(10_000) });
+  // No wall-clock deadline: a child the IPC channel keeps alive fails at the test timeout,
+  // and the tsx import of the module graph on a loaded runner cannot lose a race.
+  const exited = once(child, "exit");
   try {
-    const [message] = await once(child, "message");
+    const [message] = await withinTest(once(child, "message"), signal);
     expect(message).toBe("loaded");
-    expect(await exited, stderr).toEqual([0, null]);
+    expect(await withinTest(exited, signal), stderr).toEqual([0, null]);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       const stopped = once(child, "exit");
