@@ -382,7 +382,7 @@ class StateReadTransport {
       };
       // Retry only dispatch preparation, using the release's existing per-read admission budget.
       const task = pool.pool.runTask(
-        waitForAdmission ? () => authority.acquire(prepareDispatch) : prepareDispatch,
+        waitForAdmission ? async () => await authority.acquire(prepareDispatch) : prepareDispatch,
         {
           signal: authority.signal,
           inputBytes: requestBytes(request),
