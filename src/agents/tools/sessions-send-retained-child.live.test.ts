@@ -20,7 +20,10 @@ import {
   history,
   runWithLiveSubagentGateway,
 } from "../subagents/announce/subagent-challenges.live.test-support.js";
-import { observeHeldExecutor } from "../subagents/announce/subagent-external-gate.test-support.js";
+import {
+  isTerminalExecutorOutcome,
+  observeHeldExecutor,
+} from "../subagents/announce/subagent-external-gate.test-support.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../subagents/registry/subagent-registry-persistence.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
@@ -389,12 +392,15 @@ describeLive("retained native child continuation", () => {
               held.release("FOREIGN_COMPLETE");
               if (foreignRunId) {
                 await until("foreign execution settles", async () => {
-                  const ended = await gateway.request<{ endedAt?: number }>("agent.wait", {
-                    runId: foreignRunId,
-                    timeoutMs: 1000,
-                  });
+                  const ended = await gateway.request<{ status: string; endedAt?: number }>(
+                    "agent.wait",
+                    {
+                      runId: foreignRunId,
+                      timeoutMs: 1000,
+                    },
+                  );
                   // Cleanup joins terminal failure too; it is not a success assertion.
-                  return ended.endedAt !== undefined ? true : undefined;
+                  return isTerminalExecutorOutcome(ended) ? true : undefined;
                 });
               }
             }

@@ -81,23 +81,38 @@ export async function createExternalGates() {
   };
 }
 
+type ExecutorWaitOutcome = {
+  status: string;
+  endedAt?: number;
+  error?: string;
+  stopReason?: string;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
+};
+
+export function isTerminalExecutorOutcome({
+  status,
+  endedAt,
+}: Pick<ExecutorWaitOutcome, "status" | "endedAt">): boolean {
+  // Non-timeout terminal observations need not include timestamps. Only use the
+  // end time for timeout, where a wait deadline is distinct from a stopped run.
+  return (
+    status === "ok" ||
+    status === "error" ||
+    status === "aborted" ||
+    (status === "timeout" && endedAt !== undefined)
+  );
+}
+
 export async function observeHeldExecutor(options: {
   isHeldAndLive: () => boolean;
-  waitForRun: () => Promise<{
-    status: string;
-    endedAt?: number;
-    error?: string;
-    stopReason?: string;
-    timeoutPhase?: string;
-    providerStarted?: boolean;
-  }>;
+  waitForRun: () => Promise<ExecutorWaitOutcome>;
 }): Promise<true | undefined> {
   if (options.isHeldAndLive()) {
     return true;
   }
   const outcome = await options.waitForRun();
-  // A wait deadline is not a terminal run timeout; only the latter has an end time.
-  if (outcome.endedAt !== undefined) {
+  if (isTerminalExecutorOutcome(outcome)) {
     const details = [`status=${outcome.status}`];
     if (outcome.stopReason) {
       details.push(`stopReason=${outcome.stopReason}`);

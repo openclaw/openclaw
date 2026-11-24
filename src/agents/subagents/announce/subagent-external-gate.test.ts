@@ -59,6 +59,15 @@ it("reports a terminal run error instead of polling an unopened execution gate",
   ).rejects.toThrow("status=error, providerStarted=false: native executor rejected its input");
 });
 
+it.each(["ok", "error", "aborted"])(
+  "recognizes terminal status %s without an end time",
+  async (status) => {
+    await expect(
+      observeHeldExecutor({ isHeldAndLive: () => false, waitForRun: async () => ({ status }) }),
+    ).rejects.toThrow(`status=${status}`);
+  },
+);
+
 it("distinguishes a timed-out wait RPC from a terminal run timeout", async () => {
   const waitForRun = vi
     .fn<Parameters<typeof observeHeldExecutor>[0]["waitForRun"]>()
