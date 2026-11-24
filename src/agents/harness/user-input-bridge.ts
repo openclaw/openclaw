@@ -58,7 +58,11 @@ export function formatAgentHarnessUserInputPrompt(
   const lines = [options.intro ?? "Agent needs input:"];
   questions.forEach((question, index) => {
     const prefix = questions.length > 1 ? `${index + 1}. ` : "";
-    lines.push("", `${prefix}${formatText(question.header)}`, formatText(question.question));
+    lines.push(
+      "",
+      `${prefix}${formatText(question.header)}`,
+      formatQuestionText(question, options.formatText),
+    );
     if (question.isSecret) {
       lines.push(
         options.secretWarning ?? "This channel may show your reply to other participants.",
@@ -76,6 +80,33 @@ export function formatAgentHarnessUserInputPrompt(
     }
   });
   return lines.join("\n");
+}
+
+/**
+ * Display formatters escape one line of untrusted text. Apply them around line
+ * breaks and the browser link, which text-only channels must receive unchanged
+ * because the question text is their only copy of it. A link carrying markup
+ * or mention characters stays escaped like the rest of the text.
+ */
+function formatQuestionText(
+  question: AgentHarnessUserInputQuestion,
+  formatText: ((text: string) => string) | undefined,
+): string {
+  if (!formatText) {
+    return question.question;
+  }
+  const formatPart = (part: string) => {
+    const text = part.trim();
+    return text ? part.replace(text, () => formatText(text)) : part;
+  };
+  const literalUrl =
+    question.url && !/[\s<>@`[\]()*~|]/u.test(question.url) ? question.url : undefined;
+  return question.question
+    .split(/\r?\n/u)
+    .map((line) =>
+      literalUrl ? line.split(literalUrl).map(formatPart).join(literalUrl) : formatPart(line),
+    )
+    .join("\n");
 }
 
 export async function deliverAgentHarnessUserInputPrompt(
@@ -122,7 +153,7 @@ function buildAgentHarnessQuestionPresentation(params: {
   ].join("\n");
   return {
     blocks: [
-      { type: "text", text: formatText(question.question) },
+      { type: "text", text: formatQuestionText(question, params.formatText) },
       { type: "text", text: optionGuidance },
       {
         type: "buttons",

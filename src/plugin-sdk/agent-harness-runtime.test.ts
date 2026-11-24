@@ -627,6 +627,33 @@ Other: reply with your own answer.`,
     });
   });
 
+  it("formats question text around line breaks and the literal browser link", () => {
+    const url = "https://example.com/connector_1?a=1&b=_2_";
+    const formatText = (text: string) =>
+      text
+        .replace(/\p{Cc}/gu, "?")
+        .replaceAll("&", "&amp;")
+        .replaceAll("_", "\uff3f");
+    const prompt = (text: string, linked = true) =>
+      formatPrompt([question("continue", { question: text, ...(linked ? { url } : {}) })], {
+        formatText,
+      })
+        .split("\n")
+        .slice(3)
+        .join("\n");
+
+    expect(prompt(`Sign_in & continue:\r\n\n  ${url} (${url})\n\tthen reply_here`)).toBe(
+      `Sign\uff3fin &amp; continue:\n\n  ${url} (${url})\n\tthen reply\uff3fhere`,
+    );
+    // Only the validated link field is exempt; other URL-looking text stays escaped.
+    expect(prompt(`See\n${url}`, false)).toBe(
+      "See\nhttps://example.com/connector\uff3f1?a=1&amp;b=\uff3f2\uff3f",
+    );
+    expect(formatPrompt([question("q", { question: "a_b\r\nc", url })]).endsWith("a_b\r\nc")).toBe(
+      true,
+    );
+  });
+
   it("keeps a comma-containing option label as one multi-select answer", () => {
     const questions = [
       question("region", {

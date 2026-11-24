@@ -222,6 +222,57 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("keeps the browser link and line breaks intact in the text shown without buttons", async () => {
+    const gateway = createAnsweringGateway([{ continue: ["I've completed this step"] }]);
+    const url = "https://example.com/apps/drive/connector_5f3c8c41?next=a_b&scope=__c__#d_e";
+    await expectResult(
+      gateway.request(
+        "url",
+        formParams({
+          mode: "url",
+          message: "Reconnect <Drive> to restore access.",
+          requestedSchema: undefined,
+          url,
+          elicitationId: "auth-1",
+        }),
+      ),
+      "accept",
+    );
+    const body = `Reconnect &lt;Drive&gt; to restore access.\n\n${url}\n\nOpen the link and complete the step in your browser. Then select "I've completed this step".`;
+    const payload = vi.mocked(gateway.params.onBlockReply!).mock.calls[0]?.[0];
+    // Channels without buttons deliver this authored fallback text verbatim.
+    expect(payload?.presentationTextMode).toBe("fallback");
+    expect(payload?.text).toBe(
+      `Codex needs confirmation:\n\nBrowser step\n${body}\n1. I've completed this step\n2. Decline\n\nReply with the number or option text.`,
+    );
+    expect(payload?.presentation?.blocks[0]).toEqual({ type: "text", text: body });
+  });
+
+  it.each([
+    [
+      "https://good.example/ ok [Verify here](https://evil.example/phish)",
+      "https://good.example/ ok \uff3bVerify here\uff3d\uff08https://evil.example/phish\uff09",
+    ],
+    ["https://a.example/<@&123456>", "https://a.example/&lt;\uff20&amp;123456&gt;"],
+    ["https://a.example/<b>hi</b>", "https://a.example/&lt;b&gt;hi&lt;/b&gt;"],
+    ["https://a.example/x`code`", "https://a.example/x\uff40code\uff40"],
+    ["https://a.example/@everyone", "https://a.example/\uff20everyone"],
+    [
+      "https://a.example/*b*~~s~~|c_d",
+      "https://a.example/\u2217b\u2217\uff5e\uff5es\uff5e\uff5e\uff5cc\uff3fd",
+    ],
+  ])("keeps escaping a browser link that carries markup: %s", async (url, escaped) => {
+    const gateway = createAnsweringGateway([{ continue: ["Decline"] }]);
+    await gateway.request(
+      "url",
+      formParams({ mode: "url", requestedSchema: undefined, url, elicitationId: "auth-1" }),
+    );
+    const payload = vi.mocked(gateway.params.onBlockReply!).mock.calls[0]?.[0];
+    expect(payload?.text).toContain(`\n\n${escaped}\n\n`);
+    expect(payload?.text).not.toContain(url);
+    expect(JSON.stringify(payload?.presentation?.blocks.slice(0, 2))).not.toContain(url);
+  });
+
   it("rejects inherited and accessor thread correlation without invoking getters", async () => {
     const gateway = createAnsweringGateway([]);
     const inherited = formParams();
