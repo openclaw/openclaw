@@ -17,7 +17,7 @@ import {
   createSlashMenuState,
   resetSlashMenuState,
 } from "../chat/components/chat-composer-slash-menu.tsx";
-import { insertComposerDictation } from "../chat/composer-dictation.ts";
+import { insertComposerDictation, placeComposerDictation } from "../chat/composer-dictation.ts";
 
 export class NewSessionComposerTextareaController {
   // An opening gets one cast; typing and async picker updates never reroll it.
@@ -168,41 +168,37 @@ export class NewSessionComposerTextareaController {
    * Writing the final insertion directly grows the box before the next render
    * commits that same value into the page-owned draft.
    */
-  insertTranscript(transcript: string, late?: true): string | null {
+  insertTranscript(transcript: string, late?: true, preservePreview?: true): string | null {
     const target = this.textarea;
     if (!target) {
       return null;
     }
-    const captured = this.capturedSelection;
-    // Delayed finals must not replace edits made after Stop unlocked this draft.
-    const selection =
-      captured && (!late || captured.value === target.value)
-        ? captured
-        : {
-            start: late ? target.selectionStart : target.value.length,
-            end: late ? target.selectionEnd : target.value.length,
-            value: target.value,
-          };
-    this.capturedSelection = null;
-    const insertion = insertComposerDictation(
-      selection.value,
+    const insertion = placeComposerDictation(
       transcript,
-      selection.start,
-      selection.end,
+      this.capturedSelection,
+      {
+        start: late ? target.selectionStart : target.value.length,
+        end: late ? target.selectionEnd : target.value.length,
+        value: target.value,
+      },
+      late,
+      preservePreview,
     );
-    if (insertion.value === selection.value) {
+    this.capturedSelection = insertion.captured;
+    if (!insertion.changed) {
       return null;
     }
-    target.value = insertion.value;
-    adjustTextareaHeight(target);
-    queueMicrotask(() => {
-      if (!target.isConnected) {
-        return;
-      }
-      target.focus({ preventScroll: true });
-      target.selectionStart = insertion.caret;
-      target.selectionEnd = insertion.caret;
-    });
+    if (!preservePreview) {
+      target.value = insertion.value;
+      adjustTextareaHeight(target);
+      queueMicrotask(() => {
+        if (!target.isConnected) {
+          return;
+        }
+        target.focus({ preventScroll: true });
+        target.setSelectionRange(insertion.caret, insertion.caret);
+      });
+    }
     return insertion.value;
   }
 

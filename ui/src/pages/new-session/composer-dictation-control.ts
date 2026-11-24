@@ -72,13 +72,13 @@ export class NewSessionDictationControl {
       enabled,
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
-      onCommit: (transcript: string, late?: true) => {
+      onCommit: (transcript: string, late?: true, preservePreview?: true) => {
         // Route changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior route's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
           return;
         }
-        const next = this.options.textarea.insertTranscript(transcript, late);
+        const next = this.options.textarea.insertTranscript(transcript, late, preservePreview);
         if (next !== null) {
           this.options.onMessage(next);
         }

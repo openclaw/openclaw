@@ -450,7 +450,7 @@ export function ComposerDictationSendAction(props: {
 }
 
 export function renderComposerDictationStatusSolid(dictation?: ComposerDictationController) {
-  if (!dictation?.active) {
+  if (!dictation?.active && !dictation?.transcribing) {
     return null;
   }
   if (dictation.connecting) {
@@ -463,15 +463,23 @@ export function renderComposerDictationStatusSolid(dictation?: ComposerDictation
       />
     );
   }
+  const finalizing = dictation.finalizing || !dictation.active;
   return (
     <div class="agent-chat__composer-status-stack">
       <div
-        class={`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+        role={!dictation.active ? "status" : undefined}
+        class={[
+          "agent-chat__dictation-status",
+          { "agent-chat__dictation-status--finalizing": finalizing },
+        ]}
       >
         <span
-          class={`agent-chat__dictation-phase${!dictation.finalizing ? " agent-chat__dictation-phase--listening" : ""}`}
+          class={[
+            "agent-chat__dictation-phase",
+            { "agent-chat__dictation-phase--listening": !finalizing },
+          ]}
         >
-          {dictation.finalizing
+          {finalizing
             ? t("chat.composer.dictationFinalizing")
             : t("chat.composer.dictationListening")}
         </span>

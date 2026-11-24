@@ -3940,6 +3940,7 @@ export const en: TranslationMap & {
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
+      dictationEmpty: "No speech was transcribed.",
       dictationListening: "Listening…",
       dictationStopAndKeep: "Stop and keep text",
       dictationProviderUnavailable:

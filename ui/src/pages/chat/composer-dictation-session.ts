@@ -15,7 +15,6 @@ import { describeRealtimeTalkInputError, RealtimeTalkInputController } from "./t
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
-const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
 
 type DictationSessionResult = {
   sessionId: string;
@@ -65,8 +64,6 @@ export class ComposerDictationSession {
   private readonly finalTranscripts: string[] = [];
   private currentPartial = "";
   private startPromise: Promise<void> | null = null;
-  private readonly pendingAudio: Float32Array[] = [];
-  private pendingAudioSamples = 0;
   private appendChain: Promise<void> = Promise.resolve();
   private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
   private stopped = false;
@@ -99,11 +96,31 @@ export class ComposerDictationSession {
       this.options && "inputDeviceId" in this.options
         ? this.options.inputDeviceId
         : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
-    const media = await this.input.open(inputDeviceId);
+    // Admit before opening the microphone. Stopped recordings may still occupy
+    // the Gateway slots; a refusal must not capture words it cannot transcribe.
+    const result = await this.client.request<DictationSessionResult>("talk.session.create", {
+      mode: "transcription",
+      transport: "gateway-relay",
+      brain: "none",
+      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
+    });
+    this.sessionId = result.sessionId;
+    this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
     if (this.stopped) {
       return;
     }
+    if (
+      result.audio?.inputEncoding !== DICTATION_ENCODING ||
+      result.audio.inputSampleRateHz !== DICTATION_SAMPLE_RATE_HZ
+    ) {
+      throw new Error(t("chat.composer.dictationAudioUnsupported"));
+    }
+    // A provider failure while the permission prompt is open must end startup.
     this.unsubscribe = this.client.addEventListener((frame) => this.handleEvent(frame));
+    const media = await this.input.open(inputDeviceId);
+    if (this.stopped || this.failed) {
+      return;
+    }
     try {
       this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
     } catch {
@@ -116,56 +133,34 @@ export class ComposerDictationSession {
     this.inputMeter.start(media, this.context);
     this.inputPump.start(media, this.context, (samples) => this.appendAudio(samples));
     this.callbacks.onReady();
-
-    const result = await this.client.request<DictationSessionResult>("talk.session.create", {
-      mode: "transcription",
-      transport: "gateway-relay",
-      brain: "none",
-      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
-    });
-    this.sessionId = result.sessionId;
-    this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
-    if (
-      result.audio?.inputEncoding !== DICTATION_ENCODING ||
-      result.audio.inputSampleRateHz !== DICTATION_SAMPLE_RATE_HZ
-    ) {
-      await this.closeRemote();
-      throw new Error(t("chat.composer.dictationAudioUnsupported"));
-    }
-    if (this.discarded) {
-      this.pendingAudio.length = 0;
-      this.pendingAudioSamples = 0;
-    } else {
-      this.flushPendingAudio();
-    }
-    if (this.stopped) {
-      if (!this.discarded) {
-        await this.appendChain;
-      }
-      await this.closeRemote();
-    }
   }
 
   transcriptSnapshot(): string {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
-  async finish(drainFinalTranscript = false): Promise<string> {
+  async finish(mode: "snapshot" | "drain" | "composer" = "snapshot"): Promise<string> {
     const lateFinal =
-      drainFinalTranscript && !this.gatewayDisconnected ? this.waitForLateFinal() : null;
+      mode !== "snapshot" && !this.gatewayDisconnected ? this.waitForLateFinal() : null;
     const cleanup = this.stopAndClose(true);
     if (lateFinal) {
       // Bound admission separately; a started close uses the media provider timeout.
       void cleanup.catch(() => undefined);
-      return lateFinal;
+      const transcript = await lateFinal;
+      if (mode === "composer" && !transcript && !this.discarded) {
+        this.reportFailure(
+          this.gatewayDisconnected
+            ? t("chat.composer.dictationDisconnected")
+            : t("chat.composer.dictationEmpty"),
+        );
+      }
+      return transcript;
     }
     return cleanup.then(() => this.transcriptSnapshot());
   }
 
   async cancel(): Promise<void> {
     this.discarded = true;
-    this.pendingAudio.length = 0;
-    this.pendingAudioSamples = 0;
     this.settleLateFinalDrain?.(true);
     await this.stopAndClose(false);
   }
@@ -196,17 +191,6 @@ export class ComposerDictationSession {
     if (this.stopped) {
       return;
     }
-    if (!this.sessionId) {
-      const remaining = MAX_PENDING_AUDIO_SAMPLES - this.pendingAudioSamples;
-      if (remaining <= 0) {
-        return;
-      }
-      const buffered = samples.slice(0, remaining);
-      this.pendingAudio.push(buffered);
-      this.pendingAudioSamples += buffered.length;
-      this.detectSilence(samples);
-      return;
-    }
     this.queueAudio(samples);
     this.detectSilence(samples);
   }
@@ -224,14 +208,6 @@ export class ComposerDictationSession {
         this.heardSpeech = false;
         this.callbacks.onSilence();
       }
-    }
-  }
-
-  private flushPendingAudio(): void {
-    const pending = this.pendingAudio.splice(0);
-    this.pendingAudioSamples = 0;
-    for (const samples of pending) {
-      this.queueAudio(samples);
     }
   }
 
@@ -295,6 +271,9 @@ export class ComposerDictationSession {
       return;
     }
     this.failed = true;
+    // Late provider text is provisional until its successful close. An error
+    // must discard it without cancelling unrelated stopped recordings.
+    this.settleLateFinalDrain?.(true);
     this.callbacks.onError(message, this.hasTranscript());
   }
 
@@ -379,8 +358,9 @@ export class ComposerDictationSession {
                 t("chat.composer.dictationFailed"),
               ),
             );
+          } else {
+            finish(transcript());
           }
-          finish(transcript());
         }
       });
       this.settleLateFinalDrain = (discard) => finish(discard ? "" : transcript());

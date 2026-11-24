@@ -342,6 +342,28 @@ it("stopping during the model response aborts the owned run and ignores late out
   expect(tracks).toHaveLength(1);
 });
 
+it("starts listening again after an empty transcription without a dictation error", async () => {
+  const h = harness();
+  const impl = h.request.getMockImplementation()!;
+  h.request.mockImplementation(async (method, params) => {
+    if (method === "talk.session.close") {
+      h.emit("talk.event", {
+        transcriptionSessionId: asOptionalRecord(params)?.sessionId,
+        type: "close",
+        reason: "completed",
+      });
+      return { ok: true };
+    }
+    return impl(method, params);
+  });
+  await h.state.toggleRealtimeTalk();
+  h.utterance();
+  await h.nextCapture.promise;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.state.realtimeTalkStatus).toBe("listening");
+  expect(h.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+});
+
 it("keeps listening for the model answer after an empty final", async () => {
   const h = harness();
   const sent = createDeferred();

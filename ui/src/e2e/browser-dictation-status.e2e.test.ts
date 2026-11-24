@@ -229,8 +229,19 @@ suite.define(() => {
       await page.mouse.up();
       await page.getByRole("button", { name: "Stop and keep text" }).click();
       await gateway.waitForRequest("talk.session.close");
+      await captureComposerProof(
+        suite,
+        page,
+        editedDraft ? "dictation-edited-pending.png" : "dictation-pending.png",
+      );
+      const pendingPhase = await page.locator(".agent-chat__dictation-phase").allTextContents();
+      await expect
+        .poll(() => textarea.evaluate((node: HTMLTextAreaElement) => node.readOnly))
+        .toBe(false);
       if (editedDraft) {
-        await textarea.fill(editedDraft);
+        await textarea.press("End");
+        await textarea.pressSequentially(editedDraft.slice("ship it".length));
+        await expect.poll(() => textarea.inputValue()).toBe(editedDraft);
       }
 
       await gateway.emitGatewayEvent("talk.event", {
@@ -259,6 +270,7 @@ suite.define(() => {
       await captureComposerProof(suite, page, "dictation-late-finals.png");
 
       await expect.poll(() => textarea.inputValue()).toBe(expected);
+      expect(pendingPhase).toContain("Finishing dictation…");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
