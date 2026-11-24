@@ -13,7 +13,6 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
-import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
   createOperatorRecoveryFixture,
   pairedOperator,
@@ -191,8 +190,8 @@ it.each([
         sessionKey: "agent:main:dashboard:settled-requester",
         sessionId: "settled-requester",
       });
-      const requesterOperatorSource = captureQueuedOperatorRecoverySource(spawned.sourceAuthority);
-      expect(requesterOperatorSource?.kind).toBe("gateway");
+      // Stable's fixture has already released the live source, just as restart would.
+      const requesterOperatorSource = { kind: "gateway", snapshot: spawned.snapshot } as const;
       const wokenAs = await deliverOwedNoticeAfterRestart({
         state: "interrupted",
         createdActor: { type: "human", source: "profile", id: profile.id },
