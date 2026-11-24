@@ -45,6 +45,7 @@ import {
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
@@ -422,26 +423,42 @@ describe("session.message websocket events", () => {
     await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
     await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
 
+    // Keep cold fixture preparation outside the delivery window. Under Node
+    // contention chat.send admission can exceed 10s, and the /status reply still
+    // needs dispatch and transcript publication after the ACK.
+    await prepareGatewayReplyRuntimeForTest();
+    const runId = "scoped-delivery-proof";
+    const sendTimeoutMs = 45_000;
+    const deliveryTimeoutMs = sendTimeoutMs + 30_000;
     using otherChats = collectEventPayloads(otherWs, "chat");
     const chatEvents = [mainWs, legacyWs].map((ws) =>
-      onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
+      onceMessage(
+        ws,
+        matchingEvent("chat", { sessionKey: "agent:main:main", runId }),
+        deliveryTimeoutMs,
+      ),
     );
 
     const [send, ...delivered] = await Promise.all([
-      rpcReq(mainWs, "chat.send", {
-        sessionKey: "main",
-        message: "/status",
-        toolBindings: {
-          browser: {
-            kind: "tab",
-            tabId: 7,
-            target: "host",
-            profile: "chrome",
-            targetId: "target-7",
+      rpcReq(
+        mainWs,
+        "chat.send",
+        {
+          sessionKey: "main",
+          message: "/status",
+          toolBindings: {
+            browser: {
+              kind: "tab",
+              tabId: 7,
+              target: "host",
+              profile: "chrome",
+              targetId: "target-7",
+            },
           },
+          idempotencyKey: runId,
         },
-        idempotencyKey: "scoped-delivery-proof",
-      }),
+        sendTimeoutMs,
+      ),
       ...chatEvents,
     ]);
     expect(send.ok, JSON.stringify(send)).toBe(true);
