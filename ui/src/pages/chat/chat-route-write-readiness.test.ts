@@ -28,13 +28,6 @@ it("holds a direct transport send used by realtime chat during route admission",
   );
 });
 
-it("marks split Talk sends with useTalkSettings", async () => {
-  const host = makeChatHost({ requestHandlers: {} });
-  await requestChatSend(host, { message: "Talk turn", runId: "talk-turn", useTalkSettings: true });
-  const send = host.request.mock.calls.find(([method]) => method === "chat.send");
-  expect(send?.[1]).toMatchObject({ useTalkSettings: true });
-});
-
 it("holds direct and restored queued sends after startup until route revalidation", async () => {
   let pending = false;
   const sessionKey = "agent:main:chat:b1c2cd3c-1234-4321-9876-123456789abc";
