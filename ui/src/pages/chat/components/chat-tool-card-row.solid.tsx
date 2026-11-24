@@ -267,14 +267,15 @@ export function ToolCardRow(props: ToolCardProps) {
     if (inline() && state === "running") {
       return view().command ? undefined : "running";
     }
+    // The open body reports the missing tool result, not the owning run's interruption.
+    if (state === "unrecorded" && props.options.interrupted) {
+      return "interrupted";
+    }
     if (
       props.options.expanded ||
       (state !== "blocked" && state !== "unknown" && state !== "unrecorded")
     ) {
       return undefined;
-    }
-    if (state === "unrecorded" && props.options.interrupted) {
-      return "interrupted";
     }
     if (!inline() && (view().kind !== "generic" || launch() || !operation()?.showOutcome)) {
       return undefined;

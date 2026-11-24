@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getByRole } from "@solidjs/testing-library";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentActivityItem } from "../../../../../src/agents/agent-activity-presentation.js";
@@ -189,8 +190,15 @@ it("labels a completed Codex file creation from its recorded operation", async (
   expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
   expect(onToggleExpanded).not.toHaveBeenCalled();
 
-  expect(query(container, ".chat-tool-row__toggle")).toMatchObject({ ariaLabel: "Created new.ts" });
-  query(container, ".chat-tool-row__toggle")?.click();
+  const toggle = getByRole(container, "button", {
+    name: "Created new.ts",
+    description: "",
+    expanded: false,
+  });
+  expect(toggle).toBe(query(container, ".chat-tool-row__toggle"));
+  toggle.focus();
+  expect(document.activeElement).toBe(toggle);
+  toggle.click();
   expect(onToggleExpanded).toHaveBeenCalledWith("msg:patch:add");
   expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
 });
