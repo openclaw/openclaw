@@ -248,13 +248,16 @@ It cannot change unwaived coverage. A whole-child grant does not require a recei
    Release Prepare workflow at trusted P with `operation=admit-qualification`.
    Retain the successful admission run ID. The policy transport ref in this
    request is a locator only; do not create it or dispatch validation at it.
-3. Pass both pins to receipt recovery:
+3. Pass the admission run ID to receipt recovery. It reads policy Q from the
+   admission receipt, not from the SHA that ran the Release Prepare workflow.
 
    ```bash
    pnpm frv recover --run <original> --workflow-sha <P> \
-     --policy-sha <policy-Q> --policy-admission-run <admission-run> \
+     --policy-admission-run <admission-run> \
      --request-file <private-request-path>
    ```
+
+   Optionally pass `--policy-sha <policy-Q>` to require an exact match.
 
 Recovery and publisher verification both authenticate the separate admission and
 reevaluate the original raw jobs against exactly that ledger.
