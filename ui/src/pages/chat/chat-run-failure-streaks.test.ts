@@ -35,7 +35,7 @@ const persistedFailure = (runId: string, seq: number) => ({
   openclawRunError: { runId, summary },
 });
 
-const billingError = { message: "Upgrade your plan", actionUrl: "https://example.com/plans" };
+const billingError = { message: "A subscription is required." };
 const billingCause = {
   provider: "google",
   failoverReason: "billing",
@@ -53,14 +53,6 @@ it.each([
     "billing message",
     { ...billingCause, billingError: { ...billingError, message: "Add credits" } },
   ],
-  [
-    "action URL",
-    {
-      ...billingCause,
-      billingError: { ...billingError, actionUrl: "https://example.com/credits" },
-    },
-  ],
-  ["missing action URL", { ...billingCause, billingError: { message: "Upgrade your plan" } }],
   ["missing billing details", { provider: "google", failoverReason: "billing" }],
   ["harness update action", { ...billingCause, code: HARNESS_UPDATE_REQUIRED_CODE }],
   ["missing cause", undefined],

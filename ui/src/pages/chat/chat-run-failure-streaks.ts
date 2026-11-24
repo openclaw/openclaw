@@ -33,8 +33,7 @@ export function projectRunFailureStreaks(items: ChatItem[]): ChatItem[] {
         latestCause?.provider === cause?.provider &&
         latestCause?.failoverReason === cause?.failoverReason &&
         latestCause?.code === cause?.code &&
-        latestCause?.billingError?.message === cause?.billingError?.message &&
-        latestCause?.billingError?.actionUrl === cause?.billingError?.actionUrl
+        latestCause?.billingError?.message === cause?.billingError?.message
       ) {
         latest = { ...latest, repeatCount: (latest.repeatCount ?? 1) + (item.repeatCount ?? 1) };
         result[latestIndex] = latest;

@@ -12,7 +12,6 @@ for (const billing of [false, true]) {
   let upstreamRequests = 0;
   const refusal = "requires an active Google AI Ultra subscription";
   const message = "This request requires an active Google AI Ultra subscription.";
-  const actionUrl = "https://one.google.com/about/google-ai-plans/";
   const provider = billing ? "google" : "fixture";
   const model = billing ? "gemini-4-argon" : "current";
   const suite = createControlUiE2eSuite({
@@ -104,7 +103,7 @@ for (const billing of [false, true]) {
   }
 
   suite.define(() => {
-    it("shows the provider recovery action and preserves it after reload", async () => {
+    it("shows the provider failure message without plan links and preserves it after reload", async () => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
@@ -135,9 +134,7 @@ for (const billing of [false, true]) {
               expect(
                 await failure.locator(".chat-run-failure__billing-message").textContent(),
               ).toBe(message);
-              const plans = failure.getByRole("link", { name: "View plans", exact: true });
-              expect(await plans.getAttribute("href")).toBe(actionUrl);
-              expect(await plans.locator("svg").isVisible()).toBe(true);
+              expect(await failure.locator(".chat-run-failure__billing a").count()).toBe(0);
               if (page.viewportSize()?.width === 1280) {
                 const guidance = await failure
                   .locator(".chat-run-failure__billing-message")
@@ -164,10 +161,8 @@ for (const billing of [false, true]) {
             await page.setViewportSize({ width: 390, height: 844 });
             await checkFailure();
             const text = await failure.locator(".chat-run-failure__billing-message").boundingBox();
-            const link = await failure.locator(".chat-run-failure__plans").boundingBox();
             const header = await failure.locator(".chat-run-failure .row").boundingBox();
             expect(text!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
-            expect(link!.y).toBeGreaterThanOrEqual(text!.y + text!.height);
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
           }
           await failure.getByRole("button", { name: "Open Models", exact: true }).click();

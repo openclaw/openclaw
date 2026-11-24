@@ -325,7 +325,6 @@ describe("CLI provider-owned context and failures", () => {
         reason: "billing",
         billingError: {
           message,
-          actionUrl: "https://one.google.com/about/google-ai-plans/",
         },
       });
       expect(

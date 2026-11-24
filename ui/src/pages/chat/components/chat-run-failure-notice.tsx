@@ -242,18 +242,6 @@ export function ChatRunFailureNotice(props: {
                   <div class="chat-run-failure__billing-message">
                     <bdi>{billing().message}</bdi>
                   </div>
-                  <Show when={billing().actionUrl}>
-                    {(url) => (
-                      <a
-                        class="session-link chat-run-failure__plans"
-                        href={url()}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {t("chat.recovery.viewPlans")} <Icon name="externalLink" />
-                      </a>
-                    )}
-                  </Show>
                 </div>
               )}
             </Show>

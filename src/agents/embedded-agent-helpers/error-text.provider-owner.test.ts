@@ -28,7 +28,7 @@ describe("assistant diagnostic provider ownership", () => {
   });
 
   it("prepares one billing reply across assistant and exception shapes", () => {
-    const billingError = { message: "Choose a plan.", actionUrl: "https://example.com/plans" };
+    const billingError = { message: "A subscription is required." };
     const isPlanRefusal = ({ errorMessage }: { errorMessage: string }) =>
       errorMessage.includes(billingError.message);
     const formatBillingError = vi.fn((context: { errorMessage: string }) =>

@@ -177,7 +177,10 @@ it("names a provider's billing problem with its declared label and sends its fix
   const modelCatalog = [
     { id: "acme-large", name: "Acme Large", provider: "acme", providerName: "Acme Cloud Plan" },
   ];
-  const billingError = { message: "Choose an active plan." };
+  const billingError = {
+    message: "A subscription is required.",
+    actionUrl: "https://example.com/plans",
+  };
   const draw = (failoverReason: string) =>
     mountSolid(
       () =>
@@ -202,7 +205,7 @@ it("names a provider's billing problem with its declared label and sends its fix
     );
   const billing = draw("billing");
   expect(part("billing-message")?.textContent).toBe(billingError.message);
-  expect(part("plans")).toBeNull();
+  expect(part("billing")?.querySelector("a")).toBeNull();
   expect(part("title")?.textContent).toBe("Acme Cloud Plan reports a billing problem");
   const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
     ".chat-run-failure__retry",

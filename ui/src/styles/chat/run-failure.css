@@ -111,8 +111,7 @@
   font-size: calc(12px * var(--control-ui-text-scale));
 }
 
-.chat-run-failure .chat-run-failure__retry svg,
-.chat-run-failure__plans svg {
+.chat-run-failure .chat-run-failure__retry svg {
   width: 12px;
   height: 12px;
   stroke-width: 2px;

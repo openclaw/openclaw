@@ -436,9 +436,7 @@ export type ProviderPlugin = {
    * raw error shape. Return undefined to fall back to generic classification.
    */
   classifyFailoverReason?: (ctx: ProviderFailoverErrorContext) => FailoverReason | null | undefined;
-  formatBillingError?: (
-    ctx: ProviderFailoverErrorContext,
-  ) => { message: string; actionUrl?: string } | undefined;
+  formatBillingError?: (ctx: ProviderFailoverErrorContext) => { message: string } | undefined;
   /**
    * Provider-owned cache TTL eligibility.
    *

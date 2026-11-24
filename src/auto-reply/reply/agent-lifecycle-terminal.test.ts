@@ -50,8 +50,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
 
   it("preserves billing guidance and attribution through mixed fallback exhaustion", () => {
     const billingError = {
-      message: "Choose an active plan.",
-      actionUrl: "https://example.com/plans",
+      message: "A subscription is required.",
     };
     const attempts: FallbackAttempt[] = [];
     const paid = { provider: "paid-provider", model: "model-a" };

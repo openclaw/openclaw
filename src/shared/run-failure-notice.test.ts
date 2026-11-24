@@ -13,23 +13,13 @@ describe("billing display projection", () => {
       }),
     )?.billingError;
 
-  it.each([
-    "javascript:alert(1)",
-    "/plans",
-    "https://",
-    "x".repeat(2049),
-    "https://user@example.com/plans",
-    "http://:pass@example.com/plans",
-  ])("drops only the invalid billing link %j", (actionUrl) => {
-    expect(billing({ message: "  Choose an active plan.  ", actionUrl })).toEqual({
-      message: "Choose an active plan.",
-    });
-  });
-
   it("normalizes safe guidance without promoting raw or non-billing metadata", () => {
-    expect(billing({ message: "Choose a plan.", actionUrl: "http:example.com" })?.actionUrl).toBe(
-      "http://example.com/",
-    );
+    expect(
+      billing({
+        message: "  A subscription is required.  ",
+        actionUrl: "https://example.com/plans",
+      }),
+    ).toEqual({ message: "A subscription is required." });
     expect(billing({ message: "x".repeat(700) })?.message).toHaveLength(600);
     for (const value of [undefined, { message: "  " }]) {
       expect(billing(value)).toBeUndefined();
