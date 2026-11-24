@@ -8,12 +8,10 @@ import {
   pluginContractPatterns,
 } from "./vitest.contracts-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
-  narrowIncludePatternsForCli,
-} from "./vitest.pattern-file.ts";
+  createScopedVitestPatternPlugin,
+  withoutVitestPatternFields,
+} from "./vitest.scoped-patterns.ts";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
 export {
@@ -33,23 +31,29 @@ export function createContractsVitestConfig(
   argv: string[] = process.argv,
   options: { name?: string; pool?: "forks" | "threads" } = {},
 ) {
-  const cliIncludePatterns = narrowIncludePatternsForCli(includePatterns, argv);
-  const envIncludePatterns = intersectIncludePatterns(
-    includePatterns,
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
-    matchesVitestGlob,
-  );
   return defineConfig({
     ...base,
+    plugins: [
+      ...sharedVitestConfig.plugins,
+      createScopedVitestPatternPlugin(
+        includePatterns,
+        {
+          env,
+          argv,
+          intersectIncludeFile: true,
+          excludeUnitFastTests: false,
+          exclude: databaseWorkerCoreTestFiles,
+        },
+        baseTest.exclude ?? [],
+      ),
+    ],
     test: {
-      ...baseTest,
+      ...withoutVitestPatternFields(baseTest),
       name: options.name ?? "contracts",
       pool: options.pool ?? baseTest.pool,
       isolate: false,
       runner: nonIsolatedRunnerPath,
       setupFiles: baseTest.setupFiles ?? [],
-      include: envIncludePatterns ?? cliIncludePatterns ?? includePatterns,
-      exclude: [...(baseTest.exclude ?? []), ...databaseWorkerCoreTestFiles],
       passWithNoTests: true,
     },
   });

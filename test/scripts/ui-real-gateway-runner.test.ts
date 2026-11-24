@@ -26,6 +26,17 @@ vi.mock("../vitest/vitest.ui-e2e-prebuilt.config.ts", () => ({
     },
   }),
 }));
+// Config resolution is the boundary; complete factory/hook behavior is covered by ownership tests.
+vi.mock("vitest/node", () => ({
+  resolveConfig: async (
+    _options: unknown,
+    config: { test: { projects: { test: unknown }[] } },
+  ) => ({
+    test: {
+      resolvedProjects: config.test.projects.map((project) => ({ projectConfig: project.test })),
+    },
+  }),
+}));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (original) => ({
   ...(await original<typeof import("../../scripts/lib/managed-child-process.mts")>()),
   runManagedCommand: vi.fn(),
@@ -134,6 +145,7 @@ it.each([
     return desktop.promise;
   });
   const running = runRealGatewayUiTests([], env);
+  await Promise.resolve();
   expect(managed).toHaveBeenCalledTimes(2);
   const [serialCall, desktopCall] = managed.mock.calls.map(([call]) => call);
   if (process.platform !== "win32") {
@@ -194,6 +206,7 @@ it.each([false, true])(
     const settled = vi.fn();
     const running = runRealGatewayUiTests([], env);
     const observed = running.then(settled, settled);
+    await Promise.resolve();
     expect(managed).toHaveBeenCalledTimes(2);
     managed.mock.calls[0]![0].onSignal!("SIGTERM");
     if (failCleanup) {

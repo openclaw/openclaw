@@ -1,0 +1,6 @@
+# Preserve native pattern polarity, mixed-origin intersection and effective-dir
+# coverage, override/browser-instance polarity, leaf ownership, and live-file watch.
+# Includes resolved-consumer migrations and additive FRV/shared-server coverage.
+# Against 4fffd7dfe66d4642e0338ca001d375d0d217065e: 841 net test lines;
+# allocate only the 441 lines above the unchanged 400-line ordinary allowance.
+441

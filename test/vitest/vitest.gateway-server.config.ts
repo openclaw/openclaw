@@ -8,7 +8,6 @@ import {
   gatewayServerIsolatedTestFiles,
   gatewayServerSerialTestFiles,
 } from "./vitest.gateway-server-paths.mjs";
-import { relativizeScopedPatterns } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createGatewayServerVitestConfig(
@@ -51,6 +50,10 @@ export function createGatewayServerVitestConfig(
     fileParallelism: false,
     name: "gateway-server-native",
   });
+  const parallel = createScopedVitestConfig(
+    ["src/gateway/**/*server*.test.ts", ...gatewayServerBackedHttpTestFiles],
+    { ...options, exclude: [...options.exclude, ...gatewayServerSerialTestFiles] },
+  );
   const groupOrder = config.test?.sequence?.groupOrder ?? 0;
   return defineConfig({
     ...config,
@@ -68,15 +71,11 @@ export function createGatewayServerVitestConfig(
           },
         },
         {
-          ...config,
+          ...parallel,
           extends: false,
           test: {
-            ...config.test,
+            ...parallel.test,
             name: "gateway-server-parallel",
-            exclude: [
-              ...(config.test?.exclude ?? []),
-              ...relativizeScopedPatterns(gatewayServerSerialTestFiles, options.dir),
-            ],
             sequence: { ...config.test?.sequence, groupOrder: groupOrder + 1 },
           },
         },

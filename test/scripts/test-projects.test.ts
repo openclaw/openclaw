@@ -18,6 +18,7 @@ import {
   buildVitestRunPlans as planRuns,
   createVitestRunSpecs as runSpecs,
   findUnmatchedExplicitTestTargets as unmatchedTargets,
+  formatFailedShardDigest,
   hasImportGraphImpactOnTargets as impactsTargets,
   isTestFileTarget,
   orderFullSuiteSpecsForParallelRun,
@@ -470,6 +471,32 @@ describe("scripts/test-projects changed-target routing", () => {
         });
         expect(files[0]).not.toBe(files[1]);
         expect(fs.existsSync(borrowed)).toBe(false);
+      });
+    },
+  );
+
+  it.each(["test/scripts/run-node.test.ts", "extensions/matrix/src/matrix/client/storage.test.ts"])(
+    "retains inherited exclusions for the explicitly owned file %s",
+    (target) => {
+      withIncludeFile([`!${target}`], (includeFile) => {
+        const [spec] = runSpecs([target], {
+          baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+        });
+        expect(spec?.includePatterns).toEqual([target, `!${target}`]);
+        assert(spec?.includeFilePath);
+        try {
+          writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns!);
+          expect(JSON.parse(fs.readFileSync(spec.includeFilePath, "utf8"))).toEqual([]);
+          writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns!, {
+            expandGlobs: false,
+          });
+          expect(JSON.parse(fs.readFileSync(spec.includeFilePath, "utf8"))).toEqual([
+            target,
+            `!${target}`,
+          ]);
+        } finally {
+          fs.rmSync(spec.includeFilePath, { force: true });
+        }
       });
     },
   );
@@ -1659,6 +1686,53 @@ export const single = {
   it("keeps the top-level extensions watch target on its aggregate owner", () => {
     expectRun(planRuns(["--watch", "extensions"]), "full-extensions", { watchMode: true });
   });
+
+  it("keeps a nonliteral contract owner for discovery instead of matching the glob as a filename", () => {
+    const prefix = "src/channels/plugins/contracts/";
+    withIncludeFile(
+      [`${prefix}*-shard-a.contract.test.ts`, `!${prefix}?-shard-a.contract.test.ts`],
+      (includeFile) => {
+        const specs = runSpecs([configFile("contracts-channel-surface")], {
+          baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+        });
+        expect(specs.map((spec) => spec.config)).toEqual([configFile("contracts-channel-surface")]);
+        // The real filename survives even though the owner's literal "*" would match "?".
+        expect(
+          path.matchesGlob(
+            `${prefix}directory.registry-backed-shard-a.contract.test.ts`,
+            `${prefix}?-shard-a.contract.test.ts`,
+          ),
+        ).toBe(false);
+      },
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "round-trips inherited exclusions in a shard rerun command",
+    () => {
+      const include = "test/scripts/*.test.ts";
+      const exclude = "test/scripts/it's excluded*.test.ts";
+      const line = formatFailedShardDigest([
+        {
+          config: configFile("tooling"),
+          includePatterns: [include, `!${exclude}`],
+          code: 1,
+        },
+      ]).find((value) => value.startsWith("[test]   rerun: "));
+      assert(line);
+      const command = line.slice("[test]   rerun: ".length);
+      // Replace only the executable with an argv recorder; do not run a test suite.
+      const recorded = spawnSync("/bin/sh", ["-c", `pnpm() { printf '%s\\0' "$@"; }; ${command}`], {
+        encoding: "utf8",
+      });
+      expect(recorded.status, recorded.stderr).toBe(0);
+      const args = recorded.stdout.split("\0").slice(0, -1);
+      expect(args).toEqual(["test", include, "--", "--exclude", exclude, "--reporter=verbose"]);
+      const parsed = parseTestProjectsArgs(args.slice(1));
+      expect(parsed.targetArgs).toEqual([include]);
+      expect(parsed.nonTargetArgs).toEqual(["--exclude", exclude, "--reporter=verbose"]);
+    },
+  );
 
   it.each(["extension-telegram", "extension-matrix"])(
     "preserves an externally scoped %s config target",

@@ -572,19 +572,16 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
   return analysis;
 }
 
-let cachedUnitFastTestFiles = null;
-let cachedUnitFastIsolatedTestFiles = null;
-let cachedUnitFastTimerTestFiles = null;
 const scopedUnitFastTestFilesByKey = new Map();
 
 export function getUnitFastTestFilesForIncludePatterns(includePatterns, options = {}) {
-  const cwd = process.cwd();
+  const cwd = options.cwd ?? process.cwd();
   const normalizedCwd = normalizeRepoPath(cwd);
   const dir = normalizeScopedDir(options.dir);
   const normalizedPatterns = includePatterns.map(normalizeRepoPath);
   if (normalizedPatterns.some((pattern) => cannotSafelyNarrowIncludePattern(pattern, dir))) {
     // Keep the former full exclusion list when Vitest syntax cannot be safely mapped to repo paths.
-    return getUnitFastTestFiles();
+    return getUnitFastTestFiles(null, cwd);
   }
   const patterns = [
     ...new Set(normalizedPatterns.map((pattern) => anchorScopedIncludePattern(pattern, dir))),
@@ -629,26 +626,22 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
   return files;
 }
 
-export function getUnitFastTestFiles(includePatterns) {
+export function getUnitFastTestFiles(includePatterns, cwd = process.cwd()) {
   if (includePatterns) {
-    return getUnitFastTestFilesForIncludePatterns(includePatterns);
+    return getUnitFastTestFilesForIncludePatterns(includePatterns, { cwd });
   }
-  if (cachedUnitFastTestFiles !== null) {
-    return cachedUnitFastTestFiles;
-  }
-  cachedUnitFastTestFiles = collectUnitFastTestFileAnalysis()
+  return collectUnitFastTestFileAnalysis(cwd)
     .filter((entry) => entry.unitFast)
     .map((entry) => entry.file);
-  return cachedUnitFastTestFiles;
 }
 
-function selectedUnitFastAnalysis(includePatterns) {
+function selectedUnitFastAnalysis(includePatterns, cwd) {
   // Partial selections reuse scoped analysis without populating whole-lane membership caches.
   return includePatterns
-    ? getUnitFastTestFilesForIncludePatterns(includePatterns).map((file) =>
-        analyzeUnitFastTestFile(process.cwd(), file),
+    ? getUnitFastTestFilesForIncludePatterns(includePatterns, { cwd }).map((file) =>
+        analyzeUnitFastTestFile(cwd, file),
       )
-    : collectUnitFastTestFileAnalysis();
+    : collectUnitFastTestFileAnalysis(cwd);
 }
 
 function isUnitFastTimerAnalysis(entry) {
@@ -663,24 +656,16 @@ function isUnitFastIsolatedAnalysis(entry) {
   );
 }
 
-export function getUnitFastTimerTestFiles(includePatterns) {
-  if (!includePatterns && cachedUnitFastTimerTestFiles !== null) {
-    return cachedUnitFastTimerTestFiles;
-  }
-  const files = selectedUnitFastAnalysis(includePatterns)
+export function getUnitFastTimerTestFiles(includePatterns, cwd = process.cwd()) {
+  return selectedUnitFastAnalysis(includePatterns, cwd)
     .filter(isUnitFastTimerAnalysis)
     .map((entry) => entry.file);
-  return includePatterns ? files : (cachedUnitFastTimerTestFiles = files);
 }
 
-export function getUnitFastIsolatedTestFiles(includePatterns) {
-  if (!includePatterns && cachedUnitFastIsolatedTestFiles !== null) {
-    return cachedUnitFastIsolatedTestFiles;
-  }
-  const files = selectedUnitFastAnalysis(includePatterns)
+export function getUnitFastIsolatedTestFiles(includePatterns, cwd = process.cwd()) {
+  return selectedUnitFastAnalysis(includePatterns, cwd)
     .filter(isUnitFastIsolatedAnalysis)
     .map((entry) => entry.file);
-  return includePatterns ? files : (cachedUnitFastIsolatedTestFiles = files);
 }
 
 function getUnitFastTestFileAnalysis(file) {

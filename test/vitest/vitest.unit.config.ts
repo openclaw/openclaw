@@ -5,6 +5,10 @@ import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { shouldPassWithNoTestsForCliIncludes } from "./vitest.scoped-config.ts";
 import {
+  createScopedVitestPatternPlugin,
+  withoutVitestPatternFields,
+} from "./vitest.scoped-patterns.ts";
+import {
   nonIsolatedRunnerPath,
   repoRoot,
   resolveRepoRootPath,
@@ -107,13 +111,12 @@ export function createUnitVitestConfigWithOptions(
   const envIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, argv);
-  const unitFastTestFiles = getUnitFastTestFiles(envIncludePatterns ?? cliIncludePatterns);
   const coverageIncludePatterns =
     isCoverageEnabledFromArgv(argv) &&
     options.includePatterns === undefined &&
     envIncludePatterns === null &&
     cliIncludePatterns === null
-      ? resolveDefaultUnitCoverageIncludePatterns(unitFastTestFiles)
+      ? resolveDefaultUnitCoverageIncludePatterns()
       : null;
   const protectedIncludeFiles = new Set(
     defaultIncludePatterns.filter((pattern) => isBundledPluginDependentUnitTestFile(pattern)),
@@ -129,15 +132,27 @@ export function createUnitVitestConfigWithOptions(
     ...new Set([
       ...exclude,
       ...baseExcludePatterns,
-      ...unitFastTestFiles,
       ...extraExcludePatterns,
       ...loadExtraExcludePatternsFromEnv(env),
     ]),
   ];
   return defineConfig({
     ...sharedVitestConfig,
+    plugins: [
+      ...sharedVitestConfig.plugins,
+      createScopedVitestPatternPlugin(
+        defaultIncludePatterns,
+        { env, argv },
+        resolvedExcludePatterns,
+        (patterns, test) =>
+          test.passWithNoTests === undefined &&
+          shouldPassWithNoTestsForCliIncludes(patterns.scopedCliInclude, patterns.scopedExclude)
+            ? { passWithNoTests: true }
+            : {},
+      ),
+    ],
     test: {
-      ...sharedTest,
+      ...withoutVitestPatternFields(sharedTest),
       name: options.name ?? "unit",
       isolate: false,
       runner: nonIsolatedRunnerPath,
@@ -148,8 +163,6 @@ export function createUnitVitestConfigWithOptions(
           ),
         ),
       ],
-      include: envIncludePatterns ?? cliIncludePatterns ?? defaultIncludePatterns,
-      exclude: resolvedExcludePatterns,
       coverage: {
         ...sharedTest.coverage,
         ...(coverageIncludePatterns !== null && coverageIncludePatterns.length > 0
@@ -163,10 +176,9 @@ export function createUnitVitestConfigWithOptions(
           ]),
         ],
       },
-      ...(options.passWithNoTests ||
-      shouldPassWithNoTestsForCliIncludes(cliIncludePatterns, resolvedExcludePatterns)
-        ? { passWithNoTests: true }
-        : {}),
+      ...(options.passWithNoTests === undefined
+        ? {}
+        : { passWithNoTests: options.passWithNoTests }),
     },
   });
 }

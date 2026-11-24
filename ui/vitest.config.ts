@@ -4,12 +4,18 @@ import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import type { Plugin } from "vite";
-import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
+import {
+  defineConfig,
+  defineProject,
+  type ViteUserConfig,
+  type TestUserConfig,
+  type TestProjectInlineConfiguration,
+} from "vitest/config";
 import type { Vitest } from "vitest/node";
 import { peleClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
-  intersectIncludePatterns,
+  splitIncludePatterns,
 } from "../test/vitest/vitest.include-patterns.ts";
 import {
   loadPatternListFromEnv,
@@ -21,6 +27,12 @@ import {
   loadVitestPerformanceConfig,
 } from "../test/vitest/vitest.performance-config.ts";
 import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
+import {
+  createScopedVitestPatternPlugin,
+  resolveScopedVitestPatterns,
+  resolveScopedVitestConfigPatterns,
+  withoutVitestPatternFields,
+} from "../test/vitest/vitest.scoped-patterns.ts";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
@@ -49,13 +61,28 @@ const workspaceSourceAliases = [
       (typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/")),
   ),
 ];
-function includeUiTests(patterns: string[], env = process.env): string[] {
-  const selected = intersectIncludePatterns(
-    patterns.map((pattern) => path.posix.normalize(`ui/${pattern}`)),
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
-    matchesVitestGlob,
+function repoUiPatterns(patterns: string[]): string[] {
+  return patterns.map((pattern) => (path.isAbsolute(pattern) ? pattern : `ui/${pattern}`));
+}
+
+function createUiPatternPlugin(
+  include: string[],
+  exclude: string[],
+  env = process.env,
+  apply?: Parameters<typeof createScopedVitestPatternPlugin>[3],
+): Plugin {
+  return createScopedVitestPatternPlugin(
+    repoUiPatterns(include),
+    {
+      root: repoRoot,
+      dir: "ui",
+      env,
+      intersectIncludeFile: true,
+      excludeUnitFastTests: false,
+    },
+    repoUiPatterns(exclude),
+    apply,
   );
-  return selected ? selected.map((pattern) => path.posix.relative("ui", pattern)) : patterns;
 }
 
 const sharedUiTestConfig = {
@@ -167,44 +194,121 @@ export function createUiBrowserVitestConfig(
   env = process.env,
   browser: "chromium" | "webkit" = "chromium",
 ): ViteUserConfig {
-  const include = includeUiTests(
+  env = { ...env };
+  const include =
     browser === "webkit"
       ? webkitTestFiles
-      : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
-    env,
-  );
-  const mockRegistryInclude = includeUiTests(
+      : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"];
+  const mockRegistryInclude =
     browser === "chromium"
       ? mockRegistryBrowserTests
-      : ["src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx"],
-    env,
-  );
+      : ["src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx"];
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
-  const excludesBrowserFiles =
-    runtimeFiles !== null &&
-    filterFilesByPatterns(
-      runtimeFiles.map((file) => path.posix.relative("ui", file)),
-      include,
-      nodeDrivenBrowserLayoutTests,
-      matchesVitestGlob,
-    ).length === 0;
-  if (browser === "chromium" && !excludesBrowserFiles && chromiumLaunchOptions === null) {
-    chromiumLaunchOptions = resolveChromiumLaunchOptions();
-  }
-  const provider = playwright({
-    launchOptions:
-      browser === "chromium"
-        ? {
-            ...chromiumLaunchOptions,
-            // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
-            args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
-          }
-        : undefined,
-  });
-  if (excludesBrowserFiles) {
-    // Keep browser discovery for native sharding; only skip its speculative launch.
-    delete provider.prewarm;
-  }
+  const patternOptions = {
+    root: repoRoot,
+    dir: "ui",
+    env,
+    intersectIncludeFile: true,
+    excludeUnitFastTests: false,
+  };
+  const resolveInstances = (
+    patterns: ReturnType<typeof resolveScopedVitestPatterns>,
+    test: TestUserConfig,
+  ) => {
+    const ordinary = resolveScopedVitestPatterns(
+      repoUiPatterns(include),
+      {
+        ...patternOptions,
+        effectiveDir: patterns.effectiveDir,
+      },
+      repoUiPatterns([...nodeDrivenBrowserLayoutTests, ...mockRegistryBrowserTests]),
+    );
+    const mocked = resolveScopedVitestPatterns(
+      repoUiPatterns(mockRegistryInclude),
+      {
+        ...patternOptions,
+        effectiveDir: patterns.effectiveDir,
+      },
+      [],
+    );
+    return (test.browser?.instances ?? []).flatMap((instance) => {
+      const isMock = instance.name === `${browser}-mock-registry`;
+      if (isMock && !instance.include?.length && mocked.scopedInclude.length === 0) return [];
+      const ownInclude = instance.include?.length ? instance.include : undefined;
+      const selection = splitIncludePatterns(
+        ownInclude ?? (isMock ? mocked.scopedInclude : patterns.scopedInclude),
+      );
+      return [
+        {
+          ...instance,
+          include: selection.include,
+          exclude: [
+            ...(instance.exclude?.length
+              ? instance.exclude
+              : instance.name === browser
+                ? ordinary.scopedOwnerExclude
+                : patterns.scopedOwnerExclude),
+            // An instance exclusion override must not erase the negatives of
+            // the selection it inherits; its own include owns its own negatives.
+            ...(!ownInclude ? patterns.scopedSelectionExclude : []),
+            ...selection.exclude,
+          ],
+        },
+      ];
+    });
+  };
+  const providerPlugin: Plugin = {
+    name: "openclaw:ui-browser-provider",
+    enforce: "post",
+    config: {
+      // Native CLI overrides run first; BrowserLoader's ordinary hook needs
+      // the provider before the final pattern hook executes.
+      order: "pre",
+      handler(config) {
+        const test = config.test;
+        if (!test?.browser?.enabled) return;
+        const patterns = resolveScopedVitestConfigPatterns(
+          repoUiPatterns(include),
+          patternOptions,
+          repoUiPatterns(nodeDrivenBrowserLayoutTests),
+          test,
+          config.root,
+        );
+        const instances = resolveInstances(patterns, test);
+        const absolute = (pattern: string) => path.resolve(patterns.effectiveDir, pattern);
+        const excluded =
+          instances.every((instance) => instance.include.length === 0) ||
+          (runtimeFiles !== null &&
+            !instances.some(
+              (instance) =>
+                filterFilesByPatterns(
+                  runtimeFiles.map((file) => path.resolve(repoRoot, file)),
+                  instance.include.map(absolute),
+                  instance.exclude.map(absolute),
+                  matchesVitestGlob,
+                ).length,
+            ));
+        const configured =
+          test.browser.provider ?? instances.find((instance) => instance.provider)?.provider;
+        if (configured) return;
+        if (browser === "chromium" && !excluded && chromiumLaunchOptions === null) {
+          chromiumLaunchOptions = resolveChromiumLaunchOptions();
+        }
+        const provider = playwright({
+          launchOptions:
+            browser === "chromium"
+              ? {
+                  ...chromiumLaunchOptions,
+                  args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
+                }
+              : undefined,
+        });
+        // This provider belongs only to this config resolution, never a caller.
+        if (excluded) delete provider.prewarm;
+        test.browser.provider = provider;
+      },
+    },
+  };
   return defineProject({
     root: here,
     plugins: [
@@ -213,6 +317,10 @@ export function createUiBrowserVitestConfig(
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
       createRedactingReporterPlugin(),
+      providerPlugin,
+      createUiPatternPlugin(include, nodeDrivenBrowserLayoutTests, env, (patterns, test) => ({
+        browser: { ...test.browser, instances: resolveInstances(patterns, test) },
+      })),
     ],
     optimizeDeps: {
       include: [
@@ -268,25 +376,20 @@ export function createUiBrowserVitestConfig(
       name: browser === "webkit" ? "webkit" : "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
-      include,
-      exclude: [...nodeDrivenBrowserLayoutTests],
       setupFiles: ["./src/test-helpers/dom.setup.ts"],
       browser: {
         enabled: true,
-        provider,
         commands: { overlayEmulateMedia },
         instances: [
           {
             browser,
             name: browser,
-            exclude: [...nodeDrivenBrowserLayoutTests, ...mockRegistryBrowserTests],
           },
           ...(mockRegistryInclude.length
             ? [
                 {
                   browser,
                   name: `${browser}-mock-registry`,
-                  include: mockRegistryInclude,
                   // This additional WebKit lane proves parked-row box/geometry restoration.
                   ...(browser === "webkit" ? { testNamePattern: /parks retained rows/ } : {}),
                   isolate: true,
@@ -376,10 +479,7 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: includeUiTests([
-            "src/**/*.test.{ts,tsx}",
-            "../extensions/*/browser/**/*.test.{ts,tsx}",
-          ]),
+          include: ["src/**/*.test.{ts,tsx}", "../extensions/*/browser/**/*.test.{ts,tsx}"],
           exclude: [
             "src/**/*.browser.test.{ts,tsx}",
             "src/**/*.e2e.test.{ts,tsx}",
@@ -409,7 +509,8 @@ export default defineConfig({
           // root runners isolate the same tests without slowing the main suite.
           isolate: true,
           name: "unit-mock-registry",
-          include: includeUiTests([...mockRegistryUnitTests]),
+          include: [...mockRegistryUnitTests],
+          exclude: [],
           environment: "jsdom",
           setupFiles: nodeSetupFiles,
         },
@@ -431,11 +532,11 @@ export default defineConfig({
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
-          include: includeUiTests([
+          include: [
             "src/**/*.node.test.{ts,tsx}",
             "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...nodeDrivenBrowserLayoutTests,
-          ]),
+          ],
           environment: "jsdom",
           setupFiles: nodeSetupFiles,
         },
@@ -458,11 +559,22 @@ export default defineConfig({
           isolate: true,
           // Finish other UI tests before measuring full-render wall time.
           sequence: { groupOrder: 1 },
-          include: includeUiTests(timingTests),
+          include: timingTests,
+          exclude: [],
           environment: "jsdom",
           setupFiles: nodeSetupFiles,
         },
       },
-    ],
+    ].map((project: TestProjectInlineConfiguration) => {
+      if (project.test?.browser?.enabled) return project;
+      return {
+        ...project,
+        test: withoutVitestPatternFields(project.test ?? {}),
+        plugins: [
+          ...(project.plugins ?? []),
+          createUiPatternPlugin(project.test?.include ?? [], project.test?.exclude ?? []),
+        ],
+      };
+    }),
   },
 });

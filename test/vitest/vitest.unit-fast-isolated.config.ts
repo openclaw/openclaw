@@ -1,11 +1,9 @@
 // Vitest unit fast isolated config wires audited stateful tests out of shared module caches.
 import { defineConfig } from "vitest/config";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
-  narrowIncludePatternsForCli,
-} from "./vitest.pattern-file.ts";
+  createScopedVitestPatternPlugin,
+  withoutVitestPatternFields,
+} from "./vitest.scoped-patterns.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { getUnitFastIsolatedTestFiles } from "./vitest.unit-fast-paths.mjs";
 import { unitTestIncludePatterns } from "./vitest.unit-paths.mjs";
@@ -15,28 +13,29 @@ export function createUnitFastIsolatedVitestConfig(
   options: { argv?: string[] } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const discoveryPatterns =
-    selectedPatterns ?? narrowIncludePatternsForCli(unitTestIncludePatterns, options.argv);
-  const isolatedTestFiles = getUnitFastIsolatedTestFiles(discoveryPatterns);
-  const includeFromEnv = intersectIncludePatterns(
-    isolatedTestFiles,
-    selectedPatterns,
-    matchesVitestGlob,
-  );
-  const cliInclude = narrowIncludePatternsForCli(isolatedTestFiles, options.argv);
-
   return defineConfig({
     ...sharedVitestConfig,
+    plugins: [
+      ...sharedVitestConfig.plugins,
+      createScopedVitestPatternPlugin(
+        unitTestIncludePatterns,
+        {
+          env,
+          argv: options.argv,
+          intersectIncludeFile: true,
+          excludeUnitFastTests: false,
+          selectOwnedInclude: getUnitFastIsolatedTestFiles,
+        },
+        sharedTest.exclude ?? [],
+      ),
+    ],
     test: {
-      ...sharedTest,
+      ...withoutVitestPatternFields(sharedTest),
       name: "unit-fast-isolated",
       // Forced stateful tests can mock modules imported by later files, so each gets a fresh graph.
       isolate: true,
       runner: undefined,
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
-      include: includeFromEnv ?? cliInclude ?? isolatedTestFiles,
-      exclude: sharedTest.exclude ?? [],
       passWithNoTests: true,
     },
   });

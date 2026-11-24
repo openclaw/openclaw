@@ -2,12 +2,10 @@
 // shared module cache.
 import { defineConfig } from "vitest/config";
 import { gatewayServerIsolatedTestFiles } from "./vitest.gateway-server-paths.mjs";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
-  narrowIncludePatternsForCli,
-} from "./vitest.pattern-file.ts";
+  createScopedVitestPatternPlugin,
+  withoutVitestPatternFields,
+} from "./vitest.scoped-patterns.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
 export function createGatewayServerIsolatedVitestConfig(
@@ -15,17 +13,18 @@ export function createGatewayServerIsolatedVitestConfig(
   options: { argv?: string[] } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const includeFromEnv = intersectIncludePatterns(
-    gatewayServerIsolatedTestFiles,
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
-    matchesVitestGlob,
-  );
-  const cliInclude = narrowIncludePatternsForCli(gatewayServerIsolatedTestFiles, options.argv);
-
   return defineConfig({
     ...sharedVitestConfig,
+    plugins: [
+      ...sharedVitestConfig.plugins,
+      createScopedVitestPatternPlugin(
+        gatewayServerIsolatedTestFiles,
+        { env, argv: options.argv, intersectIncludeFile: true, excludeUnitFastTests: false },
+        sharedTest.exclude ?? [],
+      ),
+    ],
     test: {
-      ...sharedTest,
+      ...withoutVitestPatternFields(sharedTest),
       name: "gateway-server-isolated",
       // Keep each file's real or mocked Gateway modules out of neighboring graphs.
       isolate: true,
@@ -33,8 +32,6 @@ export function createGatewayServerIsolatedVitestConfig(
       pool: "forks",
       runner: undefined,
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
-      include: includeFromEnv ?? cliInclude ?? gatewayServerIsolatedTestFiles,
-      exclude: sharedTest.exclude ?? [],
       passWithNoTests: true,
     },
   });
