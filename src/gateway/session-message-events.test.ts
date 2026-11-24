@@ -426,9 +426,20 @@ describe("session.message websocket events", () => {
     // Fixture preparation has no delivery deadline; arm observers after readiness, before send.
     await prepareGatewayReplyRuntimeForTest();
     using otherChats = collectEventPayloads(otherWs, "chat");
-    const chatEvents = [mainWs, legacyWs].map((ws) =>
-      onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
-    );
+    const chatEvents = [
+      { label: "session-scoped", ws: mainWs },
+      { label: "legacy", ws: legacyWs },
+    ].map(({ label, ws }) => {
+      const armedAt = performance.now();
+      return onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })).catch(
+        (cause: unknown) => {
+          throw new Error(
+            `Chat delivery observer ${label} failed after ${Math.round(performance.now() - armedAt)}ms`,
+            { cause },
+          );
+        },
+      );
+    });
 
     const [send, ...delivered] = await Promise.all([
       rpcReq(mainWs, "chat.send", {
