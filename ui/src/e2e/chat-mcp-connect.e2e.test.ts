@@ -48,7 +48,11 @@ suite.define(() => {
     const card = page.getByRole("region", { name: "Sign in to Fieldnotes" });
     const signIn = card.getByRole("link", { name: "Sign in", exact: true });
     await signIn.waitFor();
-    expect(await page.getByRole("button", { name: /Fieldnotes List Issues/ }).count()).toBe(0);
+    const toolOutput = page.getByRole("button", {
+      name: "Tool output fieldnotes__list_items",
+      exact: true,
+    });
+    expect(await toolOutput.count()).toBe(0);
     expect((await card.boundingBox())!.y).toBeGreaterThan((await reply.boundingBox())!.y);
     const opening = page.context().waitForEvent("page");
     await signIn.press("Enter");
