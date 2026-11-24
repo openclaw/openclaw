@@ -22,16 +22,23 @@ export function snapshotBytes(
       version: 2,
       beamId: row.beamId,
       source: row.source,
-      title: row.title,
+      // V1 accepted unpaired UTF-16 surrogates from JSON escapes. Portable v2
+      // requires Unicode scalars, including on reads of previously stored rows.
+      title: row.title.toWellFormed(),
       updatedAt: row.updatedAt,
       completed: row.completed,
       ...(row.truncated ? { truncated: true } : {}),
       ...(row.sourceModel
-        ? { sourceModel: { provider: row.sourceModel.provider, model: row.sourceModel.model } }
+        ? {
+            sourceModel: {
+              provider: row.sourceModel.provider,
+              model: row.sourceModel.model.toWellFormed(),
+            },
+          }
         : {}),
       items: row.items.map(({ type, text, speaker }) => ({
         type,
-        text,
+        text: text.toWellFormed(),
         ...(speaker ? { speaker } : {}),
       })),
     })

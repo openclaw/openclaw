@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 import { expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { parseBeamPacket } from "../packet-contract/packet-v2.generated.js";
 import { sampleUpload, staffReceipt } from "./beam-store.test-support.js";
 import { beamTestAuthority, persistentBeamTestStore } from "./beam.test-support.js";
 import { readBeamDestination } from "./destination-v2.js";
@@ -147,10 +148,23 @@ it("reads one publication generation and protects a visitor's snapshot across re
     expect(selected.status).toBe(200);
     expect(selected.headers.get("beam-digest")).toBe(legacy.digest);
     expect((await keyedStore.lookup(upload.beamId))?.publicationId).toBeUndefined();
-    await keyedStore.register(upload.beamId, { ...oldRow, title: "Changed" });
+    const historicalText = "retained " + String.fromCharCode(0xd800);
+    await keyedStore.register(upload.beamId, {
+      ...oldRow,
+      title: historicalText,
+      sourceModel: { provider: "example", model: historicalText.trim().replace(" ", "-") },
+      items: [{ type: "userMessage", text: historicalText }],
+    });
     expect((await fetch(oldSnapshot, { headers: { "If-Match": legacy.revision } })).status).toBe(
       412,
     );
+    const changed = await (await fetch(headUrl)).json();
+    const restored = await fetch(oldSnapshot, { headers: { "If-Match": changed.revision } });
+    const portable = parseBeamPacket(new Uint8Array(await restored.arrayBuffer()));
+    expect(portable.title).toBe("retained \ufffd");
+    expect(portable.items[0]?.text).toBe(portable.title);
+    expect(portable.sourceModel?.model).toBe("retained-\ufffd");
+    expect((await keyedStore.lookup(upload.beamId))?.title).toBe(historicalText);
   } finally {
     await close();
   }
