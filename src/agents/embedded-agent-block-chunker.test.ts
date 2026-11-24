@@ -79,6 +79,177 @@ function streamChunks(chunker: EmbeddedBlockChunker, source: string, delta: numb
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it("keeps indented Unicode source intact when a fenced projection cannot fit", () => {
+    const source = "    😀abc";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 9,
+      hardMaxChars: 40,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(source);
+
+    expect(drainChunks(chunker, true)).toEqual([source]);
+  });
+
+  it("does not split a label while a streamed destination is still empty", () => {
+    const link = `[${"a".repeat(30)}](https://example.com/x)`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+    const emit = (chunk: string) => chunks.push(chunk);
+    const emptyDestinationEnd = link.indexOf("(") + 1;
+
+    for (const character of link.slice(0, emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    expect(chunks).toEqual([]);
+
+    for (const character of link.slice(emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+    expect(chunks).toEqual([link]);
+  });
+
+  it.each(["\n", "\r\n"])("keeps a streamed multiline link label intact with %j", (newline) => {
+    const link = `[${"a".repeat(28)}${newline}b](https://example.com/x)`;
+    const chunker = paragraphChunker(10, 30, { hardMaxChars: 160 });
+    const { chunks, metadata } = streamChunks(chunker, link, 1);
+
+    expect(chunks).toEqual([link]);
+    expect(markdownToIR(link).links).toEqual([
+      expect.objectContaining({ href: "https://example.com/x" }),
+    ]);
+    expectSourceCoverage(metadata, link);
+    expectDrained(chunker, link.length);
+  });
+
+  it.each(["\n", "\r\n"])("keeps a fitting multiline-title link intact with %j", (newline) => {
+    const link = `[doc](https://docs.example "line one${newline}line two")`;
+    for (const delta of [1, link.length]) {
+      const chunker = paragraphChunker(1, 30, { hardMaxChars: 160 });
+      const { chunks, metadata } = streamChunks(chunker, link, delta);
+
+      expect(chunks).toEqual([link]);
+      expectSourceCoverage(metadata, link);
+      expectDrained(chunker, link.length);
+    }
+    const bounded = paragraphChunker(1, 30);
+    const { chunks, metadata } = streamChunks(bounded, link, 1);
+    expectChunksWithinLength(chunks, 30);
+    expectSourceCoverage(metadata, link);
+    expectDrained(bounded, link.length);
+  });
+
+  it("protects links rendered inside literal HTML blocks", () => {
+    const link = `[${"a".repeat(40)}](https://example.com/x)`;
+    const source = `<div>\n${link}\n</div>`;
+    for (const delta of [1, source.length]) {
+      const chunker = paragraphChunker(1, 30, { hardMaxChars: 160 });
+      const { chunks, metadata } = streamChunks(chunker, source, delta);
+
+      expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+      expect(markdownToIR(source).links).toEqual([
+        expect.objectContaining({ href: "https://example.com/x" }),
+      ]);
+      expectChunksWithinLength(chunks, 160);
+      expectSourceCoverage(metadata, source);
+      expectDrained(chunker, source.length);
+    }
+  });
+
+  it("retains unassigned newlines until a forced final drain", () => {
+    const source = "\n".repeat(31);
+    const chunker = paragraphChunker(1, 30);
+    chunker.append(source);
+
+    expect(drainChunks(chunker)).toEqual([]);
+    expect(chunker.bufferedText).toBe(source);
+    expect(chunker.consumedLength).toBe(0);
+
+    expect(drainChunks(chunker, true)).toEqual([]);
+    expectDrained(chunker, source.length);
+  });
+
+  it.each(["\n\n", "\n \t\n", "\r\n\r\n"])(
+    "releases a streamed partial label at a blank line %j",
+    (blankLine) => {
+      const prefix = `[${"a".repeat(28)}${blankLine}`;
+      const tail = "Next paragraph.";
+      const source = prefix + tail;
+      const chunker = paragraphChunker(10, 30, { hardMaxChars: 160 });
+      const { chunks, metadata, emit } = captureChunks();
+
+      for (const character of prefix) {
+        chunker.append(character);
+        chunker.drain({ force: false, emit });
+      }
+      expect(chunks.length).toBeGreaterThan(0);
+      chunker.append(tail);
+      chunker.drain({ force: true, emit });
+      expectSourceCoverage(metadata, source);
+      expectDrained(chunker, source.length);
+    },
+  );
+
+  it("keeps adjacent bounded Markdown links in separate chunks", () => {
+    const first = "[a](https://a.co)";
+    const second = "[b](https://b.co)";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 20,
+      hardMaxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(first + second);
+
+    expect(drainChunks(chunker, true)).toEqual([first, second]);
+  });
+
+  it("hard-splits a link that exceeds the transport ceiling without breaking UTF-16", () => {
+    const link = `[invite](https://example.com/${"a".repeat(40)}😀${"b".repeat(40)})`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 50,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(link);
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.join("")).toBe(link);
+    expectChunksWithinLength(chunks, 50);
+    expect(chunks.every((chunk) => chunk.isWellFormed())).toBe(true);
+  });
+
+  it("keeps a link intact after shortening an oversized fence language hint", () => {
+    const link = `[invite](https://example.com/${"a".repeat(80)})`;
+    const text = `\`\`\`${"language".repeat(8)}\ncode\n\`\`\`\nSee ${link} now.`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+
+    chunker.append(text);
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+    expectChunksWithinLength(chunks, 160);
+  });
+
   it("emits a whole leading grapheme that exactly fills the hard cap", () => {
     const cluster = `e${"\u0301".repeat(1199)}`;
     const chunker = paragraphChunker(800, 1200);

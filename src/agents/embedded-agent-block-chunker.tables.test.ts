@@ -10,8 +10,8 @@ const rows = (count: number) =>
 const table = ["| Region | Total |", "| --- | ---: |", ...rows(80)].join("\n");
 const source = "Quarterly summary.\n\n" + table + "\n\nNext steps.";
 const longTable = ["| Region | Total |", "| --- | ---: |", ...rows(240)].join("\n");
-function capture(maxChars = 1200) {
-  const chunker = new EmbeddedBlockChunker({ minChars: maxChars === 100 ? 50 : 800, maxChars });
+function capture(maxChars = 1200, minChars = maxChars === 100 ? 50 : 800, hardMaxChars?: number) {
+  const chunker = new EmbeddedBlockChunker({ minChars, maxChars, hardMaxChars });
   const chunks: string[] = [];
   const metadata: BlockChunkMetadata[] = [];
   const drain = (force = false) =>
@@ -82,6 +82,43 @@ it.each([
     if (text === longTable) {
       expect(output.chunks.length).toBeGreaterThan(2);
     }
+  },
+);
+it.each([1, 17, 4096])(
+  "preserves links and source custody in table continuations (%i)",
+  (delta) => {
+    const links = Array.from(
+      { length: 12 },
+      (_, i) => `[R${i}](https://example.com/${i}/${"a".repeat(60)})`,
+    );
+    const linkedTable = [
+      "| Item | Link |",
+      "| --- | --- |",
+      ...links.map((link, i) => `| ${i} | ${link} |`),
+    ].join("\n");
+    const output = capture(240, 80, 400);
+    const { chunker } = output;
+    for (let offset = 0; offset < linkedTable.length; offset += delta) {
+      chunker.append(linkedTable.slice(offset, offset + delta));
+      output.drain();
+    }
+    output.drain(true);
+
+    expect(output.chunks.length).toBeGreaterThan(1);
+    for (const link of links) {
+      expect(output.chunks.filter((chunk) => chunk.includes(link))).toHaveLength(1);
+    }
+    expect(output.chunks.every((chunk) => chunk.length <= 240)).toBe(true);
+    expect(
+      output.chunks.map((chunk) => convertMarkdownTables(chunk, "bullets")).join("\n"),
+    ).not.toMatch(/^\| \d+/m);
+    expect(output.metadata.map((entry) => entry.sourceText).join("")).toBe(linkedTable);
+    expect(output.metadata.map((entry) => entry.sourceStart)).toEqual([
+      0,
+      ...output.metadata.slice(0, -1).map((entry) => entry.sourceEnd),
+    ]);
+    expect(chunker.consumedLength).toBe(linkedTable.length);
+    expect(chunker.hasBuffered()).toBe(false);
   },
 );
 it("resets the header, pending rows and source position", () => {
