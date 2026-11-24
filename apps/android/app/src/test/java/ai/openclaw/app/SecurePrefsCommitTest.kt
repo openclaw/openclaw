@@ -24,51 +24,52 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 class SecurePrefsCommitTest {
   @Test
-  fun proxyEditsAreAtomicDestinationScopedAndKeepThePairedAccount() = runBlocking {
-    val (prefs, backing) = fixture()
-    val endpoint = GatewayEndpoint.manual("gateway.example", 443, true, "/team")
-    val other = GatewayEndpoint.manual("other.example", 443, true)
-    val gatewayAuth = GatewayCredentials(token = "gateway-token", password = "gateway-password")
-    prefs.saveGatewayCredentials(endpoint.stableId, gatewayAuth)
-    val tokens = DeviceAuthStore(prefs)
-    assertTrue(tokens.saveToken(endpoint.stableId, "device", "operator", "paired-token"))
-    assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "first")))
-    assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(other, GatewayProxyCredentials("bob", "other")))
-    val grant = requireNotNull(prefs.gatewayProxyAuthorization(endpoint))
-    val request = Request.Builder().url("https://gateway.example/team").build()
-    assertEquals(Credentials.basic("alice", "first", Charsets.UTF_8), grant.authorizeUpgrade(request).header("Authorization"))
-    assertTrue(runCatching { grant.authorizeUpgrade(request.newBuilder().header("Authorization", "Bearer existing").build()) }.exceptionOrNull() is GatewayExternalAuthorizationException)
-    for (url in listOf("http://gateway.example/team", "https://other.example/team", "https://gateway.example/team-other")) {
-      assertThrows(GatewayExternalAuthorizationException::class.java) { grant.requireCurrent(request.newBuilder().url(url).build()) }
+  fun proxyEditsAreAtomicDestinationScopedAndKeepThePairedAccount() =
+    runBlocking {
+      val (prefs, backing) = fixture()
+      val endpoint = GatewayEndpoint.manual("gateway.example", 443, true, "/team")
+      val other = GatewayEndpoint.manual("other.example", 443, true)
+      val gatewayAuth = GatewayCredentials(token = "gateway-token", password = "gateway-password")
+      prefs.saveGatewayCredentials(endpoint.stableId, gatewayAuth)
+      val tokens = DeviceAuthStore(prefs)
+      assertTrue(tokens.saveToken(endpoint.stableId, "device", "operator", "paired-token"))
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "first")))
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(other, GatewayProxyCredentials("bob", "other")))
+      val grant = requireNotNull(prefs.gatewayProxyAuthorization(endpoint))
+      val request = Request.Builder().url("https://gateway.example/team").build()
+      assertEquals(Credentials.basic("alice", "first", Charsets.UTF_8), grant.authorizeUpgrade(request).header("Authorization"))
+      assertTrue(runCatching { grant.authorizeUpgrade(request.newBuilder().header("Authorization", "Bearer existing").build()) }.exceptionOrNull() is GatewayExternalAuthorizationException)
+      for (url in listOf("http://gateway.example/team", "https://other.example/team", "https://gateway.example/team-other")) {
+        assertThrows(GatewayExternalAuthorizationException::class.java) { grant.requireCurrent(request.newBuilder().url(url).build()) }
+      }
+      assertThrows(IllegalArgumentException::class.java) { prefs.loadGatewayProxyCredentials(endpoint.copy(tlsEnabled = false)) }
+      assertThrows(IllegalStateException::class.java) { prefs.loadGatewayProxyCredentials(endpoint.copy(host = "other.example")) }
+      assertThrows(IllegalArgumentException::class.java) { GatewayProxyCredentials("invalid:username", "secret") }
+      assertEquals("GatewayProxyCredentials([redacted])", GatewayProxyCredentials("alice", "first").toString())
+
+      backing.failNextCommit = true
+      assertEquals(GatewayProxySaveResult.FAILED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "second")))
+      assertEquals("first", prefs.loadGatewayProxyCredentials(endpoint)?.password)
+      grant.requireCurrent(request)
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "second")))
+      assertThrows(GatewayExternalAuthorizationException::class.java) { grant.requireCurrent(request) }
+      val reopened = SecurePrefs(RuntimeEnvironment.getApplication(), securePrefsOverride = backing)
+      assertEquals("second", reopened.loadGatewayProxyCredentials(endpoint)?.password)
+      assertEquals("other", reopened.loadGatewayProxyCredentials(other)?.password)
+      assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("bob", "other")))
+
+      backing.failNextCommit = true
+      assertEquals(GatewayProxySaveResult.FAILED, prefs.saveGatewayProxyCredentials(endpoint, null))
+      assertEquals("second", prefs.loadGatewayProxyCredentials(endpoint)?.password)
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, null))
+      assertNull(prefs.loadGatewayProxyCredentials(endpoint))
+      assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("bob", "other")))
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "restored")))
+      assertEquals(gatewayAuth, prefs.loadGatewayCredentials(endpoint.stableId))
+      assertEquals("paired-token", tokens.loadToken(endpoint.stableId, "device", "operator"))
+      prefs.putString("gateway.proxy.basic.${other.stableId}", "unreadable")
+      assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(other, null))
     }
-    assertThrows(IllegalArgumentException::class.java) { prefs.loadGatewayProxyCredentials(endpoint.copy(tlsEnabled = false)) }
-    assertThrows(IllegalStateException::class.java) { prefs.loadGatewayProxyCredentials(endpoint.copy(host = "other.example")) }
-    assertThrows(IllegalArgumentException::class.java) { GatewayProxyCredentials("invalid:username", "secret") }
-    assertEquals("GatewayProxyCredentials([redacted])", GatewayProxyCredentials("alice", "first").toString())
-
-    backing.failNextCommit = true
-    assertEquals(GatewayProxySaveResult.FAILED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "second")))
-    assertEquals("first", prefs.loadGatewayProxyCredentials(endpoint)?.password)
-    grant.requireCurrent(request)
-    assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "second")))
-    assertThrows(GatewayExternalAuthorizationException::class.java) { grant.requireCurrent(request) }
-    val reopened = SecurePrefs(RuntimeEnvironment.getApplication(), securePrefsOverride = backing)
-    assertEquals("second", reopened.loadGatewayProxyCredentials(endpoint)?.password)
-    assertEquals("other", reopened.loadGatewayProxyCredentials(other)?.password)
-    assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("bob", "other")))
-
-    backing.failNextCommit = true
-    assertEquals(GatewayProxySaveResult.FAILED, prefs.saveGatewayProxyCredentials(endpoint, null))
-    assertEquals("second", prefs.loadGatewayProxyCredentials(endpoint)?.password)
-    assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, null))
-    assertNull(prefs.loadGatewayProxyCredentials(endpoint))
-    assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("bob", "other")))
-    assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "restored")))
-    assertEquals(gatewayAuth, prefs.loadGatewayCredentials(endpoint.stableId))
-    assertEquals("paired-token", tokens.loadToken(endpoint.stableId, "device", "operator"))
-    prefs.putString("gateway.proxy.basic.${other.stableId}", "unreadable")
-    assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(other, null))
-  }
 
   @Test
   fun acknowledgedRemovalKeepsGatewayCredentials() {

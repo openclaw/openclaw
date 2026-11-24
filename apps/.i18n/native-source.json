@@ -941,7 +941,6 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayAdditionDialog.kt","kind":"ui-call","surface":"android","id":"native.android.ad699e1ff3be59dd","source":"Retry connection"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayAdditionDialog.kt","kind":"ui-call","surface":"android","id":"native.android.4a1bc465663bd561","source":"Set up manually"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayAdditionDialog.kt","kind":"ui-call","surface":"android","id":"native.android.5fb2cae2d3efa562","source":"Setup code"},
-    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayAdditionDialog.kt","kind":"ui-call","surface":"android","id":"native.android.1ec56f55703e88f9","source":"Setup code expired. Generate a fresh code with openclaw qr."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayAdditionDialog.kt","kind":"ui-call","surface":"android","id":"native.android.aefc42b77ff1a612","source":"Token (optional)"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayAdditionDialog.kt","kind":"ui-call","surface":"android","id":"native.android.706179676ed52040","source":"Use Enter setup code to paste a setup code."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayAdditionDialog.kt","kind":"ui-call","surface":"android","id":"native.android.628558e4a81a0f95","source":"Your current connection stays unchanged until you choose Connect."},

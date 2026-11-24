@@ -144,12 +144,7 @@ internal fun GatewayAdditionDialog(
         GatewayAdditionStep.Review(config, previous)
       } else {
         val source = if (previous is GatewayAdditionStep.Code) GatewayEndpointInputSource.SETUP_CODE else GatewayEndpointInputSource.QR_SCAN
-        val expired =
-          decoded.setupCode
-            ?.let(::decodeGatewaySetupCode)
-            ?.expiresAtMs
-            ?.let { it <= System.currentTimeMillis() } == true
-        val message = if (expired) nativeString("Setup code expired. Generate a fresh code with openclaw qr.") else gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
+        val message = gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
         if (previous is GatewayAdditionStep.Code) GatewayAdditionStep.Code(message) else GatewayAdditionStep.ScanError(message)
       }
   }

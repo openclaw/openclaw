@@ -57,6 +57,8 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -342,7 +344,7 @@ class SetupQrSelectionTest {
     composeRule.onNodeWithText("HTTP Basic").performClick()
     composeRule.onNodeWithTag("proxy-username").performTextReplacement("alice")
     composeRule.onNodeWithTag("proxy-password").performTextReplacement("discarded")
-    composeRule.onNodeWithText("Cancel").performClick()
+    composeRule.onAllNodesWithText("Cancel").onLast().performClick()
     assertFalse(prefs.hasGatewayProxyCredentials(endpoint.stableId))
     composeRule.onNodeWithText("HTTP Basic").performClick()
     composeRule.onNodeWithTag("proxy-username").performTextReplacement("alice")
@@ -362,7 +364,11 @@ class SetupQrSelectionTest {
     capture("onboarding-proxy-save-failure")
 
     val failure = requireNotNull(model.gatewayConnectionDisplay.value.problem)
-    fun reportProblem(code: String, reason: String? = null) {
+
+    fun reportProblem(
+      code: String,
+      reason: String? = null,
+    ) {
       val problem = failure.copy(code = code, reason = reason, message = "Sign-in required")
       composeRule.runOnIdle {
         ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_nodeConnected").value = true
@@ -382,7 +388,7 @@ class SetupQrSelectionTest {
     composeRule.onNodeWithText("HTTP Basic").performClick()
     composeRule.onNodeWithTag("proxy-username").performTextReplacement("alice")
     composeRule.onNodeWithTag("proxy-save").assertIsNotEnabled()
-    composeRule.onNodeWithText("Cancel").performClick()
+    composeRule.onAllNodesWithText("Cancel").onLast().performClick()
     composeRule.onNodeWithText("Cancel").performClick()
 
     reportProblem("AUTH_UNAUTHORIZED", "trusted_proxy_user_missing")

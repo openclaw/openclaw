@@ -1844,24 +1844,25 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
-  fun proxyAccountCannotChangeUntilForgetClearsLocalChat() = runBlocking {
-    val app = RuntimeEnvironment.getApplication()
-    val prefs = testPrefs(app)
-    val cache = RecordingTranscriptCache().apply { failClear = true }
-    val runtime = trackRuntime(NodeRuntime(app, prefs, cache))
-    val endpoint = GatewayEndpoint.manual("gateway.example", 443, true)
-    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
-    val device = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
-    assertTrue(DeviceAuthStore(prefs).saveToken(endpoint.stableId, device, "operator", "paired-token"))
-    assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "secret")))
-    assertFalse(runtime.forgetGateway(endpoint.stableId))
-    assertNull(prefs.loadGatewayProxyCredentials(endpoint))
-    assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("bob", "other")))
-    cache.failClear = false
-    assertTrue(runtime.forgetGateway(endpoint.stableId))
-    assertNull(prefs.gatewayProxyPrincipal(endpoint.stableId))
-    assertEquals(listOf(endpoint.stableId), cache.clearedGatewayIds)
-  }
+  fun proxyAccountCannotChangeUntilForgetClearsLocalChat() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val prefs = testPrefs(app)
+      val cache = RecordingTranscriptCache().apply { failClear = true }
+      val runtime = trackRuntime(NodeRuntime(app, prefs, cache))
+      val endpoint = GatewayEndpoint.manual("gateway.example", 443, true)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      val device = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+      assertTrue(DeviceAuthStore(prefs).saveToken(endpoint.stableId, device, "operator", "paired-token"))
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "secret")))
+      assertFalse(runtime.forgetGateway(endpoint.stableId))
+      assertNull(prefs.loadGatewayProxyCredentials(endpoint))
+      assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("bob", "other")))
+      cache.failClear = false
+      assertTrue(runtime.forgetGateway(endpoint.stableId))
+      assertNull(prefs.gatewayProxyPrincipal(endpoint.stableId))
+      assertEquals(listOf(endpoint.stableId), cache.clearedGatewayIds)
+    }
 
   @Test
   fun switchToUndiscoveredGatewayKeepsCurrentConnectionAndActiveGateway() {
