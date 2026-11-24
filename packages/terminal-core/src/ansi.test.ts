@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { AnsiSequenceStripper, iterateAnsiSegments } from "./ansi-sequences.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  ANSI_OSC_INTRODUCER_PATTERN,
+  AnsiSequenceStripper,
+  iterateAnsiSegments,
+  scanAnsiCsiAt,
+  scanAnsiOscAt,
+} from "./ansi-sequences.js";
 import {
   sanitizeForLog,
   stripAnsi,
@@ -19,6 +25,134 @@ function expectEverySplit(input: string, text: string, expected: string[]) {
 }
 
 describe("terminal ansi helpers", () => {
+  it("preserves complete OSC matching while exposing the first excluded body byte", () => {
+    // Freeze the existing complete-match grammar as the independent compatibility oracle.
+    // eslint-disable-next-line no-control-regex -- Match actual ANSI control bytes in the independent compatibility oracle.
+    const complete = /(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x1b\\|\x07|\x9c)/y;
+    for (const opener of ["\u001b]", "\u009d"]) {
+      for (const body of ["", "text😀", "\u009d\u009d", '"{}[]\r\n', "\u001bX", '\u009b1"q']) {
+        for (const ending of ["\u0007", "\u001b\\", "\u009c", ""]) {
+          const input = `${opener}${body}${ending}after`;
+          for (let index = 0; index < input.length; index++) {
+            complete.lastIndex = index;
+            const expected = complete.exec(input)?.[0];
+            expect(scanAnsiOscAt(input, index)?.value).toBe(expected);
+          }
+        }
+      }
+    }
+    for (const ending of ["\u0007", "\u001b\\", "\u009c", "\u001bX", ""]) {
+      expect(scanAnsiOscAt(`\u009dpayload${ending}`, 0)).toEqual({
+        bodyEnd: 8,
+        value: ending && ending !== "\u001bX" ? `\u009dpayload${ending}` : undefined,
+      });
+    }
+  });
+
+  it("does not share failed OSC frontiers between inputs or consume the blocking escape", () => {
+    const unfinished = "\u009d\u009d\u001b[31m";
+    const complete = "\u009dtitle\u0007";
+    const first = scanAnsiOscAt(unfinished, 0);
+    expect(first).toEqual({ bodyEnd: 2, value: undefined });
+    if (!first) {
+      throw new Error("Expected OSC scan at the known introducer");
+    }
+    expect(scanAnsiOscAt(complete, 0)?.value).toBe(complete);
+    expect(scanAnsiCsiAt(unfinished, first.bodyEnd)?.value).toBe("\u001b[31m");
+    expect(scanAnsiOscAt(unfinished, 0)).toEqual(first);
+  });
+
+  it("bounds OSC search work in the real strip and segment consumers", () => {
+    const repeated = "\u009d".repeat(16_384);
+    const csi = '\u001b[1"q';
+    const osc = '\u009d0;"title\u0007';
+    // Compatibility OSC can consume the leading failed run through a later terminator.
+    const cases = [
+      [repeated + "\u001b[31mtail", repeated + "tail", repeated + "tail", ["\u001b[31m"]],
+      [repeated, repeated, repeated, []],
+      [repeated + csi + osc + repeated, repeated + repeated, repeated, [csi, osc]],
+      [
+        repeated + "\u001b]next\u0007" + repeated,
+        repeated + repeated,
+        repeated,
+        ["\u001b]next\u0007"],
+      ],
+    ] as const;
+    for (const [input, strict, compatibility, sequences] of cases) {
+      const consumers = [
+        [() => ({ text: stripAnsi(input) }), strict],
+        [() => ({ text: stripAnsiSequences(input) }), compatibility],
+        [
+          () => ({ text: stripAnsiForStreamChunk(input, { compatibilityGrammar: true }) }),
+          compatibility,
+        ],
+        [
+          () => {
+            const parts = [...iterateAnsiSegments(input)];
+            return {
+              text: parts
+                .filter((part) => part.kind === "text")
+                .map((part) => part.value)
+                .join(""),
+              sequences: parts.filter((part) => part.kind === "ansi").map((part) => part.value),
+            };
+          },
+          strict,
+        ],
+      ] as const;
+      for (const [consume, expected] of consumers) {
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
+        const exec = RegExp.prototype.exec;
+        let work = 0;
+        const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+          this: RegExp,
+          text: string,
+        ) {
+          const start = this.lastIndex;
+          const match = Reflect.apply(exec, this, [text]);
+          if (this.sticky && this.source.startsWith(ANSI_OSC_INTRODUCER_PATTERN)) {
+            // Complete/body matches expose their scanned extent. A failed
+            // compatibility search at a real opener examines the remaining input.
+            work +=
+              match?.[0].length ??
+              (text[start] === "\u009d" || text.startsWith("\u001b]", start)
+                ? text.length - start
+                : 0);
+          }
+          return match;
+        });
+        let result: { text: string; sequences?: string[] };
+        try {
+          result = consume();
+        } finally {
+          spy.mockRestore();
+        }
+        expect(result.text).toBe(expected);
+        if (result.sequences) {
+          expect(result.sequences).toEqual(sequences);
+        }
+        expect(work).toBeLessThanOrEqual(input.length * 2);
+      }
+    }
+  });
+
+  it("keeps compatibility OSC crossing strict frontiers and invocation state separate", () => {
+    const input = "A\u001b]title\u001b[31mname\u0007B";
+    expect(stripAnsi(input)).toBe("A\u001b]titlename\u0007B");
+    expect(stripAnsiSequences(input)).toBe("AB");
+    expect(stripAnsiSequences("\u009d".repeat(128) + "\u001b]unterminated")).toBe(
+      "\u009d".repeat(128) + "nterminated",
+    );
+    expect(stripAnsiSequences(input)).toBe("AB");
+    const segments = iterateAnsiSegments("\u009d\u009d\u001b[31mtail");
+    expect(segments.next().value).toEqual({ kind: "text", value: "\u009d\u009d" });
+    expect([...iterateAnsiSegments("\u001b]title\u0007safe")].at(-1)).toEqual({
+      kind: "text",
+      value: "safe",
+    });
+    expect([...segments].at(-1)).toEqual({ kind: "text", value: "tail" });
+  });
+
   it.each([
     ["ESC OSC with ESC ST", ["A\u001B]0;title", "\u001B\\B"]],
     ["C1 OSC with C1 ST", ["A\u009D0;title", "\u009CB"]],
