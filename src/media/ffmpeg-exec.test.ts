@@ -64,14 +64,15 @@ describe("runFfprobe", () => {
     });
   });
 
-  it("passes an inherited file descriptor through the canonical exec wrapper", async () => {
+  it("passes an identity-bound file through the canonical exec wrapper", async () => {
     runExecMock.mockResolvedValue({ stdout: "ok", stderr: "" });
 
-    await expect(runFfprobe(["pipe:0"], { stdinFileDescriptor: 17 })).resolves.toBe("ok");
+    const stdinFile = { fd: 17, source: { path: "/probe", dev: 1n, ino: 2n } };
+    await expect(runFfprobe(["pipe:0"], { stdinFile })).resolves.toBe("ok");
     expect(runExecMock).toHaveBeenCalledWith("/usr/bin/ffprobe", ["pipe:0"], {
       logOutput: false,
       maxBuffer: 10 * 1024 * 1024,
-      stdinFileDescriptor: 17,
+      stdinFile,
       timeoutMs: 10_000,
     });
   });

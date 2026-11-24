@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as commandStdinFile from "../process/command-stdin-file.js";
 import type { PlaybackMediaProbeResult } from "./media-probe.js";
 import {
   observePlaybackSourceOpen,
@@ -12,9 +13,9 @@ import {
   waitForPlaybackSourceCleanup,
 } from "./playback-transcode.test-support.js";
 
-const { playbackWarn, probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
+const { playbackWarn, probePlaybackMediaFile, runFfmpeg } = vi.hoisted(() => ({
   playbackWarn: vi.fn(),
-  probePlaybackMediaFileDescriptor: vi.fn(),
+  probePlaybackMediaFile: vi.fn(),
   runFfmpeg: vi.fn(),
 }));
 
@@ -37,7 +38,7 @@ vi.mock("./ffmpeg-exec.js", () => ({
 
 vi.mock("./media-probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./media-probe.js")>()),
-  probePlaybackMediaFileDescriptor,
+  probePlaybackMediaFile,
 }));
 
 const { createSource, resolveTranscode, resolveMetadata } = usePlaybackFixture(
@@ -48,8 +49,8 @@ const { createSource, resolveTranscode, resolveMetadata } = usePlaybackFixture(
 beforeEach(() => {
   playbackWarn.mockReset();
   runFfmpeg.mockReset();
-  probePlaybackMediaFileDescriptor.mockReset();
-  probePlaybackMediaFileDescriptor.mockImplementation(async (_fd: number, kind: string) =>
+  probePlaybackMediaFile.mockReset();
+  probePlaybackMediaFile.mockImplementation(async (_file: unknown, kind: string) =>
     kind === "audio"
       ? { durationMs: 1000, audioCodec: "pcm_s16le", audioStreamIndex: 0 }
       : videoProbe({
@@ -113,7 +114,7 @@ function createGatedFfmpegJob(output: string) {
 describe("resolvePlaybackTranscode", () => {
   it("returns a lossless MP4 rendition on the first playback request for a compatible MOV", async () => {
     const source = await createSource("screen-recording.mov");
-    probePlaybackMediaFileDescriptor.mockResolvedValue(
+    probePlaybackMediaFile.mockResolvedValue(
       videoProbe({
         videoCodec: "h264",
         videoProfile: "high",
@@ -137,7 +138,7 @@ describe("resolvePlaybackTranscode", () => {
 
   it("re-encodes a compatible MOV if copying its streams fails", async () => {
     const source = await createSource("unmappable-recording.mov");
-    probePlaybackMediaFileDescriptor.mockResolvedValue(
+    probePlaybackMediaFile.mockResolvedValue(
       videoProbe({
         videoCodec: "h264",
         videoProfile: "high",
@@ -183,7 +184,7 @@ describe("resolvePlaybackTranscode", () => {
   });
   it("falls back before ffmpeg when source duration exceeds the transcode limit", async () => {
     const source = await createSource("long-video.mkv");
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
+    probePlaybackMediaFile.mockResolvedValueOnce({
       durationMs: 20 * 60 * 1000 + 1,
       videoCodec: "hevc",
       videoStreamIndex: 0,
@@ -195,7 +196,7 @@ describe("resolvePlaybackTranscode", () => {
 
   it("scopes cached codec classification by media kind and MIME", async () => {
     const source = await createSource("dual-track.mp4");
-    probePlaybackMediaFileDescriptor
+    probePlaybackMediaFile
       .mockResolvedValueOnce({ durationMs: 1000, audioCodec: "aac", audioStreamIndex: 1 })
       .mockResolvedValueOnce(
         videoProbe({
@@ -227,7 +228,7 @@ describe("resolvePlaybackTranscode", () => {
     async (mimeType, codec, expected) => {
       const source = await createSource(`oversized-${mimeType.replaceAll("/", "-")}-${codec}`);
       await fs.truncate(source.sourcePath, 16 * 1024 * 1024 + 1);
-      probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
+      probePlaybackMediaFile.mockResolvedValueOnce(
         videoProbe({
           videoCodec: codec,
           videoProfile: "high",
@@ -248,9 +249,7 @@ describe("resolvePlaybackTranscode", () => {
     ["unknown-profile-opus", { audioCodec: "opus", audioStreamIndex: 1 }],
   ] as const)("transcodes incompatible H.264 media: %s", async (name, probe) => {
     const source = await createSource(`${name}.mp4`);
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
-      videoProbe({ videoCodec: "h264", ...probe }),
-    );
+    probePlaybackMediaFile.mockResolvedValueOnce(videoProbe({ videoCodec: "h264", ...probe }));
     await expect(resolveMetadata(videoRequest(source))).resolves.toMatchObject({
       playback: "transcode",
     });
@@ -264,7 +263,7 @@ describe("resolvePlaybackTranscode", () => {
       videoPixelFormat: "yuv420p",
       audioStreamIndex: 1,
     });
-    probePlaybackMediaFileDescriptor
+    probePlaybackMediaFile
       .mockResolvedValueOnce(probe)
       .mockResolvedValueOnce({ ...probe, audioCodec: "opus" });
 
@@ -282,7 +281,7 @@ describe("resolvePlaybackTranscode", () => {
   ] as const)("retries inconclusive %s inspection", async (extension, mimeType, initial) => {
     const source = await createSource(`probe-retry.${extension}`);
     await using transcode = createGatedFfmpegJob("normalized-video");
-    probePlaybackMediaFileDescriptor
+    probePlaybackMediaFile
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(
         videoProbe({ videoCodec: "hevc", audioCodec: "aac", audioStreamIndex: 1 }),
@@ -293,7 +292,7 @@ describe("resolvePlaybackTranscode", () => {
     await expectResolution(params, "preparing");
     await transcode.started;
     expect(runFfmpeg).toHaveBeenCalledOnce();
-    expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledTimes(2);
+    expect(probePlaybackMediaFile).toHaveBeenCalledTimes(2);
     await finishJob(transcode);
     await expectResolution(params, "transcoded");
   });
@@ -302,7 +301,7 @@ describe("resolvePlaybackTranscode", () => {
     const source = await createSource("inspection-single-flight.mp4");
     const probeStarted = createDeferred();
     const probeGate = createDeferred<PlaybackMediaProbeResult>();
-    probePlaybackMediaFileDescriptor.mockImplementationOnce(async () => {
+    probePlaybackMediaFile.mockImplementationOnce(async () => {
       probeStarted.resolve();
       return await probeGate.promise;
     });
@@ -323,12 +322,12 @@ describe("resolvePlaybackTranscode", () => {
     const second = resolveMetadata(params);
     try {
       await probeStarted.promise;
-      expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledOnce();
+      expect(probePlaybackMediaFile).toHaveBeenCalledOnce();
       probeGate.resolve(nativeProbe);
       const metadata = { playback: "native", durationMs: 1000, width: 480, height: 960 };
       await expect(Promise.all([first, second])).resolves.toEqual([metadata, metadata]);
       await expect(resolveMetadata(params)).resolves.toEqual(metadata);
-      expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledOnce();
+      expect(probePlaybackMediaFile).toHaveBeenCalledOnce();
     } finally {
       probeGate.resolve(nativeProbe);
       await Promise.allSettled([first, second]);
@@ -338,7 +337,7 @@ describe("resolvePlaybackTranscode", () => {
   it("single-flights MIME aliases that target the same cached rendition", async () => {
     const source = await createSource("alias-audio.mp4");
     await using transcode = createGatedFfmpegJob("normalized-audio");
-    probePlaybackMediaFileDescriptor.mockResolvedValue({
+    probePlaybackMediaFile.mockResolvedValue({
       durationMs: 1000,
       audioCodec: "opus",
       audioStreamIndex: 0,
@@ -374,7 +373,7 @@ describe("resolvePlaybackTranscode", () => {
         `single-flight-${mimeType.replaceAll("/", "-")}.${extension}`,
       );
       if (extension !== "mkv") {
-        probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
+        probePlaybackMediaFile.mockResolvedValueOnce(
           videoProbe({
             videoCodec: "hevc",
             videoStreamIndex: videoIndex,
@@ -391,7 +390,7 @@ describe("resolvePlaybackTranscode", () => {
       await expectResolution(params, "preparing");
       await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
-      expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledOnce();
+      expect(probePlaybackMediaFile).toHaveBeenCalledOnce();
       await finishJob(transcode);
 
       const resolved = await resolveTranscode(params);
@@ -434,23 +433,25 @@ describe("resolvePlaybackTranscode", () => {
       const closeError = new Error("output close failed");
       const probeError = new Error("output probe failed");
       const closeOutput = vi.fn<() => Promise<void>>();
-      const openFile = fs.open;
+      const openFile = commandStdinFile.openCommandStdinFile;
       let interceptedOutput = false;
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (pathname, ...args) => {
-        const handle = await openFile(pathname, ...args);
-        if (!interceptedOutput && path.basename(String(pathname)) === "output.mp4") {
-          interceptedOutput = true;
-          const close = handle.close.bind(handle);
-          closeOutput.mockImplementation(async () => {
-            await close();
-            throw closeError;
-          });
-          vi.spyOn(handle, "close").mockImplementation(closeOutput);
-        }
-        return handle;
-      });
+      const openSpy = vi
+        .spyOn(commandStdinFile, "openCommandStdinFile")
+        .mockImplementation(async (pathname) => {
+          const input = await openFile(pathname);
+          if (!interceptedOutput && path.basename(pathname) === "output.mp4") {
+            interceptedOutput = true;
+            const close = input[Symbol.asyncDispose];
+            closeOutput.mockImplementation(async () => {
+              await close();
+              throw closeError;
+            });
+            vi.spyOn(input, Symbol.asyncDispose).mockImplementation(closeOutput);
+          }
+          return input;
+        });
       if (probeFails) {
-        probePlaybackMediaFileDescriptor
+        probePlaybackMediaFile
           .mockResolvedValueOnce(
             videoProbe({
               videoCodec: "hevc",
@@ -593,7 +594,7 @@ describe("resolvePlaybackTranscode", () => {
   ] as const)("resolves %s without ffmpeg", async (mimeType, codec, expected) => {
     const source = await createSource(`no-ffmpeg-${mimeType.replaceAll("/", "-")}`);
     if (codec) {
-      probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
+      probePlaybackMediaFile.mockResolvedValueOnce({
         durationMs: 1000,
         audioCodec: codec,
         audioStreamIndex: 0,

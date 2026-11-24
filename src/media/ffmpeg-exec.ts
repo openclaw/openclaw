@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import type { CommandStdinFile } from "../process/command-stdin-file.js";
 import { runExec, type RunExecOptions } from "../process/exec.js";
 import {
   MEDIA_FFMPEG_MAX_BUFFER_BYTES,
@@ -12,21 +13,16 @@ type MediaExecOptions = {
   timeoutMs?: number;
   maxBufferBytes?: number;
   input?: Buffer | string;
-  stdinFileDescriptor?: number;
+  stdinFile?: CommandStdinFile;
 };
 
 function resolveExecOptions(
   defaultTimeoutMs: number,
   options: MediaExecOptions | undefined,
 ): RunExecOptions {
-  if (options?.input !== undefined && options.stdinFileDescriptor !== undefined) {
-    throw new Error("media exec accepts either input or stdinFileDescriptor, not both");
-  }
   return {
     input: options?.input,
-    ...(options?.stdinFileDescriptor !== undefined
-      ? { stdinFileDescriptor: options.stdinFileDescriptor }
-      : {}),
+    ...(options?.stdinFile ? { stdinFile: options.stdinFile } : {}),
     logOutput: false,
     maxBuffer: options?.maxBufferBytes ?? MEDIA_FFMPEG_MAX_BUFFER_BYTES,
     timeoutMs: options?.timeoutMs ?? defaultTimeoutMs,
