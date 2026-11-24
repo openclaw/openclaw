@@ -109,9 +109,11 @@ for messages, a calendar clock for scheduled jobs, and an image for image genera
 Shared tools keep their semantic icons regardless of the provider. Tools owned by
 installed third-party plugins may show the plugin logo when the Gateway has
 confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugins
-keep their monochrome activity icons. Missing or unreadable logos fall back to
-the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
-icon. Unknown publisher metadata does not enable branding.
+keep their monochrome activity icons. When an installed, non-bundled plugin
+owns an MCP tool but provides no activity artwork for it, chat can use the
+plugin's icon instead, even for an OpenClaw-published service wrapper. Missing
+or unreadable artwork falls back to the normal tool glyph; unknown tools use a
+puzzle icon.
 
 Choose **View → Inline command trail (this browser)** in the session menu to show
 compact command, read, and search rows in conversation order while work is running.

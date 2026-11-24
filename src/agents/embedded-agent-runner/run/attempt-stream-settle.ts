@@ -707,6 +707,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       {
         runId: attempt.runId,
         sessionId: attempt.sessionId,
+        authScope: input.agentDir,
         accountRoute: selectedCredential.identityKey,
       },
     );

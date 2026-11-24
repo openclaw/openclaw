@@ -577,6 +577,16 @@ if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) 
           await fs.writeFile(path.join(packedRoot, "dist", `${name}-fixture.mjs`), "");
         }
       }
+      if (build) {
+        await fs.writeFile(
+          path.join(runningRoot, "dist", "build-info.json"),
+          '{"buildId":"2026.11.21-installed"}',
+        );
+        await fs.writeFile(
+          path.join(packedRoot, "dist", "build-info.json"),
+          JSON.stringify({ buildId: `2026.11.21-${build}` }),
+        );
+      }
       await fs.writeFile(
         path.join(packedRoot, "package.json"),
         '{"name":"openclaw","version":"2026.11.21","type":"module"}',
@@ -688,6 +698,21 @@ if (process.argv[2] !== 'install') {
           await expect(fs.stat(path.join(frontend, ".openclaw-launcher"))).rejects.toMatchObject({
             code: "ENOENT",
           });
+          expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
+          return;
+        }
+        if (build === "installed") {
+          // The installed build again: nothing is published and the serving install is untouched.
+          expect(outcome).toMatchObject({ status: "current", version: "2026.11.21" });
+          expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+            status: "skipped",
+            reason: "already-current",
+          });
+          expect(await readTrial(prefix)).toBeNull();
+          expect(await fs.readdir(path.join(prefix, "releases"))).toEqual([]);
+          await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject(
+            { code: "ENOENT" },
+          );
           expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
           return;
         }

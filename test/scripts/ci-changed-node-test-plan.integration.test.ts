@@ -268,23 +268,36 @@ it.each([
   "src/auto-reply/reply/agent-runner-memory.ts",
   "packages/agent-core/src/harness/compaction/summarization-completion.ts",
   "packages/ai/src/transports/anthropic-messages.ts",
-])("selects every transitive importer test when %s changes", (source) => {
-  const selected = new Set(
-    resolveChangedNodeTestTargets([source], { selectionMode: "aggressive" }),
+])("selects the declared behavior tests and same-directory importers when %s changes", (source) => {
+  // PR CI excludes PR-exempt files; the declared set opts its matches in regardless.
+  const declared = new Set(
+    resolveChangedNodeTestTargets([source], {
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    }),
   );
   for (const test of [
     "src/agents/embedded-agent-runner.prompt-cache.test.ts",
     "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
     "src/auto-reply/reply/agent-runner-compaction-fallback.test.ts",
     "src/cron/session-context-accounting.gateway.integration.test.ts",
+    "src/agents/command/cli-compaction.test.ts",
   ]) {
-    expect(selected.has(test), test).toBe(true);
+    expect(declared.has(test), test).toBe(true);
   }
+  const selected = new Set(
+    resolveChangedNodeTestTargets([source], { selectionMode: "aggressive" }),
+  );
+  const directory = source.replace(/[^/]+$/u, "");
   const importers = resolveAffectedTestsFromImportGraph(source, process.cwd(), {
     tooling: true,
     forceFull: true,
     resolveAliases: true,
     runtimeOnly: true,
-  }).filter((file) => /^(?:src|test|extensions|packages|ui)\//u.test(file));
+  }).filter(
+    (file) =>
+      file.startsWith(directory) && !/^(?:src|packages)\/[^/]+(?:\/src)?\/$/u.test(directory),
+  );
   expect(importers.filter((file) => !selected.has(file))).toEqual([]);
 });
