@@ -9,6 +9,10 @@ import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
 } from "../../infra/gateway-suspend-coordinator.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  GatewayOperatorAccessUnavailableError,
+} from "../../infra/operator-authority-error.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { dispatchGatewayMethod } from "../../plugin-sdk/gateway-method-runtime.js";
 import { getGatewayRequestAuthorityV1 } from "../../plugin-sdk/gateway-request-authority.js";
@@ -204,7 +208,12 @@ describe("plugin HTTP route runtime scopes", () => {
             expect(authority?.requiredGrantPluginId).toBe("policy");
             await authority?.revalidate();
             grantCurrent = false;
-            expect(() => authority?.assertCurrent()).toThrow();
+            expect(() => authority?.assertCurrent()).not.toThrow();
+            await expect(authority?.revalidate()).resolves.toBeUndefined();
+            expect(() => authority?.assertCurrent("policy")).toThrow("grant ended");
+            expect(() => authority?.assertCurrent("other-policy")).toThrow(
+              GatewayOperatorAccessDeniedError,
+            );
             return true;
           },
         },
@@ -238,6 +247,35 @@ describe("plugin HTTP route runtime scopes", () => {
       grantCurrent = true;
       expect(() => authority?.assertCurrent()).toThrow("Gateway request authority expired");
       expect(getGatewayRequestAuthorityV1()).toBeUndefined();
+    },
+  );
+
+  it.each(["ended", "unavailable"] as const)(
+    "maps original named grant failures (%s)",
+    async (cause) => {
+      const response = await invoke(
+        {
+          handler() {
+            getGatewayRequestAuthorityV1()?.assertCurrent("policy");
+            return true;
+          },
+        },
+        {
+          ...trusted,
+          gatewayRequestAuth: {
+            ...trusted.gatewayRequestAuth!,
+            operatorAccessAuthority: {
+              requiredPolicyPlugin: "policy",
+              signal: new AbortController().signal,
+              assertCurrent() {
+                if (cause === "unavailable") throw new GatewayOperatorAccessUnavailableError();
+                throw new GatewayOperatorAccessDeniedError("grant-revoked");
+              },
+            },
+          },
+        },
+      );
+      expect(response.res.statusCode).toBe(cause === "ended" ? 403 : 503);
     },
   );
 

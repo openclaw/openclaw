@@ -152,6 +152,7 @@ async function withPluginRouteRuntimeScope<T>(
               if (!isOpen()) {
                 throw new Error("Gateway HTTP request closed");
               }
+              assertRemoteControlUiIngressCurrent(client?.remoteControlUiIngress);
             },
           }
         : undefined,

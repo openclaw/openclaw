@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { dispatchGatewayMethod } from "../plugin-sdk/gateway-method-runtime.js";
 import { getGatewayRequestAuthorityV1 } from "../plugin-sdk/gateway-request-authority.js";
 import {
@@ -8,13 +9,16 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 
 afterEach(() => resetTestPluginRegistry());
 
@@ -137,6 +141,90 @@ async function waitForPause(f: ReturnType<typeof fixture>, pending: Promise<unkn
 }
 
 describe("registered plugin RPC authority through the real dispatcher", () => {
+  it("preserves each concurrent HTTP caller in a registered RPC and expires the nested lease", async () => {
+    const { registry, config } = createPluginRegistryFixture();
+    const path = "/authority-proof";
+    const retained: NonNullable<ReturnType<typeof getGatewayRequestAuthorityV1>>[] = [];
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "authority-proof",
+      name: "Authority proof",
+      contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+      register(api) {
+        api.registerGatewayMethod(
+          "authorityProof.read",
+          async ({ respond }) => {
+            const authority = getGatewayRequestAuthorityV1();
+            if (authority) {
+              await authority.revalidate();
+              retained.push(authority);
+            }
+            respond(true, {
+              person: authority?.personProfileId,
+              attribution: authority?.attributionProfileId,
+            });
+          },
+          { scope: "operator.read", profileAccess: "independent" },
+        );
+        api.registerHttpRoute({
+          path: path,
+          match: "exact",
+          auth: "gateway",
+          async handler(_req, res) {
+            const nested = await dispatchGatewayMethod("authorityProof.read", {});
+            res.end(JSON.stringify(nested.payload));
+            return true;
+          },
+        });
+      },
+    });
+    const methods = createGatewayMethodRegistry(
+      registry.registry.gatewayMethodDescriptors,
+      registry.registry,
+    );
+    const context = createDirectChatContext({
+      trackExecution: trackAsyncWork,
+      getGatewayMethodRegistry: () => methods,
+    });
+    setTestPluginRegistry(registry.registry);
+    const handler = createGatewayPluginRequestHandler({
+      registry: registry.registry,
+      log: createSubsystemLogger("test/plugin-rpc-authority"),
+      getGatewayRequestContext: () => context,
+    });
+    const results = await Promise.all(
+      (["trusted-proxy", "token"] as const).map(async (authMethod) => {
+        const profileId = authMethod === "trusted-proxy" ? "individual" : "shared-display";
+        const response = makeMockHttpResponse();
+        response.res.req.url = path;
+        await handler(response.res.req, response.res, undefined, {
+          gatewayAuthSatisfied: true,
+          gatewayRequestOperatorScopes: ["operator.read"],
+          gatewayRequestAuth: {
+            authMethod,
+            trustDeclaredOperatorScopes: false,
+            authenticatedUserProfile: {
+              profileId,
+              displayName: null,
+              hasAvatar: false,
+              updatedAt: 1,
+            },
+            ...(authMethod === "trusted-proxy" ? { personProfileId: profileId } : {}),
+          },
+        });
+        return response.end.mock.calls[0]?.[0];
+      }),
+    );
+    expect(results).toEqual([
+      JSON.stringify({ person: "individual", attribution: "individual" }),
+      JSON.stringify({ attribution: "shared-display" }),
+    ]);
+    expect(retained).toHaveLength(2);
+    for (const authority of retained)
+      expect(() => authority.assertCurrent()).toThrow("Gateway request authority expired");
+  });
+
   it.each(["login", "shared"] as const)(
     "binds individual identity to the %s source for this RPC",
     async (source) => {

@@ -1,27 +1,34 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  GatewayRequestAuthorityExpiredError,
+} from "../../infra/operator-authority-error.js";
 import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type {
   GatewayRequestAuthorityV1,
   PluginRuntimeGatewayRequestScope,
 } from "./gateway-request-scope.types.js";
 
-type RequestGuards = { assertCurrent(): void; revalidate?: () => Promise<void> };
+type RequestGuards = {
+  assertCurrent(requiredGrantPluginId?: string): void;
+  revalidate?: () => Promise<void>;
+};
 type RequestLease = { current?: RequestGuards };
 
 function bindGuards(lease: RequestLease) {
-  const assertCurrent = () => {
+  const assertCurrent = (requiredGrantPluginId?: string) => {
     if (!lease.current) {
-      throw new Error("Gateway request authority expired");
+      throw new GatewayRequestAuthorityExpiredError();
     }
-    lease.current.assertCurrent();
+    lease.current.assertCurrent(requiredGrantPluginId);
   };
   return {
     assertCurrent,
-    async revalidate() {
-      assertCurrent();
+    async revalidate(requiredGrantPluginId?: string) {
+      assertCurrent(requiredGrantPluginId);
       if (lease.current?.revalidate) {
         await lease.current.revalidate();
-        assertCurrent();
+        assertCurrent(requiredGrantPluginId);
       }
     },
   };
@@ -36,7 +43,7 @@ export async function withPluginGatewayRequestAuthority<T>(
   const client = scope.client;
   if (!admission || !client) {
     return await withPluginRuntimeGatewayRequestScope(
-      { ...scope, readRequestAuthority: undefined },
+      { ...scope, parentHttpRequestAuthority: undefined, readRequestAuthority: undefined },
       run,
     );
   }
@@ -45,18 +52,23 @@ export async function withPluginGatewayRequestAuthority<T>(
   const lease: RequestLease = {
     current: {
       revalidate: scope.revalidate,
-      assertCurrent() {
+      assertCurrent(requiredGrantPluginId) {
         if (
-          scope.signal?.aborted ||
           client.invalidated ||
           client.connectionSignal?.aborted ||
-          client.authenticatedUserProfile?.profileId !== attributionProfileId ||
-          scope.hasCurrentClientAuthority?.() === false
+          client.authenticatedUserProfile?.profileId !== attributionProfileId
         ) {
-          throw new Error("Gateway request authority expired");
+          throw new GatewayRequestAuthorityExpiredError();
         }
         admission.assertCurrent();
-        access?.assertCurrent();
+        // Ordinary policy edits apply at the next admission. A plugin that starts
+        // a grant-owned operation can explicitly require its original role grant.
+        if (requiredGrantPluginId !== undefined) {
+          if (!access || requiredGrantPluginId !== access.requiredPolicyPlugin) {
+            throw new GatewayOperatorAccessDeniedError("access-record-inactive");
+          }
+          access.assertCurrent();
+        }
       },
     },
   };
@@ -76,7 +88,11 @@ export async function withPluginGatewayRequestAuthority<T>(
   });
   try {
     return await withPluginRuntimeGatewayRequestScope(
-      { ...scope, readRequestAuthority: () => (lease.current ? authority : undefined) },
+      {
+        ...scope,
+        parentHttpRequestAuthority: undefined,
+        readRequestAuthority: () => (lease.current ? authority : undefined),
+      },
       run,
     );
   } finally {

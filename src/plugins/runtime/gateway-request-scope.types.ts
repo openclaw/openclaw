@@ -18,12 +18,13 @@ export type GatewayRequestAuthorityV1 = Readonly<{
   personProfileId?: string;
   /** Policy explicitly required by the admitted role and matched by its original grant. */
   requiredGrantPluginId?: string;
-  assertCurrent(): void;
-  revalidate(): Promise<void>;
+  assertCurrent(requiredGrantPluginId?: string): void;
+  revalidate(requiredGrantPluginId?: string): Promise<void>;
 }>;
 
 export type PluginRuntimeGatewayRequestScope = {
   readRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
+  parentHttpRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
   /** Request-owned reader headroom expires when the interactive handler settles. */
   canUseInteractiveStateReadCapacity?: () => boolean;
   /** Exact registration and Gateway owner retained across awaited system operations. */

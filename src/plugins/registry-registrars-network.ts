@@ -124,18 +124,31 @@ function adaptPluginGatewayMethodHandler(
       }
     };
     const scope = getPluginRuntimeGatewayRequestScope();
+    const parent = scope?.parentHttpRequestAuthority?.();
+    const operator =
+      opts.client?.internal?.authenticatedOperator && opts.client.connect.role === "operator"
+        ? opts.client
+        : undefined;
     const invoke = () => handler({ ...opts, respond, assertHandlerCurrent });
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
       const result = scope
         ? await withPluginGatewayRequestAuthority(
-            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            {
+              ...scope,
+              revalidate: parent ? () => parent.revalidate() : scope.revalidate,
+              gatewayMethodDispatchAllowed: mayDispatch && scope.client != null,
+            },
             invoke,
-            opts.client?.internal?.authenticatedOperator && opts.client.connect.role === "operator"
+            parent || operator
               ? {
-                  personProfileId: resolvePluginRequestPersonProfileId(opts.client),
+                  personProfileId: operator
+                    ? resolvePluginRequestPersonProfileId(operator)
+                    : parent?.personProfileId,
                   assertCurrent() {
+                    parent?.assertCurrent();
+                    opts.signal?.throwIfAborted();
                     assertHandlerCurrent();
                     opts.sessionMutationAuthorization?.assertCurrent();
                   },

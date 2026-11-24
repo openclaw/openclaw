@@ -223,9 +223,10 @@ export async function runWithGatewayRequestEnvelope<T>(
       !client.internal.syntheticClient &&
       (method === "themes.list" || method === "users.prefs.get" || method === "agents.list");
     try {
+      const parentScope = getPluginRuntimeGatewayRequestScope();
       const pluginRegistry =
         (options.methodRegistry.pluginRegistry as PluginRegistry | undefined) ??
-        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+        parentScope?.pluginRegistry ??
         getActivePluginRegistry() ??
         undefined;
       return await withPluginRuntimeGatewayRequestScope(
@@ -234,6 +235,11 @@ export async function runWithGatewayRequestEnvelope<T>(
           // Detached turn admission needs the live instance resolver, not a captured request context.
           resolveGatewayContext: options.context.resolveGatewayContext,
           client,
+          // HTTP route clients are unique per request. Only its exact in-process
+          // dispatch can inherit the active handler's lease; a sibling cannot.
+          ...(client && !client.internal?.authenticatedOperator && parentScope?.client === client
+            ? { parentHttpRequestAuthority: parentScope.readRequestAuthority }
+            : {}),
           ...(interactiveStateRead
             ? { canUseInteractiveStateReadCapacity: () => interactiveStateRead }
             : {}),
