@@ -216,6 +216,7 @@ describe("candidate-owned publish consumer chain", () => {
   });
   it.each([
     "beta promotion descendant",
+    "beta promotion waived descendant",
     "beta promotion execution-plan descendant",
     "same qualification",
     "candidate-bound same qualification",
@@ -231,17 +232,18 @@ describe("candidate-owned publish consumer chain", () => {
   ])("selects a direct admitted root across transport refs only for %s", async (scenario) => {
     const promotion = scenario.startsWith("beta promotion");
     const candidateBound = scenario.startsWith("candidate-bound");
+    const versionBound = scenario.includes("waived");
     const version = "2099.1.1-beta.1";
     const changedPaths = promotion
       ? ["package.json", "extensions/discord/package.json", "docs/plugins/plugin-inventory.md"]
       : [`CHANGELOG/${version.split("-")[0]}.md`, `CHANGELOG/records/${version.split("-")[0]}.md`];
     const root = candidatePublicationFixture({
       candidateVersion: version,
-      ...(promotion ? { releaseProfile: "stable" } : {}),
+      ...(promotion ? { releaseProfile: "stable", reuseEvidence: false } : {}),
       ...(candidateBound ? { candidateSha: "a".repeat(40) } : {}),
     });
     let evidenceClient: Parameters<typeof validateReleaseRunEvidence>[1] = root.client;
-    if (candidateBound) {
+    if (candidateBound || versionBound) {
       const child = root.plan.children.find((entry) => entry.key === "normalCi");
       assert(child);
       const originalJobs = await root.client.getRunAttemptJobs(child.runId);
@@ -261,7 +263,7 @@ describe("candidate-owned publish consumer chain", () => {
       const grants = [
         {
           targetVersion: version,
-          targetSha: root.q,
+          ...(candidateBound ? { targetSha: root.q } : {}),
           childRole: "normalCi",
           jobName: "synthetic leaf",
           reason: "Synthetic candidate-bound approval",
@@ -331,6 +333,7 @@ describe("candidate-owned publish consumer chain", () => {
       sha: qualificationSha,
     };
     if (promotion) {
+      inputs.reuse_evidence = "true";
       envelope.publicationSelection.npmDistTag = "latest";
     }
     inputs.trusted_workflow_json = JSON.stringify(envelope);
@@ -406,7 +409,9 @@ describe("candidate-owned publish consumer chain", () => {
       },
       client,
     );
-    if (candidateBound && descendant) {
+    if (versionBound) {
+      await expect(result).rejects.toThrow("version-bound release waiver");
+    } else if (candidateBound && descendant) {
       await expect(result).rejects.toThrow("candidate-bound release waiver");
     } else if (
       scenario.endsWith("same qualification") ||
@@ -419,6 +424,15 @@ describe("candidate-owned publish consumer chain", () => {
         root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
         current: { conclusion: "success" },
       });
+      if (promotion && !scenario.endsWith("execution-plan descendant")) {
+        expect(evidence).toMatchObject({
+          reuseSelection: {
+            policy: "stable-qualified-beta-final-v1",
+            changedPaths,
+            targetSha,
+          },
+        });
+      }
       if (candidateBound) {
         expect(evidence.waivers).toHaveLength(1);
         expect(evidence.children.find((child) => child.role === "normalCi")).toMatchObject({
@@ -563,6 +577,7 @@ describe("candidate-owned publish consumer chain", () => {
         ? {
             candidateVersion: "2026.8.28-beta.1",
             releaseProfile,
+            reuseEvidence: false,
           }
         : {},
     );

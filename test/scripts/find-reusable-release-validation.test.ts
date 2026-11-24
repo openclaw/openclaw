@@ -482,7 +482,22 @@ if (fixture.exitCode) {
   );
   process.exit(fixture.exitCode);
 }
-process.stdout.write(\`\${JSON.stringify(fixture.record)}\\n\`);
+const request = JSON.parse(process.argv[reuseRequestIndex + 1]);
+const record = fixture.record;
+const exact = record.root.targetSha === request.targetSha;
+const { classifyReleaseEvidenceComparison } = await import(${JSON.stringify(new URL("../../scripts/full-release-validation-policy.mjs", import.meta.url).href)});
+const { createReleaseEvidenceClient } = await import(${JSON.stringify(new URL("../../scripts/release-ci-summary.mjs", import.meta.url).href)});
+const client = createReleaseEvidenceClient("openclaw/openclaw");
+const comparison = exact ? null : JSON.parse(readFileSync(join(process.env.FAKE_VALIDATOR_FIXTURES,
+  ("repos/openclaw/openclaw/compare/" + record.root.targetSha + "..." + request.targetSha).replaceAll(/[/?]/gu, "_") + ".json"), "utf8"));
+const delta = exact ? { policy: "exact-target-full-validation-v1", changedPaths: [] } : classifyReleaseEvidenceComparison(comparison, {
+  baseSha: record.root.targetSha, targetSha: request.targetSha,
+  version: request.validationInputs?.targetVersion ?? record.validationInputs?.targetVersion,
+  rootManifest: { ...record.manifest, validationInputs: record.validationInputs, runReleaseSoak: String(record.runReleaseSoak) },
+  readSourceFile: (sha, path) => client.getSourceFile(sha, path),
+});
+record.reuseSelection = { ...delta, targetSha: request.targetSha };
+process.stdout.write(\`\${JSON.stringify(record)}\\n\`);
 `;
 
 function fixtureName(fixtures: string, endpoint: string): string {
@@ -521,6 +536,7 @@ function runResolver(args: {
   binDir: string;
   compareBaseSha?: string;
   compareFiles?: string[];
+  comparePatch?: string;
   compareRenamed?: boolean;
   compareStatus?: string;
   fixtures: string;
@@ -601,6 +617,7 @@ function runResolver(args: {
           Object.assign(
             {
               filename,
+              ...(args.comparePatch ? { patch: args.comparePatch } : {}),
               status: args.compareRenamed && index === 0 ? "renamed" : "modified",
             },
             args.compareRenamed && index === 0 ? { previous_filename: "src/index.ts" } : {},
@@ -1135,6 +1152,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     const result = resolveEvidence(record, {
       compareBaseSha: priorSha,
       compareFiles: ["package.json"],
+      comparePatch: "version-only metadata patch".repeat(10_000),
       repoDir: cloneHead(origin),
       targetSha,
       releaseProfile: "stable",
@@ -1164,7 +1182,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("is not an eligible release-metadata descendant");
+    expect(result.stderr).toContain("shared evidence validator rejected the run");
   });
 
   it("rejects a source-file rename to CHANGELOG.md", () => {
@@ -1182,7 +1200,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("is not an eligible release-metadata descendant");
+    expect(result.stderr).toContain("shared evidence validator rejected the run");
   });
 
   it("rejects target version metadata that is internally inconsistent", () => {

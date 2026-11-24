@@ -380,19 +380,7 @@ for ((index = 0; index < run_count; index += 1)); do
   # prior run proved; only exact-match manifests are reusable. Manifests
   # written before validationInputs existed never match.
   manifest_inputs="$(jq -Sc '.validationInputs // empty' <<< "$validation_record")"
-  if [[ -n "$manifest_inputs" && "$manifest_inputs" != "$expected_inputs" && "$RELEASE_PROFILE" != beta ]]; then
-    # The strict verifier already proved the promotion delta and both admissions.
-    matched_inputs="$(node --input-type=module - "$REPO_ROOT/scripts/lib/release-beta-promotion.mjs" "$manifest_inputs" "$expected_inputs" <<'NODE'
-import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
-const { promotionValidationInputs } = await import(pathToFileURL(process.argv[2]));
-process.stdout.write(String(isDeepStrictEqual(...process.argv.slice(3).map((json) => promotionValidationInputs(JSON.parse(json))))));
-NODE
-)"
-  else
-    matched_inputs=false
-  fi
-  if [[ -z "$manifest_inputs" || ( "$manifest_inputs" != "$expected_inputs" && "$matched_inputs" != true ) ]]; then
+  if [[ -z "$manifest_inputs" || ( "$manifest_inputs" != "$expected_inputs" && "$(jq -r '.reuseSelection.policy' <<< "$validation_record")" != stable-qualified-beta-final-v1 ) ]]; then
     echo "[evidence-reuse] run ${run_id}: validation inputs differ from the current request; skipping" >&2
     continue
   fi
@@ -403,37 +391,16 @@ NODE
   fi
 
   prior_sha="$(jq -r '.root.targetSha' <<< "$validation_record")"
-  evidence_policy="exact-target-full-validation-v1"
-  changed_paths="[]"
-  if [[ "$prior_sha" != "$TARGET_SHA" ]]; then
-    compare_json=""
-    if ! compare_json="$(
-      gh api "repos/${REPO}/compare/${prior_sha}...${TARGET_SHA}"
-    )"; then
-      echo "[evidence-reuse] run ${run_id}: could not compare ${prior_sha}...${TARGET_SHA}; skipping" >&2
-      continue
-    fi
-    selected_version="$(jq -r '.targetVersion // ""' <<< "$expected_inputs")"
-    if [[ -z "$selected_version" ]]; then selected_version="$(jq -r '.manifest.candidateBinding.package.version // .validationInputs.targetVersion // ""' <<< "$validation_record")"; fi
-    if ! delta_json="$(RELEASE_COMPARISON_JSON="$compare_json" RELEASE_BASE_SHA="$prior_sha" \
-      RELEASE_SELECTED_VERSION="$selected_version" RELEASE_TARGET_SHA="$TARGET_SHA" GH_REPO="$REPO" node --input-type=module - "$REPO_ROOT/scripts/full-release-validation-policy.mjs" <<'NODE'
-import { pathToFileURL } from "node:url";
-const { classifyReleaseEvidenceComparison } = await import(pathToFileURL(process.argv[2]));
-const { createReleaseEvidenceClient } = await import(new URL("./release-ci-summary.mjs", pathToFileURL(process.argv[2])));
-const client = createReleaseEvidenceClient(process.env.GH_REPO);
-const result = classifyReleaseEvidenceComparison(JSON.parse(process.env.RELEASE_COMPARISON_JSON), {
-  baseSha: process.env.RELEASE_BASE_SHA, targetSha: process.env.RELEASE_TARGET_SHA, version: process.env.RELEASE_SELECTED_VERSION,
-  readSourceFile: (sha, path) => client.getSourceFile(sha, path),
-});
-process.stdout.write(JSON.stringify(result));
-NODE
-    )"; then
-      echo "[evidence-reuse] run ${run_id}: target ${TARGET_SHA} is not an eligible release-metadata descendant of ${prior_sha}; skipping" >&2
-      continue
-    fi
-    evidence_policy="$(jq -r '.policy' <<< "$delta_json")"
-    changed_paths="$(jq -c '.changedPaths' <<< "$delta_json")"
+  # The strict verifier owns comparison and source-blob reads. Consume only its
+  # bounded, destination-bound selection, never a full comparison in the environment.
+  if ! delta_json="$(jq -ce --arg target "$TARGET_SHA" '
+    .reuseSelection | select(.targetSha == $target and (.policy | type == "string")
+      and (.changedPaths | type == "array"))' <<< "$validation_record")"; then
+    echo "[evidence-reuse] run ${run_id}: verifier omitted its requested reuse selection; skipping" >&2
+    continue
   fi
+  evidence_policy="$(jq -r '.policy' <<< "$delta_json")"
+  changed_paths="$(jq -c '.changedPaths' <<< "$delta_json")"
 
   run_url="$(jq -r '.root.url' <<< "$validation_record")"
   echo "[evidence-reuse] reusing ${evidence_policy} run ${run_id} (${run_url}) for ${TARGET_SHA}" >&2

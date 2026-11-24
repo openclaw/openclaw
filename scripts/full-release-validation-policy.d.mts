@@ -14,6 +14,7 @@ export function classifyReleaseEvidenceComparison(
   identity: {
     baseSha: string;
     targetSha?: string;
+    rootManifest?: unknown;
     version?: unknown;
     readSourceFile?: (sha: string, path: string) => string;
   },

@@ -21,8 +21,17 @@ export function isBetaPromotionPath(path, version) {
 
 export function classifyBetaPromotionComparison(
   comparison,
-  { baseSha, targetSha, version, readSourceFile },
+  { baseSha, targetSha, version, readSourceFile, rootManifest },
 ) {
+  if (
+    !["stable", "full"].includes(rootManifest?.releaseProfile) ||
+    rootManifest.runReleaseSoak !== "true" ||
+    rootManifest.controls?.performanceBlocking !== true
+  ) {
+    throw new Error(
+      "beta-to-final reuse requires stable/full qualification, soak and blocking performance",
+    );
+  }
   const target = parseReleaseVersion(version ?? "");
   const files = comparison?.files;
   // GitHub's compare endpoint caps changed files at 300. A larger cut falls
@@ -45,10 +54,14 @@ export function classifyBetaPromotionComparison(
   if (!/^[a-f0-9]{40}$/u.test(headSha ?? "")) {
     throw new Error("beta-to-final comparison omitted its exact head commit");
   }
-  const sourceVersion = JSON.parse(readSourceFile(baseSha, "package.json")).version;
+  const sourcePackage = readSourceFile(baseSha, "package.json");
+  const sourceVersion = JSON.parse(sourcePackage).version;
   const source = parseReleaseVersion(sourceVersion ?? "");
   if (source?.channel !== "beta" || source.baseVersion !== version) {
     throw new Error("beta-to-final reuse requires the corresponding beta package version");
+  }
+  if (rootManifest.validationInputs?.targetVersion !== sourceVersion) {
+    throw new Error("beta-to-final evidence versions differ from their source packages");
   }
   for (const file of files) {
     const path = file.filename;
@@ -63,7 +76,7 @@ export function classifyBetaPromotionComparison(
     if (notes) {
       continue;
     }
-    const before = readSourceFile(baseSha, path);
+    const before = path === "package.json" ? sourcePackage : readSourceFile(baseSha, path);
     const after = readSourceFile(headSha, path);
     if (path.endsWith("/package.json") || path === "package.json") {
       const expected = JSON.parse(before);

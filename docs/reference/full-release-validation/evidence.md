@@ -51,7 +51,8 @@ A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
 
 1. Complete a successful `stable` or `full` FRV on the beta candidate, with
    `rerun_group=all`, soak enabled, and blocking performance. A `beta` profile
-   never qualifies stable, even if its selected jobs passed.
+   never qualifies stable, even if its selected jobs passed. The beta may have
+   used `reuse_evidence=false` to force fresh qualification.
 2. Prepare a descendant for the corresponding unsuffixed final version. The only
    allowed changes are version alignment in root/plugin/SDK package manifests,
    generated plugin catalog/reference versions, and that final release's canonical
@@ -61,7 +62,8 @@ A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
    same profile, lane inputs, baselines, and publication roster. The strict
    verifier authenticates both admissions and the complete immutable Git delta
    under `stable-qualified-beta-final-v1`. An incomplete comparison falls back to
-   fresh qualification.
+   fresh qualification. Beta-version waivers cannot excuse final-version jobs;
+   discovery declines such evidence before skipping fresh product checks.
 4. Retain the successful final parent and its original beta evidence root. Product
    children retain their original run/attempt identities. Final npm, plugin npm,
    and Docker artifacts are prepared and qualified afresh; beta publication

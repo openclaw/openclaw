@@ -1565,21 +1565,8 @@ export function validateEvidenceReuseChain(
       throw new Error("exact-target release evidence reuse requires no changed paths");
     }
   } else if (reuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY) {
-    if (
-      !["stable", "full"].includes(rootManifest.releaseProfile) ||
-      rootManifest.runReleaseSoak !== "true" ||
-      rootManifest.controls?.performanceBlocking !== true
-    ) {
-      throw new Error(
-        "beta-to-final reuse requires stable/full qualification, soak and blocking performance",
-      );
-    }
     const version = JSON.parse(readSourceFile(currentManifest.targetSha, "package.json")).version;
-    const sourceVersion = JSON.parse(readSourceFile(reuse.evidenceSha, "package.json")).version;
-    if (
-      rootManifest.validationInputs.targetVersion !== sourceVersion ||
-      currentManifest.validationInputs.targetVersion !== version
-    ) {
+    if (currentManifest.validationInputs.targetVersion !== version) {
       throw new Error("beta-to-final evidence versions differ from their source packages");
     }
     const verified = classifyReleaseEvidenceComparison(
@@ -1589,6 +1576,7 @@ export function validateEvidenceReuseChain(
         targetSha: currentManifest.targetSha,
         version,
         readSourceFile,
+        rootManifest,
       },
     );
     if (
@@ -3227,6 +3215,9 @@ function qualificationReusePolicyIdentity(admission, promotion = false) {
   const inputs = { ...identity.inputs };
   const envelope = JSON.parse(inputs.trusted_workflow_json);
   if (promotion) {
+    // Discovery is dispatch control, not a measured qualification input. The
+    // authenticated source must already be a direct root with all groups.
+    delete inputs.reuse_evidence;
     envelope.publicationSelection = promotionSelection(envelope.publicationSelection);
   }
   // Changelog-only C descendants can advance their C-owned Q with C. An
@@ -3448,6 +3439,7 @@ export async function validateReleaseRunEvidence(
       ? { changedPaths: [], policy: EXACT_TARGET_EVIDENCE_REUSE_POLICY }
       : classifyReleaseEvidenceComparison(comparison, {
           baseSha: manifest.targetSha,
+          rootManifest: manifest,
           targetSha: reuseRequest.targetSha,
           readSourceFile: (sha, path) => evidenceClient.getSourceFile(sha, path),
           version:
@@ -3468,21 +3460,6 @@ export async function validateReleaseRunEvidence(
       throw new Error("ineligible reuse candidate: requires matching validation inputs");
     }
     requestedReuseDelta = delta;
-    validateRequestedEvidenceReuse(
-      manifest,
-      manifest,
-      manifest,
-      {
-        expectedChangedPaths: delta.changedPaths,
-        expectedEvidencePolicy: delta.policy,
-        expectedEvidenceSha: manifest.targetSha,
-        expectedRootRunId: manifest.runId,
-        expectedSelectedRunId: manifest.runId,
-        expectedTargetSha: reuseRequest.targetSha,
-      },
-      () => comparison,
-      (sha, path) => evidenceClient.getSourceFile(sha, path),
-    );
   }
   let validatedDirectRequestedReuse = false;
   let expectedReuseDescendant = false;
@@ -3967,6 +3944,14 @@ export async function validateReleaseRunEvidence(
   if (waivers.some((waiver) => waiver.targetSha && waiver.targetSha !== destinationTargetSha)) {
     throw new Error("candidate-bound release waiver cannot qualify a different target SHA");
   }
+  const destinationVersion =
+    reuseRequest?.validationInputs?.targetVersion ??
+    (expectedEvidencePolicy === BETA_FINAL_EVIDENCE_REUSE_POLICY
+      ? JSON.parse(evidenceClient.getSourceFile(expectedTargetSha, "package.json")).version
+      : currentEvidence.manifest.validationInputs?.targetVersion);
+  if (waivers.some((waiver) => waiver.targetVersion !== destinationVersion)) {
+    throw new Error("version-bound release waiver cannot qualify a different target version");
+  }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(
       `expected run attempts contain unvalidated run IDs: ${[...remainingExpectedRunAttempts.keys()].join(", ")}`,
@@ -3998,6 +3983,9 @@ export async function validateReleaseRunEvidence(
     controls: rootEvidence.manifest.controls,
     current,
     directRoot: !reuse,
+    ...(requestedReuseDelta
+      ? { reuseSelection: { ...requestedReuseDelta, targetSha: reuseRequest.targetSha } }
+      : {}),
     evidenceReuse: reuse
       ? {
           changedPaths: reuse.changedPaths,

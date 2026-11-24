@@ -45,6 +45,7 @@ export function candidatePublicationFixture(
     targetContextRef?: string;
     qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
     publicationArtifactSource?: { runId: string; runAttempt: number };
+    reuseEvidence?: boolean;
     releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
@@ -121,6 +122,7 @@ export function candidatePublicationFixture(
       options.targetContextRef ??
       (extended ? "extended-stable/" : "release/") + version.split("-")[0],
     release_profile: profile,
+    reuse_evidence: String(options.reuseEvidence ?? true),
     rerun_group: "all",
     mode: "both",
     run_release_soak: String(profile !== "beta"),
