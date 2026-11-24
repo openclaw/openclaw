@@ -1,3 +1,4 @@
+import type { Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   ReplyMessageInjectionAttempt,
@@ -22,7 +23,7 @@ const controllerState = resolveGlobalSingleton(Symbol.for("openclaw.sessionContr
   backendRunIdsByOperation: new WeakMap<ReplyOperation, Set<string>>(),
   operationsByUpstreamAbortSignal: new WeakMap<AbortSignal, ReplyOperation>(),
   producerCompletionByOperation: new WeakMap<ReplyOperation, Promise<unknown>>(),
-  backendReadyByOperation: new WeakMap<ReplyOperation, Promise<void>>(),
+  backendReadyByOperation: new WeakMap<ReplyOperation, Deferred>(),
   messageAdmissionsByAttachment: new WeakMap<object, Map<string, ReplyMessageInjectionAttempt>>(),
   afterClearByOperation: new WeakMap<ReplyOperation, ReplyOperationAfterClear>(),
   successorBarrierStartsByOperation: new WeakMap<ReplyOperation, Set<() => void>>(),
