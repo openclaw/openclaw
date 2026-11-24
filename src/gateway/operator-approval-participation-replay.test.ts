@@ -47,8 +47,8 @@ it("applies session participation selection before limiting both worker and rece
       async (input: typeof selection) => (await prepareOperatorApprovalReplay(input)).records,
     ]) {
       expect((await read(selection)).map((record) => record.id)).toEqual(["creator"]);
-      const only = (execApprovalSelection: (typeof selection)["execApprovalSelection"]) =>
-        read({ ...selection, execApprovalSelection });
+      const only = (choice: OperatorApprovalExecSelection) =>
+        read({ ...selection, execApprovalSelection: choice });
       // An empty participant-only selection still returns non-exec approvals.
       expect(
         (await only({ include: [], exclude: [], ordinary: false })).map((record) => record.id),
