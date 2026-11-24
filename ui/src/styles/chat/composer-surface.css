@@ -1018,6 +1018,10 @@
   color: var(--chat-composer-secondary, var(--text));
 }
 
+.agent-chat__input .chat-send-btn--talk-idle:not(:disabled, [aria-disabled="true"]) {
+  color: var(--accent);
+}
+
 .agent-chat__input .chat-send-btn--voice:disabled {
   background: transparent;
 }
@@ -1159,6 +1163,7 @@
   width: 39px;
   min-width: 0;
   --voice-meter-fade: 8px;
+  color: inherit;
   transition: opacity var(--duration-fast) ease;
 }
 

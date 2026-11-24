@@ -413,7 +413,9 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           <button
             class={[
               "chat-send-btn",
-              props.voiceActive ? "chat-send-btn--voice-live" : "chat-send-btn--voice",
+              props.voiceActive
+                ? "chat-send-btn--voice-live"
+                : "chat-send-btn--voice chat-send-btn--talk-idle",
               { "chat-send-btn--voice-error": voiceErrored() },
             ]}
             type="button"
