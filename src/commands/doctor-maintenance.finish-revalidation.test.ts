@@ -699,7 +699,7 @@ it("continues owning-run Doctor maintenance", async () => {
   expect(mocks.stops).toBe(1);
   expect(result.logs).toContain("Stopped the managed Gateway for Doctor repair.");
   expect(result.logs).toContainEqual(
-    expect.stringContaining("Its repairs write state the running Gateway also writes;"),
+    expect.stringContaining("its repairs write state that the running Gateway also writes"),
   );
   const restarted = result.logs.indexOf("Gateway restarted and verified after Doctor maintenance.");
   expect(restarted).toBeGreaterThan(-1);

@@ -405,7 +405,7 @@ async function runStandaloneDoctor(
   running = true,
   config: OpenClawConfig = native.config,
   approveConfigRepair = false,
-  admission?: () => void,
+  admission?: { restore: () => void; installation: () => void },
 ) {
   delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   delete process.env.OPENCLAW_UPDATE_RUN_ID;
@@ -440,8 +440,8 @@ async function runStandaloneDoctor(
       signal: new AbortController().signal,
       warnings: [],
       settle: (operation) => operation(),
-      assertRestoreAdmission: admission,
-      assertInstallationAdmission: admission,
+      assertRestoreAdmission: admission?.restore,
+      assertInstallationAdmission: admission?.installation,
     });
     return;
   }
@@ -526,31 +526,40 @@ describe.skipIf(process.platform === "win32")("service definition repair", () =>
     expect(systemctlCalls("restart")).toHaveLength(1);
   });
 
-  it("Doctor restoration reads update admission before each native mutation, not at every native command", async () => {
+  it("Doctor restoration rereads update admission per guarded native operation, not at every native command", async () => {
     await fixture();
     const execute = native.systemctl.getMockImplementation()!;
     const events: string[] = [];
     let nativeBoundary = false;
     // The real executors assert the caller's live authority and the inherited native
-    // service authority at every dispatch boundary (systemd-exec.ts, exec-file.ts).
-    native.systemctl.mockImplementation(async (env, args, timeoutMs, assertCurrent) => {
+    // service authority before dispatch (systemd-exec.ts, exec-file.ts).
+    native.systemctl.mockImplementation(async (env, args, ...rest) => {
       nativeBoundary = true;
       try {
-        assertCurrent?.();
+        rest[1]?.();
         assertGatewayServiceUpdateCurrent();
       } finally {
         nativeBoundary = false;
       }
       events.push(`systemctl ${args[0]}`);
-      return execute(env, args, timeoutMs, assertCurrent);
+      return execute(env, args, ...rest);
     });
-    await runStandaloneDoctor("maintenance", true, native.config, false, () => {
-      events.push(nativeBoundary ? "admission at native boundary" : "admission");
+    const record = (label: string) => () => {
+      events.push(nativeBoundary ? `${label} at native boundary` : label);
+    };
+    await runStandaloneDoctor("maintenance", true, native.config, false, {
+      restore: record("restore admission"),
+      installation: record("installation admission"),
     });
     expect(systemctlCalls("restart")).toHaveLength(1);
-    expect(events).not.toContain("admission at native boundary");
-    // The definition repair's native mutation starts right after a fresh admission read.
-    expect(events[events.indexOf("systemctl daemon-reload") - 1]).toBe("admission");
+    expect(events.filter((event) => event.endsWith("at native boundary"))).toEqual([]);
+    // The definition install, which here also restarts the Gateway, starts right
+    // after both admissions are reread.
+    const install = events.indexOf("systemctl daemon-reload");
+    expect(events.slice(install - 2, install)).toEqual([
+      "restore admission",
+      "installation admission",
+    ]);
   });
 
   it("repairs a published-driver user-prefix shim unit through the candidate installer", async () => {

@@ -481,6 +481,8 @@ export async function restoreDoctorGatewayService(params: {
         preserveDefinition: true,
         preserveAutoStart: true,
         beforeMutation: assertAutoStartCurrent,
+        // systemd also rechecks admission right before each native start/restart dispatch.
+        beforeEffect: assertMaintenanceCurrent,
         assertCurrent: assertInspectionCurrent,
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }
