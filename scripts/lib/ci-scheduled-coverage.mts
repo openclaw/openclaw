@@ -138,24 +138,6 @@ const SCHEDULED_COVERAGE_CONFIG_OWNERS = new Map<
       ),
   ],
 ]);
-const scheduledCoverageConfigCache = new Map<string, string[]>();
-
-function listScheduledCoverageConfigFiles(config: string): string[] | undefined {
-  const declared = listNodeTestVolumeConfigFiles(config);
-  if (declared) {
-    return declared;
-  }
-  const owner = SCHEDULED_COVERAGE_CONFIG_OWNERS.get(config);
-  if (!owner) {
-    return undefined;
-  }
-  let files = scheduledCoverageConfigCache.get(config);
-  if (!files) {
-    files = typeof owner === "function" ? owner() : listScopedOwnerTestFiles(owner);
-    scheduledCoverageConfigCache.set(config, files);
-  }
-  return files;
-}
 function scheduledE2eExcludes(): string[] {
   return sharedVitestExcludePatterns.filter((pattern) => pattern !== vitestE2eTestGlob);
 }
@@ -172,6 +154,22 @@ export function listScheduledTestFiles(): string[] {
   }
   const tracked = scheduledTrackedTestFiles();
   const inventory = resolveCanonicalTargetInventory();
+  const coverageConfigFiles = new Map<string, string[] | undefined>();
+  const listScheduledCoverageConfigFiles = (config: string): string[] | undefined => {
+    if (coverageConfigFiles.has(config)) {
+      return coverageConfigFiles.get(config);
+    }
+    let files = listNodeTestVolumeConfigFiles(config);
+    if (!files) {
+      const owner = SCHEDULED_COVERAGE_CONFIG_OWNERS.get(config);
+      if (owner) {
+        files = typeof owner === "function" ? owner() : listScopedOwnerTestFiles(owner);
+      }
+    }
+    // Scheduled and release groups share this call's prepared config inventories.
+    coverageConfigFiles.set(config, files);
+    return files;
+  };
   const missingConfigs = [...inventory.configs].filter(
     (config) => !inventory.completeConfigs.has(config) && !listScheduledCoverageConfigFiles(config),
   );
