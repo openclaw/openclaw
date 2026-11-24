@@ -224,15 +224,30 @@ describe("createBeamMirrorRunner", () => {
         type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
         text: `Message ${index}: ${"🙂 text ".repeat(200)}end`,
       }));
+      const catalog = createBeamTestCatalog({ sessions: beamTestSessions(["native-300"]) });
+      const newest = chronological.toReversed();
+      const read = vi.fn<typeof catalog.read>(async ({ hostId, threadId, limit, cursor }) => {
+        const start = Number(cursor ?? 0);
+        return {
+          hostId,
+          threadId,
+          items: newest.slice(start, start + limit),
+          nextCursor: start + limit < newest.length ? String(start + limit) : undefined,
+        };
+      });
+      const resolveExecutable = vi.fn(
+        createBeamExecutableResolver(process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT!),
+      );
       const runner = fixture.runner(
-        { sessions: beamTestSessions(["native-300"]), items: chronological.toReversed() },
+        {},
         {
-          resolveExecutable: createBeamExecutableResolver(
-            process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT!,
-          ),
+          listCatalogs: () => [{ ...catalog, read }],
+          resolveExecutable,
         },
       );
-      await runner.tick();
+      await runTicks(runner, 3);
+      expect(read).toHaveBeenCalledTimes(12);
+      expect(resolveExecutable).toHaveBeenCalledTimes(1);
       expect(fixture.sent).toHaveLength(1);
       const payload = fixture.sent[0]!.payload;
       expect(parseBeamUpload(structuredClone(payload)).ok).toBe(true);
@@ -243,6 +258,67 @@ describe("createBeamMirrorRunner", () => {
       expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThanOrEqual(56 * 1024);
     },
   );
+
+  it("checks newly granted multiplayer history on every poll and skips identical cleaner input", async () => {
+    let grant = 0;
+    let speaker = "one";
+    let message = "unchanged";
+    const catalog = createBeamTestCatalog();
+    const read = vi.fn<typeof catalog.read>(async ({ hostId, threadId }) => ({
+      hostId,
+      threadId,
+      items: [
+        { type: "userMessage", text: message, speakerId: `${grant}:${speaker}` },
+        { type: "userMessage", text: "first", speakerId: `${grant}:one` },
+      ],
+    }));
+    const runner = fixture.runner(
+      {},
+      {
+        listCatalogs: () => {
+          grant++;
+          return [{ ...catalog, read }];
+        },
+      },
+    );
+    await runTicks(runner, 3);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(1);
+    speaker = "two";
+    await runner.tick();
+    expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(2);
+    message = "same-second edit";
+    await runner.tick();
+    expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(3);
+    expect(fixture.sent.at(-1)?.payload.items.at(-1)?.text).toBe("same-second edit");
+  });
+
+  it("remembers an equivalent v1 input without a second upload", async () => {
+    let recencyAt = beamTestNow;
+    const runner = fixture.runner({ sessions: () => beamTestSessions(["t1"], recencyAt) });
+    await runner.tick();
+    recencyAt++;
+    await runTicks(runner, 3);
+    expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(2);
+    expect(fixture.sent).toHaveLength(1);
+  });
+
+  it("requires a successful upload before skipping a clean and keeps authority changes cold", async () => {
+    let token = "first-token";
+    const runner = fixture.runner(
+      {},
+      {
+        runtime: { config: { current: () => beamTestMirrorConfig({ token }) } },
+      },
+      { status: () => (fixture.sent.length === 1 ? 503 : 200) },
+    );
+    await runTicks(runner, 3);
+    expect(fixture.sent).toHaveLength(2);
+    expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(2);
+    token = "replacement-token";
+    await runner.tick();
+    expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(3);
+  });
 
   it("pauses poll grants while an operator enrollment is resolving its native source", async () => {
     const gate = beamTestBarrier();
@@ -281,7 +357,8 @@ describe("createBeamMirrorRunner", () => {
       items: [{ type: "userMessage" as const, text: "unfiltered text" }],
     };
     const runner = fixture.runner(catalog);
-    vi.spyOn(cleaner, "cleanBeamCandidate").mockImplementation(async (candidate) => {
+    vi.spyOn(cleaner, "cleanBeamCandidate").mockImplementation(async (input) => {
+      const candidate = JSON.parse(input) as cleaner.BeamCleanCandidate;
       expect(candidate).toMatchObject({ title: session.name, items: catalog.items });
       const packet = {
         version: 2 as const,

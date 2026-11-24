@@ -5,6 +5,7 @@ import {
   timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import type {
+  SessionCatalogListProviderParams,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
@@ -39,6 +40,7 @@ const PI_PARAMETER_MESSAGES = {
 export async function listLocalPiSessionPage(
   value?: unknown,
   bindSource = false,
+  exportSource?: SessionCatalogListProviderParams["exportSource"],
 ): Promise<PiSessionPage> {
   const params = sessionCatalogPaging.parseListParams(value, {
     searchMaxLength: MAX_SEARCH_LENGTH,
@@ -48,6 +50,7 @@ export async function listLocalPiSessionPage(
   const { summaries, hasMore } = await listPiSummaryPage(process.env, {
     offset,
     limit: params.limit,
+    exportSource,
     ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
   });
   const page = summaries.map(({ file, version: _version, ...session }) =>

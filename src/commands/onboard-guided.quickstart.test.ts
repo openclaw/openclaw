@@ -64,9 +64,14 @@ describe("runGuidedOnboarding quick start", () => {
 
       const transcript = capture.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(transcript).toContain("Local setup");
-      expect(transcript.split("Everything's in place.")).toHaveLength(2);
+      const completion =
+        choice === "skip"
+          ? "OpenClaw setup is saved. Connect AI before opening chat."
+          : "Everything's in place.";
+      expect(transcript.split(completion)).toHaveLength(2);
       if (choice === "skip") {
         expect(transcript).toContain("Next steps");
+        expect(transcript).not.toContain("Everything's in place.");
       }
     },
   );

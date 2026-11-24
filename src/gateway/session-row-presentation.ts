@@ -70,13 +70,15 @@ import {
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
+type PersonalPinOrder = ReadonlyMap<string, number> | null;
+
 type PresentationOptions = Readonly<
   Omit<
     records.SnapshotOptions,
     "now" | "active" | "subagentRuns" | "preparedFacts" | "preparedRunState"
   > & {
     includeActivitySummary?: boolean;
-    personalPins?: ReadonlyMap<string, number> | null;
+    personalPins?: PersonalPinOrder;
     rowMode?: SessionsListParams["rowMode"];
     omitSentinelChildren?: boolean;
     childArchiveFilter?: SessionsListParams["archived"];
@@ -282,7 +284,7 @@ export function prepareProjectedSessionPresentation(
   const listView = (
     opts: SessionsListParams,
     selection = false,
-    personalPins?: ReadonlyMap<string, number> | null,
+    personalPins?: PersonalPinOrder,
   ): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
@@ -639,12 +641,14 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
-      personalPins?: ReadonlyMap<string, number> | null,
+      select: (
+        retained?: Map<object, SessionListFilteredEntries>,
+        invited?: boolean,
+      ) => SessionEntrySelection,
+      personalPins?: PersonalPinOrder,
     ) {
-      // Membership, clocks, and transient runs are not owned by metadata partitions.
-      const live = opts.activeOnly || opts.activityPulseBoundaries;
-      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
+      // Clocks and transient runs are not owned by metadata or membership publications.
+      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
         return select();
       }
       const view = listView(opts, true, personalPins);
@@ -657,8 +661,10 @@ export function prepareProjectedSessionPresentation(
         view.partitions = undefined;
       }
       if (!view.selection) {
+        view.invited = entryFilter !== undefined && sharing.sessionCap === "invited";
         const { entries, ownerSessionProfiles, ...facets } = select(
           publicationState?.lists.partitions(view),
+          view.invited,
         );
         Object.freeze(entries);
         view.selection = Object.freeze({
@@ -672,11 +678,7 @@ export function prepareProjectedSessionPresentation(
       }
       return view.selection;
     },
-    list(
-      rows: GatewaySessionRow[],
-      opts: SessionsListParams,
-      personalPins?: ReadonlyMap<string, number> | null,
-    ) {
+    list(rows: GatewaySessionRow[], opts: SessionsListParams, personalPins?: PersonalPinOrder) {
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.
       const view = listView(opts, false, personalPins);
