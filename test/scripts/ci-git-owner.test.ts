@@ -9,9 +9,12 @@ import { parse } from "yaml";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
-// Each case owns its checkout and process trees. Overlap their real timeout and
-// drain waits, but keep subprocess pressure bounded on the four-core CI runner.
+// Each case owns its checkout and process trees; bound subprocess pressure on CI.
 beforeAll(() => {
   vi.setConfig({ maxConcurrency: 2 });
   return () => vi.resetConfig();
@@ -197,12 +200,13 @@ function writeGitProxy(
   body: string,
 ): { binDir: string; realGit: string } {
   const binDir = join(fixture.root, name);
-  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const realGit = resolveGitOutsideFixtures();
   mkdirSync(binDir);
   writeFileSync(
     join(binDir, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
+${gitPathShimShellPrelude()}
 ${body}
 `,
   );
@@ -345,6 +349,29 @@ exec "$REAL_GIT" "$@"`,
   },
 );
 
+releasePolicyIt(
+  "recovers stalled shallow hydration without changing the pinned ancestry proof",
+  ({ command }) => {
+    const fixture = createAncestryFixture(command, 8, 220);
+    // Replay the observed no-progress fetch; recovery and ancestry use real Git.
+    const proxy = writeGitProxy(
+      fixture,
+      "recoverable-no-progress-git",
+      `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+    );
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(
+      runReleaseAncestry(checkout, "merge-base", proxyEnvironment(proxy)),
+      "merge-base",
+    );
+    expect(fixtureGit(checkout, ["rev-parse", "--is-shallow-repository"])).toBe("false");
+    expect(fixtureGit(checkout, ["rev-parse", remoteMain])).toBe(fixture.target);
+  },
+);
+
 releasePolicyIt.for([false, true])(
   "rejects unprovable release history (stalled=%s)",
   (stalled, { command }) => {
@@ -353,7 +380,7 @@ releasePolicyIt.for([false, true])(
       ? writeGitProxy(
           fixture,
           "no-progress-git",
-          `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* ]]; then
+          `if [[ " $* " == *" fetch "* && ( " $* " == *" --deepen=128 "* || " $* " == *" --unshallow "* ) ]]; then
   exit 0
 fi
 exec "$REAL_GIT" "$@"`,
@@ -762,17 +789,16 @@ linuxIt.for([
 ] as const)(
   "base policy stops before availability/retry on $label",
   { timeout: 55_000 },
-  async ({ result, code, ...entry }, { signal }) => {
+  async ({ label: _label, result, code, ...options }, { signal }) => {
     const report = await runBase(signal, [result], {
       baseAvailableAfter: 1,
-      realDrain: true,
-      scenario: "scenario" in entry ? entry.scenario : undefined,
-      cancelDuringCleanup: "cancelDuringCleanup" in entry,
+      realDrain: false,
+      ...options,
     });
     expectReport(report, { code }, { fetches: 1 });
     expect(report.commands.filter(({ args }) => args[0] === "rev-parse")).toHaveLength(1);
     expect(report.output).not.toContain("Resolved base commit");
-    expect(report.cancelledDuringCleanup).toBe("cancelDuringCleanup" in entry);
+    expect(report.cancelledDuringCleanup).toBe("cancelDuringCleanup" in options);
   },
 );
 
@@ -782,15 +808,14 @@ linuxIt(
     const report = await runBase(signal, ["hang", 0], {
       baseAvailableAfter: 2,
       realClock: true,
+      realDrain: false,
       readyFetchClockAdvanceSeconds: 30,
     });
-    expect(report.code, report.output).toBe(0);
+    expectReport(report, { code: 0, readyAttempts: [1, 2] });
     expect(report.output).toContain("exact fetch failed");
-    expect(report.readyAttempts).toEqual([1, 2]);
-    expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual([
-      "fixture fetch timeout: 30",
-      "fixture fetch timeout: 30",
-    ]);
+    expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual(
+      Array(2).fill("fixture fetch timeout: 30"),
+    );
     expect(report.fetchClockAdvancedSeconds).toBe(30);
   },
   55_000,
@@ -901,6 +926,7 @@ const sanity = (
 ) =>
   runCiGitStep({
     signal,
+    realDrain: false,
     ...options,
     workflow: "workflow-sanity",
     objects: { ...auditObjects, ...options.objects },

@@ -222,14 +222,12 @@ function sessionsBoardPage(
 }
 
 /**
- * Interactive Sessions-board writes wait in the store's mutation queue, so the
- * caller's full Gateway authority (transport, role/scope/profile authorization,
- * in-process lifetime) is rechecked immediately before the SQLite write.
+ * Interactive Sessions-board writes wait in the store's mutation queue. Keep
+ * the request lifetime and session fences immediately before the SQLite write.
  */
 function sessionsBoardCaller(
   context: Pick<
     GatewayMethodContext,
-    | "hasCurrentClientAuthority"
     | "sessionMutationAuthorization"
     | "sessionAccessAuthority"
     | "sessionMutationCommitGuard"
@@ -239,9 +237,6 @@ function sessionsBoardCaller(
   return {
     assertCurrent() {
       context.signal?.throwIfAborted();
-      if (context.hasCurrentClientAuthority?.() === false) {
-        throw new Error("Caller authority is no longer active.");
-      }
       context.sessionAccessAuthority?.assertCurrent();
       context.sessionMutationAuthorization?.assertCurrent();
       context.sessionMutationCommitGuard?.();
@@ -335,7 +330,7 @@ export function registerWorkboardGatewayMethods(params: {
     if (CLI_OWNER_METHODS.has(method)) {
       api.registerGatewayMethod(
         `${method}.owner`,
-        (request) => {
+        async (request) => {
           if (
             typeof request.params?.expectedOwnerId !== "string" ||
             !request.params.expectedOwnerId.trim()
@@ -347,7 +342,7 @@ export function registerWorkboardGatewayMethods(params: {
             });
             return;
           }
-          return requestHandler(request);
+          await requestHandler(request);
         },
         { scope },
       );

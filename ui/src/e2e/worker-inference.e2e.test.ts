@@ -116,7 +116,7 @@ suite.define(() => {
         const transcript = page.locator(".chat-thread-inner");
         await page.goto(suite.server.baseUrl + "new");
         if (required) {
-          await page.getByText("OpenClaw worker", { exact: true }).waitFor();
+          await page.getByText("Cloud device", { exact: true }).waitFor();
           expect(await where.count()).toBe(0);
           expect(await page.locator("#new-session-project-trigger").count()).toBe(0);
         } else {

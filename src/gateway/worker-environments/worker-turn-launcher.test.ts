@@ -79,7 +79,7 @@ describe("worker turn launcher local placement", () => {
     sql.expectIdle();
     await fx.seedActivePlacement("remote-exec");
     sql.clear();
-    expect(prepared.assertCurrent).toThrow("placement authority changed");
+    expect(prepared.assertCurrent).toThrow("placement changed");
     sql.expectIdle();
   });
 
@@ -251,7 +251,7 @@ describe("worker turn launcher local placement", () => {
           expect(await fx.placements.listAsync()).toEqual([]);
         } else {
           await expect(operation).rejects.toThrow(
-            change === "placement publication" ? "placement authority changed" : refusal.message,
+            change === "placement publication" ? "placement changed" : refusal.message,
           );
           expect(runLocal).not.toHaveBeenCalled();
         }
@@ -573,11 +573,7 @@ describe("worker turn launcher local placement", () => {
   it("rejects an active worker turn assigned to a configured CLI runtime", async () => {
     const runtimeId = "claude-cli";
     await fx.seedActivePlacement();
-    const getEnvironment = vi.fn(() => undefined);
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
-      get: getEnvironment,
-    };
+    const environments = fx.unusedEnvironments();
     const provider = createLauncher({ environments });
     const runLocal = vi.fn(localResult);
     const runId = `run-${runtimeId}`;
@@ -617,6 +613,7 @@ describe("worker turn launcher local placement", () => {
               inlineProviderModels: [],
               configuredCatalogEntries: [],
             },
+            run: <T>(run: () => T): T => run(),
             [Symbol.asyncDispose]: release,
           };
         }),
@@ -627,7 +624,12 @@ describe("worker turn launcher local placement", () => {
       `Cloud worker turns require the OpenClaw runtime, not ${runtimeId}`,
     );
 
-    expectUncalled(runLocal, getEnvironment);
+    expectUncalled(
+      runLocal,
+      environments.ensureRetainedRunning,
+      environments.acquireTurnCredential,
+      environments.startTunnel,
+    );
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     expect(release).toHaveBeenCalledOnce();
   });
@@ -678,7 +680,7 @@ describe("worker turn launcher local placement", () => {
       if (scenario !== "current") {
         await expect(provider.prepareSandbox(sandboxInput())).rejects.toThrow(
           scenario === "placement-replaced"
-            ? "placement authority changed"
+            ? "placement changed"
             : "environment changed while preparing its sandbox",
         );
         return;

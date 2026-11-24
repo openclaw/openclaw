@@ -4,13 +4,11 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/sc
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
-import { listDevicePairing } from "../infra/device-pairing.js";
-import { verifyPairingToken } from "../infra/pairing-token.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  buildRateLimitIdentityKey,
 } from "./auth-rate-limit.js";
 import {
   authorizeControlUiReadHttpGatewayConnect,
@@ -25,7 +23,6 @@ import {
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
 import {
-  bindControlUiPluginCookieRequestAuthority,
   prepareControlUiPluginCookieRequest,
   resolveControlUiPluginAuthCookieGeneration,
 } from "./http-auth-plugin-cookie.js";
@@ -46,14 +43,8 @@ import {
   bindHttpOperatorAccessAuthority,
   sendGatewayHttpAuthFailure,
 } from "./http-operator-access.js";
-import {
-  bindHttpResponseAuthority,
-  captureHttpRequestAuthority,
-  GatewayHttpRequestAuthorityError,
-  type GatewayHttpRequestAuthOptions,
-  type GatewayHttpRequestAuthority,
-  type GatewayHttpResponseAuthority,
-} from "./http-request-authority.js";
+import { verifyHttpOperatorDeviceToken } from "./http-operator-device-token.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   assertRemoteControlUiIngressCurrent,
   getRemoteControlUiIngressContext,
@@ -71,9 +62,10 @@ import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-se
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
-
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
-const CONTROL_UI_OPERATOR_ROLE = "operator";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "./trusted-proxy-delegation.js";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";
 
@@ -82,7 +74,6 @@ export type AuthorizedGatewayHttpRequest = AuthenticatedHttpUserProfile & {
   user?: string;
   trustDeclaredOperatorScopes: boolean;
   deviceOperatorScopes?: string[];
-  revalidate?: () => Promise<void>;
   hasCurrentClientAuthority?: () => boolean;
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
@@ -90,7 +81,7 @@ export type AuthorizedGatewayHttpRequest = AuthenticatedHttpUserProfile & {
 export type GatewayHttpRequestAuthCheckResult =
   | {
       ok: true;
-      requestAuth: AuthorizedGatewayHttpRequest & GatewayHttpRequestAuthority;
+      requestAuth: AuthorizedGatewayHttpRequest;
     }
   | {
       ok: false;
@@ -105,11 +96,10 @@ type GatewayHttpRequestAuthParams = GatewayHttpRequestAuthOptions & {
 type GatewayHttpRequestAuthCheckParams = Omit<GatewayHttpRequestAuthParams, "res"> & {
   res?: ServerResponse;
 };
-export type AuthorizedControlUiReadRequest = AuthenticatedHttpUserProfile &
-  Pick<AuthorizedGatewayHttpRequest, "hasCurrentClientAuthority" | "revalidate"> & {
-    authMethod: NonNullable<GatewayAuthResult["method"]>;
-    operatorScopes: string[];
-  };
+export type AuthorizedControlUiReadRequest = AuthenticatedHttpUserProfile & {
+  authMethod: NonNullable<GatewayAuthResult["method"]>;
+  operatorScopes: string[];
+};
 
 type ControlUiReadAuthParams = Omit<GatewayHttpRequestAuthParams, "auth"> & {
   auth?: ResolvedGatewayAuth;
@@ -127,48 +117,15 @@ export function resolveHttpBrowserOriginPolicy(
   return resolveBrowserOriginPolicy({ req, cfg });
 }
 
-function resolveControlUiReadAuthToken(
-  req: IncomingMessage,
-  allowQueryToken: boolean | undefined,
-): string | undefined {
-  const bearer = getBearerToken(req);
-  if (bearer || !allowQueryToken || !req.url) {
-    return bearer;
+function readControlUiQueryToken(req: IncomingMessage): string | undefined {
+  if (!req.url) {
+    return undefined;
   }
   try {
     return normalizeOptionalString(new URL(req.url, "http://localhost").searchParams.get("token"));
   } catch {
     return undefined;
   }
-}
-
-async function verifyHttpOperatorDeviceToken(
-  token: string,
-  requiredSharedGatewaySessionGeneration: string | undefined,
-  requiredScopes: readonly string[] = [],
-): Promise<string[] | null> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (
-      !operatorToken ||
-      operatorToken.revokedAtMs ||
-      !verifyPairingToken(token, operatorToken.token)
-    ) {
-      continue;
-    }
-    const verified = await verifyDeviceToken({
-      deviceId: device.deviceId,
-      token,
-      role: CONTROL_UI_OPERATOR_ROLE,
-      // Verify the whole observed grant so a concurrent scope reduction cannot
-      // leave the HTTP request with authority from the earlier pairing snapshot.
-      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes, ...requiredScopes],
-      requiredSharedGatewaySessionGeneration,
-    });
-    return verified.ok ? [...operatorToken.scopes] : null;
-  }
-  return null;
 }
 
 function resolveControlUiReadOperatorScopes(
@@ -202,11 +159,16 @@ async function checkHttpOperatorCredentials(
   params: Omit<GatewayHttpRequestAuthParams, "res"> & {
     token: string | undefined;
     requiredDeviceScopes?: readonly string[];
+    usesQueryToken?: boolean;
   },
   authorizeConnect: typeof authorizeHttpGatewayConnect,
 ): Promise<HttpOperatorCredentialResult> {
   const { auth, token } = params;
   const remoteIngress = getRemoteControlUiIngressContext(params.req);
+  const delegationClaim = hasGatewayDelegationClaim(params.req, auth.trustedProxy?.userHeader);
+  if (delegationClaim && (remoteIngress || auth.mode !== "trusted-proxy")) {
+    return { authResult: { ok: false, reason: GATEWAY_DELEGATION_DENIED } };
+  }
   if (remoteIngress) {
     assertRemoteControlUiIngressCurrent(remoteIngress);
     return {
@@ -219,26 +181,50 @@ async function checkHttpOperatorCredentials(
   const ingressAttribution = prepareGatewayIngressAttribution({
     req: params.req,
     trustedProxies: params.trustedProxies,
+    trustedProxy: auth.trustedProxy,
     allowRealIpFallback: params.allowRealIpFallback,
   });
   if (ingressAttribution.kind === "unattributable-proxy") {
     return { authResult: { ok: false, reason: ingressAttribution.reason } };
   }
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req, params.cfg);
   const clientIp = ingressAttribution.rateLimit.subject.key;
   const canUseDeviceTokenFallback =
-    Boolean(token) && auth.mode !== "trusted-proxy" && auth.mode !== "none";
-  const run = async (): Promise<HttpOperatorCredentialResult> => {
+    Boolean(token) &&
+    auth.mode !== "trusted-proxy" &&
+    auth.mode !== "none" &&
+    ingressAttribution.kind !== "openclaw-id-tunnel";
+  const queryKey =
+    params.usesQueryToken && ingressAttribution.kind === "direct-local" && auth.mode !== "none"
+      ? buildRateLimitIdentityKey(
+          browserOriginPolicy.fetchSite === "same-origin"
+            ? "control-ui-url-same-origin"
+            : "control-ui-url",
+          clientIp,
+        )
+      : undefined;
+  const limiter = params.rateLimiter;
+  const recordCredentialFailure = async (scope: string) => {
+    // URL attempts have a hard lockout. Keep IP history without imposing a
+    // different response delay on a correct and an incorrect URL credential.
+    if (queryKey) {
+      limiter?.recordFailure(clientIp, scope);
+    } else {
+      await limiter?.recordFailureAndDelay(clientIp, scope);
+    }
+  };
+  const verify = async (): Promise<HttpOperatorCredentialResult> => {
     const authResult = await authorizeConnect({
       auth,
       connectAuth: token ? { token, password: token } : null,
       req: params.req,
-      browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req, params.cfg),
+      browserOriginPolicy,
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
-      rateLimiter: params.rateLimiter,
+      rateLimiter: limiter,
       clientIp,
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-      deferRateLimitFailure: canUseDeviceTokenFallback,
+      deferRateLimitFailure: canUseDeviceTokenFallback || Boolean(queryKey),
     });
     const authGeneration = resolveSharedGatewaySessionGeneration(auth, params.trustedProxies);
     let resolvedAuthResult = authResult;
@@ -246,21 +232,16 @@ async function checkHttpOperatorCredentials(
     if (
       !authResult.ok &&
       authResult.reason !== PROXY_ATTRIBUTION_REQUIRED_REASON &&
+      !delegationClaim &&
       canUseDeviceTokenFallback &&
       token
     ) {
       const recordSharedSecretFailure = async () => {
         if (authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch") {
-          await params.rateLimiter?.recordFailureAndDelay(
-            clientIp,
-            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-          );
+          await recordCredentialFailure(AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         }
       };
-      const deviceRateCheck = params.rateLimiter?.check(
-        clientIp,
-        AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
-      );
+      const deviceRateCheck = limiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       if (deviceRateCheck && !deviceRateCheck.allowed) {
         await recordSharedSecretFailure();
         resolvedAuthResult = {
@@ -277,14 +258,11 @@ async function checkHttpOperatorCredentials(
         );
         if (verifiedScopes) {
           deviceScopes = verifiedScopes;
-          params.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+          limiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
           resolvedAuthResult = { ok: true, method: "device-token" };
         } else {
           await recordSharedSecretFailure();
-          await params.rateLimiter?.recordFailureAndDelay(
-            clientIp,
-            AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
-          );
+          await recordCredentialFailure(AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         }
       }
     }
@@ -295,43 +273,75 @@ async function checkHttpOperatorCredentials(
     };
   };
 
-  if (!canUseDeviceTokenFallback || !params.rateLimiter) {
-    return await run();
+  const checkCredentials = () =>
+    canUseDeviceTokenFallback && limiter
+      ? withSerializedCredentialFallbackAttempt({ limiter, ip: clientIp, run: verify })
+      : verify();
+  if (!queryKey || !params.rateLimiter) {
+    return await checkCredentials();
   }
-  // Shared and device credentials form one terminal auth attempt. Keep their
-  // async checks together so concurrent fallbacks cannot outrun either bucket.
+  const queryLimiter = params.rateLimiter;
   return await withSerializedCredentialFallbackAttempt({
-    limiter: params.rateLimiter,
-    ip: clientIp,
-    run,
+    limiter: queryLimiter,
+    ip: queryKey,
+    run: async () => {
+      const scope = "control-ui-url-credential";
+      const budget = queryLimiter.check(queryKey, scope);
+      if (!budget.allowed) {
+        return {
+          authResult: {
+            ok: false,
+            reason: "rate_limited",
+            rateLimited: true,
+            retryAfterMs: budget.retryAfterMs,
+          },
+        };
+      }
+      const result = await checkCredentials();
+      if (result.authResult.ok) {
+        queryLimiter.reset(queryKey, scope);
+      } else if (
+        result.authResult.reason === "token_mismatch" ||
+        result.authResult.reason === "password_mismatch"
+      ) {
+        queryLimiter.recordFailure(queryKey, scope);
+        // Trusted-proxy local password authentication has no device fallback
+        // to finish the deferred shared-secret accounting.
+        if (!canUseDeviceTokenFallback) {
+          queryLimiter.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+        }
+      }
+      return result;
+    },
   });
 }
 
 /** Authorize a read-only same-origin Control UI request, including paired devices. */
 export async function authorizeControlUiReadRequestOrReply(
   params: ControlUiReadAuthParams,
-): Promise<(AuthorizedControlUiReadRequest & GatewayHttpResponseAuthority) | null> {
+): Promise<AuthorizedControlUiReadRequest | null> {
   const auth = params.getResolvedAuth?.() ?? params.auth;
   const cfg = params.cfg ?? getRuntimeConfig();
-  const hasCurrentClientAuthority = captureHttpRequestAuthority({
-    ...params,
-    auth: auth ?? { mode: "none", allowTailscale: false },
-  });
   if (!auth) {
     if (getRemoteControlUiIngressContext(params.req)) {
       sendUnauthorized(params.res);
       return null;
     }
     params.onPluginFrameGrants?.([]);
-    return bindHttpResponseAuthority(
-      { authMethod: "none" as const, operatorScopes: [...CLI_DEFAULT_OPERATOR_SCOPES] },
-      params.res,
-      hasCurrentClientAuthority,
-    );
+    return { authMethod: "none", operatorScopes: [...CLI_DEFAULT_OPERATOR_SCOPES] };
   }
-  const token = resolveControlUiReadAuthToken(params.req, params.allowQueryToken);
+  const bearer = getBearerToken(params.req);
+  const token =
+    bearer ?? (params.allowQueryToken ? readControlUiQueryToken(params.req) : undefined);
   const { authResult, authGeneration, deviceOperatorScopes } = await checkHttpOperatorCredentials(
-    { ...params, cfg, auth, token, rateLimiter: token ? params.rateLimiter : undefined },
+    {
+      ...params,
+      cfg,
+      auth,
+      token,
+      usesQueryToken: Boolean(token && !bearer),
+      rateLimiter: token ? params.rateLimiter : undefined,
+    },
     authorizeControlUiReadHttpGatewayConnect,
   );
   if (!authResult.ok) {
@@ -363,12 +373,6 @@ export async function authorizeControlUiReadRequestOrReply(
   ) {
     return null;
   }
-  if (!hasCurrentClientAuthority()) {
-    if (params.replyOnFailure !== false) {
-      sendUnauthorized(params.res);
-    }
-    return null;
-  }
   const authMethod = authResult.method ?? "none";
   const operatorScopes = resolveControlUiReadOperatorScopes(
     params.req,
@@ -386,33 +390,7 @@ export async function authorizeControlUiReadRequestOrReply(
     }
     return null;
   }
-  const requestAuth = bindHttpResponseAuthority(
-    { authMethod, operatorScopes, ...authenticatedProfile },
-    params.res,
-    hasCurrentClientAuthority,
-  );
-  if (authMethod === "device-token" && token) {
-    const verifyCurrentDeviceToken = () =>
-      verifyHttpOperatorDeviceToken(token, authGeneration, deviceOperatorScopes);
-    // Profile attribution can yield after the original credential verification.
-    if (!(await verifyCurrentDeviceToken()) || !requestAuth.hasCurrentClientAuthority()) {
-      if (params.replyOnFailure !== false) {
-        requestAuth.assertCurrent();
-        sendUnauthorized(params.res);
-      }
-      return null;
-    }
-    const assertCurrent = requestAuth.assertCurrent;
-    requestAuth.revalidate = async () => {
-      assertCurrent();
-      const scopes = await verifyCurrentDeviceToken();
-      assertCurrent();
-      if (!scopes) {
-        sendUnauthorized(params.res);
-        throw new GatewayHttpRequestAuthorityError("Unauthorized");
-      }
-    };
-  }
+  const requestAuth = { authMethod, operatorScopes, ...authenticatedProfile };
   params.onPluginFrameGrants?.(
     setControlUiPluginAuthCookieForRequest(
       params.req,
@@ -432,8 +410,9 @@ type ControlUiSessionReadFilter = (
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
 ) => boolean;
 
-type AuthorizedControlUiSessionOwnerReadRequest = AuthorizedControlUiReadRequest &
-  GatewayHttpResponseAuthority & { canReadSession: ControlUiSessionReadFilter };
+type AuthorizedControlUiSessionOwnerReadRequest = AuthorizedControlUiReadRequest & {
+  canReadSession: ControlUiSessionReadFilter;
+};
 
 /**
  * Session byte routes serve one session's bytes after the route resolves its
@@ -479,7 +458,7 @@ export async function authorizeControlUiSessionOwnerReadRequestOrReply(
 export async function authorizeGatewayHttpRequestOrReply(
   params: GatewayHttpRequestAuthParams,
   allowDeviceToken = false,
-): Promise<(AuthorizedGatewayHttpRequest & GatewayHttpResponseAuthority) | null> {
+): Promise<AuthorizedGatewayHttpRequest | null> {
   const result = await checkGatewayHttpRequestAuth(params, allowDeviceToken);
   if (!result.ok) {
     sendGatewayHttpAuthFailure(params.res, result.authResult);
@@ -488,11 +467,7 @@ export async function authorizeGatewayHttpRequestOrReply(
   if (!bindHttpOperatorAccessAuthority(params.res, result.requestAuth.operatorAccessAuthority)) {
     return null;
   }
-  return bindHttpResponseAuthority(
-    result.requestAuth,
-    params.res,
-    result.requestAuth.hasCurrentClientAuthority,
-  );
+  return result.requestAuth;
 }
 
 export function setControlUiPluginAuthCookieForRequest(
@@ -503,6 +478,10 @@ export function setControlUiPluginAuthCookieForRequest(
   authenticatedScopes: readonly string[],
   authenticatedProfileId?: string,
 ): ControlUiPluginTabAuthGrant[] {
+  if (hasGatewayDelegationClaim(req, cfg.gateway?.auth?.trustedProxy?.userHeader)) {
+    // OCE must authorize every request; do not export an ambient native grant.
+    return [];
+  }
   const grants = listControlUiPluginTabAuthGrants(authenticatedScopes);
   if (grants.length > 0) {
     return setControlUiPluginAuthCookie(res, grants, {
@@ -528,50 +507,18 @@ export async function authorizePluginGatewayHttpRequestOrReply(
   operatorScopes: string[];
 } | null> {
   const authGeneration = resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies);
-  const hasCurrentClientAuthority = captureHttpRequestAuthority(params);
   const cookieAuth = await prepareControlUiPluginCookieRequest(params.req, {
     requestPath: params.requestPath,
     authGeneration,
     res: params.res,
   });
   if (cookieAuth) {
-    if (!hasCurrentClientAuthority()) {
-      sendUnauthorized(params.res);
-      return null;
-    }
-    return bindControlUiPluginCookieRequestAuthority(cookieAuth, {
-      ...params,
-      hasCurrentClientAuthority,
-    });
+    return cookieAuth;
   }
   if (params.res.writableEnded || params.res.destroyed) {
     return null;
   }
   const requestAuth = await authorizeGatewayHttpRequestOrReply(params, true);
-  if (requestAuth?.authMethod === "device-token") {
-    const token = getBearerToken(params.req);
-    const requiredDeviceScopes = [...(requestAuth.deviceOperatorScopes ?? [])];
-    const revalidate = requestAuth.revalidate;
-    requestAuth.revalidate = async () => {
-      await revalidate();
-      const { authResult } = await checkHttpOperatorCredentials(
-        {
-          ...params,
-          auth: params.getResolvedAuth?.() ?? params.auth,
-          token,
-          requiredDeviceScopes,
-          // Admission owns attempt accounting; this checks the same admitted grant.
-          rateLimiter: undefined,
-        },
-        authorizeHttpGatewayConnect,
-      );
-      await revalidate();
-      if (!authResult.ok || authResult.method !== "device-token") {
-        sendUnauthorized(params.res);
-        throw new GatewayHttpRequestAuthorityError("Unauthorized");
-      }
-    };
-  }
   return requestAuth
     ? { requestAuth, operatorScopes: params.resolveOperatorScopes(params.req, requestAuth) }
     : null;
@@ -582,7 +529,6 @@ export async function checkGatewayHttpRequestAuth(
   allowDeviceToken = false,
 ): Promise<GatewayHttpRequestAuthCheckResult> {
   const cfg = params.cfg ?? getRuntimeConfig();
-  const hasCurrentClientAuthority = captureHttpRequestAuthority(params);
   const token = getBearerToken(params.req);
   const { authResult, deviceOperatorScopes }: HttpOperatorCredentialResult =
     allowDeviceToken || getRemoteControlUiIngressContext(params.req)
@@ -601,9 +547,6 @@ export async function checkGatewayHttpRequestAuth(
   if (!authResult.ok) {
     return { ok: false, authResult };
   }
-  if (!hasCurrentClientAuthority()) {
-    return { ok: false, authResult: { ok: false, reason: "unauthorized" } };
-  }
   const profileAuth = await checkAuthenticatedHttpUserProfile({
     authResult,
     cfg,
@@ -615,14 +558,11 @@ export async function checkGatewayHttpRequestAuth(
     return profileAuth;
   }
   const authenticatedProfile = profileAuth.profile;
-  if (!hasCurrentClientAuthority()) {
-    return { ok: false, authResult: { ok: false, reason: "unauthorized" } };
-  }
   return {
     ok: true,
     requestAuth: {
       hasCurrentClientAuthority: () =>
-        hasCurrentClientAuthority() &&
+        authenticatedProfile.hasCurrentProfileAuthority?.() !== false &&
         hasCurrentGatewayOperatorAccess(authenticatedProfile.operatorAccessAuthority),
       authMethod: authResult.method,
       ...(authResult.user ? { user: authResult.user } : {}),
@@ -655,7 +595,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(
   },
 ): Promise<{
   cfg: OpenClawConfig;
-  requestAuth: AuthorizedGatewayHttpRequest & GatewayHttpResponseAuthority;
+  requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: string[];
 } | null> {
   const cfg = params.cfg ?? getRuntimeConfig();

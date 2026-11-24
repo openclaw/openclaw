@@ -5,6 +5,7 @@ import {
   type ScheduledAdmissionFacts,
   type ScheduledExecutionFacts,
 } from "./execution-context.js";
+import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -73,38 +74,6 @@ function ready(j: CronStoredJob, f: ScheduledAdmissionFacts): ScheduledExecution
     throw new Error(`expected ready, got ${JSON.stringify(result)}`);
   }
   return result.facts;
-}
-
-function operatorSource() {
-  return {
-    executionRevision: "exec-1",
-    source: {
-      version: 1,
-      agentId: "main",
-      sessionKey: PARENT_KEY,
-      sessionId: "parent-session",
-      lifecycleRevision: "rev-1",
-      sourceRunId: "source-run",
-      snapshot: {
-        profileId: "profile-1",
-        scopes: ["operator.admin"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "grant-gen",
-          role: "operator",
-          authMethod: "device-token",
-        },
-        device: { deviceId: "device-1", key: "a".repeat(64) },
-        controlUiAdmin: true,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    },
-  } as unknown as NonNullable<CronStoredJob["operatorSource"]>;
 }
 
 describe("buildScheduledExecutionContext principals", () => {
@@ -177,7 +146,7 @@ describe("buildScheduledExecutionContext principals", () => {
   it("prefers the operator source and names its exact incarnation", () => {
     const stored = parentLinked({
       sessionTarget: `session:${PARENT_KEY}`,
-      operatorSource: operatorSource(),
+      operatorSource: createTestCronOperatorSource(PARENT_KEY),
     });
     const context = ready(stored, facts({ runSessionKey: PARENT_KEY }));
     expect(context.principal).toMatchObject({
@@ -317,24 +286,38 @@ describe("buildScheduledExecutionContext parent lifecycle", () => {
     });
   });
 
+  // An edit or branch switch rotates the session id; a daily or manual reset rotates the
+  // revision. The key-only link keeps the parent's workspace, memory, board and sandbox.
   it.each([
-    ["session id", { ...live, sessionId: "new-session", sandboxRequired: true }],
-    ["lifecycle revision", { ...live, lifecycleRevision: "rev-2", sandboxRequired: true }],
-  ] as const)("runs unbound with legacy decisions when the parent's %s changed", (_, parentRow) => {
-    const result = buildScheduledExecutionContext(parentLinked(), facts({ parentRow }));
-    if (result.status !== "ready") {
-      throw new Error(`expected ready, got ${result.status}`);
-    }
-    const context = result.facts;
-    expect(context.principal).toEqual({ kind: "unbound-parent", parentSessionKey: PARENT_KEY });
-    expect(context.authority.basis).toBe("legacy");
-    expect(context.resources.memory).toEqual({ source: "run-session" });
-    expect(context.resources.boardSessionKey).toBe(context.resources.mediaSessionKey);
-    expect(context.resources.boardSessionKey).not.toBe(PARENT_KEY);
-    expect(context.resources.workspace).toEqual({ source: "run-session" });
-    expect(context.resources.sandbox.basis).not.toContain("parent-row");
-    expect(context.toolPolicy.automations).not.toMatchObject({ scope: "self-and-parent-wake" });
-  });
+    ["edited", { ...live, sessionId: "new-session", sandboxRequired: true }],
+    ["reset", { ...live, lifecycleRevision: "rev-2", sandboxRequired: true }],
+  ] as const)(
+    "keeps a child bound to its current parent after the parent is %s",
+    (_, parentRow) => {
+      const result = buildScheduledExecutionContext(
+        parentLinked(),
+        facts({ parentRow: { ...parentRow, workspaceDir: "/parent/workspace" } }),
+      );
+      if (result.status !== "ready") {
+        throw new Error(`expected ready, got ${result.status}`);
+      }
+      const context = result.facts;
+      const parent = {
+        agentId: "main",
+        sessionKey: PARENT_KEY,
+        sessionId: parentRow.sessionId,
+        lifecycleRevision: parentRow.lifecycleRevision,
+      };
+      expect(context.principal).toMatchObject({ kind: "parent", parent });
+      expect(context.resources.memory).toMatchObject({ source: "parent", parent });
+      expect(context.resources.boardSessionKey).toBe(PARENT_KEY);
+      expect(context.resources.workspace).toEqual({
+        source: "parent-row",
+        dir: "/parent/workspace",
+      });
+      expect(context.resources.sandbox).toEqual({ required: true, basis: ["parent-row"] });
+    },
+  );
 
   it("pauses when the parent's bound worktree is gone", () => {
     const parentRow = { ...live, worktree: { path: "/work/tree", exists: false } };

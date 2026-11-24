@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   validateToolsEffectiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import {
   buildBundleMcpToolsFromCatalog,
   peekSessionMcpRuntime,
@@ -17,8 +18,11 @@ import {
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
+import { readGitHubPublicationConfiguration } from "../../agents/github-tool-identity-config.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
-import { listCoreToolSections } from "../../agents/tool-catalog.js";
+import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
+import { isSessionProjectMoveEligible } from "../../agents/session-project-guidance.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import type { ToolPolicyLike } from "../../agents/tool-policy.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
@@ -31,6 +35,7 @@ import type {
   EffectiveToolInventoryNotice,
   EffectiveToolInventoryResult,
 } from "../../agents/tools-effective-inventory.types.js";
+import { resolveSessionToolPreviewSandboxPolicy } from "../../agents/tools-effective-sandbox-policy.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
@@ -55,7 +60,8 @@ import { resolveSessionModelRef, type GatewaySessionEntryRead } from "../session
 import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { projectSessionToolPreview } from "./tools-effective.projection.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TrustedToolsEffectiveContext = NonNullable<
@@ -68,49 +74,6 @@ const TOOLS_EFFECTIVE_SLOW_LOG_MS = 250;
 const TOOLS_EFFECTIVE_CACHE_LIMIT = 128;
 const MCP_CONFIG_SUMMARY_CACHE_LIMIT = 128;
 const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
-
-// Static presentation only: the effective inventory still owns tool selection.
-const coreToolDescriptions = new Map(
-  listCoreToolSections({ swarmEnabled: true, personalInstructionsEnabled: true }).flatMap(
-    (section) => section.tools.map((tool) => [tool.id, tool.description] as const),
-  ),
-);
-
-function projectSessionToolPreview(
-  inventory: EffectiveToolInventoryResult,
-): EffectiveToolInventoryResult {
-  return {
-    agentId: inventory.agentId,
-    profile: inventory.profile,
-    groups: inventory.groups.map((group) => ({
-      id: group.id,
-      label: group.label,
-      source: group.source,
-      tools: group.tools.map((tool) => {
-        // Runtime descriptions and notices can contain MCP launch details or host paths.
-        const description =
-          tool.source !== "core"
-            ? ""
-            : tool.id === "github_publish"
-              ? tool.rawDescription // Its owner renders only the policy-filtered action names.
-              : (coreToolDescriptions.get(tool.id) ?? "");
-        return {
-          id: tool.id,
-          label: tool.id,
-          source: tool.source,
-          description,
-          rawDescription: description,
-          ...(tool.pluginId ? { pluginId: tool.pluginId } : {}),
-          ...(tool.channelId ? { channelId: tool.channelId } : {}),
-          ...(tool.source === "mcp"
-            ? { mcpServer: tool.mcpServer, mcpToolName: tool.mcpToolName }
-            : {}),
-          ...(tool.deniedBySession ? { deniedBySession: true as const } : {}),
-        };
-      }),
-    })),
-  };
-}
 
 type ToolsEffectiveCacheEntry = {
   value: EffectiveToolInventoryResult;
@@ -143,6 +106,7 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     agentId: context.agentId,
     modelProvider: optionalCacheString(context.modelProvider),
     modelId: optionalCacheString(context.modelId),
+    agentRuntime: context.agentRuntime,
     messageProvider: optionalCacheString(context.messageProvider),
     accountId: optionalCacheString(context.accountId),
     currentChannelId: optionalCacheString(context.currentChannelId),
@@ -152,6 +116,12 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     groupSpace: optionalCacheString(context.groupSpace),
     replyToMode: optionalCacheString(context.replyToMode),
     webSearchEnabled: context.toolOverrides?.webSearch !== false,
+    githubPublicationAvailable: context.githubPublicationAvailable,
+    sessionProjectMoveEligible: context.sessionProjectMoveEligible,
+    githubPublicationConfiguration:
+      !context.agentRuntime || context.agentRuntime === "openclaw"
+        ? readGitHubPublicationConfiguration({ config: context.cfg, agentId: context.agentId })
+        : undefined,
     // Prepared session ceilings can change without a config or session-id change.
     policy: Object.values<ToolPolicyLike | undefined>(
       resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),
@@ -321,6 +291,7 @@ async function resolveBaseToolsEffectiveInventory(
         messageProvider: context.messageProvider,
         modelProvider: context.modelProvider,
         modelId: context.modelId,
+        agentRuntime: context.agentRuntime,
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
         currentChannelId: context.currentChannelId,
@@ -331,6 +302,8 @@ async function resolveBaseToolsEffectiveInventory(
         groupSpace: context.groupSpace,
         replyToMode: context.replyToMode,
         webSearchEnabled: context.toolOverrides?.webSearch,
+        githubPublicationAvailable: context.githubPublicationAvailable,
+        sessionProjectMoveEligible: context.sessionProjectMoveEligible,
       }),
     );
   } finally {
@@ -340,6 +313,7 @@ async function resolveBaseToolsEffectiveInventory(
 
 async function resolveReadOnlyToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
+  includeMcpPluginOwnership: boolean,
 ): Promise<EffectiveToolInventoryResult> {
   const base = await resolveCachedBaseToolsEffective(context);
   const harness = context.agentHarnessId
@@ -369,6 +343,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
           catalog,
           context,
           workspaceDir: context.workspaceDir,
+          pluginIdsByServer: includeMcpPluginOwnership ? mcpConfig.pluginIdsByServer : undefined,
         });
       }
     } catch (error) {
@@ -414,6 +389,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
     catalog,
     context,
     workspaceDir: runtime.workspaceDir,
+    pluginIdsByServer: includeMcpPluginOwnership ? mcpConfig.pluginIdsByServer : undefined,
   });
 }
 
@@ -422,6 +398,7 @@ async function projectMcpCatalog(params: {
   catalog: Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
+  pluginIdsByServer?: ReadonlyMap<string, string>;
 }): Promise<EffectiveToolInventoryResult> {
   const catalogNotices = (params.catalog.diagnostics ?? []).map(
     (diagnostic): EffectiveToolInventoryNotice => ({
@@ -474,7 +451,9 @@ async function projectMcpCatalog(params: {
             const mcp = getPluginToolMeta(tool)?.mcp;
             return {
               source: "mcp",
-              pluginId: BUNDLE_MCP_PLUGIN_ID,
+              // Config owns the association; a server's advertised name or title does not.
+              pluginId:
+                (mcp && params.pluginIdsByServer?.get(mcp.serverName)) ?? BUNDLE_MCP_PLUGIN_ID,
               ...(mcp
                 ? {
                     mcpServer: mcp.serverName,
@@ -505,7 +484,9 @@ async function resolveTrustedToolsEffectiveContext(
   params: {
     sessionKey: string;
     requestedAgentId?: string;
+    localEmbedded?: boolean;
     respond: RespondFn;
+    context: GatewayRequestContext;
   },
   loaded: Pick<GatewaySessionEntryRead, "entry" | "canonicalKey" | "cfg">,
 ) {
@@ -538,6 +519,29 @@ async function resolveTrustedToolsEffectiveContext(
   const delivery = deliveryContextFromSession(loaded.entry);
   const origin = sessionDeliveryOrigin(loaded.entry);
   const resolvedModel = resolveSessionModelRef(loaded.cfg, loaded.entry, sessionAgentId);
+  const agentRuntime =
+    resolvedModel &&
+    resolveEffectiveAgentRuntime({
+      cfg: loaded.cfg,
+      provider: resolvedModel.provider,
+      modelId: resolvedModel.model,
+      agentScope: { kind: "prepared", agentId: sessionAgentId },
+      sessionKey: canonicalKey,
+      sessionEntry: loaded.entry,
+    });
+  // Listing describes the brokered surface, never current publication authority.
+  const githubPublicationAvailable =
+    !params.localEmbedded &&
+    agentRuntime !== undefined &&
+    agentHarnessExposesOpenClawTools(agentRuntime) &&
+    !(await readAcpSessionMetaForEntryAsync({
+      cfg: loaded.cfg,
+      sessionKey: canonicalKey,
+      agentId: sessionAgentId,
+      entry: loaded.entry,
+    }))
+      ? true
+      : undefined;
   const workspaceDir =
     normalizeOptionalString(loaded.entry.spawnedWorkspaceDir) ??
     resolveAgentWorkspaceDir(loaded.cfg, sessionAgentId);
@@ -551,9 +555,10 @@ async function resolveTrustedToolsEffectiveContext(
     pluginRegistryVersion: getActivePluginRegistryVersion(),
     channelRegistryVersion: getActivePluginChannelRegistryVersion(),
     nodePluginToolsVersion: getConnectedNodePluginToolsVersion(),
-    modelProvider: resolvedModel.provider,
-    modelId: resolvedModel.model,
+    modelProvider: resolvedModel?.provider,
+    modelId: resolvedModel?.model,
     messageProvider: delivery?.channel ?? origin?.provider,
+    agentRuntime,
     accountId: delivery?.accountId ?? origin?.accountId,
     currentChannelId: delivery?.to,
     currentThreadTs:
@@ -567,6 +572,12 @@ async function resolveTrustedToolsEffectiveContext(
     groupSpace: loaded.entry.space,
     spawnedBy: normalizeOptionalString(loaded.entry.spawnedBy),
     agentHarnessId: normalizeOptionalString(loaded.entry.agentHarnessId),
+    githubPublicationAvailable,
+    sessionProjectMoveEligible: isSessionProjectMoveEligible(
+      loaded.cfg,
+      sessionAgentId,
+      loaded.entry,
+    ),
     toolOverrides: loaded.entry.toolOverrides,
     replyToMode: resolveReplyToMode(
       loaded.cfg,
@@ -581,6 +592,13 @@ async function resolveTrustedToolsEffectiveContext(
       config: context.cfg,
       sessionKey: context.sessionKey,
       preparedSessionEntry: { sessionKey: canonicalKey, entry: loaded.entry },
+      sandboxToolPolicy: await resolveSessionToolPreviewSandboxPolicy({
+        cfg: context.cfg,
+        agentId: context.agentId,
+        sessionKey: canonicalKey,
+        sessionEntry: loaded.entry,
+        context: params.context,
+      }),
       agentId: context.agentId,
       modelProvider: context.modelProvider,
       modelId: context.modelId,
@@ -622,14 +640,19 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
           {
             sessionKey: params.sessionKey,
             requestedAgentId: sessionOwner.agentId,
+            localEmbedded: context.localEmbedded,
             respond,
+            context,
           },
           loaded,
         );
         if (!trustedContext) {
           return;
         }
-        const inventory = await resolveReadOnlyToolsEffectiveInventory(trustedContext);
+        const inventory = await resolveReadOnlyToolsEffectiveInventory(
+          trustedContext,
+          !sessionOnly,
+        );
         authority.assertCurrent();
         assertSourceCurrent();
         respond(true, sessionOnly ? projectSessionToolPreview(inventory) : inventory, undefined);

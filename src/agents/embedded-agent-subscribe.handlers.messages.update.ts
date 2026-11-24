@@ -18,6 +18,7 @@ import {
   type TextProjection,
 } from "../shared/text/text-projection.js";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
+import { userFacingTextFilters } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { recordPendingAssistantReplyDirectives } from "./embedded-agent-subscribe.handlers.messages.replies.js";
@@ -56,11 +57,11 @@ import {
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
 } from "./embedded-agent-utils.js";
-import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import type { AgentEvent } from "./runtime/index.js";
 
 export function handleMessageUpdate(
   ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
+  evt: Extract<AgentEvent, { type: "message_update" }>,
 ): Promise<void> | undefined {
   const msg = evt.message;
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
@@ -294,6 +295,7 @@ export function handleMessageUpdate(
     const preparedCommentaryText = extractAssistantCommentaryText(
       streamAssistant,
       (_text, final) => (final ? preparedCommentarySource : ""),
+      (ctx.state.commentaryTextProjection ??= createTextProjection(userFacingTextFilters())),
     );
     if (
       (preparedCommentaryText || previousCommentaryText) &&

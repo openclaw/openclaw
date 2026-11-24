@@ -9,6 +9,7 @@ import {
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
@@ -109,6 +110,7 @@ type AssistantReplyContentParams = {
   agentId?: string;
   payloads: ReplyPayload[];
   managedMediaLocalRoots?: Parameters<typeof createManagedOutgoingMediaBlocks>[0]["localRoots"];
+  mediaAccess?: OutboundMediaAccess;
   includeSensitiveMedia?: boolean;
   includeSensitiveDisplay?: boolean;
   onManagedMediaPrepareError?: (message: string) => void;
@@ -248,6 +250,7 @@ export async function buildAssistantReplyContentFromInputs(
       ...(params.agentId ? { agentId: params.agentId } : {}),
       items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),
       localRoots: params.managedMediaLocalRoots,
+      mediaAccess: params.mediaAccess,
       continueOnPrepareError: true,
       onPrepared: (item, blocks) => {
         for (const url of [item.url, ...(sourceMedia.get(item.url.trim()) ?? [])]) {

@@ -136,6 +136,48 @@ it("uses only bounded visible dialogue and never appends a prediction", () =>
     expect(await loadTranscriptEvents(f.scope)).toEqual(before);
   }));
 
+it("sends recent user turns and only the final reply, past tool activity", () =>
+  withPredictionTest(async (f) => {
+    for (let index = 0; index < 16; index += 1) {
+      await appendTranscriptMessage(f.scope, {
+        message: { role: "user", content: `ask ${index}` },
+      });
+      await appendTranscriptMessage(f.scope, {
+        message: { role: "assistant", content: `progress ${index}` },
+      });
+    }
+    for (let index = 0; index < 20; index += 1) {
+      const id = `call-${index}`;
+      await appendTranscriptMessage(f.scope, {
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id, name: "exec", arguments: { command: "ls" } }],
+        },
+      });
+      await appendTranscriptMessage(f.scope, {
+        message: {
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "exec",
+          content: [{ type: "text", text: "listing" }],
+        },
+      });
+    }
+    const question = "Shall I close the older PR?";
+    await appendTranscriptMessage(f.scope, {
+      message: { role: "assistant", content: "Findings. ".repeat(400) + question },
+    });
+    expect(await f.predict()).toMatchObject([true, { text: "What should I try next?" }]);
+    const turns = JSON.parse(complete.mock.calls[0]?.[0].conversation);
+    // The oldest user turn falls outside the 16-turn window; narration never reaches the model.
+    expect(turns.slice(0, -1)).toEqual(
+      Array.from({ length: 16 }, (_, index) => ({ role: "user", text: `ask ${index}` })),
+    );
+    expect(turns.at(-1).role).toBe("assistant");
+    expect(turns.at(-1).text).toHaveLength(2_000);
+    expect(turns.at(-1).text.endsWith(question)).toBe(true);
+  }));
+
 it.each(["suggestion", "disabled", "cancelled"] as const)(
   "waits for owned terminal persistence before prediction (%s)",
   (outcome) =>

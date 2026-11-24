@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   bindGatewayContextResolver,
@@ -58,8 +57,6 @@ it("retains an admitted owner's automation management through CLI construction, 
   };
   const update = (tools: CreatorTransportTools, name: string) =>
     tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "update", jobId: job.id, job: { name } });
-  const isCurrent = () =>
-    isConfiguredCommandOwner(getRuntimeConfig(), { channel: "discord", senderId: "owner-1" });
   // The process-owned listener has no admitted turn or Cron construction scope.
   await ensureMcpLoopbackServer();
   try {
@@ -69,8 +66,7 @@ it("retains an admitted owner's automation management through CLI construction, 
       {
         runId,
         callerOrigin: { kind: "unknown" },
-        managementEntitlement: { source: "channel-owner", isCurrent },
-        isCurrent,
+        managementEntitlement: { source: "channel-owner" },
       },
       async (_identity, admitted, creator) => {
         bindGatewayContextResolver(admitted, () => fixture.context);
@@ -94,10 +90,10 @@ it("retains an admitted owner's automation management through CLI construction, 
           expect((await fixture.read())[0]).toMatchObject({ name: "Reviewed legacy reminder" });
           expect((await fixture.read())[0]).not.toHaveProperty("owner");
 
+          // Admission checked the owner once; removing it mid-run does not refuse this run.
           setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: [] } });
-          await expect(update(tools, "Must not persist after owner removal")).rejects.toThrow(
-            /Automation (caller authority is no longer active|admin grant)/i,
-          );
+          await update(tools, "Updated after owner removal");
+          expect((await fixture.read())[0]).toMatchObject({ name: "Updated after owner removal" });
           setRuntimeConfigSnapshot(config);
           const grant = expectDefined(capture, "owner CLI grant");
           expect(revokeMcpLoopbackClientGrant(grant.token)).toBe(true);
@@ -137,7 +133,7 @@ it("retains an admitted owner's automation management through CLI construction, 
         clearGatewayContextResolver(admitted);
       }
     });
-    expect((await fixture.read())[0]).toMatchObject({ name: "Reviewed legacy reminder" });
+    expect((await fixture.read())[0]).toMatchObject({ name: "Updated after owner removal" });
     expect((await fixture.read())[0]).not.toHaveProperty("owner");
   } finally {
     await closeMcpLoopbackServer();

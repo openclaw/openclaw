@@ -3,7 +3,7 @@ import type {
   MemoryProviderHandle,
   MemoryReference,
   MemorySearchPage,
-} from "../../plugins/memory-provider-types.js";
+} from "../../plugins/memory-provider-runtime-types.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 

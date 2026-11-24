@@ -92,7 +92,7 @@ it("round-trips scoped encrypted streams with logical metadata and no GETs for l
   expect(stored.includes(data)).toBe(false);
   const body = await scoped.getObject("data.bin");
   assert(body, "Expected an object stream");
-  expect(await buffer(body)).toEqual(data);
+  expect((await buffer(body)).equals(data), "decrypted object bytes").toBe(true);
   expect((await list(location.list())).map((object) => object.key)).not.toContain(markerKey);
   await scoped.delete("data.bin");
   await expect(scoped.getObject("data.bin")).resolves.toBeUndefined();

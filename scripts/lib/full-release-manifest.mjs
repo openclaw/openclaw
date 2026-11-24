@@ -47,6 +47,9 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
     targetRef: context.targetRef,
     targetSha: plan.targetSha,
     candidateBinding: plan.candidate,
+    ...(plan.publicationArtifactSource === undefined
+      ? {}
+      : { publicationArtifactSource: plan.publicationArtifactSource }),
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
     advisoryJobs: drain?.advisoryJobs ?? [],
@@ -134,8 +137,8 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
           performanceReportPublication: "artifact-only",
         },
         childRuns: plan.qualificationCoverage
-          ? Object.fromEntries(
-              plan.children.map((child) => [
+          ? Object.fromEntries([
+              ...plan.children.map((child) => [
                 child.key,
                 child.key === "productPerformance"
                   ? {
@@ -145,7 +148,15 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
                     }
                   : child.runId,
               ]),
-            )
+              ...(plan.qualificationCoverage.exemptions ?? []).map((exemption) => [
+                exemption.childRole,
+                {
+                  disposition: exemption.disposition,
+                  runId: "",
+                  supportingEvidence: exemption.supportingEvidence,
+                },
+              ]),
+            ])
           : {
               normalCi: runs.normalCi ?? "",
               pluginPrereleaseIndependent: runs.pluginPrereleaseIndependent ?? "",
@@ -201,6 +212,10 @@ export function manifestContextFromEnvironment(source, env = process.env) {
     env.QUALIFICATION_BASELINES_JSON ?? coverage.qualification_baselines_json;
   if (qualificationBaselines) {
     inputs.qualificationBaselinesJson = qualificationBaselines;
+  }
+  // Source admission binds this pin; the manifest must echo it for validation.
+  if (coverage.publication_artifact_source_json) {
+    inputs.publicationArtifactSourceJson = coverage.publication_artifact_source_json;
   }
   inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
   inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";

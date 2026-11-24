@@ -102,7 +102,7 @@ export async function openClaudeCatalogTerminal(params: {
     }
     const source = await fs.stat(record.filePath).catch(() => undefined);
     if (!source?.isFile()) {
-      throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
+      throw new ClaudeCatalogParamsError("Claude session chat history is unavailable");
     }
     const resolution = resolveClaudeTerminalExecutable();
     if (!resolution) {

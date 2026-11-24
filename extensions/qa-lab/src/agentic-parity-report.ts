@@ -19,17 +19,17 @@ import {
   formatRuntimeWallClockMs,
   summarizeRuntimeParityTiming,
 } from "./runtime-parity-timing.js";
-import type {
-  RuntimeParityDrift,
-  RuntimeParityResult,
-  RuntimeParityUsagePolicy,
-} from "./runtime-parity.js";
 import {
   isRuntimeParityResultPass,
   normalizeRuntimePair,
   resolveRuntimeParityUsagePolicy,
   runtimeParityCellStatus,
 } from "./runtime-parity.js";
+import type {
+  RuntimeParityDrift,
+  RuntimeParityResult,
+  RuntimeParityUsagePolicy,
+} from "./runtime-parity.types.js";
 
 // Historical summaries may omit run provenance. Validate labels only when it is present.
 type QaParityRunBlock = {

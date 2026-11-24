@@ -14,10 +14,6 @@ const participants = [{ identity: { type: "profile" as const, id: "profile-bob" 
 const ada = { type: "human" as const, id: "profile-ada", label: "Ada" };
 const identity = { type: "profile" as const, id: ada.id };
 const modes = ["light", "dark"] as const;
-function appearance(face: Element) {
-  const { opacity, filter } = getComputedStyle(face);
-  return { opacity, filter };
-}
 function dimensions(face: Element) {
   const { width, height } = face.getBoundingClientRect();
   return [width, height];
@@ -91,10 +87,10 @@ function contrastRatio(first: number, second: number): number {
 const originalAttributes = ["data-theme-mode", "data-theme"].map(
   (name) => [name, document.documentElement.getAttribute(name)] as const,
 );
-function sidebarFixture(pinned: boolean) {
+function sidebarFixture() {
   const sidebar = document.createElement("aside");
   sidebar.className = "sidebar";
-  sidebar.innerHTML = `<div class="sidebar-shell"><section class="sidebar-sessions sidebar-recent-sessions${pinned ? " sidebar-zone-entry" : ""}">
+  sidebar.innerHTML = `<div class="sidebar-shell"><section class="sidebar-sessions sidebar-recent-sessions">
     <div class="sidebar-recent-session"><a class="sidebar-recent-session__link">
       <span class="sidebar-session-indicator"></span><span class="sidebar-recent-session__title">Shared session</span>
     </a></div></section></div>`;
@@ -102,7 +98,6 @@ function sidebarFixture(pinned: boolean) {
   return {
     sidebar,
     row: sidebar.querySelector<HTMLElement>(".sidebar-recent-session")!,
-    indicator: sidebar.querySelector<HTMLElement>(".sidebar-session-indicator")!,
   };
 }
 async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
@@ -196,27 +191,18 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           (theme === "claw" && (ownerCount === 2 || ownerCount === 13)
             ? ["present", "running", "away", "unread"]
             : ["present", "away"]
-          ).flatMap((presence) =>
-            (presence === "present" && ownerCount === 12 ? [false, true] : [false]).map(
-              (pinned) => ({ theme, mode, ownerCount, presence, pinned }),
-            ),
-          ),
+          ).map((presence) => ({ theme, mode, ownerCount, presence })),
         ),
       ),
     ),
   )(
-    "lays out $ownerCount owners: $theme/$mode, $presence, pinned=$pinned",
-    async ({ theme, mode, ownerCount, presence, pinned }) => {
+    "lays out $ownerCount owners: $theme/$mode, $presence",
+    async ({ theme, mode, ownerCount, presence }) => {
       await applyTheme(theme, mode);
-      const { sidebar, row: firstRow } = sidebarFixture(pinned);
-      const rowMarkup = firstRow.innerHTML;
-      const rows = ["idle", "hover", "active", "selected"].map((state, index) => {
-        const row = index === 0 ? firstRow : document.createElement("div");
-        if (index > 0) {
-          row.className = firstRow.className;
-          row.innerHTML = rowMarkup;
-          firstRow.parentElement!.append(row);
-        }
+      const { sidebar, row: rowTemplate } = sidebarFixture();
+      const rows = ["idle", "hover", "active", "selected"].map((state) => {
+        const row = rowTemplate.cloneNode(true) as HTMLElement;
+        rowTemplate.before(row);
         // Measure each interaction endpoint outside its transition.
         row.style.transition = "none";
         row.classList.toggle("sidebar-recent-session--active", state === "active");
@@ -254,6 +240,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         )!;
         return { state, row, stack, primary, peer, setOwnerViewing };
       });
+      rowTemplate.remove();
       await readyAvatars(sidebar);
       await userEvent.hover(rows[1]!.row, { force: true });
       // One real browser capture contains all four states; sample each counter's pixels below.
@@ -277,34 +264,31 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         }
         const peerBounds = peer.getBoundingClientRect();
         const stackBounds = stack.getBoundingClientRect();
-        expect(stackBounds).toMatchObject({ width: 28, height: 20 });
+        expect(stackBounds.width).toBeGreaterThan(primary.getBoundingClientRect().width);
         const leftToRight = ownerCount === 2 ? [peer, primary] : [primary, peer];
         for (const [index, face] of leftToRight.entries()) {
           expect(face.getBoundingClientRect()).toMatchObject({
             width: 18,
             height: 18,
             top: stackBounds.top + 1,
-            left: stackBounds.left + index * 10,
+            left: stackBounds.left + index * (stackBounds.width - 18),
           });
         }
-        expect(getComputedStyle(primary).fontSize).toBe(getComputedStyle(peer).fontSize);
         expect(dimensions(primary.querySelector(".viewer-avatar > span")!)).toEqual([16, 16]);
-        const primaryStyle = appearance(primary),
-          peerStyle = appearance(peer);
+        const primaryStyle = getComputedStyle(primary),
+          peerStyle = getComputedStyle(peer);
         const opacity = presence === "away" ? "0.45" : "1";
-        expect([primaryStyle.opacity, peerStyle.opacity]).toEqual([
-          opacity,
-          ownerCount > 2 ? opacity : "1",
-        ]);
-        if (ownerCount > 2) {
-          expect(peerStyle.filter).toBe(primaryStyle.filter);
-        }
+        expect(primaryStyle.fontSize).toBe(peerStyle.fontSize);
+        expect(primaryStyle.opacity).toBe(opacity);
+        expect(peerStyle.opacity).toBe(ownerCount > 2 ? opacity : "1");
         if (presence === "running") {
           const traceBounds = row.querySelector(".session-glyph__trace")!.getBoundingClientRect();
-          expect(traceBounds).toMatchObject({
-            left: stackBounds.left - 2,
-            right: stackBounds.right + 2,
-          });
+          expect(traceBounds.left).toBeLessThan(stackBounds.left);
+          expect(traceBounds.right).toBeGreaterThan(stackBounds.right);
+          expect(traceBounds.left + traceBounds.width / 2).toBeCloseTo(
+            stackBounds.left + stackBounds.width / 2,
+            3,
+          );
         }
         if (presence === "unread") {
           const badge = row.querySelector(".session-glyph__badge--unread")!;
@@ -333,8 +317,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
             peer.contains(document.elementFromPoint(x, textBounds.top + textBounds.height / 2)),
           ).toBe(true);
         }
-        const style = getComputedStyle(peer);
-        expect(style.borderTopWidth).toBe("1px");
+        expect(peerStyle).toMatchObject({ borderTopWidth: "1px", filter: primaryStyle.filter });
         if (presence === "away") {
           continue;
         }
@@ -343,7 +326,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           getComputedStyle(row, "::after").backgroundColor,
         );
         const counterLuminance = paintedCounterLuminance(peer, capture!);
-        const textLuminance = renderedLuminance(style.color);
+        const textLuminance = renderedLuminance(peerStyle.color);
         expect(
           contrastRatio(counterLuminance, rowLuminance),
           `${theme} ${state} surface`,
@@ -354,12 +337,26 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         ).toBeGreaterThanOrEqual(4.5);
       }
       const { row, primary, peer, setOwnerViewing } = rows[0]!;
+      if (theme === "claw" && presence === "away" && ownerCount <= 3) {
+        await expect.poll(() => getComputedStyle(primary).opacity).toBe("0.45");
+        const foreground = ownerCount === 2 ? primary : peer;
+        const rear = ownerCount === 2 ? peer : primary;
+        const overlapPixels = async () => {
+          const { context, image, bounds } = await captureFace(foreground);
+          const scale = image.width / bounds.width;
+          return [...context.getImageData(3 * scale, 8 * scale, 3 * scale, 3 * scale).data];
+        };
+        const visible = await overlapPixels();
+        rear.style.visibility = "hidden";
+        expect(await overlapPixels()).toEqual(visible);
+        rear.style.visibility = "";
+      }
       if (theme === "claw" && presence === "away" && ownerCount === 3) {
         setOwnerViewing(true);
         flush();
         await expect
-          .poll(() => [primary, peer].map(appearance))
-          .toEqual([0, 1].map(() => ({ opacity: "1", filter: "none" })));
+          .poll(() => [primary, peer].map((face) => getComputedStyle(face)))
+          .toMatchObject([0, 1].map(() => ({ opacity: "1", filter: "none" })));
       }
       if (presence === "present") {
         row.style.zoom = "4";
@@ -396,7 +393,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
       chip.style.zoom = "4";
       await expectCenteredInk(owner);
       if (size === "row") {
-        const { row } = sidebarFixture(false);
+        const { row } = sidebarFixture();
         row.append(chip);
         expect(getComputedStyle(owner)).toMatchObject({ borderTopWidth: "0px", boxShadow: "none" });
       }

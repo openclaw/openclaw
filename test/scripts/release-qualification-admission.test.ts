@@ -5,6 +5,7 @@ import {
   buildQualificationAdmissionRequest,
   resolveQualificationAdmissionDescriptor,
   revalidateQualificationAdmissionAuthority,
+  verifyReleaseQualificationOperators,
   semanticQualificationInputs,
   QUALIFICATION_ADMISSION_WORKFLOW,
 } from "../../scripts/release-qualification-admission.mjs";
@@ -14,6 +15,10 @@ import {
   request,
   fixture,
 } from "./release-qualification-admission.test-support.js";
+
+it("rejects a Q revision without its ledger", () => {
+  expect(() => fixture(false, { missingLedger: true })).toThrow("HTTP 404");
+});
 
 const envelope = (inputs = request().inputs) =>
   JSON.parse(expectDefined(inputs.trusted_workflow_json, "trusted workflow envelope"));
@@ -71,7 +76,7 @@ it.each([
   );
 });
 
-it("binds baseline support to Q source data and rejects later evidence substitution", () => {
+it("binds baseline support to C source data and rejects later evidence substitution", () => {
   expect(() => fixture(false, { candidateVersion: "2026.7.8" })).toThrow(/predecessor/);
   expect(() => fixture(false, { oldestSupportedBaseline: "2026.6.35" })).toThrow(
     /oldest-supported/,
@@ -105,6 +110,27 @@ it.each([false, true])("authenticates P without Q main ancestry (protected=%s)",
   ).toEqual(f.descriptor);
 });
 
+it("admits off-main Q while retaining P authority and C package and baseline identity", () => {
+  const q = "c".repeat(40);
+  const f = fixture(true, { qualificationSha: q, transportRef: "release-ci/cccccccccccc-123" });
+  expect(f.verify()).toEqual(f.receipt);
+  expect(f.receipt.request).toMatchObject({ candidateSha, qualificationSha: q });
+  expect(f.calls).toContain("repos/openclaw/openclaw/contents/package.json?ref=" + candidateSha);
+  expect(f.calls).not.toContain("repos/openclaw/openclaw/contents/package.json?ref=" + q);
+  expect(f.calls.some((call) => call.includes("compare/" + q))).toBe(false);
+  f.authority.tagSha = q;
+  expect(() => f.verify()).toThrow(/protected release tooling tag/);
+});
+
+it("rejects mismatched Q in the reviewed workflow envelope", () => {
+  const selected = request();
+  const trusted = envelope(selected.inputs);
+  trusted.trustedWorkflow.sha = publisherSha;
+  expect(() =>
+    buildQualificationAdmissionRequest({ ...selected, inputs: withEnvelope(trusted) }),
+  ).toThrow(/envelope.*Q/);
+});
+
 it("removes only the self-referential locator and retains unknown semantic fields", () => {
   const original = request().inputs;
   const trusted = envelope(original);
@@ -121,15 +147,14 @@ it("accepts admitted empty strings omitted from the child run inputs context", (
   expect(f.verify(observed)).toEqual(f.receipt);
 });
 
-it.each([
-  { reviewed: false },
-  { qualificationSha: publisherSha },
-  { transportRef: "release-ci/bbbbbbbbbbbb-123" },
-])("rejects an unattested or changed C=Q tuple: %j", (override) => {
-  expect(() => buildQualificationAdmissionRequest({ ...request(), ...override })).toThrow(
-    /reviewed C=Q/,
-  );
-});
+it.each([{ reviewed: false }, { transportRef: "release-ci/bbbbbbbbbbbb-123" }])(
+  "rejects an unattested or changed qualification tuple: %j",
+  (override) => {
+    expect(() => buildQualificationAdmissionRequest({ ...request(), ...override })).toThrow(
+      /reviewed C\/Q/,
+    );
+  },
+);
 
 it.each([
   ["failed-run", change("run", { conclusion: "failure" })],
@@ -163,12 +188,45 @@ it("revalidates operator authority after artifact download", () => {
   ).toThrow(/qualification authority/);
 });
 
+it("accepts GitHub's empty step inventory for a successful exact producer job", () => {
+  const f = fixture();
+  expectDefined(f.jobs.jobs[0], "admission job").steps = [];
+  expect(() => f.verify()).not.toThrow();
+});
+
+it("accepts an artifact timestamp within the producer job when upload step times cross DST", () => {
+  const f = fixture();
+  expectDefined(f.jobs.jobs[0], "admission job").completed_at = "2026-09-28T01:00:04Z";
+  f.metadata.created_at = "2026-09-28T01:00:02Z";
+  expect(() => f.verify()).not.toThrow();
+});
+
 it("refuses changed archive bytes and UTF-8 archive adapters", () => {
   const f = fixture();
   expect(() => f.verify(f.selected.inputs, () => Buffer.from("not the exact ZIP"))).toThrow(
     /archive bytes/,
   );
   expect(() => f.verify(f.selected.inputs, () => new Uint8Array(0))).toThrow(/archive bytes/);
+});
+
+it.each([false, true])("reads each distinct operator grant once (distinct=%s)", (distinct) => {
+  const actor = { id: 91, login: "release-operator", type: "User" };
+  const triggering = distinct ? { ...actor, id: 92, login: "release-trigger" } : { ...actor };
+  const calls: string[] = [];
+  const runGh = (args: string[]) => {
+    calls.push(args[1]!);
+    return JSON.stringify({
+      permission: "write",
+      user: args[1]!.includes("release-trigger") ? triggering : actor,
+    });
+  };
+  expect(
+    verifyReleaseQualificationOperators("openclaw/openclaw", actor, triggering, runGh),
+  ).toEqual({
+    operator: { id: actor.id, login: actor.login },
+    triggeringOperator: { id: triggering.id, login: triggering.login },
+  });
+  expect(calls).toHaveLength(distinct ? 2 : 1);
 });
 
 it("revalidates current authority without reacquiring immutable evidence (protected)", () => {

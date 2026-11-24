@@ -31,7 +31,11 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
-import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+  type MemoryLimitParams,
+} from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_DECLARATION_CONFIG_GROUPS,
@@ -40,6 +44,11 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
+import {
+  DEFAULT_TSDOWN_MAX_OLD_SPACE_MB,
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./lib/tsdown-heap-budget.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
@@ -58,9 +67,7 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
-export const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const DOCKER_TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB";
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const SERIALIZED_MAIN_CONFIG_GROUPS = [
@@ -742,6 +749,8 @@ function resolveTsdownEnv(
   return {
     ...compilerEnv,
     NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, budget.maxOldSpaceMb),
+    // Descendants keep the frozen budget, including the native declaration emitter.
+    [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(budget.maxOldSpaceMb),
   };
 }
 
@@ -814,7 +823,11 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 export function resolveTsdownBuildInvocation(
   params: TsdownBuildParams = {},
 ): TsdownBuildInvocation {
-  const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const budget = resolveTsdownMemoryBudget(params);
+  const env = resolveTsdownEnv(params.env ?? process.env, {
+    ...params,
+    resolvedMemoryBudget: budget,
+  });
   const args = params.args ?? [];
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
@@ -823,21 +836,30 @@ export function resolveTsdownBuildInvocation(
     (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
   );
   const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const mainConfig = !args.some(isConfigArg) || selectsMainConfig(args);
   const runtimeOnly =
     !args.includes("--dts") &&
-    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    mainConfig &&
     filters.length > 0 &&
     filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
+  // Native allocations are outside the JS heap. Keep small runtime builds serial
+  // and declaration graphs serialized, regardless of which build entry point is used.
+  const defaultConcurrency =
+    !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? 1
+      : mainConfig
+        ? tsdownBudgetAdmitsParallelNativeWork(budget.maxOldSpaceMb)
+          ? 2
+          : 1
+        : null;
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    // Native declaration children retain entire compiler graphs. Let tsdown own
-    // config admission so preparation and trace drainage cannot overlap unboundedly.
-    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
-      ? ["--concurrency", "1"]
+    ...(!explicitConcurrency && defaultConcurrency !== null
+      ? ["--concurrency", String(defaultConcurrency)]
       : []),
     ...forwardedArgs,
   ];
@@ -1482,6 +1504,20 @@ async function loadDefaultLiveGatewayDistFence(): Promise<LiveGatewayDistFenceFn
   }
 }
 
+function readParentResidentMemoryBytes(): number | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    const status = fs.readFileSync(`/proc/${process.ppid}/status`, "utf8");
+    const rss = status.match(/^VmRSS:\s+(\d+)\s+kB$/mu)?.[1];
+    const bytes = rss === undefined ? Number.NaN : Number(rss) * 1024;
+    return Number.isSafeInteger(bytes) ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runTsdownBuild(
   argv: string[] = process.argv.slice(2),
   options: {
@@ -1512,6 +1548,43 @@ export async function runTsdownBuild(
       {
         reportShortfall(shortfall) {
           if (shortfall.fatal) {
+            try {
+              console.error(
+                "[tsdown-build:memory-refusal]",
+                JSON.stringify({
+                  sample: "after-refusal",
+                  memoryCapacity: readProcessMemoryCapacity({}),
+                  rssBytes: process.memoryUsage().rss,
+                  parentRssBytes: readParentResidentMemoryBytes(),
+                  cgroup: readProcessCgroupV2Snapshot({}, { includeMemoryDetails: true })
+                    ?.slice(0, 8)
+                    .map(({ counters }, depth) => {
+                      const current = Number(counters["memory.current"] ?? Number.NaN);
+                      const peak = Number(counters["memory.peak"] ?? Number.NaN);
+                      const max = /^\d+\s*$/u.test(counters["memory.max"] ?? "")
+                        ? Number(counters["memory.max"])
+                        : Number.NaN;
+                      const high = /^\d+\s*$/u.test(counters["memory.high"] ?? "")
+                        ? Number(counters["memory.high"])
+                        : Number.NaN;
+                      const inactiveFile = Number(
+                        counters["memory.stat"]?.match(/^inactive_file\s+(\d+)$/mu)?.[1] ??
+                          Number.NaN,
+                      );
+                      return {
+                        depth,
+                        currentBytes: Number.isSafeInteger(current) ? current : null,
+                        peakBytes: Number.isSafeInteger(peak) ? peak : null,
+                        maxBytes: Number.isSafeInteger(max) ? max : null,
+                        highBytes: Number.isSafeInteger(high) ? high : null,
+                        inactiveFileBytes: Number.isSafeInteger(inactiveFile) ? inactiveFile : null,
+                      };
+                    }),
+                }),
+              );
+            } catch {
+              // Diagnostics must preserve the original admission refusal.
+            }
             console.error(shortfall.message);
           } else {
             console.warn(shortfall.message);

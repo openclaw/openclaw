@@ -15,6 +15,11 @@ import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
@@ -329,7 +334,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
     };
   });
   const handleKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    if (event.key !== "Enter" || event.shiftKey || isComposingKeyboardEvent(event)) {
       return;
     }
     event.preventDefault();
@@ -482,9 +487,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
               </div>
             </div>
           </Show>
-          <Show when={store().abandonedTurnOutcomeUnknown}>
-            <div class="custodian__error" role="alert">
-              <span>{t("custodian.connectionChanged")}</span>
+          <Show
+            when={store().abandonedTurnOutcomeUnknown && !store().chatAvailable && !store().error}
+          >
+            <div class="custodian__catch-up" role="status">
+              <span class="custodian__history-spinner" aria-hidden="true" />
+              <span class="sr-only">{t("connection.reconnecting")}</span>
             </div>
           </Show>
           <Loading
@@ -495,15 +503,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
               {transcriptNotice(transcriptStatus())}
             </Errored>
           </Loading>
-          <Show
-            when={
-              store().error &&
-              !(
-                store().abandonedTurnOutcomeUnknown &&
-                store().error === t("custodian.connectionChanged")
-              )
-            }
-          >
+          <Show when={store().error}>
             <div class="custodian__error" role="alert">
               <span>{store().error}</span>
               <Show when={store().activeClient && store().chatAvailable && store().canRetry()}>
@@ -541,7 +541,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                         }}
                         onBeforeInput={handleTextareaOverflowInteraction}
                         onCompositionStart={handleTextareaOverflowInteraction}
-                        onBlur={handleTextareaOverflowInteraction}
+                        onCompositionEnd={recordCompositionEnd}
+                        onKeyUp={clearCompositionEnd}
+                        onBlur={(event) => {
+                          handleTextareaOverflowInteraction(event);
+                          clearCompositionEnd(event);
+                        }}
                         onWheel={handleTextareaOverflowInteraction}
                         onPointerDown={handleTextareaOverflowInteraction}
                         onScroll={handleTextareaOverflowScroll}
@@ -557,6 +562,9 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                       disabled={sending() || !store().canSend}
                       onInput={(event) => store().setInput(event.currentTarget.value)}
                       onKeyDown={handleKeydown}
+                      onCompositionEnd={recordCompositionEnd}
+                      onKeyUp={clearCompositionEnd}
+                      onBlur={clearCompositionEnd}
                     />
                   </Show>
                   <span class="agent-chat__composer-placeholder" aria-hidden="true">

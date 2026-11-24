@@ -13,12 +13,13 @@
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -56,9 +57,6 @@ assert(!values.owner || wasOwnerReplaced(), "Baseline owner was not substituted"
 const inspector = new Session();
 const payloadBytes = 512 * 1024;
 let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 try {
   const profiles = Array.from({ length: 40 }, (_, index) => {
     const profile = ensureProfileForEmail(`avatar-${index}@example.test`, options);
@@ -118,12 +116,7 @@ try {
     writeHeapSnapshot(values.snapshot);
   }
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoadBefore = loadavg();
   const cpu = process.threadCpuUsage();
@@ -132,7 +125,7 @@ try {
   const wallMs = performance.now() - started;
   const used = process.threadCpuUsage(cpu);
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   console.log(
     JSON.stringify({

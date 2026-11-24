@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AsyncResource } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
@@ -8,6 +8,10 @@ import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
 } from "../gateway/operator-tool-gateway-authority.js";
+import {
+  readPluginSessionWorkAuthority,
+  runWithPluginSessionWorkAuthority,
+} from "../gateway/plugin-session-work-authority.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
@@ -34,8 +38,10 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createOwnedInstance } from "./plugin-instance.test-support.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginMetadataSnapshot } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -43,6 +49,11 @@ import {
   withPluginRegistryPreparationScope,
 } from "./registry-lifecycle.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
+import {
+  createPluginRegistryOwner,
+  setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
+} from "./runtime.js";
 import {
   bindGatewayContextResolver,
   getInProcessGatewayRequestContext,
@@ -55,6 +66,7 @@ import { resolvePluginServiceScheduler } from "./service-scheduler-binding.js";
 import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 import { getPluginServiceCleanupSettlement, startPluginServices } from "./services.js";
 import { createServiceRegistration } from "./services.test-support.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 function fixture(id: string) {
   const clock = createGatewaySchedulerClock();
@@ -64,6 +76,113 @@ function fixture(id: string) {
     scheduler: createTestGatewayScheduler(clock.clock),
   };
 }
+
+it("keeps predecessor service ticks callable while an admitted turn still holds it", async ({
+  signal,
+}) => {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({ id: "overlapping-scheduler", generationOverlap: true });
+  registry.plugins.push(record);
+  const instance = new PluginInstance(record.id, { record, registry });
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const events: string[] = [];
+  registry.services.push({
+    id: record.id,
+    pluginId: record.id,
+    source: record.source,
+    origin: record.origin,
+    service: {
+      apiVersion: 2,
+      id: record.id,
+      start({ scheduler: serviceScheduler }) {
+        serviceScheduler.schedule({
+          id: "complete-old-work",
+          delayMs: 1,
+          run: () => {
+            expect(instance.hasActiveCall).toBe(true);
+            events.push("tick");
+          },
+        });
+      },
+      stop() {
+        events.push("stop");
+      },
+    },
+  });
+  setActivePluginRegistry(registry);
+  const owner = createPluginRegistryOwner(registry);
+  const services = await startPluginServices({ registry, config: {}, scheduler });
+  // Both serialized pre-stop observations must ignore service-lifetime authority.
+  await instance.waitForRetainedWork(signal, { includeCalls: true });
+  await instance.waitForIdle(signal);
+  const turn = instance.retainConsumer(undefined, registry);
+  const next = createEmptyPluginRegistry();
+  setActivePluginRegistry(next);
+  owner.publish(next, async () => {
+    await services.stop();
+  });
+  try {
+    expect(instance.acceptingCalls).toBe(false);
+    await clock.advanceBy(1);
+    expect(events).toEqual(["tick"]);
+    turn.release();
+    await waitForPluginRegistryRetirement(registry);
+    expect(events).toEqual(["tick", "stop"]);
+  } finally {
+    turn.release();
+    await services.stop();
+    await scheduler.stop();
+    await owner.close();
+  }
+});
+
+it.each([undefined, false])(
+  "refuses quiesced service tick bodies without generation overlap (%s)",
+  async (generationOverlap) => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "serialized-scheduler",
+      ...(generationOverlap === undefined ? {} : { generationOverlap }),
+    });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    let ticks = 0;
+    registry.services.push(
+      createServiceRegistration(
+        {
+          apiVersion: 2,
+          id: record.id,
+          start({ scheduler: serviceScheduler }) {
+            serviceScheduler.schedule({
+              id: "ordinary-tick",
+              delayMs: 1,
+              everyMs: 1,
+              run: () => {
+                ticks += 1;
+              },
+            });
+          },
+        },
+        { pluginId: record.id },
+      ),
+    );
+    const services = await startPluginServices({ registry, config: {}, scheduler });
+    try {
+      await clock.advanceBy(1);
+      expect(ticks).toBe(1);
+      instance.quiesce();
+      await clock.advanceBy(1);
+      expect(ticks).toBe(1);
+    } finally {
+      await services.stop();
+      await scheduler.stop();
+      await instance.dispose();
+    }
+  },
+);
 
 it("owns service callbacks after startup and reload callers finish", async () => {
   class CallerFacts {
@@ -96,6 +215,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
     expect(getInProcessGatewayRequestContext()).toBe(context);
     expect(getPluginRuntimeGatewayRequestScope()?.client).toBeUndefined();
     expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+    expect(readPluginSessionWorkAuthority()).toBeUndefined();
     registerRoute(`/scheduled-context/${++observations}`);
   };
   registry.services.push({
@@ -107,6 +227,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
       apiVersion: 2,
       id: "scheduled-context",
       start({ scheduler: serviceScheduler, config }) {
+        expect(pluginInvocationContext.getStore()).toBeUndefined();
         scopes.push(serviceScheduler);
         configs.push(config);
         resources.push(new AsyncResource("service-start", { requireManualDestroy: true }));
@@ -146,7 +267,15 @@ it("owns service callbacks after startup and reload callers finish", async () =>
                     signal: caller.signal,
                     isWebchatConnect: () => false,
                   },
-                  () => readers.run(run),
+                  () =>
+                    readers.run(() => {
+                      const invocationScope = new PluginInvocationScope(callerRegistry, []);
+                      const inClosedInvocation = invocationScope.run(() =>
+                        AsyncLocalStorage.snapshot(),
+                      );
+                      invocationScope.release();
+                      return inClosedInvocation(run);
+                    }),
                 ),
             ),
           ),
@@ -166,9 +295,21 @@ it("owns service callbacks after startup and reload callers finish", async () =>
   );
   try {
     await clock.advanceBy(1);
+    const borrow = new AbortController();
     await runFromRequest(() =>
-      scopes[0]!.schedule({ id: "later-request", delayMs: 1, run: observe }),
+      runWithPluginSessionWorkAuthority(
+        {
+          pluginId: record.id,
+          context,
+          target: { agentId: "main", sessionKey: "agent:main:research", sessionId: "session" },
+          signal: borrow.signal,
+          assertCurrent: () => borrow.signal.throwIfAborted(),
+          assertToolAllowed() {},
+        },
+        () => scopes[0]!.schedule({ id: "later-request", delayMs: 1, run: observe }),
+      ),
     );
+    borrow.abort(new Error("Session work borrow closed"));
     await clock.advanceBy(1);
     expect(registry.httpRoutes.map((route) => route.path)).toEqual([
       "/scheduled-start/1",

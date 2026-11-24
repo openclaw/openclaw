@@ -49,6 +49,11 @@ export function nativeHistoryMessageSourceId(message: unknown): string | null {
   return typeof id === "string" && id ? id : null;
 }
 
+/** Raw loaded rows retain the sources rendered inside activity summaries. */
+export function oldestNativeHistoryMessage(messages: unknown[]): unknown {
+  return messages.find(nativeHistoryMessageSourceId);
+}
+
 export function nativeHistoryMessageSourceIdentity(message: unknown): string | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);

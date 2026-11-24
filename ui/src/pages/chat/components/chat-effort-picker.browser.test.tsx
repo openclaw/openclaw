@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import {
   resolveChatFastModeSelectState,
@@ -12,7 +13,7 @@ import { emulateOverlayMedia } from "../../../test-helpers/overlay-browser-media
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
-import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
+import "../../../styles/chat/composer-surface.css";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
@@ -158,12 +159,10 @@ describe("effort selection", () => {
     onTestFinished(installTitleTooltips(document));
     const focusComposer = (event: MouseEvent | PointerEvent) =>
       focusComposerFromChrome(event, true, textarea);
-    composer.addEventListener("pointerdown", focusComposer);
-    composer.addEventListener("click", focusComposer);
-    onTestFinished(() => {
-      composer.removeEventListener("pointerdown", focusComposer);
-      composer.removeEventListener("click", focusComposer);
-    });
+    const lifetime = new AbortController();
+    composer.addEventListener("pointerdown", focusComposer, { signal: lifetime.signal });
+    composer.addEventListener("click", focusComposer, { signal: lifetime.signal });
+    onTestFinished(() => lifetime.abort());
     textarea.focus();
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
@@ -174,7 +173,9 @@ describe("effort selection", () => {
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
-    await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+    // A visible slider proves the reopen and waits out the lazy panel chunk before Tab.
+    const range = () => host!.querySelector<HTMLInputElement>("input[type=range]");
+    await expect.poll(() => range()?.checkVisibility()).toBe(true);
     // macOS WebKit uses Option-Tab to traverse controls inside the open picker.
     await userEvent.keyboard(
       navigator.platform.includes("Mac") &&
@@ -183,7 +184,7 @@ describe("effort selection", () => {
         ? "{Alt>}{Tab}{/Alt}"
         : "{Tab}",
     );
-    await expect.poll(() => document.activeElement).toBe(host!.querySelector("input[type=range]"));
+    await expect.poll(() => document.activeElement).toBe(range());
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);
@@ -217,23 +218,46 @@ describe("effort selection", () => {
     ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
     await speedFixture(speedState("ultrafast", ["priority", "ultrafast"], false));
-    expect(speed("ultrafast").disabled).toBe(true);
-    expect(speed("on")).toBeNull();
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     const standardOnly = await speedFixture(speedState("ultrafast", ["default"], false));
-    expect(speed("off").getAttribute("aria-checked")).toBe("true");
-    for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
-      expect(option.disabled).toBe(true);
-      option.click();
-    }
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
     expect(standardOnly.input.disabled).toBe(false);
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    await speedFixture(speedState(true, undefined, false, true));
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
+    expect(summary().getAttribute("data-chat-fast-mode")).toBe("false");
+    expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-fast-badge")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-gauge-needle")).not.toBeNull();
+    expect(summary().title).toBe("High");
     await speedFixture(speedState("ultrafast"));
     expect(speed("ultrafast").disabled).toBe(true);
     expect(summary().getAttribute("aria-label")).toContain("Ultrafast");
     expect(speed("ultrafast").getAttribute("aria-checked")).toBe("true");
     expect(speed("off").getAttribute("tabindex")).toBe("0");
     expect(speed("ultrafast").getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("draws the composer lightning inside its own icon box", async () => {
+    const composer = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => composer.remove());
+    composer.innerHTML = '<div class="agent-chat__input"><div class="agent-chat__composer-footer">';
+    host = composer.querySelector<HTMLDivElement>(".agent-chat__composer-footer")!;
+    await speedFixture(speedState(true));
+    const zap = host.querySelector(".chat-controls__effort-zap")!;
+    const glyph = zap.querySelector("svg")!.getBoundingClientRect();
+    expect([glyph.width, glyph.height]).toEqual([zap.clientWidth, zap.clientHeight]);
+  });
+
+  it("shows the effective level without a default badge", async () => {
+    await fixture(["low", "medium", "high"], "high", true);
+    expect(summary().textContent?.trim()).toBe("High");
+    expect(summary().getAttribute("aria-label")).toBe("Effort: Default (High)");
+    expect(host!.querySelector("[data-chat-thinking-preview-committed]")?.textContent?.trim()).toBe(
+      "High",
+    );
+    expect(host!.querySelector(".chat-controls__permission-default-badge")).toBeNull();
   });
 
   it("previews effort without committing and restores the committed level on cancel or blur", async () => {
@@ -361,43 +385,27 @@ it("keeps keyboard changes on real effort levels when pointer input is continuou
   }
 });
 
-it("restores the remembered permitted Daybreak choice and recovers an unavailable selection", async () => {
-  const onSelect = vi.fn();
-  const access = {
+it("keeps the Daybreak switch focused and blocks repeat activation while saving", async () => {
+  const saving = createDeferred();
+  const onSelect = vi.fn(() => saving.promise);
+  await fixture(["low", "high"], "low", false, undefined, true, {
+    requested: "standard",
+    programs: ["standard", "daybreak_blue"],
     sessionKey: "effort-preview",
     disabled: false,
-    programs: ["standard", "daybreak_blue", "daybreak_red"] as const,
     onSelect,
-  };
-  const draw = (extra: Partial<ChatAccessProgramControlProps>) =>
-    fixture(["low", "high"], "low", false, undefined, true, { ...access, ...extra });
-  const toggle = () => host!.querySelector<HTMLInputElement>(".chat-controls__access-head input")!;
-  const option = (value: string) =>
-    host!.querySelector<HTMLButtonElement>(`[data-chat-access-option="${value}"]`)!;
-  await draw({ requested: "standard", previous: "daybreak_red" });
-  await userEvent.click(toggle());
-  expect(onSelect).toHaveBeenLastCalledWith("daybreak_red", "effort-preview");
-  await draw({ requested: "daybreak_red" });
-  expect(option("daybreak_red").getAttribute("aria-pressed")).toBe("true");
-  await userEvent.click(toggle());
-  expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");
-  await draw({ requested: "daybreak_red", programs: ["standard", "daybreak_blue"] });
-  expect(host!.textContent).toContain("Red (unavailable)");
-  await userEvent.click(option("daybreak_blue"));
-  expect(onSelect).toHaveBeenLastCalledWith("daybreak_blue", "effort-preview");
-  await draw({
-    requested: "standard",
-    previous: "daybreak_red",
-    programs: ["standard", "daybreak_blue"],
   });
-  await userEvent.click(toggle());
-  expect(onSelect).toHaveBeenLastCalledWith("daybreak_blue", "effort-preview");
-  await draw({ requested: "daybreak_red", programs: undefined });
-  expect(host!.textContent).not.toContain("unavailable");
-  expect(toggle().disabled).toBe(false);
-  await userEvent.click(toggle());
-  expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");
-  await draw({ requested: "daybreak_red", disabled: true });
-  expect(toggle().disabled).toBe(true);
-  expect(option("daybreak_blue").disabled).toBe(true);
+  const toggle = host!.querySelector<HTMLInputElement>(".chat-controls__access-head input")!;
+  try {
+    toggle.focus();
+    await userEvent.keyboard(" ");
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.disabled).toBe(false);
+    await userEvent.keyboard(" ");
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("daybreak_blue", "effort-preview");
+  } finally {
+    saving.resolve();
+  }
+  await expect.poll(() => toggle.getAttribute("aria-disabled")).toBeNull();
 });

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 
@@ -14,18 +15,41 @@ const INSTALLED_PLUGIN_STATUS = {
   error: ["pluginsPage.needsAttention", "danger"],
 } as const satisfies Record<InstalledPluginState, readonly [string, string]>;
 
-export function renderPluginStateStatus(state: InstalledPluginState, className: string) {
+export function renderPluginStateStatus(state: InstalledPluginState, showInstalledLabel = false) {
   const [labelKey, tone] = INSTALLED_PLUGIN_STATUS[state];
   const label = t(labelKey);
+  const installedLabel = showInstalledLabel ? t("pluginsPage.installed") : undefined;
   return (
     <span
-      class={[className, "settings-status", `settings-status--${tone}`]}
+      class={["plugin-catalog-card__status", "settings-status", `settings-status--${tone}`]}
       data-plugin-state={state}
       role="img"
-      aria-label={label}
+      aria-label={installedLabel ? `${installedLabel} (${label})` : label}
       title={label}
     >
       <span class="settings-status__dot" aria-hidden="true" />
+      {installedLabel}
+    </span>
+  );
+}
+
+const INSTALLED_PLUGIN_STATUS_WORD = {
+  enabled: ["pluginsPage.enabled", "ok"],
+  disabled: ["pluginsPage.disabled", "muted"],
+  "needs-setup": ["pluginsPage.needsSetup", "warn"],
+  error: ["pluginsPage.needsAttention", "danger"],
+} as const satisfies Record<InstalledPluginState, readonly [string, string]>;
+
+/** The row form: the state's word beside its dot, with the full notice on hover. */
+export function renderPluginStateWord(state: InstalledPluginState) {
+  const [wordKey, kind] = INSTALLED_PLUGIN_STATUS_WORD[state];
+  return (
+    <span
+      class="plugins-settings-row__status"
+      data-plugin-state={state}
+      title={t(INSTALLED_PLUGIN_STATUS[state][0])}
+    >
+      <SettingsStatus kind={kind} label={t(wordKey)} />
     </span>
   );
 }

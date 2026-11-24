@@ -77,6 +77,7 @@ function createPage(devices?: Promise<{ kind: string; deviceId: string }[]>) {
     setInterval,
     clearInterval,
     Date,
+    performance,
   });
   const run = async (action: "start" | "pull" | "stop", captureId = "capture-1") => {
     const source = createMeetingBrowserAudioCaptureSource({
@@ -131,6 +132,24 @@ describe("browser meeting input capture", () => {
       page = createPage();
       await page.run("start");
     });
+
+    it.each([60_000, -60_000])(
+      "renews and expires by elapsed time after a %i ms wall-clock change",
+      async (clockShiftMs) => {
+        await vi.advanceTimersByTimeAsync(8_000);
+        page.processAudio(new Float32Array([0.5]));
+        expect((await page.run("pull")).base64).toBe("AEA=");
+        vi.setSystemTime(Date.now() + clockShiftMs);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(page.close).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(9_900);
+        expect(page.close).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(100);
+        expect(page.close).toHaveBeenCalledOnce();
+        expect(page.status()).toMatchObject({ remote: false, tracks: [] });
+        expect((await page.run("pull")).closed).toBe(true);
+      },
+    );
 
     it("isolates playback from device tracks, bounds backlog, and restores the exact source", async () => {
       expect(page.status()).toEqual({ remote: true, local: false, tracks: [page.remoteTrack] });

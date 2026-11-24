@@ -7,12 +7,20 @@ import {
   model as agentLoopModel,
   reply,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import {
+  getInternalBeforeRequest,
+  setInternalBeforeRequest,
+} from "../../packages/agent-core/src/internal-hooks.js";
+import { isActiveTurnTainted } from "../../packages/agent-core/src/turn-taint.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { getSession, waitForExecSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -26,21 +34,31 @@ import {
   createCodeModeHarness,
   expectToolCalls,
   jsonTool,
+  mcpTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
+import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
+import { createAgentTurnTaintState } from "./embedded-agent-runner/run/turn-taint-state.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
 } from "./plugin-runtime-refresh.js";
 import { Agent } from "./runtime/index.js";
+import { createResourceLoader } from "./sessions/agent-session-loop-resource-loader.test-support.js";
+import { AgentSession } from "./sessions/agent-session.js";
+import { AuthStorage, ModelRegistry, SessionManager, SettingsManager } from "./sessions/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 const model: typeof agentLoopModel = { ...agentLoopModel, api: "openai-responses" };
+const storeEnv = { preparedStoreEnvironment: { env: { NODE_OPTIONS: "--no-warnings" } } };
+const storeEnvWarning =
+  "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.";
 
 type RecoveryProgram = string | { wait: true; runId?: string };
 
@@ -94,14 +112,22 @@ async function runCodeModeAgent(params: {
     RecoveryProgram | ((context: Context) => RecoveryProgram | Promise<RecoveryProgram>)
   >;
   hiddenTools: AnyAgentTool[];
+  executor?: "node" | "quickjs";
   execInput?: Record<string, unknown>;
   abortSignal?: AbortSignal;
+  embeddedSession?: boolean;
   configureAgent?: (
     agent: Agent,
-    harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
-  ) => void;
+    harness: {
+      tools: AnyAgentTool[];
+      ctx: Parameters<typeof createCodeModeTools>[0];
+      session?: AgentSession;
+    },
+  ) => void | Promise<void>;
 }) {
-  const harness = createCodeModeHarness();
+  const harness = createCodeModeHarness({
+    codeMode: params.executor ? { executor: params.executor } : undefined,
+  });
   const ctx = harness.ctx;
   const tools = params.abortSignal
     ? createCodeModeTools({ ...ctx, abortSignal: params.abortSignal }).map((candidate) =>
@@ -137,50 +163,157 @@ async function runCodeModeAgent(params: {
       return reply({ ...message, api: model.api, timestamp: Date.now() });
     },
   });
-  params.configureAgent?.(agent, { tools, ctx });
-  await agent.prompt("finish the task despite tool errors");
+  let session: AgentSession | undefined;
+  if (params.embeddedSession) {
+    const sessionManager = SessionManager.inMemory();
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(model.provider, "synthetic-test-key");
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: harness.config,
+      sessionManager,
+      workspaceDir: "/workspace",
+      model,
+    });
+    const resourceLoader = await createResourceLoader(async (api) => {
+      for (const factory of factories) {
+        await factory(api);
+      }
+    });
+    session = new AgentSession({
+      agent,
+      systemPrompt: "Synthetic Code Mode recovery",
+      cwd: "/workspace",
+      customTools: toToolDefinitions(tools, ctx),
+      allowedToolNames: tools.map((availableTool) => availableTool.name),
+      resourceLoader,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: false },
+      }),
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+    });
+  }
+  await params.configureAgent?.(agent, { tools, ctx, session });
+  try {
+    await (session ?? agent).prompt("finish the task despite tool errors");
+  } finally {
+    session?.dispose();
+  }
   return { agent };
 }
 
 describe("Code Mode agent-loop error recovery", () => {
   const tempDirs = createTempDirTracker();
-  it.each([
-    { name: "omitted title", metadata: {}, accepted: true },
-    { name: "authored title", metadata: { title: "Record the fixture effect" }, accepted: true },
-    { name: "empty title", metadata: { title: "" }, accepted: false },
-    { name: "blank title", metadata: { title: " \t " }, accepted: false },
-    { name: "object title", metadata: { title: { text: "Record effect" } }, accepted: false },
-    { name: "oversized title", metadata: { title: "x".repeat(121) }, accepted: false },
-  ])("validates $name before executing a cell", async ({ metadata, accepted }) => {
-    const effects: string[] = [];
-    const target = effectTool("record_effect", effects, "recorded", { recorded: true });
-    const code = "return await record_effect({});";
-    const execInput = { ...metadata, code };
-    const { agent } = await runCodeModeAgent({
-      hiddenTools: [target],
-      programs: [code],
-      execInput,
-    });
-    const result = agent.state.messages.find((message) => message.role === "toolResult");
-    expect(result).toMatchObject({ toolName: "exec", isError: !accepted });
-    expect(effects).toEqual(accepted ? ["recorded"] : []);
-    expect(agent.state.messages.find((message) => message.role === "assistant")).toMatchObject({
-      content: [{ type: "toolCall", name: "exec", arguments: execInput }],
-    });
-    if (accepted) {
-      expect(readToolResultDetails(result)).toMatchObject({
-        status: "completed",
-        value: { recorded: true },
+  it.each(["tool", "request-preparation"] as const)(
+    "injects steers after a failed cell at the next boundary (%s)",
+    async (arrival) => {
+      const corrections = ["first correction", "second correction"];
+      const receipts: Promise<unknown>[] = [];
+      let enqueue!: () => Promise<void>;
+      const failure = tool("failing_action", async () => {
+        if (arrival === "tool") {
+          await enqueue();
+        }
+        throw new Error("synthetic Code Mode failure");
       });
-    } else {
-      expect(result?.content).toEqual([
-        expect.objectContaining({
-          type: "text",
-          text: expect.stringContaining('Validation failed for tool "exec":\n  - title:'),
-        }),
+      let nextRequest: Context | undefined;
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [failure],
+        embeddedSession: true,
+        programs: [
+          "return await failing_action({});",
+          (context) => {
+            nextRequest = context;
+            return "return 1;";
+          },
+        ],
+        configureAgent(loop, { session }) {
+          if (!session) {
+            throw new Error("Expected embedded session");
+          }
+          loop.steeringMode = "all";
+          enqueue = async () => {
+            for (const text of corrections) {
+              const accepted = createDeferred<boolean>();
+              receipts.push(
+                steerActiveSessionWithOptionalDeliveryWait(session, text, {
+                  waitForTranscriptCommit: true,
+                  onQueueAccepted: accepted.resolve,
+                }),
+              );
+              expect(await accepted.promise).toBe(true);
+            }
+          };
+          const beforeRequest = getInternalBeforeRequest(loop);
+          let requests = 0;
+          setInternalBeforeRequest(loop, async (signal) => {
+            const result = await beforeRequest?.(signal);
+            if (++requests === 2 && arrival === "request-preparation") {
+              await enqueue();
+            }
+            return result;
+          });
+        },
+      });
+      await Promise.all(receipts);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        details: { status: "failed" },
+      });
+      expect(nextRequest?.messages.filter((message) => message.role === "user").slice(-2)).toEqual(
+        corrections.map((text) => expect.objectContaining({ content: [{ type: "text", text }] })),
+      );
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(3);
+    },
+  );
+  it.for(["node", "quickjs"] as const)(
+    "%s returns a rejected cell while a sibling bridge has no response",
+    async (executor, { signal }) => {
+      const started = createDeferred();
+      let enqueueFollowUp!: () => void;
+      const held = tool("held_action", async (_id, _args, abort) => {
+        enqueueFollowUp();
+        started.resolve();
+        if (!abort) {
+          throw new Error("Expected the bridge cancellation signal");
+        }
+        return await withinTest(createDeferred<never>().promise, abort);
+      });
+      const failing = tool("failing_action", async () => {
+        await started.promise;
+        throw new Error("bridge unavailable");
+      });
+      const code = "await Promise.all([held_action({}), failing_action({})]);";
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [held, failing],
+        executor,
+        programs: [code],
+        execInput: { code, awaitResults: true },
+        abortSignal: signal,
+        configureAgent: (loop) => {
+          enqueueFollowUp = () =>
+            loop.followUp({ role: "user", content: "queued follow-up", timestamp: Date.now() });
+        },
+      });
+      expectRecovered(agent);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        details: {
+          status: "failed",
+          failurePhase: "bridge",
+          error: expect.stringContaining("bridge unavailable"),
+        },
+      });
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+      expect(
+        agent.state.messages.filter((message) => message.role === "assistant").slice(-2),
+      ).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
       ]);
-    }
-  });
+    },
+  );
 
   it("recovers after a parked read fails without replaying the mutation", async () => {
     const workspace = tempDirs.make("code-mode-wait-");
@@ -247,9 +380,10 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
-  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
-    const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished);
-    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+  it("preserves native exec output and refusal diagnostics", async ({ onTestFinished }) => {
+    const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished, storeEnv);
+    const stdout = "  review-ready\n \n";
+    await writeFile(join(state.workspaceDir, "input.txt"), stdout);
     const execute = vi.spyOn(shell, "execute");
     const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
     const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
@@ -285,7 +419,7 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(results[1]).toMatchObject({
       status: "completed",
-      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+      value: { status: "completed", exitCode: 0, aggregated: stdout },
     });
     expect(results[2]).toMatchObject({
       status: "completed",
@@ -297,11 +431,94 @@ describe("Code Mode agent-loop error recovery", () => {
     });
     for (const result of results.slice(1)) {
       expect(resultDetails({ details: result?.value })).not.toHaveProperty("message");
+      expect(resultDetails({ details: result?.value }).warningText).toBe(storeEnvWarning);
     }
     expectRecovered(agent);
     expectToolCalls(3, shell);
     expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
   });
+
+  it.for(["exec", "process poll"])(
+    "delivers a steer during %s and resumes the exact result",
+    async (waitKind, { onTestFinished }) => {
+      const { state, shell, scopeKey } = await nativeExecFixture(
+        "steer-held-shell",
+        onTestFinished,
+      );
+      const processTool = createProcessTool({ scopeKey });
+      const pollCalls = vi.spyOn(processTool, "execute");
+      const started = join(state.workspaceDir, "started");
+      const release = join(state.workspaceDir, "release");
+      const command = nodeCommand(`const fs = require("node:fs");
+      const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => {
+        if (fs.existsSync(${JSON.stringify(release)})) { watcher.close(); clearTimeout(timer); console.log("original result"); }
+      });
+      const timer = setTimeout(() => watcher.close(), 10000);
+      fs.appendFileSync(${JSON.stringify(started)}, "started");`);
+      const correction = "Check this before the command finishes.";
+      let session!: AgentSession;
+      const observed: Context[] = [];
+      const run = runCodeModeAgent({
+        hiddenTools: [shell, processTool],
+        embeddedSession: true,
+        execInput: {
+          code:
+            waitKind === "exec"
+              ? `return (await exec({command:${JSON.stringify(command)}})).aggregated;`
+              : `let result = await exec({command:${JSON.stringify(command)}, background:true});
+             const sessionId = result.sessionId;
+             while (result.status === "running") {
+               result = await process({action:"poll", sessionId, timeout:1000});
+             }
+             return result.aggregated;`,
+          awaitResults: true,
+        },
+        programs: [
+          "exec",
+          async (context) => {
+            observed.push(context);
+            await writeFile(release, "finish");
+            const result = readToolResultDetails(
+              context.messages.findLast((m) => m.role === "toolResult"),
+            );
+            expect(result).toMatchObject({
+              status: "waiting",
+              reason: "steering",
+              runId: expect.any(String),
+            });
+            return { wait: true, runId: String(result?.runId) };
+          },
+        ],
+        configureAgent(_agent, harness) {
+          session = harness.session!;
+        },
+      });
+      await vi.waitFor(async () => expect(await readFile(started, "utf8")).toBe("started"), {
+        timeout: 15000,
+      });
+      if (waitKind === "process poll") {
+        // Deliver only once the background command is being observed, not during exec startup.
+        await vi.waitFor(() => expect(pollCalls).toHaveBeenCalled(), { timeout: 15000 });
+      }
+      const receipt = steerActiveSessionWithOptionalDeliveryWait(session, correction, {
+        waitForTranscriptCommit: true,
+      });
+      const { agent } = await run;
+      await receipt;
+      expect(observed[0]?.messages.slice(-2)).toMatchObject([
+        { role: "toolResult", details: { status: "waiting" } },
+        { role: "user", content: [{ type: "text", text: correction }] },
+      ]);
+      expect(
+        readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
+      ).toMatchObject({
+        status: "completed",
+        value: "original result\n",
+      });
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+      expect(await readFile(started, "utf8")).toBe("started");
+    },
+  );
 
   it("keeps native failure output within its budget", async ({ onTestFinished }) => {
     const { shell } = await nativeExecFixture("exec-failure-budget", onTestFinished);
@@ -324,7 +541,7 @@ describe("Code Mode agent-loop error recovery", () => {
       const { state, scopeKey, shell } = await nativeExecFixture(
         "wrong-wait-recovery",
         onTestFinished,
-        withWarning ? { preparedStoreEnvironment: { env: { NODE_OPTIONS: "--no-warnings" } } } : {},
+        withWarning ? storeEnv : {},
       );
       // Noninteractive exec closes stdin; a parent-owned file releases this same child.
       const releasePath = join(state.workspaceDir, "release-held-process");
@@ -348,16 +565,9 @@ describe("Code Mode agent-loop error recovery", () => {
             if (withWarning) {
               const native = await nativeExec.mock.results[0]!.value;
               expect(native.content).toEqual([
-                {
-                  type: "text",
-                  text: expect.stringContaining(
-                    "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.",
-                  ),
-                },
+                { type: "text", text: expect.stringContaining(storeEnvWarning) },
               ]);
-              expect(nested.warningText).toBe(
-                "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.",
-              );
+              expect(nested.warningText).toBe(storeEnvWarning);
             } else {
               expect(nested).not.toHaveProperty("warningText");
             }
@@ -597,6 +807,90 @@ describe("Code Mode agent-loop error recovery", () => {
         error: expect.stringContaining("after terminal action"),
       },
     });
+  });
+
+  it.each([
+    {
+      use: "unused search",
+      code: 'const [handle] = await catalog.search("remote_metadata"); if (handle?.name !== "MCP.remote.metadata") throw new Error("Missing MCP handle"); return "found";',
+      tainted: false,
+    },
+    {
+      use: "read description",
+      code: 'const [handle] = await catalog.search("remote_metadata"); void handle.description; return "found";',
+      tainted: true,
+    },
+    {
+      use: "emitted handle",
+      code: 'return await catalog.search("remote_metadata");',
+      tainted: true,
+    },
+    {
+      use: "declaration",
+      code: 'await API.read("mcp/remote.d.ts"); return "found";',
+      tainted: true,
+    },
+  ])("records memory provenance after $use", async ({ code, tainted }) => {
+    const state = await createOpenClawTestState({ label: "catalog-memory-provenance" });
+    const remote = mcpTool({
+      name: "remote_metadata",
+      serverName: "remote",
+      toolName: "metadata",
+      description: "Externally supplied description",
+    });
+    const relativePath = "memory/catalog.md";
+    const taint = createAgentTurnTaintState();
+    try {
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [remote],
+        programs: [
+          code,
+          'return await write({ path: "memory/catalog.md", content: "Owner-requested note" });',
+        ],
+        async configureAgent(activeAgent, { ctx, tools }) {
+          const codingTools = await createOpenClawCodingToolsAsync({
+            workspaceDir: state.workspaceDir,
+            senderIsOwner: true,
+            isTurnTainted: taint.isTainted,
+            toolConstructionPlan: {
+              includeBaseCodingTools: true,
+              includeShellTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: false,
+              includePluginTools: false,
+            },
+          });
+          const write = codingTools.find((candidate) => candidate.name === "write");
+          if (!write) {
+            throw new Error("Missing memory write tool");
+          }
+          const controls = tools.map((control) =>
+            wrapToolWithBeforeToolCallHook(control, {
+              ...ctx,
+              onToolOutcome: (observation) => taint.observe(observation),
+            }),
+          );
+          activeAgent.state.tools = controls;
+          applyCodeModeCatalog({ ...ctx, tools: [...controls, remote, write] });
+        },
+      });
+      expectRecovered(agent);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        details: { status: "completed" },
+      });
+      expect(remote.execute).not.toHaveBeenCalled();
+      await expect(readFile(join(state.workspaceDir, relativePath), "utf8")).resolves.toBe(
+        "Owner-requested note",
+      );
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir: state.workspaceDir, relativePath }),
+      ).resolves.toMatchObject({
+        originClass: tainted ? "untrusted" : "agent",
+      });
+      expect(isActiveTurnTainted(agent.state.messages)).toBe(tainted);
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it.each(["network", undefined] as const)("persists %s nested-call provenance", async (source) => {

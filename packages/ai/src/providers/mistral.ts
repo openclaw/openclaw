@@ -17,6 +17,7 @@ import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
+  awaitProviderLifecycleCallback,
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
   finalizeTransportStream,
@@ -189,7 +190,10 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
           content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
         });
       }
-      const nextPayload = await options?.onPayload?.(payload, model);
+      const nextPayload = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(payload, model) : undefined,
+        options?.signal,
+      );
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }

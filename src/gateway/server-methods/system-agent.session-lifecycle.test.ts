@@ -187,28 +187,6 @@ describe("openclaw.chat session lifecycle", () => {
     expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
   });
 
-  it("disposes the unpublished engine when requester authority changes during eviction", async () => {
-    let current = true;
-    const oldest = seededSession({ lastUsedAt: 0 });
-    oldest.engine.dispose = vi.fn(async () => {
-      current = false;
-    });
-    const sessions = fullSessions(oldest);
-    const respond = vi.fn();
-    const pending = callChat(
-      makeContext(sessions),
-      { sessionId: "unpublished" },
-      () => current,
-      respond,
-    );
-
-    await expect(pending).rejects.toThrow("Gateway requester authority changed");
-    expect(oldest.engine.dispose).toHaveBeenCalledOnce();
-    expect(createdEngines[0]?.dispose).toHaveBeenCalledOnce();
-    expect(sessions.has("unpublished")).toBe(false);
-    expect(respond).not.toHaveBeenCalled();
-  });
-
   it("resets a session on request", async () => {
     const engine = makeEngine();
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);

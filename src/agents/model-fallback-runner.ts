@@ -69,6 +69,7 @@ import {
 } from "./model-fallback-cooldown.js";
 import {
   isModelFallbackDecisionLogEnabled,
+  logModelFallbackChainStopped,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
@@ -160,7 +161,6 @@ async function runWithModelFallbackInternal<T>(
   const operatorAuthority = params.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const plannedCandidates = resolveModelCandidateChain({
     cfg: params.cfg,
@@ -276,7 +276,6 @@ async function runWithModelFallbackInternal<T>(
       continue;
     }
     const candidateRef = { provider: candidate.provider, model: candidate.model };
-    operatorAuthority?.assertCurrent();
     if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
       continue;
     }
@@ -504,7 +503,6 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
-    operatorAuthority?.assertCurrent();
     if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
       continue;
     }
@@ -591,7 +589,14 @@ async function runWithModelFallbackInternal<T>(
       exhaustionResult = attemptRun.exhaustionResult;
     }
     // Local coordination failures must not consume provider fallbacks (#83510).
-    if (isNonProviderRuntimeCoordinationError(err) || isTranscriptNotContinuableError(err)) {
+    const failoverContext = { ...candidateRef, ...runAttribution };
+    const transcriptStop = isTranscriptNotContinuableError(err);
+    if (isNonProviderRuntimeCoordinationError(err) || transcriptStop) {
+      logModelFallbackChainStopped({
+        reason: transcriptStop ? "transcript_not_continuable" : "local_runtime_coordination",
+        ...failoverContext,
+        error: err,
+      });
       throw err;
     }
     if (transientProbeProviderForAttempt) {
@@ -603,7 +608,6 @@ async function runWithModelFallbackInternal<T>(
     if (isMissingAgentHarnessError(err)) {
       throw err;
     }
-    const failoverContext = { ...candidateRef, ...runAttribution };
     const normalized =
       coerceToFailoverError(err, failoverContext) ??
       (isLikelyContextOverflowError(formatErrorMessage(err))
@@ -639,8 +643,7 @@ async function runWithModelFallbackInternal<T>(
       const switchMsg = err.message;
       const switchNormalized = new FailoverError(switchMsg, {
         reason: "unknown",
-        ...candidateRef,
-        ...runAttribution,
+        ...failoverContext,
       });
       lastError = switchNormalized;
       await observeFailedCandidate({
@@ -722,10 +725,8 @@ async function runWithModelFallbackInternal<T>(
     candidates,
     lastError,
     label: "models",
-    formatAttempt: (attempt) =>
-      `${attempt.provider}/${attempt.model}: ${attempt.error}${
-        attempt.reason ? ` (${attempt.reason})` : ""
-      }`,
+    formatAttempt: ({ provider, model, error, reason }) =>
+      `${provider}/${model}: ${error}${reason ? ` (${reason})` : ""}`,
     soonestCooldownExpiry: await resolveFallbackSoonestCooldownExpiry({
       authRuntime,
       userLockedAuthProfileId,

@@ -1,7 +1,7 @@
 import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
 import type { VisitorTarget } from "./cloudflare.js";
 import type { ActiveVisitorInvitation } from "./grant-record.js";
-import type { VisitorInviteDetails } from "./tool-results.js";
+import type { VisitorAccountSeats, VisitorInviteDetails } from "./tool-results.js";
 
 /**
  * Where a visitor signs in: the operator-declared public Gateway origin plus the Control UI base
@@ -34,6 +34,17 @@ function utcMinute(epochMs: number): string {
   return `${new Date(epochMs).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
+export function accountSeatsText(seats: VisitorAccountSeats): string {
+  const observed = `Cloudflare account seats (shared across applications and devices): ${seats.occupied ?? "unknown"} / ${seats.capacity ?? "unknown"}; ${seats.remaining === null ? "remaining unknown" : `${seats.remaining} remaining`}.`;
+  const advice =
+    seats.status === "full"
+      ? "WARNING: new login identities cannot obtain a seat while the account is full. Already-seated identities can keep using their seat; renewing an invitation does not allocate another. An account operator must review seat consumers or capacity in Cloudflare One overview. No seats were removed."
+      : seats.status === "unknown"
+        ? "Seat availability is unknown; check Cloudflare One overview before promising a new login."
+        : "This is an observation, not a seat reservation or login guarantee.";
+  return [observed, advice, ...seats.diagnostics].join(" ");
+}
+
 /** Tool result for a committed invite or renewal; the note appears only in the invitation text. */
 export function visitorInviteResult({
   renewed,
@@ -42,6 +53,7 @@ export function visitorInviteResult({
   gatewayAccess,
   signInUrl,
   noteSupplied,
+  accountSeats,
 }: {
   renewed: boolean;
   target: VisitorTarget;
@@ -49,6 +61,7 @@ export function visitorInviteResult({
   gatewayAccess: string;
   signInUrl?: string;
   noteSupplied: boolean;
+  accountSeats: VisitorAccountSeats;
 }): { text: string; details: VisitorInviteDetails } {
   const { grantId, githubLogin, expiresAt } = grant;
   const who =
@@ -86,9 +99,10 @@ export function visitorInviteResult({
       : " Existing inviter note kept."
     : "";
   return {
-    text: `${renewed ? "Renewed" : "Invited"} ${who}. Invitation ID: ${grantId}. Visitor grant expires: ${expiryText(expiresAt)}. ${gatewayAccess}. ${signIn}${noteStatus}\n\nInvitation text to share with the visitor:\n${invitationText}`,
+    text: `${renewed ? "Renewed" : "Invited"} ${who}. Invitation ID: ${grantId}. Visitor grant expires: ${expiryText(expiresAt)}. ${gatewayAccess}. ${signIn}${noteStatus}\n\n${accountSeatsText(accountSeats)}\n\nInvitation text to share with the visitor:\n${invitationText}`,
     details: {
       outcome: renewed ? "renewed" : "invited",
+      accountSeats,
       grantId,
       ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
       ...(githubLogin ? { githubLogin } : {}),

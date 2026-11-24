@@ -15,6 +15,7 @@ import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSyntheticMissingToolResult,
+  isToolUseResultPairingCanonical,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { Context } from "../llm/types.js";
@@ -165,7 +166,7 @@ export function transformTransportMessages(
   });
   transformed.length = replayLength;
 
-  if (!requiresPairing) {
+  if (!requiresPairing || isToolUseResultPairingCanonical(transformed)) {
     return transformed;
   }
 

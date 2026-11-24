@@ -1,13 +1,15 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   clearPluginHostRuntimeState,
   dispatchPluginAgentEventSubscriptions,
 } from "../host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { registrationFixture } from "../registry-registration.test-support.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import { setActivePluginRegistry, waitForPluginRegistryRetirement } from "../runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../runtime/gateway-request-scope.js";
 import type { OpenClawPluginApi } from "../types.js";
 
 type Subscription = Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0];
@@ -20,7 +22,16 @@ function subscribe(options: Omit<Subscription, "id" | "handle">) {
   return {
     handle,
     send: (data: Record<string, unknown>, sessionKey?: string) => {
-      const event = { runId: "run-payload", seq: 1, ts: 0, stream: "tool", sessionKey, data };
+      const preamble = { retainedText: "original preamble" };
+      const event = {
+        runId: "run-payload",
+        seq: 1,
+        ts: 0,
+        stream: "tool",
+        sessionKey,
+        data,
+        preamble,
+      };
       dispatchPluginAgentEventSubscriptions({
         registry,
         event,
@@ -38,6 +49,67 @@ afterEach(() => {
 });
 
 describe("agent event subscription payloads", () => {
+  it.each(["lifecycle", "tool"])(
+    "rejects unmatched %s events without entering plugin execution",
+    (stream) => {
+      const { handle, send } = subscribe({ streams: [stream], phases: ["start"] });
+      const enter = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+      try {
+        send({ phase: "update" });
+        expect(handle).not.toHaveBeenCalled();
+        expect(enter).not.toHaveBeenCalled();
+      } finally {
+        enter.mockRestore();
+      }
+    },
+  );
+
+  it("keeps matched listeners in their own generation across registry replacement", async () => {
+    const observed: unknown[] = [];
+    const fixtures = [registrationFixture(), registrationFixture()];
+    let oldHandle: Subscription["handle"] | undefined;
+    for (const [generation, fixture] of fixtures.entries()) {
+      for (const id of ["first", "second"]) {
+        fixture.register({ id }, (api) => {
+          api.agent.events.registerAgentEventSubscription({
+            id: "events",
+            streams: ["tool"],
+            phases: ["start"],
+            async handle() {
+              await Promise.resolve();
+              const scope = getPluginRuntimeGatewayRequestScope();
+              observed.push([
+                generation,
+                scope?.pluginId,
+                scope?.pluginRegistry === fixture.registry,
+              ]);
+            },
+          });
+        });
+      }
+      oldHandle ??= fixture.registry.agentEventSubscriptions[0]!.subscription.handle;
+      setActivePluginRegistry(fixture.registry);
+      emitAgentEvent({ runId: "generation-probe", stream: "tool", data: { phase: "start" } });
+      await setImmediate();
+      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    }
+    expect(observed).toEqual([
+      [0, "first", true],
+      [0, "second", true],
+      [1, "first", true],
+      [1, "second", true],
+    ]);
+    const oldRegistry = fixtures[0]!.registry;
+    await waitForPluginRegistryRetirement(oldRegistry);
+    const retiredHandle = oldHandle!;
+    expect(() =>
+      retiredHandle(
+        { runId: "retired", seq: 1, ts: 0, stream: "tool", data: { phase: "start" } },
+        { getRunContext: () => undefined, setRunContext() {}, clearRunContext() {} },
+      ),
+    ).toThrow("reloaded or disabled");
+  });
+
   it.each([
     { phases: undefined, payload: undefined },
     { phases: [], payload: "full" as const },
@@ -79,6 +151,7 @@ describe("agent event subscription payloads", () => {
         count: 42,
         enabled: false,
         missing: null,
+        ["__proto__"]: "literal metadata",
       };
       const full = () => ({
         long: "a".repeat(257),
@@ -113,6 +186,10 @@ describe("agent event subscription payloads", () => {
       expect(delivered.data === data).toBe(false);
       delivered.data.phase = "changed";
       expect(data.phase).toBe("result");
+      delete delivered.data.count;
+      expect(data.count).toBe(42);
+      delivered.preamble!.retainedText = "changed preamble";
+      expect(event.preamble.retainedText).toBe("original preamble");
       if (payload !== "metadata") {
         expect(delivered.data.nested).not.toBe(data.nested);
       }

@@ -92,7 +92,9 @@ describe("committed transcript rewrite notifications", () => {
                 { type: "thinking", thinking: "stale reasoning", thinkingSignature: "rejected" },
                 { type: "text", text: "visible answer" },
               ]
-            : [{ type: "text", text: "visible answer" }],
+            : kind === "mid-turn preflight"
+              ? [{ type: "toolCall", id: "call", name: "read", arguments: {} }]
+              : [{ type: "text", text: "visible answer" }],
       });
       if (kind === "compaction") {
         assistant.providerReplay = {
@@ -106,9 +108,10 @@ describe("committed transcript rewrite notifications", () => {
           baseUrlHash: "ozhevd1smnk8s",
         };
       }
-      await appendTranscriptMessage(scope, {
-        message: kind === "mid-turn preflight" ? toolResult() : assistant,
-      });
+      await appendTranscriptMessage(scope, { message: assistant });
+      if (kind === "mid-turn preflight") {
+        await appendTranscriptMessage(scope, { message: toolResult() });
+      }
       const manager = SessionManager.open(scope);
       const before = loadTranscriptEventsSync(scope);
       using observed = observe(scope);
@@ -132,6 +135,7 @@ describe("committed transcript rewrite notifications", () => {
         const outcome = await precheck({
           attempt: { ...caller, provider: "openai", modelId: "gpt-5.5", contextTokenBudget: 1_000 },
           request: {
+            pressure: "overflow",
             route: "truncate_tool_results_only",
             estimatedPromptTokens: 20_000,
             promptBudgetBeforeReserve: 900,
@@ -142,7 +146,8 @@ describe("committed transcript rewrite notifications", () => {
           sessionAgentId: caller.agentId,
           sessionManager: manager,
           toolResultPromptProjectionState: createProjectionState(),
-          prePromptMessageCount: 2,
+          // Only the opening user message predates this turn; the tool result is unsent.
+          prePromptMessageCount: 1,
           replaceSessionMessages: () => {},
         });
         return (

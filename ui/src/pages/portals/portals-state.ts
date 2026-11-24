@@ -11,9 +11,10 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
+import { isLocalPortalHostname } from "../../lib/gateway-locality.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
 
 export type PortalsPresentation = {
@@ -62,6 +63,7 @@ export function createPortals(
     listReady: boolean;
     listRead: { result: Promise<void> };
     error: string | null;
+    closeFailure: { portalId: string; message: string } | null;
     closingPortalId: string | null;
     portalProbeState: PortalProbeState | null;
     pendingEnvironment: EnvironmentSummary | null;
@@ -81,6 +83,7 @@ export function createPortals(
     listReady: false,
     listRead: { result: Promise.resolve() },
     error: null,
+    closeFailure: null,
     closingPortalId: null,
     portalProbeState: null,
     pendingEnvironment: null,
@@ -109,7 +112,7 @@ export function createPortals(
   };
   let presentationRequest: { requestId: string; portalId?: string } | null = null;
   let environmentLoading = false;
-  let environmentTimer: ReturnType<typeof setInterval> | undefined;
+  const environmentPoll = useVisiblePoll(2_000, () => void loadPendingEnvironment());
   let publish = () => {};
   const portalProbeCache = new Map<string, PortalReachability>();
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
@@ -158,11 +161,10 @@ export function createPortals(
     }
   });
   function pollEnvironment(enabled: boolean) {
-    if (!enabled) {
-      clearInterval(environmentTimer);
-      environmentTimer = undefined;
-    } else if (environmentTimer === undefined) {
-      environmentTimer = setInterval(() => void loadPendingEnvironment(), 2_000);
+    if (enabled) {
+      environmentPoll.start();
+    } else {
+      environmentPoll.stop();
     }
   }
 
@@ -306,6 +308,7 @@ export function createPortals(
     state.listReady = false;
     state.error = null;
     portalProbeCache.clear();
+    state.closeFailure = null;
     state.portalProbeState = null;
   }
 
@@ -337,6 +340,7 @@ export function createPortals(
     state.selectedPortalId = selectedPortalId;
     state.loaded = true;
     state.error = null;
+    state.closeFailure = null;
     const selectedPortal = portals.find((portal) => portal.id === selectedPortalId);
     if (selectedPortal) {
       ensurePortalProbe(selectedPortal, selectedPortalId !== previousPortalId);
@@ -361,8 +365,8 @@ export function createPortals(
     const portalAddress = new URL(url);
     // A remote Gateway's loopback endpoint points at the browser, not the Gateway.
     if (
-      isLoopbackHostname(portalAddress.hostname) &&
-      !isLoopbackHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
+      isLocalPortalHostname(portalAddress.hostname) &&
+      !isLocalPortalHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
     ) {
       state.portalProbeState = { key, status: "ingress-required", result: Promise.resolve() };
       notify();
@@ -525,6 +529,7 @@ export function createPortals(
       }
       state.closingPortalId = portal.id;
       state.error = null;
+      state.closeFailure = null;
       notify();
       const current = () => lifecycle.isCurrent(scope) && state.closingPortalId === portal.id;
       try {
@@ -534,7 +539,10 @@ export function createPortals(
         }
       } catch (error) {
         if (current()) {
-          state.error = t("portalsPage.closeFailed", { error: formatUiError(error) });
+          state.closeFailure = {
+            portalId: portal.id,
+            message: t("portalsPage.closeFailed", { error: formatUiError(error) }),
+          };
         }
       } finally {
         if (current()) {

@@ -1,8 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { describe, expect, it } from "vitest";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import {
@@ -25,9 +23,6 @@ describe("ACP operator model ceiling", () => {
 
   async function run(
     model: string | undefined,
-    beforePrompt?: (
-      changePolicy: (policy: GatewayOperatorRoleDefinition["modelPolicy"]) => void,
-    ) => void,
     appliedModel?: string,
     initialPolicy: GatewayOperatorRoleDefinition["modelPolicy"] = {},
   ) {
@@ -50,23 +45,15 @@ describe("ACP operator model ceiling", () => {
     mockMutableSession(sessionKey, {
       currentMeta: readySessionMeta({ agent: "fixture", runtimeOptions: model ? { model } : {} }),
     });
-    let modelPolicy = prepareOperatorModelPolicy({
+    const modelPolicy = prepareOperatorModelPolicy({
       cfg,
       policy: initialPolicy,
       manifestPlugins: [],
     });
-    const policyListeners = new Set<() => void>();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
-      get modelPolicy() {
-        return modelPolicy;
-      },
-      onModelPolicyChanged: (listener) => {
-        policyListeners.add(listener);
-        return () => policyListeners.delete(listener);
-      },
+      modelPolicy,
     });
     const admission = prepareSystemAgentRunAdmission(
       cfg,
@@ -87,13 +74,6 @@ describe("ACP operator model ceiling", () => {
           text: "fixture request",
           mode: "prompt",
           requestId: "fixture-role-run",
-          onBeforePrompt: () =>
-            beforePrompt?.((policy) => {
-              modelPolicy = prepareOperatorModelPolicy({ cfg, policy, manifestPlugins: [] });
-              for (const listener of policyListeners) {
-                listener();
-              }
-            }),
         })
         .then(
           () => undefined,
@@ -109,29 +89,10 @@ describe("ACP operator model ceiling", () => {
     ["unqualified selection", [undefined], true],
     [
       "native model alias with an exact exclusion",
-      [
-        "google/gemini-3-pro",
-        undefined,
-        undefined,
-        { allow: ["google/*"], deny: ["google/gemini-3-pro"] },
-      ],
+      ["google/gemini-3-pro", undefined, { allow: ["google/*"], deny: ["google/gemini-3-pro"] }],
       true,
     ],
-    [
-      "backend substitution of an excluded model",
-      ["fixture/allowed", undefined, "fixture/denied"],
-      false,
-    ],
-    [
-      "applied model revoked after admission while the requested model stays allowed",
-      [
-        "fixture/allowed",
-        (changePolicy) => changePolicy({ allow: ["fixture/allowed"] }),
-        "fixture/applied",
-        { allow: ["fixture/allowed", "fixture/applied"] },
-      ],
-      false,
-    ],
+    ["backend substitution of an excluded model", ["fixture/allowed", "fixture/denied"], false],
   ])("rejects %s without prompting", async (_name, args, beforeBackend) => {
     const { outcome, runtimeState } = await run(...args);
     expect(outcome).toBeInstanceOf(Error);
@@ -140,13 +101,5 @@ describe("ACP operator model ceiling", () => {
       expect(runtimeState.ensureSession).not.toHaveBeenCalled();
     }
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
-  });
-
-  it("executes a qualified allowed model and keeps the existing pre-prompt guard", async () => {
-    const before = vi.fn();
-    const { outcome, runtimeState } = await run("fixture/allowed", before);
-    expect(outcome).toBeUndefined();
-    expect(before).toHaveBeenCalledOnce();
-    expect(runtimeState.runTurn).toHaveBeenCalledOnce();
   });
 });

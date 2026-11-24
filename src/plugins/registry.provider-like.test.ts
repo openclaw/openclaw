@@ -43,7 +43,7 @@ const reservationCases = [
 
 function registerReservedProvider(
   api: OpenClawPluginApi,
-  family: (typeof reservationCases)[number][0],
+  family: (typeof reservationCases)[number][0] | "media",
   id: string,
   run: ProviderPluginCatalog["run"],
 ) {
@@ -60,6 +60,8 @@ function registerReservedProvider(
         catalog: { run },
         staticCatalog: { run },
       });
+    case "media":
+      return api.registerMediaUnderstandingProvider({ id, capabilities: ["image"] });
     case "speech":
       return api.registerSpeechProvider({ ...voice, synthesize: unused });
     case "transcription":
@@ -111,6 +113,25 @@ const catalogContext: UnifiedModelCatalogProviderContext = {
   resolveProviderApiKey: () => ({ apiKey: undefined }),
   resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
 };
+
+it.each([
+  ["speech", "speechProviders", "speech provider already registered: shared (first)"],
+  ["media", "mediaUnderstandingProviders", "media provider already registered: shared (first)"],
+] as const)("rejects padded duplicate %s provider IDs", (family, registryKey, diagnostic) => {
+  const builder = createTestRegistry();
+  const first = createCatalogOwner(builder, "first");
+  const second = createCatalogOwner(builder, "second");
+  const catalog = async () => null;
+  registerReservedProvider(first.api, family, " shared ", catalog);
+  expect(builder.registry[registryKey]).toHaveLength(1);
+  expect(builder.registry.diagnostics).toEqual([]);
+
+  registerReservedProvider(second.api, family, "shared", catalog);
+  expect(
+    builder.registry[registryKey].map(({ pluginId, provider }) => [pluginId, provider.id]),
+  ).toEqual([["first", " shared "]]);
+  expect(builder.registry.diagnostics).toEqual(registrationErrors(second.record, diagnostic));
+});
 
 it("rejects blank text provider IDs without executing catalog hooks", () => {
   const builder = createTestRegistry();

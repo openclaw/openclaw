@@ -14,6 +14,7 @@ export type SidebarCatalogMenuHost = Pick<
   | "basePath"
   | "getRouteSessionKey"
   | "onNavigate"
+  | "prepareSessionNavigation"
   | "sessionDataContext"
   | "terminalAvailable"
 > & {

@@ -151,7 +151,7 @@ afterEach(() => {
 
 describe("NewSessionDraftPersistence restore race", () => {
   it.each([undefined, "read-only", "guarded", "workspace", "full"] as const)(
-    "restores draft-local permission %s and resets it for another draft",
+    "restores permission %s, saves a new choice immediately and resets the draft",
     async (permissionMode) => {
       const flow = createFlow("permission-draft", true);
       try {
@@ -160,6 +160,9 @@ describe("NewSessionDraftPersistence restore race", () => {
         flow.setMessage("Edited prompt");
         flow.draftPersistence.persistNow();
         await waitForWrite({ text: "Edited prompt", permissionMode });
+        const selectedPermission = permissionMode === "read-only" ? undefined : "read-only";
+        flow.setPermissionMode(selectedPermission);
+        expectLastWrite({ text: "Edited prompt", permissionMode: selectedPermission });
         flow.resetDraft();
         expect(flow.permissionMode).toBeUndefined();
       } finally {
@@ -255,7 +258,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     },
   );
 
-  it("persists a model-only edit after a submission capture fails without consuming the draft", async () => {
+  it("immediately persists a model-only edit after a failed submission capture", async () => {
     const flow = createFlow();
     let selected = "openai/first";
     modelSelection(flow, () => ({ agentId: "main", model: selected, thinkingLevel: "low" }));
@@ -266,12 +269,13 @@ describe("NewSessionDraftPersistence restore race", () => {
     // A rejected/no-result create keeps this same unsent mutation and text.
     selected = "openai/second";
     flow.draftPersistence.noteSelectionMutation("model");
-    flow.draftPersistence.persistNow();
-    await waitForWrite({
+    // Teardown flushes pending work, so capture what the selection itself started.
+    const selectedWrite = writeSnapshot.mock.calls.at(-1)?.[0];
+    flow.disconnect();
+    expect(selectedWrite).toMatchObject({
       text: "Still unsent",
       modelSelection: expect.objectContaining({ model: selected }),
     });
-    flow.disconnect();
   });
 
   it("retires accepted model intent only while the submitted mutation still owns the view", async () => {

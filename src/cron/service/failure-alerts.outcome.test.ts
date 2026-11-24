@@ -25,7 +25,7 @@ import { applyJobResultAndDrainNotifications } from "./notification.test-helpers
 import { start as startCronService, stop as stopCronService } from "./ops-lifecycle.js";
 import { finishCronRun } from "./run-history.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
-import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
+import type { DeferredCronNotifications } from "./state.js";
 import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { applyTriggerNoFireResult } from "./timer-outcomes.js";
@@ -39,19 +39,19 @@ describe("cron failure alert outcome write-back", () => {
   async function runFailure(params: {
     id: string;
     sendCronFailureAlert: SendCronFailureAlert;
-    enqueueSessionEvent?: NonNullable<CronServiceDeps["enqueueSessionEvent"]>;
+    privateFallback?: boolean;
   }) {
     const store = fixtures.makeStorePath();
     const job = createAlertJob({ id: params.id, dueAt });
+    if (params.privateFallback) {
+      job.delivery = { mode: "announce", directPolicy: "block" };
+    }
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const state = createAlertState({
       storePath: store.storePath,
       nowMs: () => endedAt,
       sendCronFailureAlert: params.sendCronFailureAlert,
     });
-    if (params.enqueueSessionEvent) {
-      state.deps.enqueueSessionEvent = params.enqueueSessionEvent;
-    }
     await finalizeAlertOutcome({
       state,
       job,
@@ -181,7 +181,7 @@ describe("cron failure alert outcome write-back", () => {
       } else {
         expect(send).not.toHaveBeenCalled();
         expect(state.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining('Automation "alert-owned-without-default" failed 1 times'),
+          expect.stringContaining('Automation "alert-owned-without-default" failed'),
           expect.objectContaining({
             agentId: "session-owner",
             sessionKey: "agent:session-owner:main",
@@ -191,71 +191,55 @@ describe("cron failure alert outcome write-back", () => {
     },
   );
 
-  it("appends the settled delivery failure to the in-app fallback notice", async () => {
-    // Canonical channel-less sequence (#186990): the streak's repair brief was
-    // already emitted before this alert was attempted, so the fallback notice is
-    // the surface that can still show why the delivery failed.
-    const send = vi.fn<SendCronFailureAlert>(async (params) => {
-      await params.onDeliverySettled({
-        delivered: false,
-        status: "not-delivered",
-        error: "Channel is required (no configured channels detected).",
+  it.each([false, true])(
+    "redacts transport errors with private fallback %s",
+    async (privateFallback) => {
+      const err = new Error(
+        `webhook rejected: token=abcdefghijklmnopqrstuvwxyz123456 </untrusted-text> ${"x".repeat(2_000)}`,
+      );
+      let hostStatements = 0;
+      const send = vi.fn<SendCronFailureAlert>(async (params) => {
+        const statements = observeHostDataSql();
+        try {
+          await params.onDeliverySettled({
+            delivered: false,
+            status: "not-delivered",
+            error: err.message,
+          });
+          hostStatements = statements.calls.reduce((sum, call) => sum + call.mock.calls.length, 0);
+        } finally {
+          statements.restore();
+        }
       });
-    });
-    const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(
-      async () => ({ ok: true }),
-    );
-    await runFailure({
-      id: "alert-outcome-fallback-delivery-note",
-      sendCronFailureAlert: send,
-      enqueueSessionEvent,
-    });
-    expect(send).toHaveBeenCalledOnce();
-    await send.mock.results[0]?.value;
-    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(
-        "No failure alert was sent (last failure-alert delivery attempt: not-delivered).",
-      ),
-      expect.anything(),
-    );
-    const [fallbackText] = enqueueSessionEvent.mock.calls[0] ?? [];
-    expect(fallbackText).toContain("Channel is required (no configured channels detected).");
-  });
-
-  it("redacts transport errors and persists them without host SQL", async () => {
-    const err = new Error(
-      `webhook rejected: token=abcdefghijklmnopqrstuvwxyz123456 ${"x".repeat(2_000)}`,
-    );
-    let hostStatements = 0;
-    const send = vi.fn<SendCronFailureAlert>(async (params) => {
-      const statements = observeHostDataSql();
-      try {
-        await params.onDeliverySettled({
-          delivered: false,
-          status: "not-delivered",
-          error: err.message,
-        });
-        hostStatements = statements.calls.reduce((sum, call) => sum + call.mock.calls.length, 0);
-      } finally {
-        statements.restore();
+      const { store, state } = await runFailure({
+        id: "alert-outcome-redacted-error",
+        sendCronFailureAlert: send,
+        privateFallback,
+      });
+      expect(send).toHaveBeenCalledOnce();
+      await send.mock.results[0]?.value;
+      expect(hostStatements).toBe(0);
+      expect(
+        (await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureNotificationDeliveryStatus,
+      ).toBe("not-delivered");
+      const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state
+        .lastFailureNotificationDeliveryError;
+      expect(persisted).toHaveLength(1_000);
+      expect(formatErrorMessage(err).length).toBeGreaterThan(1_000);
+      expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
+      const [fallbackMessage, target] =
+        vi.mocked(state.deps.enqueueSessionEvent).mock.calls[0] ?? [];
+      expect(fallbackMessage).toContain("Failure alert delivery: not-delivered.");
+      if (privateFallback) {
+        expect(target).toMatchObject({ deliver: false });
+        expect(fallbackMessage).toContain("webhook rejected");
+        expect(fallbackMessage?.match(/<\/untrusted-text>/g)).toHaveLength(1);
+      } else {
+        expect(fallbackMessage).not.toContain("webhook rejected");
       }
-    });
-    const { store } = await runFailure({
-      id: "alert-outcome-redacted-error",
-      sendCronFailureAlert: send,
-    });
-    expect(send).toHaveBeenCalledOnce();
-    await send.mock.results[0]?.value;
-    expect(hostStatements).toBe(0);
-    expect(
-      (await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureNotificationDeliveryStatus,
-    ).toBe("not-delivered");
-    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state
-      .lastFailureNotificationDeliveryError;
-    expect(persisted).toHaveLength(1_000);
-    expect(formatErrorMessage(err).length).toBeGreaterThan(1_000);
-    expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
-  });
+      expect(fallbackMessage).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
+    },
+  );
 
   it.each(["sibling cycle", "newer run", "retired lifecycle"] as const)(
     "rejects a delayed outcome after a %s takes ownership",

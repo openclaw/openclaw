@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { toErrorObject } from "../infra/errors.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import {
@@ -345,7 +346,11 @@ export function warnDegradedSecretOwner(
     path: owner.paths[0]!,
     message: `Secret owner ${owner.ownerKind}:${owner.ownerId} is ${
       owner.degradationState === "stale" ? "using last-known-good" : "configured-unavailable"
-    }; paths: ${owner.paths.join(", ")}; reason: ${owner.reason}.`,
+    }; paths: ${owner.paths.join(", ")}; reason: ${owner.reason}.${
+      resolveUpdateRehearsalRoot(context.env)
+        ? " Update rehearsal leaves this owner cold; credential availability is not verified."
+        : ""
+    }`,
   });
 }
 
@@ -413,7 +418,8 @@ export async function resolveAndApplySecretAssignments(params: {
   allowOwnerIsolation?: boolean;
   forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<{ degradedOwners: DegradedSecretOwner[]; resolvedValues: Map<string, unknown> }> {
-  if (!params.allowOwnerIsolation) {
+  const rehearsal = resolveUpdateRehearsalRoot(params.context.env) !== undefined;
+  if (!(params.allowOwnerIsolation ?? rehearsal)) {
     return {
       degradedOwners: [],
       resolvedValues: await resolveStrictAssignments(params),
@@ -506,14 +512,16 @@ export async function resolveAndApplySecretAssignments(params: {
     const failure = failedOwners.get(assignments);
     if (failure) {
       const owner = assignments[0]!;
-      let degradationState = classifySecretOwnerDegradationState({
-        ownerKind: owner.ownerKind as Exclude<typeof owner.ownerKind, "unknown">,
-        ownerId: owner.ownerId,
-        refs: assignments.map((assignment) => assignment.ref),
-        config: params.options.config,
-        contractDigest: assignmentOwnerContractDigest(assignments),
-        forceColdRefKeys: params.forceColdRefKeys,
-      });
+      let degradationState = rehearsal
+        ? ("cold" as const)
+        : classifySecretOwnerDegradationState({
+            ownerKind: owner.ownerKind as Exclude<typeof owner.ownerKind, "unknown">,
+            ownerId: owner.ownerId,
+            refs: assignments.map((assignment) => assignment.ref),
+            config: params.options.config,
+            contractDigest: assignmentOwnerContractDigest(assignments),
+            forceColdRefKeys: params.forceColdRefKeys,
+          });
       if (failure.refFailureReason === "resolved secret value is a redaction placeholder") {
         degradationState = "cold";
       }

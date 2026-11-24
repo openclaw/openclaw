@@ -15,7 +15,7 @@ const CITE_PATH_SEGMENT_RE = /^[A-Za-z0-9._~-]+$/;
 // Only used to normalize the composed path; no request is ever made against it.
 const CITE_PATH_NORMALIZATION_BASE = "https://tlon.invalid";
 const CITATION_SCOPE_SKIP_LOG =
-  "[tlon] Skipping cited post: citation is outside explicit channel scope";
+  "[tlon] Skipping cited post: citation is outside the configured citation scope";
 
 class CitationScopeChangedError extends Error {}
 
@@ -46,6 +46,22 @@ function buildCitedPostScryPath(nest: string, postId: string): string | null {
     return null;
   }
   return scryPath;
+}
+
+/**
+ * Auto-discovery admits any channel the bot ship can read; otherwise only explicit channels.
+ * With cross-channel citations off, the cited channel must also be the one posted in.
+ */
+export function isCitedNestInScope(
+  nest: string,
+  scope: { effectiveAutoDiscoverChannels: boolean; explicitChannels: readonly string[] },
+  crossChannel: boolean,
+  sourceNest?: string,
+): boolean {
+  return (
+    (crossChannel || nest === sourceNest) &&
+    (scope.effectiveAutoDiscoverChannels || scope.explicitChannels.includes(nest))
+  );
 }
 
 export async function resolveTlonCitations(

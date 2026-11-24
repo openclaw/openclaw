@@ -66,6 +66,7 @@ it.each([
   "legacy-contract-ready",
   "legacy-contract-no-config",
   "legacy-contract-failure",
+  "artifact-free",
   "unchanged",
   "unchanged-ready",
   "include",
@@ -139,10 +140,12 @@ it.each([
       const ready = is(
         "unchanged-ready",
         "legacy-contract-no-config",
+        "artifact-free",
         "rules-only-ready",
         "rules-only-pending-ready",
       );
-      const settled = ready && !is("rules-only-pending-ready", "legacy-contract-no-config");
+      const settled =
+        ready && !is("rules-only-pending-ready", "legacy-contract-no-config", "artifact-free");
       const alreadyCurrent = scenario === "unchanged" || ready;
       const unselectedMarker = state.path("unselected-doctor-ran");
       const config = {
@@ -164,7 +167,7 @@ it.each([
                 ? { listener: { port: 57597, host: "${LISTENER_HOST}" } }
                 : { oldPort: 57597 }),
               label: "kept",
-              ...(scenario === "env-reference" ? { oldHost: "${LISTENER_HOST}" } : {}),
+              ...(is("env-reference", "include") ? { oldHost: "${LISTENER_HOST}" } : {}),
             }),
           },
         },
@@ -191,7 +194,7 @@ it.each([
           id: pluginId,
           channels: scenario === "non-channel-config-repair" ? [] : [pluginId],
           doctorContract:
-            old || scenario.startsWith("legacy-contract-")
+            old || scenario.startsWith("legacy-contract-") || scenario === "artifact-free"
               ? undefined
               : scenario === "declared-unrelated-surface"
                 ? { resolveSessionStoreAgentIds: true }
@@ -212,13 +215,15 @@ it.each([
       };
       const previousPath = writePlugin("1.0.0");
       const candidatePath = writePlugin("2.0.0");
-      fs.writeFileSync(
-        path.join(candidatePath, "doctor-contract-api.mjs"),
-        is("wrong-doctor-surface", "declared-unrelated-surface", "legacy-contract-no-config")
-          ? "export function resolveSessionStoreAgentIds() { return []; }"
-          : scenario === "missing-normalizer" || scenario.startsWith("rules-only-")
-            ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];'
-            : `
+      // An artifact-free package (like @openclaw/typesafe) has nothing for Doctor to inspect.
+      if (scenario !== "artifact-free") {
+        fs.writeFileSync(
+          path.join(candidatePath, "doctor-contract-api.mjs"),
+          is("wrong-doctor-surface", "declared-unrelated-surface", "legacy-contract-no-config")
+            ? "export function resolveSessionStoreAgentIds() { return []; }"
+            : scenario === "missing-normalizer" || scenario.startsWith("rules-only-")
+              ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];'
+              : `
         ${scenario === "constructor-failure" || scenario === "legacy-contract-failure" ? 'throw new Error("fixture constructor refused");' : ""}
         ${scenario === "unrelated-core-legacy" ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];' : ""}
         export function normalizeCompatibilityConfig({ cfg }) {
@@ -232,7 +237,8 @@ it.each([
           delete settings.oldHost;
           return { config, changes: ["Moved the configured listener port."] };
         }`,
-      );
+        );
+      }
       if (included) {
         writeJson(state.statePath("plugins.json"), config.plugins);
         await state.writeConfig({ plugins: { $include: state.statePath("plugins.json") } });
@@ -532,6 +538,20 @@ it.each([
         }
       }
       const applyRuntime = vi.fn();
+      const expectedNextRecords = installScenario
+        ? {
+            ...nextRecords,
+            [pluginId]: {
+              ...nextRecords[pluginId],
+              sourceSnapshotDigests: {
+                [pluginId]: {
+                  contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                  dependencyClosureDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                },
+              },
+            },
+          }
+        : nextRecords;
       const command = installScenario
         ? (async () => {
             const prepared = await configIo.readConfigFileSnapshotForWrite();
@@ -567,7 +587,7 @@ it.each([
         expect(auditRefused).toBe(true);
         expect(savedSettings()).toEqual({ listener: { port: 57597 }, label: "kept" });
         expect(pending()).toEqual([]);
-        expect(await records()).toEqual(superseded ? newerRecords : nextRecords);
+        expect(await records()).toEqual(superseded ? newerRecords : expectedNextRecords);
         expect(payload.commit).toHaveBeenCalledTimes(1);
         expect(payload.rollback).not.toHaveBeenCalled();
         expect(gateway.call).not.toHaveBeenCalled();
@@ -627,7 +647,7 @@ it.each([
         ...(inactive || pendingState ? { oldPort: 57597 } : {}),
         listener: {
           port: 57597,
-          ...(scenario === "env-reference" || ready ? { host: "${LISTENER_HOST}" } : {}),
+          ...(is("env-reference", "include") || ready ? { host: "${LISTENER_HOST}" } : {}),
         },
         label: "kept",
       });
@@ -640,7 +660,7 @@ it.each([
       expect(pending()).toEqual(
         inactive || pendingState ? beforePending : retainsOther ? [unrelated] : [],
       );
-      expect(await records()).toEqual(nextRecords);
+      expect(await records()).toEqual(expectedNextRecords);
       if (inactive) {
         expect(plugins.entries[pluginId].enabled).toBe(false);
       }

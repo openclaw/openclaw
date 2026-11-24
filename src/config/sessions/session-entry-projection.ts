@@ -14,19 +14,23 @@ type RetiredSessionMetadata = {
 };
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
+  localWorkspaceHandoff: undefined,
   activeWriterRunId: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
+  lifecycleRestartScope: undefined,
   resumeAfterRestart: undefined,
   mainRestartRecovery: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   priorWorkspace: undefined,
+  scheduledMemoryParent: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
+  "localWorkspaceHandoff",
   "inheritedGitContributorProfileIds",
   "profileInvolvement",
   "cliHistoryBoundary",
@@ -34,11 +38,14 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
   "lastRunId",
   "lifecycleRunId",
+  "lifecycleRestartScope",
   "resumeAfterRestart",
+  "operatorSources",
   "mainRestartRecovery",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "priorWorkspace",
+  "scheduledMemoryParent",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];

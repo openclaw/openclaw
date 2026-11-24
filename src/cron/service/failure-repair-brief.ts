@@ -2,51 +2,27 @@
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { CronFailureNotificationDelivery, CronJob } from "../types.js";
 
 const REPAIR_PAYLOAD_MAX_CHARS = 4_000;
 const REPAIR_ERROR_MAX_CHARS = 1_000;
 
-/** Renders the last failure-alert delivery outcome so the brief says why no alert arrived. */
-function describeAlertDelivery(delivery: CronFailureNotificationDelivery | undefined): string {
-  if (!delivery) {
-    return "No failure alert was sent.";
-  }
-  if (delivery.delivered) {
-    return "The failure alert was delivered.";
-  }
-  // delivery.status is an internal enum. The transport error is untrusted
-  // third-party content and is rendered separately as a data block (#186990).
-  return `No failure alert was sent (last failure-alert delivery attempt: ${delivery.status}).`;
-}
-
-/** The settled transport error crosses into scheduler instructions, so it needs the data boundary. */
-function alertDeliveryErrorBlocks(delivery: CronFailureNotificationDelivery | undefined): string[] {
-  const reason = delivery && !delivery.delivered ? delivery.error?.trim() : undefined;
-  if (!reason) {
-    return [];
-  }
-  return [
-    wrapUntrustedPromptDataBlock({
-      label: "Last failure-alert delivery error",
-      text: reason,
-      maxChars: REPAIR_ERROR_MAX_CHARS,
-      truncationMarker: " [truncated]",
-    }),
-  ];
-}
-
-/**
- * Renders a settled failed delivery outcome for an operator-facing fallback surface
- * (the in-app fallback notice), so the reason the alert did not arrive survives the
- * streak in which the earlier repair brief was already emitted (#186990).
- */
-export function renderSettledFailureAlertDeliveryNote(
+export function formatCronFailureAlertDeliveryNote(
+  label: string,
   delivery: CronFailureNotificationDelivery,
 ): string {
-  return [describeAlertDelivery(delivery), ...alertDeliveryErrorBlocks(delivery)]
-    .filter(Boolean)
-    .join("\n");
+  const status = `${label}: ${delivery.status}.`;
+  if (delivery.status !== "not-delivered" || !delivery.error?.trim()) {
+    return status;
+  }
+  const detail = wrapUntrustedPromptDataBlock({
+    label: "Failure alert delivery error",
+    text: formatErrorMessage(delivery.error),
+    maxChars: REPAIR_ERROR_MAX_CHARS,
+    truncationMarker: " [truncated]",
+  });
+  return `${status}\n${detail}`;
 }
 
 export function buildCronFailureRepairBrief(params: {
@@ -54,9 +30,8 @@ export function buildCronFailureRepairBrief(params: {
   consecutiveErrors: number;
   error?: string;
   errorReason?: FailoverReason;
+  previousFailureAlert?: CronFailureNotificationDelivery;
   terminal?: boolean;
-  /** Last known failure-alert delivery outcome from job state, when one exists. */
-  alertDelivery?: CronFailureNotificationDelivery;
 }): string {
   const { job } = params;
   const payload = job.payload;
@@ -71,13 +46,19 @@ export function buildCronFailureRepairBrief(params: {
   const error = [params.errorReason ? `cause: ${params.errorReason}` : "", params.error?.trim()]
     .filter(Boolean)
     .join("\n");
-  const alertDeliveryLine = describeAlertDelivery(params.alertDelivery);
   return [
     `Automation repair request from the scheduler, not a user message. Do not relay it; follow the steps below.`,
     params.terminal
-      ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). ${alertDeliveryLine}`
-      : `An automation (id ${job.id}), created in this conversation, failed ${params.consecutiveErrors} consecutive runs. ${alertDeliveryLine}`,
-    ...alertDeliveryErrorBlocks(params.alertDelivery),
+      ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). The user was not alerted; you are their notice.`
+      : `An automation (id ${job.id}), created in this conversation, failed${params.consecutiveErrors > 1 ? ` ${params.consecutiveErrors} runs in a row` : ""}. The user was not alerted; you are their notice.`,
+    ...(params.previousFailureAlert
+      ? [
+          formatCronFailureAlertDeliveryNote(
+            "Previous failure alert delivery",
+            params.previousFailureAlert,
+          ),
+        ]
+      : []),
     `Schedule: ${JSON.stringify(job.schedule)}. Payload kind: ${payload.kind}.`,
     // Job text and provider errors can carry third-party content: data, never instructions.
     wrapUntrustedPromptDataBlock({ label: "Automation name", text: job.name, maxChars: 200 }),
@@ -104,8 +85,8 @@ export function buildCronFailureRepairBrief(params: {
       : [
           `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
           "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): change it, then reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
-          "3. Otherwise: ask the user for exactly what you need to fix it.",
-          "If the automation keeps failing, the user gets the normal failure alert.",
+          "3. Otherwise: tell the user in one or two plain sentences what is broken and exactly what you need from them. Do not paste the raw error.",
+          "If the same failure happens again, you will get this request again.",
         ]),
     `${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
   ].join("\n");

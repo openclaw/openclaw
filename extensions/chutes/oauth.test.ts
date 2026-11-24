@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createServer } from "node:net";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { jsonResponse, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const REDIRECT_URI = "http://127.0.0.1:1456/oauth-callback";
 const access = "at_123";
 const refresh = "rt_123";
+const realFetch = globalThis.fetch;
 const waitForLocalOAuthCallbackMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
@@ -116,12 +118,88 @@ it("uses an IPv6 loopback callback without changing the OAuth redirect URI", asy
   expect((tokenRequest as URLSearchParams).get("redirect_uri")).toBe(redirectUri);
 });
 
+it("keeps listening after a browser refusal and exchanges the code that follows", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>(
+    "openclaw/plugin-sdk/provider-auth-runtime",
+  );
+  waitForLocalOAuthCallbackMock.mockImplementation(actual.waitForLocalOAuthCallback);
+  const probe = createServer().listen(0, "127.0.0.1");
+  await once(probe, "listening");
+  const { port } = probe.address() as { port: number };
+  await new Promise<void>((resolve) => {
+    probe.close(() => resolve());
+  });
+  const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
+  const fetchFn = mockFetch();
+  const progress: string[] = [];
+  let state = "";
+  let browser: Promise<number[]> | undefined;
+  const result = loginChutes({
+    app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
+    onAuth: async ({ url }) => {
+      state = new URL(url).searchParams.get("state") ?? "";
+    },
+    onPrompt: async () => {
+      throw new Error("a refusal must not fall back to paste");
+    },
+    onProgress: (message) => {
+      progress.push(message);
+      if (message.startsWith("Waiting for OAuth callback")) {
+        browser = (async () => {
+          const statuses = [];
+          for (const query of [
+            `error=access_denied&state=${state}`,
+            `code=code_test&state=${state}`,
+          ]) {
+            const response = await realFetch(`${redirectUri}?${query}`);
+            await response.text();
+            statuses.push(response.status);
+          }
+          return statuses;
+        })();
+      }
+    },
+  });
+  await expect(result).resolves.toMatchObject({ access, refresh });
+  expect(await browser).toEqual([400, 200]);
+  expect(progress).toContain(
+    "Sign-in was not allowed. Go back to the sign-in page and allow access.",
+  );
+  const tokenRequest = fetchFn.mock.calls[0]?.[1]?.body as URLSearchParams;
+  expect(tokenRequest.get("code")).toBe("code_test");
+});
+
+it("says the callback port is busy beside the paste prompt it falls back to", async () => {
+  waitForLocalOAuthCallbackMock.mockRejectedValue(
+    Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" }),
+  );
+  mockFetch();
+  const events: unknown[][] = [];
+  let state = "";
+  await expect(
+    login({
+      manual: false,
+      onAuth: async ({ url }) => {
+        state = new URL(url).searchParams.get("state") ?? "";
+      },
+      onPrompt: async () => {
+        events.push(["prompt"]);
+        return `${REDIRECT_URI}?code=code_test&state=${state}`;
+      },
+      onProgress: (...update) => events.push(update),
+    }),
+  ).resolves.toMatchObject({ access, refresh });
+  // Said once the prompt is open, so setup apps show it beside the paste field.
+  expect(events.slice(0, 2)).toEqual([
+    ["prompt"],
+    ["The sign-in callback could not start because its port is in use.", "callback_port_busy"],
+  ]);
+});
+
 it.each([
-  [true, REDIRECT_URI, "not a URL", "Paste the full redirect URL (must include code + state)."],
-  [true, REDIRECT_URI, `${REDIRECT_URI}?code=code_test`, "Missing 'state' parameter."],
-  [true, REDIRECT_URI, `${REDIRECT_URI}?code=code_test&state=wrong`, "OAuth state mismatch"],
-  [false, "https://127.0.0.1:1456/oauth-callback", "", "redirect URI must be http://"],
-  [false, "http://example.com/oauth-callback", "", "redirect hostname must be loopback"],
+  [true, REDIRECT_URI, `${REDIRECT_URI}?code=c&state=s`, "different sign-in attempt"],
+  [false, "https://127.0.0.1:1456/oauth-callback", "", "must be an http:// loopback address"],
+  [false, "http://example.com/oauth-callback", "", "must be an http:// loopback address"],
 ] as const)("rejects invalid callback: %s %s %s", async (manual, redirectUri, input, message) => {
   const fetchFn = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchFn);
@@ -223,8 +301,8 @@ it.each([
 });
 
 it.each<[Partial<OAuthCredential>, string]>([
-  [{ refresh: "" }, "Chutes OAuth credential is missing refresh token"],
-  [{ clientId: undefined }, "Missing CHUTES_CLIENT_ID"],
+  [{ refresh: "" }, "This Chutes sign-in has no refresh token."],
+  [{ clientId: undefined }, "This Chutes sign-in does not record its OAuth client id."],
 ])("rejects invalid refresh credentials: %j", async (overrides, message) => {
   vi.stubEnv("CHUTES_CLIENT_ID", "");
   await expect(refreshChutes({ ...stored, ...overrides })).rejects.toThrow(message);

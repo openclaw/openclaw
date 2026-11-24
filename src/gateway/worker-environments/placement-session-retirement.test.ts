@@ -108,6 +108,8 @@ it("checks changed identities and invalidates evidence, including changes during
     harness.resolveSessionEvidence.mockResolvedValue("current");
     await harness.retirement.reconcile();
     await harness.retirement.reconcile();
+    sessionChanges.emit({ all: true, scope: "worker-environments" });
+    await harness.retirement.reconcile();
     expect(harness.createSessionEvidenceResolver).toHaveBeenCalledExactlyOnceWith(
       [placement, second],
       undefined,

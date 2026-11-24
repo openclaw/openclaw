@@ -11,9 +11,24 @@ const serialize = (value: unknown, normalizeString?: (text: string) => string): 
   return chunks.join("");
 };
 
-it("preserves parsed JSON values and sorts keys recursively", () => {
-  const value = JSON.parse('{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}');
-  expect(stableStringify(value)).toBe('{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}');
+it.each<[unknown, string]>([
+  [
+    { items: [3, null, { z: false, a: 1.5 }], enabled: true },
+    '{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}',
+  ],
+  [
+    { z: undefined, a: [undefined, ...Array<undefined>(1), null] },
+    '{"a":[undefined,undefined,null],"z":undefined}',
+  ],
+  [{ "2": "two", "10": "ten", "": {} }, '{"":{},"10":"ten","2":"two"}'],
+  [[true, false, 0, -0, 1e21, 1e-7, [], {}], "[true,false,0,0,1e+21,1e-7,[],{}]"],
+  ['"\\\n\t🦞\ud800', '"\\"\\\\\\n\\t🦞\\ud800"'],
+  [undefined, "undefined"],
+  [null, "null"],
+])("pins existing JSON and undefined bytes for fixture %#", (value, expected) => {
+  expect(stableStringify(value)).toBe(expected);
+  expect(serialize(value)).toBe(expected);
+  expect(sha256StableValue(value).digest).toBe(sha256Hex(expected));
 });
 
 it("handles circular arrays without treating later siblings as circular", () => {
@@ -22,6 +37,29 @@ it("handles circular arrays without treating later siblings as circular", () => 
   items.push(items);
 
   expect(serialize(items)).toBe('[{"value":"same"},{"value":"same"},"[Circular]"]');
+});
+
+it("pins typed encodings, collection ordering and cycles in both output paths", () => {
+  const set = new Set<unknown>(["z\ud800", "a"]);
+  set.add(set);
+  const map = new Map<unknown, unknown>([
+    [1, "number"],
+    ["1", "string"],
+  ]);
+  map.set("self", map);
+  const value = {
+    set,
+    map,
+    date: new Date("2026-01-01Z"),
+    invalid: new Date(Number.NaN),
+    regex: /a/gi,
+  };
+  const expected =
+    '{"date":Date("2026-01-01T00:00:00.000Z"),"invalid":Date(null),"map":Map([["1","string"],["self","[Circular]"],[1,"number"]]),"regex":RegExp("/a/gi"),"set":Set(["[Circular]","a","z\\ud800"])}';
+  expect(stableStringify(value)).toBe(expected);
+  expect(serialize(value)).toBe(expected);
+  expect(sha256StableValue(value).digest).toBe(sha256Hex(expected));
+  expect(serialize(set, sanitizeSurrogates)).toBe('Set(["[Circular]","a","z"])');
 });
 
 it("opts into string normalization without changing the lossless default", () => {

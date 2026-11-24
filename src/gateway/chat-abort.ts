@@ -22,6 +22,7 @@ import {
   getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import {
   captureSessionTarget,
   type SessionTarget,
@@ -111,13 +112,18 @@ export function resolveChatAbortStopReason(signal: AbortSignal): string {
     : (resolveAgentRunAbortLifecycleFields(signal).stopReason ?? "rpc");
 }
 
-export function createChatAbortSignalReason(stopReason: string | undefined): Error {
+export function createChatAbortSignalReason(
+  stopReason: string | undefined,
+  userInitiated?: boolean,
+): Error {
   if (stopReason === "restart") {
     return createAgentRunRestartAbortError();
   }
   if (stopReason !== "timeout") {
     // Keep transport presentation separate from the typed lifecycle cause.
-    return Object.assign(createAgentRunDirectAbortError(), { gatewayStopReason: stopReason });
+    return Object.assign(createAgentRunDirectAbortError(userInitiated), {
+      gatewayStopReason: stopReason,
+    });
   }
   const reason = new Error("chat run timed out");
   reason.name = "TimeoutError";
@@ -378,6 +384,7 @@ export function abortChatRunById(
     onAbortPrepared?: () => (() => void) | void;
     onAbortCommitted?: () => void;
     expectedEntry?: RpcSourceRef;
+    pendingInputEndCause?: "user-stop";
     /** Shutdown can cancel retained cleanup without replacing an already published terminal. */
     preserveTerminal?: boolean;
     presentation?: ReturnType<typeof captureChatRunAbortPresentation>;
@@ -419,7 +426,15 @@ export function abortChatRunById(
     projectSessionTerminalPending: active.adapter.projectSessionTerminalPending,
     projectSessionTerminalObservedAt: active.adapter.projectSessionTerminalObservedAt,
   };
-  runProjection.abortMarker = createChatAbortMarker();
+  const abortMarker = createChatAbortMarker();
+  const target = active.input.target;
+  if (params.pendingInputEndCause && target?.agentId) {
+    abortMarker.pendingInputCancellation = {
+      chat: chatRef({ agentId: target.agentId, storePath: target.storeScope, sessionKey }),
+      endCause: params.pendingInputEndCause,
+    };
+  }
+  runProjection.abortMarker = abortMarker;
   if (stopReason) {
     active.adapter.abortStopReason = stopReason;
   }

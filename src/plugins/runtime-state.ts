@@ -43,6 +43,13 @@ export function getPluginRegistryVersion(registry: PluginRegistry | null): numbe
   return registry ? getPluginRegistryState()?.registryVersions?.get(registry) : undefined;
 }
 
+/** Pending predecessors remain in the retirement owner's inventory through cleanup. */
+export function getRetiringPluginRegistries(): readonly PluginRegistry[] {
+  return [...(getPluginRegistryState()?.retiredRegistryCleanups?.values() ?? [])].map(
+    ({ registry }) => registry,
+  );
+}
+
 /** Policy reads the process-active registry, independently of request or registration scopes. */
 export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
   return getPluginRegistryState()?.activeRegistry ?? null;

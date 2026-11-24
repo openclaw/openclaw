@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import { isWorkerIdleForPressure } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
+import { observeSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -57,6 +59,7 @@ function createSharedStateWorkerOwner() {
       entry.actor ? active.actor === entry.actor : active === entry,
     );
   const clearIdleRetirement = (entry: Entry) => {
+    entry.idleSince = undefined;
     clearTimeout(entry.idleTimer);
     entry.idleTimer = undefined;
   };
@@ -108,6 +111,7 @@ function createSharedStateWorkerOwner() {
     ) {
       return;
     }
+    entry.idleSince = performance.now();
     const timer: IdleTimer = runInDetachedAsyncContext(() =>
       setTimeout(() => {
         if (entry.idleTimer !== timer || entry.activeOperations !== 0 || !stores.has(entry)) {
@@ -217,7 +221,7 @@ function createSharedStateWorkerOwner() {
       throw new AggregateError(errors, "Failed to close shared-state SQLite workers");
     }
   }
-  registerOpenClawStateDatabaseAsyncResource({ close });
+  registerOpenClawStateDatabaseAsyncResource({ phase: "after-resources", close });
   registerOpenClawStateDatabaseLifecycleListener((event) => {
     if (event.kind !== "opened") {
       // Synchronous error eviction cannot await, but actor retirement remains
@@ -230,8 +234,11 @@ function createSharedStateWorkerOwner() {
       });
     }
   });
-  function retireIdleWorkers() {
+  function retireIdleWorkers(critical: boolean) {
     for (const entry of stores) {
+      if (!isWorkerIdleForPressure(entry.idleSince, critical)) {
+        continue;
+      }
       void runInDetachedAsyncContext(() => retireIdle(entry))?.catch((error: unknown) => {
         log.warn("Idle shared-state worker retirement failed", {
           path: entry.context.admission.databasePath,
@@ -494,6 +501,9 @@ function createSharedStateWorkerOwner() {
           );
           entry.bound = true;
         }
+        if (admission !== entry.context.admission) {
+          observeSqliteDatabaseAdmissionLocation(admission.databasePath, admission.identity);
+        }
       } catch (error) {
         return retireAfterFailure(entry, error, "binding");
       }
@@ -514,7 +524,5 @@ export function getOpenClawStateWorkerOwner() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sharedStateWorkerOwner"),
     createSharedStateWorkerOwner,
-    (sharedOwner) => sharedOwner.close(),
-    "shared-state",
   );
 }

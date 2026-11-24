@@ -34,6 +34,11 @@ exclusive ownership through manager and worker cleanup. The provider health
 returned by `memory.status` RPC is different from the CLI's aggregate index,
 source, embedding, and dreaming diagnostics and repair options.
 
+For Memory Core, `memory.status` reports coverage from the stored index. A clean,
+complete or empty index can be ready before that request initializes embeddings.
+Dirty, incomplete, unverified, or known degraded state still produces a warning.
+Use `doctor.memory.status` with `probe: true` to check the live embedding provider.
+
 When another plugin owns the memory slot and `memory-core` runs only as the
 dreaming consolidation sidecar:
 
@@ -48,7 +53,9 @@ dreaming consolidation sidecar:
   searching the sidecar index.
 - `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
   Memory Core's sidecar index and print a notice saying so (on stderr with
-  `--json`).
+  `--json`). `forget --json` also adds `"provider"` (the slot owner) and
+  `"memoryCore":"consolidation-sidecar"` to its report: the selected plugin's
+  memories were not deleted.
 
 Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
@@ -196,6 +203,10 @@ Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 30-second deadline. A cancelled caller
 interrupts its retry wait.
 
+A tool-owned deadline allows an immediate `memory_search` retry. Genuine provider
+failures still pause memory-corpus searches for up to 60 seconds; wiki-only searches
+remain independent of that cooldown.
+
 After an OpenClaw index-format upgrade, the first search rebuilds the index before
 returning results. Rebuilding can take longer, and the search result discloses
 possible costs from the configured embedding provider. An index written by a
@@ -244,9 +255,10 @@ every configured agent, falling back to the default agent when no list is
 configured. The command asks for confirmation. `--yes` skips the prompt and is
 required in a non-interactive terminal.
 
-Reset atomically drops and recreates only memory-owned derived tables in
-`agents/<agentId>/agent/openclaw-agent.sqlite`, clearing indexed content and
-cached embeddings while retaining required revision bookkeeping. Non-memory
+Reset atomically clears memory-owned derived content and cached embeddings in
+the selected agent database (SQLite or PostgreSQL), retaining required revision
+bookkeeping. SQLite recreates the derived tables; PostgreSQL retains their
+definitions and deletes the derived rows. Non-memory
 database tables and memory source files remain untouched. An agent with no index
 is a successful no-op. Reset coordinates with existing memory maintenance and
 does not restart the Gateway; a running Gateway can reindex retained sources
@@ -441,7 +453,7 @@ new entries later, but regeneration is not guaranteed.
 ### Readmission and retained data
 
 A real purge records the selected session IDs as forgotten in the agent's
-SQLite database before removing artifacts. Automatic dreaming ingestion,
+selected database before removing artifacts. Automatic dreaming ingestion,
 `memory session-backfill`, and transcript indexing, including
 `memory index --force`, check those records. Automatic ingestion records the
 reason `forgotten`. Repeating the purge does not remove the exclusion, and

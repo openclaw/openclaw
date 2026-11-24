@@ -1,15 +1,9 @@
-import {
-  composeSessionSourceAssertion,
-  type SessionSourceAssertion,
-} from "../../config/sessions/session-source-authority.js";
-import { createAbortError } from "../../infra/abort-signal.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
-import type { CliExecutionTarget, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import type { CliExecutionTarget, RunCliAgentParams } from "./types.js";
 
 export function unsupportedIsolatedCompletionError(
   backendId: string,
@@ -52,27 +46,6 @@ export function attachCliReplyBackend(
   };
   params.replyOperation.attachBackend(handle);
   return () => params.replyOperation?.detachBackend(handle);
-}
-
-/** Capture both the admitted run and any narrower caller-owned execution authority. */
-export function createCliRunCurrentAssertion(
-  params: PreparedCliRunContext["params"],
-  signal = params.abortSignal,
-): SessionSourceAssertion {
-  const assertCallerCurrent = params.assertCurrent;
-  const assertAdmitted = resolveAdmittedRunActiveAssertion(params.admittedRunContext, signal);
-  return composeSessionSourceAssertion([
-    assertCallerCurrent,
-    composeSessionSourceAssertion([assertAdmitted], (assertSource) => {
-      if (signal?.aborted) {
-        throw createAbortError("CLI run aborted");
-      }
-      if (!assertAdmitted) {
-        throw new Error("CLI run authority is no longer active");
-      }
-      assertSource();
-    }),
-  ]);
 }
 
 /** Preparation and execution must agree on the owner of private prompt context. */

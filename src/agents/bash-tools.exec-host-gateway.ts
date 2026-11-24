@@ -4,8 +4,6 @@
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
-import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
@@ -43,20 +41,18 @@ import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-r
 import { LruCache } from "../infra/lru-cache.js";
 import {
   prepareSystemRunMutableFileBinding,
-  revalidateSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
-import {
-  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  type ApprovedCwdSnapshot,
-  captureApprovedCwdSnapshotSync,
-  revalidateApprovedCwdSnapshot,
-} from "../infra/system-run-cwd-binding.js";
+import { captureApprovedCwdSnapshot } from "../infra/system-run-cwd-binding.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import {
+  resolveGatewayExecApprovalDrift,
+  revalidateGatewayExecApprovalBinding,
+} from "./bash-tools.exec-approval-binding.js";
 import {
   buildExecApprovalFollowupTarget,
   buildExecApprovalDeniedToolResult,
@@ -69,6 +65,7 @@ import {
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
+  buildGatewayExecAllowlistDeniedMessage,
   publishGatewayGuardianReview,
   buildGatewayExecApprovalDeniedToolResult,
   resolveGatewayExecApprovalFollowupText,
@@ -85,10 +82,9 @@ import {
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
+import { inlineEvalFact, opaqueProgramAsk } from "./bash-tools.exec-interpreter-approval.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import type { AgentToolResult } from "./runtime/index.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -112,48 +108,10 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
   return count;
 }
 
-async function resolveGatewayExecApprovalDrift(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  cwd: string;
-}): Promise<string | undefined> {
-  if (params.binding) {
-    const current = await revalidateSystemRunMutableFileBinding({
-      binding: params.binding,
-      cwd: params.cwd,
-    });
-    if (!current.ok) {
-      return current.message;
-    }
-  }
-  if (params.cwdSnapshot && !revalidateApprovedCwdSnapshot(params.cwdSnapshot)) {
-    return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
-  }
-  return undefined;
-}
-
-/** Rechecks a gateway approval binding at the caller's final spawn boundary. */
-async function revalidateGatewayExecApprovalBinding(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  command: string;
-  cwd: string;
-}): Promise<AgentToolResult<ExecToolDetails> | undefined> {
-  const deniedReason = await resolveGatewayExecApprovalDrift(params);
-  return deniedReason
-    ? buildGatewayExecApprovalDeniedToolResult({
-        deniedReason,
-        command: params.command,
-        cwd: params.cwd,
-      })
-    : undefined;
-}
-
 /** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
-  const cleanupMs = params.cleanupMs;
   const deny = (deniedReason: string, approvalId?: string): ProcessGatewayAllowlistResult => ({
     deniedResult: buildGatewayExecApprovalDeniedToolResult({
       approvalId,
@@ -171,7 +129,7 @@ export async function processGatewayAllowlist(
   });
   const cwdAuthorizationBound = hostSecurity === "allowlist" || hostAsk !== "off";
   const capturedCwd = cwdAuthorizationBound
-    ? captureApprovedCwdSnapshotSync(params.workdir)
+    ? await captureApprovedCwdSnapshot(params.workdir)
     : undefined;
   if (capturedCwd && !capturedCwd.ok) {
     return deny(capturedCwd.message);
@@ -258,9 +216,8 @@ export async function processGatewayAllowlist(
       },
     });
   }
-  const inlineEvalHit =
-    params.strictInlineEval === true ? detectInlineEvalInSegments(allowlistEval.segments) : null;
-  const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+  const inlineEvalHit = inlineEvalFact(params, allowlistEval);
+  const allowAlwaysPersistence = await resolveAllowAlwaysPersistenceDecision({
     segments: allowlistEval.segments,
     cwd: params.workdir,
     env: params.env,
@@ -270,13 +227,6 @@ export async function processGatewayAllowlist(
     authorizationPlan: allowlistEval.authorizationPlan,
     runtimePayload: inlineEvalHit !== null,
   });
-  if (inlineEvalHit) {
-    params.warnings.push(
-      `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
-        inlineEvalHit,
-      )}.`,
-    );
-  }
   const exactCommandDurableApprovalSatisfied = hasExactCommandDurableExecApproval({
     allowlist: approvals.allowlist,
     commandText: params.command,
@@ -407,6 +357,9 @@ export async function processGatewayAllowlist(
   const timedOutFallbackRequiresHeredocApproval =
     hasHeredocSegment && fallbackAllowlistAuthorizationSatisfied;
   const requiresInlineEvalApproval = inlineEvalHit !== null;
+  const requiresOpaqueProgramApproval =
+    !durableApprovalSatisfied &&
+    (await opaqueProgramAsk(params, allowlistEval, hostSecurity, hostAsk));
   // Exact-command durable trust must bypass plan approval: allow-always here
   // persists an `=command:` grant for the raw command text, so unenforceability
   // is moot and re-prompting would make that grant permanently ineffective.
@@ -429,7 +382,8 @@ export async function processGatewayAllowlist(
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
-    requiresInlineEvalApproval;
+    requiresInlineEvalApproval ||
+    requiresOpaqueProgramApproval;
   const denyHeadlessApproval = (): ProcessGatewayAllowlistResult => {
     const text = params.approvalFollowupText
       ? `${params.approvalFollowupText}\nCommand: ${params.command}`
@@ -656,7 +610,7 @@ export async function processGatewayAllowlist(
         ? authorizationCandidates[0]?.sourceSegment
         : undefined;
     const autoReviewResolvedPath = autoReviewSingleSegment
-      ? resolveExecutionTargetTrustPath(autoReviewSingleSegment.resolution, params.workdir)
+      ? await resolveExecutionTargetTrustPath(autoReviewSingleSegment.resolution, params.workdir)
       : undefined;
     if (params.autoReview === true && autoReviewBlockedByShellStartup) {
       params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
@@ -699,7 +653,7 @@ export async function processGatewayAllowlist(
             ? "heredoc"
             : autoReviewEnforcedCommand === undefined
               ? "execution-plan-miss"
-              : hasAllowlistMiss
+              : hasAllowlistMiss || requiresOpaqueProgramApproval
                 ? "allowlist-miss"
                 : "approval-required",
         analysis: {
@@ -834,7 +788,7 @@ export async function processGatewayAllowlist(
         approvalReviewerDeviceIds: params.approvalReviewerDeviceId
           ? [params.approvalReviewerDeviceId]
           : undefined,
-        resolvedPath: resolveApprovalAuditTrustPath(
+        resolvedPath: await resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
@@ -906,7 +860,7 @@ export async function processGatewayAllowlist(
       });
       await commitExecutionAuthorization({
         source: "ask-fallback",
-        resolvedPath: resolveApprovalAuditTrustPath(
+        resolvedPath: await resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
@@ -920,7 +874,7 @@ export async function processGatewayAllowlist(
         ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
       };
     }
-    const resolvedPath = resolveApprovalAuditTrustPath(
+    const resolvedPath = await resolveApprovalAuditTrustPath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     );
@@ -1141,6 +1095,8 @@ export async function processGatewayAllowlist(
               workdir: params.workdir,
               env: params.env,
               secretEgressBindings: params.secretEgressBindings,
+              durable: params.durable,
+              sessionId: params.sessionId,
               githubProfileDir: params.githubProfileDir,
               pathPrepend: params.pathPrepend,
               sandbox: undefined,
@@ -1149,11 +1105,12 @@ export async function processGatewayAllowlist(
               warnings: params.warnings,
               maxOutput: params.maxOutput,
               pendingMaxOutput: params.pendingMaxOutput,
-              cleanupMs,
+              cleanupMs: params.cleanupMs,
               notifyOnExit: false,
               notifyOnExitEmptySuccess: false,
               scopeKey: params.scopeKey,
               sessionKey: params.notifySessionKey ?? params.sessionKey,
+              agentId: params.agentId,
               timeoutSec: effectiveTimeout,
               startupSignal: params.signal,
               assertCurrent,
@@ -1258,12 +1215,12 @@ export async function processGatewayAllowlist(
   }
 
   if (hasAllowlistMiss) {
-    throw new Error("exec denied: allowlist miss");
+    throw new Error(buildGatewayExecAllowlistDeniedMessage(allowlistEval));
   }
 
   await commitExecutionAuthorization({
     source: "current-policy",
-    resolvedPath: resolveApprovalAuditTrustPath(
+    resolvedPath: await resolveApprovalAuditTrustPath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     ),

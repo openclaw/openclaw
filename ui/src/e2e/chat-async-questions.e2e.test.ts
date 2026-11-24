@@ -11,6 +11,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -146,6 +147,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:async-question-proof";
       const followUpTitle = "What should I emphasize?";
       const multipleQuestions = {
+        ...(!active ? openAiAuthor : {}),
         ...questionMessage,
         runId: "working-run",
         __openclaw: { id: "audience-prompt", seq: 2 },
@@ -165,18 +167,9 @@ suite.define(() => {
           idempotencyKey: "working-run:user",
         },
       };
-      const completedTool = {
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "draft-read",
-        runId: "working-run",
-        content: [{ type: "text", text: "Draft source loaded." }],
-        timestamp: questionMessage.timestamp + 500,
-        __openclaw: { id: "draft-read-result", seq: 3 },
-      };
       const gateway = await installMockGateway(page, {
         sessionKey,
-        historyMessages: [replyMessage, multipleQuestions, completedTool],
+        historyMessages: [replyMessage, multipleQuestions],
         inFlightRun: { runId: "working-run", startedAt: Date.now(), text: "" },
         sessionInfo: { hasActiveRun: true, activeRunIds: ["working-run"] },
       });
@@ -245,15 +238,16 @@ suite.define(() => {
         if (!active) {
           const finalMessage = {
             role: "assistant",
+            ...openAiAuthor,
             content: "I finished the draft.",
             runId: "working-run",
             phase: "final_answer",
             stopReason: "stop",
             timestamp: questionMessage.timestamp + 1_000,
-            __openclaw: { id: "draft-complete", seq: 4 },
+            __openclaw: { id: "draft-complete", seq: 3 },
           };
           await gateway.setMethodResponse("chat.history", {
-            messages: [replyMessage, multipleQuestions, completedTool, finalMessage],
+            messages: [replyMessage, multipleQuestions, finalMessage],
             sessionInfo: { hasActiveRun: false, activeRunIds: [] },
           });
           await gateway.emitGatewayEvent("chat", {
@@ -263,16 +257,13 @@ suite.define(() => {
             message: finalMessage,
           });
           await page
-            .getByRole("button", { name: "Stop generating" })
+            .getByRole("button", { name: "Stop", exact: true })
             .waitFor({ state: "detached" });
           await expect
             .poll(() => page.locator(".chat-work-group button").getAttribute("aria-expanded"))
             .toBe("false");
           expect(await expand.isVisible()).toBe(true);
           expect(await expand.textContent()).toContain(followUpTitle);
-          await expectBrowser(
-            page.locator(".chat-thread").getByText(title, { exact: true }),
-          ).toBeVisible();
           expect(await card.getByRole("textbox").count()).toBe(0);
         }
 
@@ -412,7 +403,7 @@ suite.define(() => {
       });
       await card.getByText(blockingTitle, { exact: true }).waitFor();
       expect(await card.textContent()).toContain("Waiting for your answer");
-      expect(await composer.count()).toBe(0);
+      await expectBrowser(composer).toBeVisible();
       await card.getByRole("button", { name: "Next", exact: true }).click();
       await card.getByText(title, { exact: true }).waitFor();
       expect(await custom.inputValue()).toBe("Readers new to the project");

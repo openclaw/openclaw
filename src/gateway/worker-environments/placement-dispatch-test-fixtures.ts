@@ -56,7 +56,7 @@ export async function seedProvisioningPlacement(
   });
 }
 
-export async function seedSyncingPlacement(
+async function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
@@ -137,6 +137,8 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: `provision:${environmentId}`,
+    resourceReceipt: null,
+    retention: null,
     nodeSetupId: null,
     nodeDeviceId: null,
     sharedHost: false,

@@ -162,6 +162,10 @@ export const validateSkillsUpdateParams = createProtocolValidator(
   S.SkillsUpdateParamsSchema,
   Checks.isSkillsUpdateParams,
 );
+export const validateSkillsCategoriesParams = createProtocolValidator(
+  S.SkillsCategoriesParamsSchema,
+  Checks.isSkillsCategoriesParams,
+);
 export const validateSkillsSearchParams = createProtocolValidator(
   S.SkillsSearchParamsSchema,
   Checks.isSkillsSearchParams,
@@ -209,4 +213,19 @@ export const validateSkillsFileGetParams = createProtocolValidator(
 export const validateModelsProbeParams = createProtocolValidator(
   S.ModelsProbeParamsSchema,
   Checks.isModelsProbeParams,
+);
+
+export const validateToolUsageStatusParams = createProtocolValidator(
+  S.ToolUsageStatusParamsSchema,
+  Checks.isToolUsageStatusParams,
+);
+
+export const validateToolUsageImportParams = createProtocolValidator(
+  S.ToolUsageImportParamsSchema,
+  Checks.isToolUsageImportParams,
+);
+
+export const validateToolUsageResetParams = createProtocolValidator(
+  S.ToolUsageResetParamsSchema,
+  Checks.isToolUsageResetParams,
 );

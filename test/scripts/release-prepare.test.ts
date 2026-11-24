@@ -17,7 +17,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function prepareSteps(overrides: Partial<Parameters<typeof createReleasePrepareSteps>[0]> = {}) {
   return createReleasePrepareSteps({
-    android: false,
     jobs: 4,
     mode: "shadow",
     rootDir: "/repo",
@@ -36,7 +35,6 @@ describe("release preparation", () => {
       expect(() => parseReleasePrepareArgs(args.split(" "))).toThrow(error);
     }
     expect(parseReleasePrepareArgs(["--jobs", "2", "--", "--jobs", "0x4"])).toMatchObject({
-      android: false,
       jobs: 4,
       mode: "shadow",
     });
@@ -49,10 +47,10 @@ describe("release preparation", () => {
 
   it("builds the write cutover from atomic versioning and scoped preflight", () => {
     const version = "2026.7.2-beta.1";
-    const steps = prepareSteps({ android: true, jobs: 6, mode: "write", version });
+    const steps = prepareSteps({ jobs: 6, mode: "write", version });
 
     expect(steps.map(({ args }) => args)).toEqual([
-      `--import tsx scripts/release-version.ts --root /repo --version ${version} --android --write`.split(
+      `--import tsx scripts/release-version.ts --root /repo --version ${version} --write`.split(
         " ",
       ),
       "scripts/release-preflight.mjs --fix --scope version --jobs 6".split(" "),
@@ -72,10 +70,10 @@ describe("release preparation", () => {
 
   it("streams large JSON-mode child output to stderr without buffering", () => {
     const childScript = [
-      'const { writeSync } = require("node:fs");',
-      'writeSync(1, "child stdout begin\\n" + "x".repeat(2 * 1024 * 1024) + "\\nchild stdout end\\n");',
-      'writeSync(2, "child stderr sentinel\\n");',
-      "process.exit(23);",
+      'const output = "child stdout begin\\n" + "x".repeat(2 * 1024 * 1024) + "\\nchild stdout end\\n";',
+      "process.stdout.write(output, () => {",
+      '  process.stderr.write("child stderr sentinel\\n", () => process.exit(23));',
+      "});",
     ].join("");
     const harness = `
       import { runReleasePrepareStep } from ${JSON.stringify(new URL("../../scripts/release-prepare.ts", import.meta.url).href)};

@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -334,6 +337,7 @@ function installRuntime(
         recordInboundSession,
       },
       inbound: {
+        buildContext: buildChannelInboundEventContext,
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
         run,
       },
@@ -896,9 +900,10 @@ describe("mattermost inbound user posts", () => {
     },
   );
 
-  it("does not debounce denied senders or system posts into an allowed turn", async () => {
+  it.each([undefined, "slack_attachment"])("isolates authorized posts (%s)", async (type) => {
+    const senderId = "allowed-user";
     const config = mattermostConfig(
-      { groupPolicy: "allowlist", groupAllowFrom: ["allowed-user"] },
+      { groupPolicy: "allowlist", groupAllowFrom: [senderId] },
       { channels: { defaults: { contextVisibility: "allowlist" } } },
     );
     installRuntime(config, undefined, {
@@ -907,23 +912,22 @@ describe("mattermost inbound user posts", () => {
     });
     const { socket, stop } = await openMonitor(config);
     for (const post of [
-      { id: "post-denied", message: "denied text", senderId: "denied-user", senderName: "mallory" },
       {
-        id: "post-system",
-        message: "system text",
-        senderId: "allowed-user",
-        type: "system_join_channel",
+        id: "post-denied",
+        message: "denied text",
+        senderId: "denied-user",
+        senderName: "mallory",
       },
-      { id: "post-allowed", message: "allowed text", senderId: "allowed-user" },
+      { id: "post-system", message: "system text", senderId, type: "system_join_channel" },
+      { id: "post-allowed", message: "allowed text", senderId, type },
     ]) {
       await emitMattermostChannelPost(socket, post);
     }
     await vi.waitFor(() => expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1));
     await stop();
     const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
-    expect(ctx).toMatchObject({ SenderId: "allowed-user", BodyForAgent: "allowed text" });
-    expect(ctx?.Body).not.toContain("denied text");
-    expect(ctx?.Body).not.toContain("system text");
+    expect(ctx).toMatchObject({ SenderId: senderId, BodyForAgent: "allowed text" });
+    expect(ctx?.Body).not.toMatch(/denied text|system text/);
   });
 
   it("flushes pending group text before authorizing a bare abort without a mention", async () => {

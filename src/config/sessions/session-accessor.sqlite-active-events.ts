@@ -37,7 +37,6 @@ import {
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
-import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   createVisibleMessageCursor,
   encodeVisibleMessageCursor,
@@ -85,21 +84,8 @@ export function readLatestSessionTranscriptMessageEvent(
         start: 0,
         endExclusive: fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
       });
-      return row ? parseActiveTranscriptMessageRow(row) : undefined;
+      return row ? parseActiveTranscriptMessageRow(row, projection) : undefined;
     },
-    options,
-  );
-}
-
-/** Classifies one entry against the authoritative active path and leaf. */
-export function readSessionTranscriptActivePathEntryRelation(
-  scope: SessionTranscriptReadScope,
-  entryId: string | null,
-  options: { readOnly?: boolean } = {},
-): "exact" | "ancestor" | "off-path" {
-  return withCurrentProjectionSnapshot(
-    scope,
-    (projection) => readActivePathEntryRelationFromProjection(projection, entryId),
     options,
   );
 }
@@ -388,7 +374,7 @@ function readVisibleDeltaPayload(
       )
       .select("parent_identity.event_id as parent_id"),
   ).rows.map((row) => {
-    const { event, eventSeq, seq } = parseActiveTranscriptMessageRow(row);
+    const { event, eventSeq, seq } = parseActiveTranscriptMessageRow(row, projection);
     return { event, eventSeq, parentId: row.parent_id, seq };
   });
 }

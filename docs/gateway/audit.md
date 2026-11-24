@@ -124,9 +124,10 @@ invoker. When admission has a verified human requester, `representedSubject`
 records that person's installation-local pseudonym separately. A supported
 explicit user selection can therefore create a child representing Bob while
 the parent execution continues as Alice. This does not mean Bob personally
-requested or approved the tool call. Agent-initiated `sessions_create` and
-`sessions_send` executions also record the trusted agent invoker and prepared
-human subject when available; they do not invent spawn lineage. The lineage
+requested or approved the tool call. Agent-initiated `sessions_send` executions also record the trusted agent invoker
+and prepared human subject when available; they do not invent spawn lineage.
+`sessions_create` uses the visible-spawn creation path, so its opening execution
+records the same lineage as `sessions_spawn`. The lineage
 projection for `sessions_spawn` links the
 parent context, execution, run, and agent when the exact private parent token
 was available. Its delegation reference covers the spawn relation plus the
@@ -492,8 +493,9 @@ what was recorded, not as proof of what happened:
   settles, a partial batch of at least two items can wait one fixed 5 ms window before submitting
   up to 32 queued items in one transaction, preserving FIFO order. Later arrivals do
   not extend that window. A full batch, maintenance, or shutdown flushes it immediately.
-  Per-item savepoints isolate rejected records; successful items are
-  acknowledged to the queue only after the shared commit. Queue acceptance itself
+  Per-item savepoints isolate rejected records, except for prevalidated single-statement
+  inserts in plain SQLite event batches, where statement atomicity provides isolation.
+  Successful items are acknowledged to the queue only after the shared commit. Queue acceptance itself
   still does not acknowledge persistence. Lock contention retains the unprocessed suffix;
   a failed batch commit retains the whole batch for a contention retry;
   an unknown worker outcome replays the unacknowledged batch with its original

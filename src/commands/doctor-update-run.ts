@@ -52,13 +52,15 @@ async function recordUpdateHistoryWarning(detail: string): Promise<void> {
     { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync, getNodeSqliteKysely },
     { decodeRun },
     { encodeRun },
-    { updateRunLedgerSchema, upsertStep },
+    { updateRunLedgerSchema },
+    { upsertStep },
   ] = await Promise.all([
     import("../state/openclaw-state-db-existing-write.js"),
     import("../infra/kysely-sync.js"),
     import("../infra/update-run-read.kernel.js"),
     import("../infra/update-run-codec.js"),
     import("../infra/update-run-write.js"),
+    import("../infra/update-run-step-upsert.js"),
   ]);
   runExistingOpenClawStateWriteTransaction(
     ({ db }) => {

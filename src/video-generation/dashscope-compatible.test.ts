@@ -6,7 +6,7 @@ import {
   pollDashscopeVideoTaskUntilComplete as pollTask,
   runDashscopeVideoGenerationTask as generateTask,
 } from "./dashscope-compatible.js";
-import type { VideoGenerationRequest as VideoRequest } from "./types.js";
+import type { VideoGenerationRequest as VideoRequest } from "./provider-types.js";
 
 function videoRequest(overrides: Partial<VideoRequest> = {}): VideoRequest {
   return { provider: "qwen", model: "wan2.6-t2v", prompt: "video", cfg: {}, ...overrides };
@@ -204,9 +204,16 @@ describe("DashScope operation deadlines", () => {
     expect(String(settled)).toMatch(pattern);
     await completion;
   }
-  it.each([false, true])(
-    "releases a malformed streaming body (capture tee=%s)",
-    async (capture) => {
+  it.each<[string, boolean]>([
+    ["application/json", false],
+    ["application/json", true],
+    ["image/png", false],
+    ["image/png", true],
+    ["binary/octet-stream", false],
+    ["binary/octet-stream", true],
+  ])(
+    "releases a malformed %s streaming body (capture tee=%s)",
+    async (contentType, capture) => {
       const order: string[] = [];
       const cancel = vi.fn(async () => {
         order.push("cancel-started");
@@ -221,7 +228,7 @@ describe("DashScope operation deadlines", () => {
           cancel,
         },
         capture,
-        "application/json",
+        contentType,
       );
       try {
         await expect(downloadVideo(fixture.fetchFn)).rejects.toThrow(malformed);
@@ -354,6 +361,7 @@ describe("DashScope operation deadlines", () => {
           buffer: Buffer.from("video"),
           fileName: "video-1.mp4",
           mimeType: contentType || "video/mp4",
+          metadata: { sourceUrl: videoUrl },
         },
       ]);
       expect(vi.getTimerCount()).toBe(0);

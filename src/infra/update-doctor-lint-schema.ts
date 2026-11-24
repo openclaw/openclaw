@@ -8,6 +8,7 @@ export const UpdateDoctorLintFindingSchema = z.object({
   fixHint: z.string().optional(),
   severity: z.string().optional(),
   path: z.string().optional(),
+  target: z.string().optional(),
   requirement: z.string().optional(),
 });
 export type UpdateDoctorLintFinding = z.infer<typeof UpdateDoctorLintFindingSchema>;

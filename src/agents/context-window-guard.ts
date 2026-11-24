@@ -39,9 +39,16 @@ export function resolveContextWindowInfo(params: {
     { cfg: params.cfg, provider: params.provider, model: params.modelId },
     normalizePositiveInt,
   );
-  const fromModelsConfig =
-    configured.effectiveConfiguredTokens ?? configured.configuredContextWindow;
   const reportedTokens = normalizePositiveInt(params.modelContextTokens);
+  // An authored contextWindow declares the native window, not the active-input
+  // cap, so a lower reported model cap still wins (as in resolveModelContextTokenProjection).
+  const configuredWindow = configured.configuredContextWindow;
+  const fromModelsConfig =
+    configured.effectiveConfiguredTokens ??
+    (configuredWindow !== undefined &&
+    (reportedTokens === null || reportedTokens >= configuredWindow)
+      ? configuredWindow
+      : undefined);
   const nativeWindow =
     normalizePositiveInt(configured.fixedContextWindow) ??
     (params.modelContextWindowSource === "synthetic"

@@ -8,6 +8,10 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { authorizeOperatorScopesForRequiredScope } from "../../gateway/method-scopes.js";
+import {
+  operatorRoleSubject,
+  type OperatorRoleSubject,
+} from "../../gateway/operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-role-policy.js";
 import {
   executeSqliteQuerySync,
@@ -40,10 +44,17 @@ import { SkillLibraryError } from "../skill-library-error.js";
 import { managedSkillCommandName } from "./command-name.js";
 
 export type SkillLibraryAuthority = {
+  /** Host-prepared current member subject, fenced again at worker admission. */
+  roleSubject?: OperatorRoleSubject;
   /** Host-authenticated profile only. Neither session attribution nor model arguments qualify. */
   profileId?: string;
   namespace?: "personal";
   scopes: readonly string[];
+  /**
+   * The host verified a current OpenClaw ID owner device whose account is linked to
+   * `profileId`: that profile's named role does not cap the owner's scopes.
+   */
+  ownerDevice?: boolean;
   getConfig: () => OpenClawConfig;
   /** Must revalidate the admitted run/placement and request owner, synchronously at commit. */
   assertCurrent: () => void;
@@ -158,16 +169,20 @@ export function resolveSkillLibraryActor(db: EngineConnection, authority: SkillL
 
 /** Apply the same role ceiling to current worker rows or the Gateway's committed profile facts. */
 export function resolveSkillLibraryActorFromProfile(
-  authority: Pick<SkillLibraryAuthority, "scopes">,
+  authority: Pick<SkillLibraryAuthority, "scopes" | "profileId" | "ownerDevice" | "roleSubject">,
   config: OpenClawConfig,
   profile: { id: string; role: string | null; githubLogin: string | null } | undefined,
 ) {
-  const ceiling = resolveOperatorRolePolicyForAssignment(
-    profile?.id,
-    profile?.role ?? null,
-    config,
-    profile?.githubLogin ?? null,
-  )?.scopes;
+  const ceiling =
+    authority.ownerDevice === true && profile !== undefined && profile.id === authority.profileId
+      ? undefined
+      : resolveOperatorRolePolicyForAssignment(
+          profile?.id,
+          profile?.role ?? null,
+          config,
+          profile?.githubLogin ?? null,
+          authority.roleSubject ?? operatorRoleSubject(profile),
+        )?.scopes;
   const permits = (scope: "operator.read" | "operator.write" | "operator.admin") =>
     authorizeOperatorScopesForRequiredScope(scope, [...authority.scopes]).allowed &&
     (!ceiling || authorizeOperatorScopesForRequiredScope(scope, ceiling).allowed);

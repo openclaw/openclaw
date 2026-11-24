@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import * as subagentRegistry from "../agents/subagents/registry/subagent-registry.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import * as deviceIdentity from "../infra/device-identity-async.js";
@@ -28,6 +30,7 @@ import { createMaintenanceHandles } from "./server-runtime-services.test-harness
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
+import * as restartResume from "./session-restart-resume.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 function idleSidecar() {
@@ -152,6 +155,7 @@ describe("createGatewayKernel", () => {
       const { state, port } = fixture;
       const bootId = `gateway-kernel-${entry}-close`;
       const configReloaderStop = createDeferred();
+      const reloadStarted = createDeferred();
       const recoveryStop = createDeferred();
       const updateCheckStopped = createDeferred();
       const periodicStopped = createDeferred();
@@ -217,17 +221,13 @@ describe("createGatewayKernel", () => {
           await server.startupSettled;
         } else {
           kernel = await createGatewayKernel(port, options);
-          kernel.kernel.unlockStartupMethods();
+          await kernel.kernel.unlockStartupMethods();
           kernel.kernel.markSidecarsReady();
           kernel.kernel.setDispatchReady(true);
         }
-        if (!kernel) {
-          throw new Error("Expected the real Gateway kernel to be captured");
-        }
+        assert(kernel, "Expected the real Gateway kernel to be captured");
         const projection = getSessionRowProjection(kernel.gatewayRequestContext);
-        if (!projection) {
-          throw new Error("Expected the real session row projection");
-        }
+        assert(projection, "Expected the real session row projection");
         const projectionDispose = vi.spyOn(projection, "dispose");
         const prepareRows = projection.withPreparedExactRows.bind(projection);
         vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
@@ -279,9 +279,10 @@ describe("createGatewayKernel", () => {
 
         const closeFirstStop = vi.fn(async () => {});
         kernel.kernel.swapDiscovery({ update: async () => {}, stop: closeFirstStop });
-        const reloadStop = vi
-          .spyOn(kernel.runtimeState.configReloader, "stop")
-          .mockReturnValue(reloadWork);
+        vi.spyOn(kernel.runtimeState.configReloader, "stop").mockImplementation(() => {
+          reloadStarted.resolve();
+          return reloadWork;
+        });
         const stopRecovery = vi.fn(() => recoveryWork);
         kernel.kernel.setScheduledServiceHandles({
           stopScheduledServices: kernel.runtimeState.stopScheduledServices,
@@ -316,9 +317,9 @@ describe("createGatewayKernel", () => {
         await expect(boundHost.request("start", () => {})).rejects.toThrow("closed instance");
         expect(acceptRequest).not.toHaveBeenCalled();
         expect(invalidateCron).toHaveBeenCalledOnce();
-        await nextTurn();
+        await withinTest(reloadStarted.promise, signal);
         expect(startMaintenance).not.toHaveBeenCalled();
-        expect(reloadStop).toHaveBeenCalledOnce();
+        expect(kernel.runtimeState.configReloader.stop).toHaveBeenCalledOnce();
         expectCalls(0, terminalDispose, gatewayStop);
         configReloaderStop.resolve();
         await nextTurn();
@@ -408,7 +409,7 @@ describe("createGatewayKernel", () => {
         ok: true,
         payload: { runId, status: "ok" },
       });
-      kernel.kernel.unlockStartupMethods();
+      await kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
       expect(getReadiness()).toMatchObject(notReady);
@@ -417,7 +418,7 @@ describe("createGatewayKernel", () => {
         ok: true,
         status: "started",
       });
-      expectCoreAgentDatabaseReadiness(getReadiness, state);
+      await expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(dispatch("chat.send", chatParams)).resolves.toEqual({ runId, status: "ok" });
 
       const { promise: firstStop, resolve: releaseFirstStop } = createDeferred();
@@ -612,6 +613,41 @@ describe("createGatewayKernel", () => {
     await withinTest(waitForPluginRegistryRetirement(ambientRegistry), signal);
     expect(capturedRegistryCleanup).toHaveBeenCalledOnce();
     expect(inspectAccount).not.toHaveBeenCalled();
+  });
+
+  it("records restart markers after an in-place update removes their installed chunks", async () => {
+    const fixture = await createKernelFixture("gateway-kernel-rotated-shutdown-chunks");
+    const { state } = fixture;
+    const rotatedChunks = [
+      "./session-restart-resume.js",
+      "../agents/subagents/registry/subagent-registry.js",
+    ];
+    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    try {
+      await fixture.configure();
+      kernel = await fixture.open();
+      // Full startup commits the reloader's config; shutdown persists markers only after that.
+      const config = kernel.gatewayRequestContext.getRuntimeConfig();
+      kernel.runtimeState.configReloader.getCommittedRuntimeConfig = () => config;
+      const markers = vi.spyOn(restartResume, "persistRunningSessionsForRestart");
+      const subagents = vi.spyOn(subagentRegistry, "terminateLiveSubagentsForShutdown");
+      for (const chunk of rotatedChunks) {
+        vi.doMock(chunk, () => {
+          throw Object.assign(new Error(`installed ${chunk} chunk was removed`), {
+            code: "ERR_MODULE_NOT_FOUND",
+          });
+        });
+      }
+      await kernel.closeOnStartupFailure();
+      expect(markers).toHaveBeenCalledOnce();
+      expect(subagents).toHaveBeenCalledOnce();
+    } finally {
+      for (const chunk of rotatedChunks) {
+        vi.doUnmock(chunk);
+      }
+      vi.restoreAllMocks();
+      await closeKernelFixture(kernel, state);
+    }
   });
 
   it("runs kernel teardown when required TLS material is unavailable", async () => {

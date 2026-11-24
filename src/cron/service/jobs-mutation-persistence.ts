@@ -13,10 +13,7 @@ import {
 } from "../tools-allow-provenance.js";
 import type { CronJob, CronStoredJob } from "../types.js";
 import { findJobOrThrow, isJobEnabled } from "./jobs-scheduling.js";
-import {
-  cronJobMessageActionAuthorityInputsEqual,
-  cronJobMessageToolAuthorityInputsEqual,
-} from "./jobs-tool-policy.js";
+import { cronJobMessageActionAuthorityInputsEqual } from "./jobs-tool-policy.js";
 import { publishCronRunReceiptMutation } from "./run-receipts.js";
 import { emit, type CronServiceState, type CronAddOptions } from "./state.js";
 import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
@@ -50,9 +47,6 @@ export async function persistUpdatedJob(params: {
     ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
       !isDeepStrictEqual(previousJob.payload, nextJob.payload));
   const scheduleChanged = !cronSchedulingInputsEqual(previousJob, nextJob);
-  const messageActionAuthorityChanged =
-    (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||
-    !cronJobMessageToolAuthorityInputsEqual(previousJob, nextJob);
   const messageSourceAuthorityChanged =
     !isDeepStrictEqual(previousJob.operatorSource, nextJob.operatorSource) ||
     !cronJobMessageActionAuthorityInputsEqual(previousJob, nextJob) ||
@@ -90,12 +84,13 @@ export async function persistUpdatedJob(params: {
     afterCommit: () => {
       publishCronRunReceiptMutation({
         jobId: nextJob.id,
-        messageActionAuthorityChanged,
         messageSourceAuthorityChanged,
         scheduleChanged,
       });
       try {
-        if (
+        if (previousJob.ownerProfileId !== nextJob.ownerProfileId) {
+          requestActiveCronJobCancellation(nextJob.id, "Cron job ownership transferred.");
+        } else if (
           params.jobMutation.kind === "update"
             ? params.jobMutation.patch.enabled === false
             : isJobEnabled(previousJob) && !isJobEnabled(nextJob)

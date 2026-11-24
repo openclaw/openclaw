@@ -1,9 +1,8 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
@@ -11,10 +10,18 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { lstatSync: vi.fn(actual.lstatSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
+  vi.mocked(fs.lstatSync).mockReset();
 });
 
 function seed(filename: string) {
@@ -49,15 +56,15 @@ function fixture() {
   return { root, shared, agent, env, backups };
 }
 
-async function owned<T>(run: () => Promise<T> | T) {
+async function owned<T>(run: (admission: Mock<() => void>) => Promise<T> | T) {
   const owner = acquireGatewayStateOwner({ databasePath: f.shared });
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
-    assertOwnerCurrent: owner.assertCurrent,
+    assertOwnerCurrent: vi.spyOn(owner, "assertCurrent"),
     assertDatabaseAccess: owner.assertDatabaseAccess,
   });
   try {
-    return await scope.run(run);
+    return await scope.run(() => run(vi.mocked(owner.assertCurrent)));
   } finally {
     await scope.close();
     owner.release();
@@ -99,6 +106,23 @@ it("omits only disposable core migration backups for the shipped flag", async ()
   expectBackup(foreign);
 });
 
+it("keeps the shared image a legacy credential cutover can fall back to", async () => {
+  f.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  await owned(() =>
+    backupDoctorMigrationDatabases({
+      env: f.env,
+      pendingDatabasePaths: [f.shared, f.agent],
+      pendingMigrations: [
+        { kind: "state", path: f.shared, foundVersion: 22, supportedVersion: 40 },
+        { kind: "agent", path: f.agent, foundVersion: 27, supportedVersion: 39 },
+      ],
+      databasePaths: [f.shared, f.agent],
+    }),
+  );
+  expectBackup(f.shared);
+  expect(f.backups(f.agent)).toEqual([]);
+});
+
 it.each(["flag-only", "foreign-temp"])("retains ordinary backups for %s Doctor", async (kind) => {
   const env =
     kind === "flag-only"
@@ -129,9 +153,9 @@ it.each(["symlink", "hardlink"])("does not admit a %s family as disposable", asy
 });
 
 it("requires a known bigint inode before omitting an image", async () => {
+  const { lstatSync: lstat } = await vi.importActual<typeof import("node:fs")>("node:fs");
   await owned(() => {
-    const lstat = fs.lstatSync;
-    vi.spyOn(fs, "lstatSync").mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
+    vi.mocked(fs.lstatSync).mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
       const stat = lstat(...args);
       if (String(args[0]) === f.agent && stat && typeof stat.ino === "bigint") {
         return new Proxy(stat, {
@@ -140,24 +164,32 @@ it("requires a known bigint inode before omitting an image", async () => {
       }
       return stat;
     });
-    syncBuiltinESMExports();
     const coverage = createDoctorRehearsalDatabaseCoverage(f.env)!;
     expect(coverage.admit([f.agent])).toEqual([]);
     expect(coverage.excludes(f.agent)).toBe(false);
   });
 });
 
-it("invalidates admitted coverage on physical replacement or owner release", async () => {
+it.each(["replacement", "companion"])("revokes %s coverage", async (kind) => {
   expect(createDoctorRehearsalDatabaseCoverage(f.env)).toBeUndefined();
   let coverage: ReturnType<typeof createDoctorRehearsalDatabaseCoverage>;
-  await owned(() => {
+  await owned((admission) => {
+    admission.mockClear();
     coverage = createDoctorRehearsalDatabaseCoverage(f.env)!;
     expect(coverage.admit([f.agent])).toEqual([f.agent]);
-    fs.renameSync(f.agent, `${f.agent}.held`);
-    seed(f.agent);
+    coverage.assertCurrent();
+    expect(admission).toHaveBeenCalledTimes(4);
+    if (kind === "replacement") {
+      fs.renameSync(f.agent, `${f.agent}.held`);
+      seed(f.agent);
+    } else {
+      fs.writeFileSync(`${f.agent}-journal`, "new journal");
+    }
     expect(coverage.assertCurrent).toThrow(/identity changed/);
-    fs.unlinkSync(f.agent);
-    fs.renameSync(`${f.agent}.held`, f.agent);
+    fs.rmSync(kind === "replacement" ? f.agent : `${f.agent}-journal`);
+    if (kind === "replacement") {
+      fs.renameSync(`${f.agent}.held`, f.agent);
+    }
     coverage.assertCurrent();
   });
   expect(coverage!.assertCurrent).toThrow(/closed|current/);
@@ -172,15 +204,6 @@ it.skipIf(process.platform === "win32")(
     });
   },
 );
-
-it("invalidates coverage when an absent companion appears", async () => {
-  await owned(() => {
-    const coverage = createDoctorRehearsalDatabaseCoverage(f.env)!;
-    expect(coverage.admit([f.agent])).toEqual([f.agent]);
-    fs.writeFileSync(`${f.agent}-journal`, "new journal");
-    expect(coverage.assertCurrent).toThrow(/identity changed/);
-  });
-});
 
 it.each([false, true])(
   "requires canonical discovery before excluding a migration alias: %s",

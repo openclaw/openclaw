@@ -61,13 +61,40 @@ function catalog(settings: RuntimeConfig, entries = [row(facts)]) {
   return { provider, rows: provider.augmentModelCatalog!({ env: {}, entries }) };
 }
 
+it.each([
+  {
+    provider: "openrouter",
+    modelId: "deepseek/deepseek-v4.1-flash-1017",
+    baseUrl: "https://openrouter.ai/api/v1",
+  },
+  { provider: "openai", modelId: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" },
+])("leaves $provider transport unchanged", ({ provider, modelId, baseUrl }) => {
+  const { normalizeTransport } = createPreparedDecisionProvider(() => config).provider!;
+  expect(
+    normalizeTransport?.({
+      provider,
+      modelId,
+      api: "openai-completions",
+      baseUrl,
+    }),
+  ).toBeUndefined();
+});
+
 it.each<[RuntimeConfig, Decision, string?]>([
   [config, facts, hosted],
   [runtime({ baseUrl: "https://api.typesafe.ai" }), facts, hosted],
   [runtime({ baseUrl: "https://api.typesafe.ai/v1/" }), facts, hosted],
-  [{ baseUrl: "http://127.0.0.1:8765", timeoutMs: 2000 }, unbound],
-  [runtime({ baseUrl: "https://systemone.fixture.invalid/v1" }), unbound],
-  [runtime({ baseUrl: "https://api.typesafe.ai/custom/v1" }), unbound],
+  [{ baseUrl: "http://127.0.0.1:8765", timeoutMs: 2000 }, unbound, "http://127.0.0.1:8765/v1"],
+  [
+    runtime({ baseUrl: "https://systemone.fixture.invalid/v1" }),
+    unbound,
+    "https://systemone.fixture.invalid/v1",
+  ],
+  [
+    runtime({ baseUrl: "https://api.typesafe.ai/custom/v1" }),
+    unbound,
+    "https://api.typesafe.ai/custom/v1",
+  ],
   [runtime({ headers: enabled }), unlimited],
   [runtime({ headers: disabled, models: [model] }), unlimited],
   [runtime({ headers: disabled, request: { headers: enabled } }), unlimited],

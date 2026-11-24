@@ -5,8 +5,21 @@ export async function waitForPluginInstanceSettlement(
   pluginId: string,
   waiters: Set<() => void>,
   settled: () => boolean,
-  signal: AbortSignal,
+  signal: AbortSignal | number,
 ): Promise<void> {
+  if (typeof signal === "number") {
+    const timeoutMs = signal;
+    const deadline = new AbortController();
+    const timer = setTimeout(() => {
+      deadline.abort(new Error(`Plugin ${pluginId} still has active calls after ${timeoutMs}ms`));
+    }, timeoutMs);
+    try {
+      await waitForPluginInstanceSettlement(pluginId, waiters, settled, deadline.signal);
+    } finally {
+      clearTimeout(timer);
+    }
+    return;
+  }
   signal.throwIfAborted();
   if (settled()) {
     return;

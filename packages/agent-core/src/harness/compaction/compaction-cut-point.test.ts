@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
+import {
+  collectCompactionCutEntryFact,
+  findCutPointFromFacts,
+  getMessageFromEntryForCompaction,
+} from "./compaction-cut-point.js";
 import { estimateTokens, findCutPoint } from "./compaction.js";
 import { createMessageEntry as messageEntry } from "./compaction.test-support.js";
 import { assistant, text, toolCall, toolResult, user } from "./shard-fixtures.test-support.js";
@@ -48,6 +53,57 @@ function buildTranscriptWithToolResult(
   ].map(messageEntry);
 }
 
+it("keeps occurrence cuts and pending budgets after releasing the source payloads", () => {
+  const entries = [
+    userText("old request", 1),
+    callingAssistant("bash", "repeat"),
+    { ...toolResultText("large removed payload ".repeat(10_000), 2), toolCallId: "repeat" },
+    userText("pending request", 3),
+    callingAssistant("read", "repeat"),
+    {
+      ...toolResultText("synthetic", 4),
+      toolCallId: "repeat",
+      isError: true,
+      details: { openclawSyntheticMissingToolResult: true },
+    },
+    callingAssistant("read", "other"),
+    { ...toolResultText("late real result", 5), toolCallId: "repeat" },
+    { ...toolResultText("other result", 6), toolCallId: "other" },
+    assistantText("complete", 7),
+  ].map(messageEntry);
+  const facts = structuredClone(entries.map((entry) => collectCompactionCutEntryFact(entry)));
+  const estimates = entries.map((entry) => {
+    const message = getMessageFromEntryForCompaction(entry);
+    return message ? estimateTokens(message) : 0;
+  });
+  const estimateAt = (index: number) => {
+    const value = estimates[index];
+    assert(value !== undefined);
+    return value;
+  };
+  const constraints = { requestBoundary: { entryId: "entry-3", preserve: true } };
+  const budgets = [1, 100, 20_000];
+  const expected = budgets.map((budget) =>
+    findCutPoint(entries, 0, entries.length, budget, constraints),
+  );
+  expect(expected[0]?.firstKeptEntryIndex).toBe(3);
+  const retention = {
+    ...constraints,
+    budget: { maxTokens: 100, reserveTokens: 10, estimateTokens },
+  };
+  const retained = findCutPoint(entries, 0, entries.length, 100, retention);
+  entries.length = 0;
+  expect(JSON.stringify(facts)).not.toContain("removed payload");
+  budgets.forEach((budget, index) => {
+    expect(findCutPointFromFacts(facts, 0, facts.length, budget, constraints, estimateAt)).toEqual(
+      expected[index],
+    );
+  });
+  expect(findCutPointFromFacts(facts, 0, facts.length, 100, retention, estimateAt)).toEqual(
+    retained,
+  );
+});
+
 describe("findCutPoint", () => {
   function foregroundBudget(entries: SessionTreeEntry[]) {
     const maxTokens = entries
@@ -72,31 +128,24 @@ describe("findCutPoint", () => {
   const asynchronousExchange = (resultBeforeText = false) =>
     asynchronousMessages(resultBeforeText).map(messageEntry);
 
-  it("retains an async call whose result follows another assistant fragment", () => {
-    const entries = asynchronousExchange();
+  it.each([
+    ["retains an async call whose result follows another assistant fragment", false, 1],
+    ["can summarize a completed tool exchange before the retained explanation", true, 3],
+  ] as const)("%s", (_name, resultBeforeText, firstKeptEntryIndex) => {
+    const entries = asynchronousExchange(resultBeforeText);
     const result = findCutPoint(entries, 0, entries.length, 100);
 
-    expect(result).toMatchObject({ firstKeptEntryIndex: 1, isSplitTurn: true });
+    expect(result).toMatchObject({ firstKeptEntryIndex, isSplitTurn: true });
   });
 
-  it("can summarize a completed tool exchange before the retained explanation", () => {
-    const entries = asynchronousExchange(true);
-
-    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(3);
-  });
-
-  it("summarizes the complete exchange when its call cannot fit the foreground budget", () => {
-    const entries = asynchronousExchange();
+  it.each([
+    ["summarizes the complete exchange when its call cannot fit the foreground budget", true],
+    ["refuses a foreground tail that can only fit an incomplete tool exchange", false],
+  ] as const)("%s", (_name, complete) => {
+    const entries = complete ? asynchronousExchange() : asynchronousExchange().slice(0, -1);
     expect(
       findCutPoint(entries, 0, entries.length, 100, foregroundBudget(entries)).firstKeptEntryIndex,
-    ).toBe(4);
-  });
-
-  it("refuses a foreground tail that can only fit an incomplete tool exchange", () => {
-    const entries = asynchronousExchange().slice(0, -1);
-    expect(
-      findCutPoint(entries, 0, entries.length, 100, foregroundBudget(entries)).firstKeptEntryIndex,
-    ).toBe(entries.length);
+    ).toBe(complete ? 4 : entries.length);
   });
 
   it("keeps an older call when a pending user message arrives before its result", () => {
@@ -105,21 +154,18 @@ describe("findCutPoint", () => {
     const entries = messages.map(messageEntry);
 
     expect(
-      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: "entry-3" })
-        .firstKeptEntryIndex,
+      findCutPoint(entries, 0, entries.length, 1, {
+        requestBoundary: { entryId: "entry-3", preserve: true },
+      }).firstKeptEntryIndex,
     ).toBe(1);
   });
 
   it("does not pull a previous completed occurrence with a reused provider id into the tail", () => {
     const messages = asynchronousMessages();
-    const earlierCall = messages[1];
-    if (earlierCall?.role !== "assistant") {
-      throw new Error("The fixture is missing its tool-calling assistant");
-    }
     messages.splice(
       1,
       0,
-      structuredClone(earlierCall),
+      callingAssistant("bash", "call-1"),
       toolResultText("Earlier completed result.", 2),
     );
     const entries = messages.map(messageEntry);
@@ -162,7 +208,9 @@ describe("findCutPoint", () => {
     ];
     expect(findCutPoint(entries, 0, entries.length, 1).firstKeptEntryIndex).toBe(3);
     expect(
-      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: pending.id }),
+      findCutPoint(entries, 0, entries.length, 1, {
+        requestBoundary: { entryId: pending.id, preserve: true },
+      }),
     ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
   });
 
@@ -191,5 +239,46 @@ describe("findCutPoint", () => {
     const result = findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS);
 
     expect(result.firstKeptEntryIndex).toBe(3);
+  });
+});
+
+describe("findCutPoint with metadata before the selected message", () => {
+  // Gateway runs write these entries: a model snapshot inside a turn, and the bootstrap
+  // marker after each completed run, right before the next user message.
+  const metadata = (index: number, customType: string): SessionTreeEntry => ({
+    type: "custom",
+    customType,
+    data: { timestamp: index },
+    id: `entry-${index}`,
+    parentId: `entry-${index - 1}`,
+    timestamp: new Date(index).toISOString(),
+  });
+  const long = (label: string) => `${label} ${"checklist line. ".repeat(250)}`;
+  const transcript = (turn2User: string, turn2Reply: string) => [
+    messageEntry(userText(long("turn 1"), 1), 0),
+    messageEntry(assistantText("reply 1", 2), 1),
+    metadata(2, "openclaw:bootstrap-context:full"),
+    messageEntry(userText(turn2User, 4), 3),
+    metadata(4, "model-snapshot"),
+    messageEntry(assistantText(turn2Reply, 6), 5),
+    metadata(6, "openclaw:bootstrap-context:full"),
+  ];
+
+  it("keeps the marker without splitting the previous complete turn", () => {
+    const entries = transcript(long("turn 2"), "reply 2");
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 2,
+      turnStartIndex: -1,
+      isSplitTurn: false,
+    });
+  });
+
+  it("still splits a turn when metadata precedes a cut inside it", () => {
+    const entries = transcript("turn 2", long("reply 2"));
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 4,
+      turnStartIndex: 3,
+      isSplitTurn: true,
+    });
   });
 });

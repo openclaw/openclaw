@@ -6,7 +6,7 @@ import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
-import { omittedMediaReason } from "./chat-message-media.ts";
+import { omittedMediaReason } from "./chat-message-media-projection.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -33,6 +33,7 @@ export type AssistantAttachmentStatusCardProps = {
   reason?: string;
   onRetry?: () => void;
   onOpen?: () => void;
+  onFindWorkspaceFile?: () => void;
   onAllow?: () => void;
   path?: string;
 };
@@ -42,11 +43,12 @@ export function AssistantAttachmentStatusCard(
 ): JSX.Element {
   const copyRef = attachmentContextCopyRef(() => ({ name: props.label }));
   const unavailable = () => props.reason !== undefined;
-  const action = () => props.onAllow ?? props.onRetry ?? props.onOpen;
+  const action = () => props.onAllow ?? props.onRetry ?? props.onFindWorkspaceFile ?? props.onOpen;
+  const retry = () => !props.onAllow && Boolean(props.onRetry);
   const statusClass = () =>
     !unavailable()
       ? "chat-assistant-attachment-card--checking"
-      : props.onRetry || props.onAllow || props.onOpen
+      : props.onRetry || props.onAllow || props.onFindWorkspaceFile || props.onOpen
         ? "chat-assistant-attachment-card--recoverable"
         : "chat-assistant-attachment-card--definitive";
   return (
@@ -116,20 +118,34 @@ export function AssistantAttachmentStatusCard(
               "chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled",
               {
                 "chat-assistant-attachment-card__allow": Boolean(props.onAllow),
-                "chat-assistant-attachment-card__retry": !props.onAllow && Boolean(props.onRetry),
+                "chat-assistant-attachment-card__retry": retry(),
               },
             ]}
             type="button"
+            aria-label={
+              retry()
+                ? t("common.retry")
+                : !props.onAllow && props.onFindWorkspaceFile
+                  ? t("chat.attachments.findInFilesFor", { name: props.label })
+                  : undefined
+            }
+            title={retry() ? t("common.retry") : undefined}
             onClick={() => action()?.()}
           >
-            <Show when={!props.onAllow && Boolean(props.onRetry)}>
-              <Icon name="refresh" />
-            </Show>
-            {props.onAllow
-              ? t("chat.attachments.allowImage")
-              : props.onRetry
-                ? t("common.retry")
-                : t("chat.attachments.openOriginal")}
+            {props.onAllow ? (
+              t("chat.attachments.allowImage")
+            ) : retry() ? (
+              <>
+                <Icon name="refresh" />
+                <span class="chat-assistant-attachment-card__action-label">
+                  {t("common.retry")}
+                </span>
+              </>
+            ) : props.onFindWorkspaceFile ? (
+              t("chat.attachments.findInFiles")
+            ) : (
+              t("chat.attachments.openOriginal")
+            )}
           </button>
         </Show>
       </div>

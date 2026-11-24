@@ -5,10 +5,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  chooseLogin,
   loginHarness,
   openLogin,
   openPicker,
+  selectProvider,
 } from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
@@ -83,8 +83,13 @@ it("keeps the credential step disabled until its configuration refresh settles",
   });
   const page = appendPage(context);
   try {
-    await chooseLogin(page);
-    await waitForSolid(() => expect(refreshing).toBe(true));
+    // The provider's only way in starts straight from its catalog row.
+    await openPicker(page);
+    await selectProvider(page, "example");
+    await waitForSolid(() => {
+      expect(refreshing).toBe(true);
+      expect(page.querySelector('input[name="wizard-text"]')).not.toBeNull();
+    });
     const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
     const submit = page.querySelector<HTMLButtonElement>(
       '.wizard-step__form button[type="submit"]',
@@ -157,8 +162,8 @@ it("refreshes the connected provider without reloading usage or replacing other 
     (method) => request.mock.calls.filter(([name]) => name === method).length,
   );
   const catalogReads = request.mock.calls.filter(([name]) => name === "models.list").length;
-  publishEvent({ type: "event", event: "config.changed", payload: {} });
-  publishEvent({ type: "event", event: "config.changed", payload: {} });
+  publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
+  publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
   connected = true;
 
   answer.resolve({ done: true, status: "done" });
@@ -246,6 +251,7 @@ it.each(["close", "cancel", "complete"] as const)(
     const page = appendPage(context);
     if (action === "close") {
       await openPicker(page);
+      await selectProvider(page, "example");
     } else {
       await openLogin(page);
     }
@@ -253,7 +259,7 @@ it.each(["close", "cancel", "complete"] as const)(
       ["usage.status", "sessions.usage"].includes(method),
     ).length;
     externalUpdate = true;
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
     expect(page.querySelector('[data-provider-id="openai"]')).toBeNull();
     if (action === "complete") {
       answer.resolve({ done: true, status: "done" });
@@ -282,7 +288,15 @@ it("retains search and Retry controls through admitted core error feedback", asy
   const { context, request } = createHarness("main");
   const initialRequest = request.getMockImplementation()!;
   request.mockImplementation(async (method, ...args) =>
-    method === "models.authStatus" ? createAuthStatus() : initialRequest(method, ...args),
+    method === "models.authStatus"
+      ? createAuthStatus([
+          {},
+          ...Array.from({ length: 6 }, (_, index) => ({
+            provider: `fixture-${index}`,
+            displayName: `Fixture ${index}`,
+          })),
+        ])
+      : initialRequest(method, ...args),
   );
   const page = appendPage(context);
   await waitForProviders(page);

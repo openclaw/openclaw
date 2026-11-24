@@ -1723,12 +1723,14 @@ export async function verifyBetaRelease(
   options: {
     rootDir?: string;
     pluginNpmReadback?: {
-      // Resolves to an informational note for a superseded published version.
       verify: (
         packageName: string,
         version: string,
         distTag: string,
-      ) => Promise<string | undefined>;
+      ) => Promise<{
+        disposition: "published" | "deferred-auth";
+        note?: string;
+      }>;
       evidence: Record<string, unknown>[];
     };
   } = {},
@@ -1811,29 +1813,33 @@ export async function verifyBetaRelease(
     });
     for (const plugin of npmPlugins) {
       diagnostic.package("pluginNpm", plugin.packageName, "started");
+      let deferredAuth = false;
       // Full publication owns tarball readback, including prior-parent publishes.
       // Only standalone health checks retain metadata verification.
       if (options.pluginNpmReadback) {
-        const note = await options.pluginNpmReadback.verify(
+        const readback = await options.pluginNpmReadback.verify(
           plugin.packageName,
           args.version,
           args.distTag,
         );
-        if (note !== undefined) {
-          lines.push(`plugin npm WARN: ${note}`);
+        deferredAuth = readback.disposition === "deferred-auth";
+        if (readback.note !== undefined) {
+          lines.push(`plugin npm WARN: ${readback.note}`);
         }
       } else {
         await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
       }
       const scope: NpmDiagnosticScope = { stage: "pluginNpm", packageName: plugin.packageName };
-      diagnostic.observeNpmPublication(scope);
-      const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
-      if (betaFloorError !== undefined) {
-        betaFloorErrors.push({ scope, message: betaFloorError });
-        diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
-      } else {
-        diagnostic.package("pluginNpm", plugin.packageName, "success");
+      if (!deferredAuth) {
+        diagnostic.observeNpmPublication(scope);
+        const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
+        if (betaFloorError !== undefined) {
+          betaFloorErrors.push({ scope, message: betaFloorError });
+          diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
+          continue;
+        }
       }
+      diagnostic.package("pluginNpm", plugin.packageName, "success");
     }
     if (!betaFloorErrors.some(({ scope }) => scope.stage === "pluginNpm")) {
       diagnostic.success("pluginNpm");

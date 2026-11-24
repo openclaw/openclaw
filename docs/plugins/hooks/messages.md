@@ -72,6 +72,11 @@ does not block ordinary agent sessions. Omitted, empty, malformed, or partly
 unknown eligibility lists remain unrestricted. Missing or unknown dispatch
 context also keeps the hook eligible.
 
+For ACP dispatch, a thrown `reply_dispatch` error or timeout ends the turn as a
+task error. The host does not try another handler or the ordinary agent runtime:
+the invoked handler may already have started work. Missing handlers and explicit
+declines retain their fallback behavior.
+
 Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,

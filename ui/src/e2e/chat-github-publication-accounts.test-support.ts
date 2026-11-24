@@ -97,7 +97,7 @@ export function defineGitHubPublicationAccountTests({
         width === 390 ? ".github-publication-mobile__accounts-panel" : ".chat-pr-branch-menu",
       );
       const shared = menu.getByRole("menuitemradio", {
-        name: width === 390 ? "@system-bot · System GitHub" : "@system-bot",
+        name: width === 390 ? "@system-bot · Shared agent account" : "@system-bot",
         exact: true,
       });
       const personal = menu.getByRole("menuitemradio", {

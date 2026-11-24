@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../../packages/gateway-protocol/src/schema/tools-catalog.js";
+import { CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE } from "../../agents/tools-effective-inventory-shared.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -58,6 +59,11 @@ const inventory: ToolsEffectiveResult = {
     },
   ],
   notices: [
+    {
+      ...CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE,
+      message: privateDetail,
+      servers: [privateDetail],
+    },
     {
       id: "mcp-server-diagnostic",
       severity: "warning",
@@ -142,7 +148,7 @@ test("scoped tool previews preserve useful identities while withholding diagnost
     ]);
     expect(payload.groups[0]!.tools[0]!.description.length).toBeGreaterThan(0);
     expect(payload).not.toHaveProperty("toolAccess");
-    expect(payload).not.toHaveProperty("notices");
+    expect(payload.notices).toEqual([CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE]);
     expect(JSON.stringify(payload)).not.toContain(privateDetail);
     // Projection must not mutate the cached inventory used by broader readers.
     reader.connect.scopes = ["operator.read"];

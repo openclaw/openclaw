@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import {
@@ -22,6 +23,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecInput,
@@ -35,11 +37,13 @@ import {
   transport,
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
+import { bindRepositoryDiskForTest } from "../worker-environments/repository-disk-authority.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "../worker-environments/session-repository-checkpoints.js";
 import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contract.js";
 import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
+import { downloadRepositoryArtifact } from "./session-repository-artifacts.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -75,6 +79,9 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
     consume({
       visible: async () => ({ kind: "missing" }),
       raw: async () => {
+        throw new Error("File browsing must consume visible transcript pages");
+      },
+      replayGroups: async () => {
         throw new Error("File browsing must consume visible transcript pages");
       },
     })) satisfies typeof withSessionTranscriptDeltaReader,
@@ -256,6 +263,64 @@ async function persistSessionEntry() {
   );
 }
 
+it.skipIf(process.platform === "win32")(
+  "streams retained repository bytes through the Gateway spawn broker",
+  async () => {
+    const base = await capture();
+    const bytes = Buffer.from("retained repository download through the real broker\n");
+    writeFile("retained.txt", bytes);
+    await publishCheckpoint(base, await capture());
+    const download = await downloadRepositoryArtifact(
+      { kind: "stored", repository: source, store, assertCurrent() {}, [Symbol.dispose]() {} },
+      "retained.txt",
+    );
+    if (download.status !== "ok") {
+      throw new Error("Retained repository file is unavailable");
+    }
+    // One native module graph keeps the broker's child identity intact.
+    const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
+    const output = execNodeEvalSync(
+      `
+        import {createSpawnBrokerHost} from ${JSON.stringify(moduleUrl("src/process/spawn-broker/host.ts"))};
+        import {runWithSpawnBroker} from ${JSON.stringify(moduleUrl("src/process/spawn-broker/context.ts"))};
+        import {streamRepositoryArtifact} from ${JSON.stringify(moduleUrl("src/gateway/server-methods/session-repository-artifacts.ts"))};
+        const broker = createSpawnBrokerHost();
+        await broker.ready();
+        try {
+          await runWithSpawnBroker(broker, async () => {
+            const chunks = [];
+            const access = {
+              repository: ${JSON.stringify(source)},
+              store: {artifactPath: () => ${JSON.stringify(store.artifactPath(source.workspaceId))}},
+              assertCurrent() {},
+            };
+            for await (const chunk of streamRepositoryArtifact(
+              access, ${JSON.stringify(download.identity)}, 0, ${bytes.length}, new AbortController().signal
+            )) chunks.push(chunk);
+            process.stdout.write(Buffer.concat(chunks));
+          });
+        } finally {
+          await broker.close();
+        }
+      `,
+      { imports: [moduleUrl("scripts/tsx.mjs")], timeout: 15_000 },
+    );
+    expect(Buffer.from(output)).toEqual(bytes);
+  },
+);
+
+it("refuses stored file fallback when the repository belongs to a retained disk", async () => {
+  source = await bindRepositoryDiskForTest(source, sessionId, store.path);
+  active = false;
+  for (const operation of ["list", "get", "download"] as const) {
+    await expect(
+      files.request(operation, operation === "list" ? undefined : "changed.txt"),
+    ).rejects.toThrow("repository disk is unavailable");
+  }
+  expect(run).not.toHaveBeenCalled();
+  expect(mocks.workspace).not.toHaveBeenCalled();
+});
+
 it("keeps incognito repository downloads alive after their RPC planning borrow ends", async () => {
   using connection = createSessionFileDownloadClient();
   const baseCommit = source.baseCommit!;
@@ -319,8 +384,14 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
   const windows = await Promise.all(run.mock.results.map((call) => call.value));
   expect(windows.every((result) => Buffer.byteLength(result.stdout) < 2 * 1024 * 1024)).toBe(true);
-  for (const filePath of ["../outside", "/etc/passwd"]) {
-    await files.error("download", filePath, undefined, connection);
+  for (const filePath of [
+    "../outside",
+    "/etc/passwd",
+    path.join(nodeRoot, ".openclaw/tmp/report.txt"),
+  ]) {
+    expect(await files.error("download", filePath, undefined, connection)).toMatchObject({
+      details: { type: "session_file_not_found", reason: "outside_session_boundary" },
+    });
   }
   onResult = () => {
     generation++;
@@ -416,6 +487,24 @@ it.each(["reset", "archive", "lifecycle revision"])(
     expect(readFile("changed.txt")).toBe("before\n");
   },
 );
+
+it("searches stopped repository artifacts using equivalent sigma forms", async () => {
+  const base = await capture();
+  const retainedPath = "ΕΛΕΓΧΟΣ/README.md";
+  fs.mkdirSync(workspaceFile("ΕΛΕΓΧΟΣ"));
+  writeFile(retainedPath, "retained Greek report\n");
+  await publishCheckpoint(base, await capture());
+  active = false;
+  for (const search of ["Σ", "σ", "ς"]) {
+    const found = await files.ok("list", { search });
+    expect(found.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
+      retainedPath,
+    ]);
+    expect(found.browser).not.toHaveProperty("truncated");
+  }
+  expect((await files.ok("get", retainedPath)).file.content).toBe("retained Greek report\n");
+  expect(run).not.toHaveBeenCalled();
+});
 
 it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
   "keeps stopped inspection limited to verified changed artifacts (%s)",

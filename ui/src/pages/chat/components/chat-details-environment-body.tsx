@@ -20,6 +20,7 @@ type Props = ChatDetailsEnvironmentDesktopProps & {
   machineMenu: boolean | undefined;
   host: string | undefined;
   branchName: string | undefined;
+  worktree: boolean;
   diff: SessionsDiffResult | NonNullable<ChatDetailsEnvironmentDesktopProps["work"]>["branch"];
   changes: SessionsDiffResult | undefined;
   fallbackWork: ChatDetailsEnvironmentDesktopProps["work"];
@@ -81,7 +82,7 @@ export function ChatDetailsEnvironmentBody(props: Props) {
             >
               {props.branchName ?? t("chat.pullRequests.publishPr")}
             </span>
-            <Show when={props.details.selectedSession?.worktree}>
+            <Show when={props.worktree}>
               <small class="chat-details__badge">{t("chat.sessionDetails.worktree")}</small>
             </Show>
           </div>
@@ -116,7 +117,7 @@ export function ChatDetailsEnvironmentBody(props: Props) {
           </Show>
         </div>
       </Show>
-      <Show when={props.details.selectedSession?.worktree && !props.branchName}>
+      <Show when={props.worktree && !props.branchName}>
         <div class="chat-details__row chat-environment__row chat-environment__worktree">
           <Icon name="folder" />
           <span>{t("chat.sessionDetails.worktree")}</span>

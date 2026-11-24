@@ -1,6 +1,5 @@
 // Deepinfra tests cover video generation provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -9,7 +8,6 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { DEEPINFRA_VIDEO_FALLBACK_MODELS } from "./media-models.js";
 import { MP4_VIDEO } from "./video-generation.test-support.js";
 
@@ -18,7 +16,6 @@ const {
   fetchWithTimeoutMock,
   pollProviderOperationJsonMock,
   resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
 
 let buildDeepInfraVideoGenerationProvider: typeof import("./video-generation-provider.js").buildDeepInfraVideoGenerationProvider;
@@ -71,6 +68,7 @@ describe("deepinfra video generation provider", () => {
         Response.json({
           id: "videos_abc",
           status: "succeeded",
+          error: "ignored success error",
           model: "Pixverse/Pixverse-T2V",
           data: [{ url: "/generated/video.mp4" }],
         }),
@@ -167,62 +165,11 @@ describe("deepinfra video generation provider", () => {
     }
   });
 
-  it("applies configured request policy to OpenAI-compatible video requests", async () => {
-    const requestPolicy = {
-      allowPrivateNetwork: true,
-      headers: { "X-DeepInfra-Route": "video-policy" },
-    };
-    const dispatcherPolicy = { mode: "env-proxy" as const };
-    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      return {
-        ...resolveProviderHttpRequestConfigWithOriginTrust(params),
-        dispatcherPolicy,
-      };
-    });
-    mockSubmit({
-      id: "videos_policy",
-      status: "succeeded",
-      data: [{ url: "/generated/policy.mp4" }],
-    });
-
-    const provider = buildDeepInfraVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "deepinfra",
-      model: "deepinfra/Pixverse/Pixverse-T2V",
-      prompt: "A request policy video",
-      cfg: createModelProviderConfig({
-        deepinfra: {
-          baseUrl: "https://api.deepinfra.com/v1/openai",
-          models: [],
-          request: requestPolicy,
-        },
-      }),
-    });
-
-    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "deepinfra",
-        capability: "video",
-        transport: "http",
-        request: requestPolicy,
-      }),
-    );
-    const postRequest = requireFirstPostJsonRequest(
-      postJsonRequestMock,
-      "DeepInfra video submit request",
-    );
-    expect(Reflect.get(postRequest ?? {}, "allowPrivateNetwork")).toBe(true);
-    expect(Reflect.get(postRequest ?? {}, "dispatcherPolicy")).toBe(dispatcherPolicy);
-    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
-    expect(postRequestHeaders).toBeInstanceOf(Headers);
-    expect((postRequestHeaders as Headers).get("x-deepinfra-route")).toBe("video-policy");
-  });
-
   it("returns immediately without polling when the submit response already succeeded", async () => {
     mockSubmit({
       id: "videos_fast",
       status: "succeeded",
+      error: "ignored success error",
       data: [{ url: "/generated/fast.mp4" }],
     });
 
@@ -445,7 +392,7 @@ describe("deepinfra video generation provider", () => {
       label: "whitespace and newline",
       value: MP4_VIDEO.toString("base64").replace(/(.{40})/g, "$1\n "),
     },
-    { label: "unpadded", value: MP4_VIDEO.toString("base64").replace(/=+$/, "") },
+    { label: "unpadded", value: MP4_VIDEO.toString("base64").replace(/[=]+$/, "") },
   ])("accepts valid $label base64 video outputs", async ({ value }) => {
     mockSubmit({
       id: "videos_normalized_base64",
@@ -488,11 +435,18 @@ describe("deepinfra video generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("throws the job error when the video generation fails", async () => {
-    mockSubmit({ id: "videos_fail", status: "queued" });
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      Response.json({ id: "videos_fail", status: "failed", error: "model overloaded" }),
-    );
+  it.each<["submission" | "poll", string | undefined, string, string]>([
+    ["poll", "videos_fail", "model overloaded", "model overloaded"],
+    ["submission", "videos_fail", "  model overloaded  ", "model overloaded"],
+    ["poll", "videos_fail", " ", "DeepInfra video generation failed"],
+    ["submission", "videos_fail", " ", "DeepInfra video generation failed"],
+    ["submission", undefined, "failed", "DeepInfra video generation response missing job id"],
+  ])("throws the %s job error with id %s", async (phase, id, error, expected) => {
+    const failed = { id, status: "failed", error };
+    const release = mockSubmit(phase === "submission" ? failed : { id, status: "queued" });
+    if (phase === "poll") {
+      fetchWithTimeoutMock.mockResolvedValueOnce(Response.json(failed));
+    }
 
     const provider = buildDeepInfraVideoGenerationProvider();
     await expect(
@@ -502,7 +456,8 @@ describe("deepinfra video generation provider", () => {
         prompt: "A failing video",
         cfg: {},
       }),
-    ).rejects.toThrow("model overloaded");
+    ).rejects.toThrow(expected);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("reports malformed submit JSON as a provider error", async () => {

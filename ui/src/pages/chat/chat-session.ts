@@ -9,7 +9,9 @@ import type {
 } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { resolveDaybreakModelSwitch } from "../../lib/chat/daybreak-access-program.ts";
 import {
   buildCatalogDisplayLookup,
   buildQualifiedChatModelValue,
@@ -50,6 +52,7 @@ import { setChatError } from "./chat-history-state.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 
 registerModelControlsEnglish();
+registerChatSessionEnglish();
 
 type ChatSessionListHost = {
   sessionsArchivedFilter?: SessionArchivedFilter;
@@ -207,7 +210,7 @@ async function applyChatSetting(
   sessionKey: string,
   captured: ReturnType<typeof captureChatSettingsTarget>,
   patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow" | "cyberAccessProgram">,
-  settingName: "thinking level" | "speed" | "context window" | "access program",
+  setting: "thinking" | "speed" | "contextWindow" | "accessProgram",
 ): Promise<boolean> {
   const canDispatch = (receipt?: SessionPatchResult | null) =>
     (captured.isCurrent() || Boolean(captured.row(receipt))) &&
@@ -228,7 +231,7 @@ async function applyChatSetting(
       canDispatch,
       onRejected: (error, acknowledgement) => {
         if (captured.isCurrent() || captured.row(acknowledgement)) {
-          setChatError(host, `Failed to set ${settingName}: ${formatUiError(error)}`);
+          setChatError(host, t(`chat.settingErrors.${setting}`, { error: formatUiError(error) }));
         }
       },
     });
@@ -259,7 +262,7 @@ export function switchChatSetting(
       targetSessionKey,
       captured,
       { cyberAccessProgram: selection.value },
-      "access program",
+      "accessProgram",
     );
   }
   if (selection.kind === "fastMode") {
@@ -279,7 +282,7 @@ export function switchChatSetting(
       targetSessionKey,
       captured,
       { contextWindow: next ?? null },
-      "context window",
+      "contextWindow",
     );
   }
   const previousThinkingLevel = captured.settings.thinkingLevel;
@@ -297,7 +300,7 @@ export function switchChatSetting(
     targetSessionKey,
     captured,
     { thinkingLevel: normalizedNext ?? null },
-    "thinking level",
+    "thinking",
   );
 }
 
@@ -384,8 +387,38 @@ export async function switchChatModel(
   const ownsModelOverride = () =>
     !isUiSelectedGlobalSessionKey(host, targetSessionKey) ||
     resolveUiSelectedGlobalAgentId(host) === modelOwnerAgentId;
+  const nextValue = splitTrailingAuthProfile(nextModel).model || defaultModel;
+  const currentValue = splitTrailingAuthProfile(currentOverride).model || defaultModel;
+  const nextEntry = host.chatModelCatalog.find(
+    (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === nextValue,
+  );
+  const nextRuntime = resolveModelRuntimeEntry(
+    nextEntry,
+    runtimeSelection === undefined && isSessionRuntimePinned(activeRow?.agentRuntime)
+      ? activeRow?.agentRuntime?.id
+      : runtimeSelection,
+  );
+  const nextPrograms = nextRuntime?.availableAccessPrograms?.cyber;
+  let remap: CyberAccessProgram | undefined;
+  if (nextPrograms !== undefined && (nextValue !== currentValue || !runtimeUnchanged)) {
+    const currentEntry = resolveModelRuntimeEntry(
+      host.chatModelCatalog.find(
+        (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
+      ),
+      activeRow?.agentRuntime?.id,
+    );
+    const storedProgram =
+      host.sessions.settingsPreview(targetSessionKey, agentScope.agentId)?.cyberAccessProgram ??
+      activeRow?.cyberAccessProgram;
+    remap = resolveDaybreakModelSwitch(
+      nextPrograms,
+      storedProgram ?? currentEntry?.cyberAccessProgramDefault,
+      storedProgram,
+    );
+  }
   const patch: SessionPatch = {
     model: nextModel || null,
+    ...(remap !== undefined ? { cyberAccessProgram: remap } : {}),
     ...(runtimeSelection !== undefined ? { agentRuntime: runtimeSelection } : {}),
   };
   const canDispatch = () =>
@@ -403,38 +436,22 @@ export async function switchChatModel(
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      const nextValue = splitTrailingAuthProfile(nextModel).model || defaultModel;
-      const currentValue = splitTrailingAuthProfile(currentOverride).model || defaultModel;
-      const nextEntry = host.chatModelCatalog.find(
-        (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === nextValue,
-      );
-      const nextRuntime = resolveModelRuntimeEntry(
-        nextEntry,
-        runtimeSelection === undefined && isSessionRuntimePinned(activeRow?.agentRuntime)
-          ? activeRow?.agentRuntime?.id
-          : runtimeSelection,
-      );
       const hasHistory = host.chatMessages?.some((message) => {
         const role = asOptionalRecord(message)?.role;
         return role === "user" || role === "assistant";
       });
       if (nextValue && nextValue !== currentValue && nextRuntime?.local !== true && hasHistory) {
         const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
-        const displayLookup = buildCatalogDisplayLookup(host.chatModelCatalog);
-        const currentEntry = host.chatModelCatalog.find(
-          (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
-        );
+        const nextLabel =
+          nextEntry?.name.trim() ||
+          formatCatalogChatModelDisplayFromLookup(
+            nextValue,
+            buildCatalogDisplayLookup(host.chatModelCatalog),
+          );
         const confirmed = await showConfirmDialog({
-          title: t("chat.modelControls.switchTitle", {
-            new:
-              nextEntry?.name.trim() ||
-              formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
-          }),
-          message: t("chat.modelControls.switchWarning", {
-            current:
-              currentEntry?.name.trim() ||
-              formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
-          }),
+          compact: true,
+          title: t("chat.modelControls.switchTitle", { new: nextLabel }),
+          message: t("chat.modelControls.switchWarning", { new: nextLabel }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
           skipPreference: {
             label: t("chat.modelControls.dontAskAgain"),
@@ -463,17 +480,10 @@ export async function switchChatModel(
       }
       try {
         const { recoverChatModelSwitch } = await import("./chat-model-recovery.runtime.ts");
-        return await recoverChatModelSwitch(
-          host,
-          err,
-          targetSessionKey,
-          nextModel,
-          runtimeSelection,
-          selection,
-        );
+        return await recoverChatModelSwitch(host, err, targetSessionKey, patch, selection);
       } catch (error) {
         if (ownsSelection()) {
-          setChatError(host, `Failed to set model: ${formatUiError(error)}`);
+          setChatError(host, t("chat.settingErrors.model", { error: formatUiError(error) }));
         }
         return false;
       }

@@ -2,9 +2,11 @@ import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js
 import { createConfigIO } from "../../config/io.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import {
   createManagedUpdateRequesterAuthority,
+  prepareUpdateRequesterIdentity,
   type UpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { ignoreNonCleanupCommandError } from "../../process/exec-result.js";
@@ -37,7 +39,11 @@ export async function resolveGatewayLifecycleContext(
 
 export async function resolveGatewayConfigPorts() {
   const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
-  return { explicit: config?.gateway?.port, fallback: resolveGatewayPort(config, process.env) };
+  return {
+    config,
+    explicit: config?.gateway?.port,
+    fallback: resolveGatewayPort(config, process.env),
+  };
 }
 
 // The detached update helper imports this through the stable daemon CLI entry.
@@ -63,7 +69,44 @@ export async function waitForGatewayUpdateRecovery(
   });
 }
 
+// The helper keeps running while Doctor and database rollback take native exclusion.
+// An idle WAL reader retained by its state-read worker would hold their shared lock.
+async function releasingHelperStateReaders<T>(check: () => Promise<T>): Promise<T> {
+  let outcome: { value: T } | { error: unknown };
+  try {
+    outcome = { value: await check() };
+  } catch (error) {
+    outcome = { error };
+  }
+  const [{ closeOpenClawStateDatabaseWorkersByPathAsync }, { resolveOpenClawStateSqlitePath }] =
+    await Promise.all([
+      import("../../state/openclaw-state-db-cache.js"),
+      import("../../state/openclaw-state-db.paths.js"),
+    ]);
+  try {
+    await closeOpenClawStateDatabaseWorkersByPathAsync(resolveOpenClawStateSqlitePath());
+  } catch (cleanupError) {
+    throw "error" in outcome
+      ? createSqliteLifecycleAggregateError(
+          [outcome.error, cleanupError],
+          "Update requester check and state reader release both failed.",
+          outcome.error,
+        )
+      : cleanupError;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
+}
+
 // The helper rechecks external chat authority at update admission and activation.
 export async function isManagedUpdateRequesterOwner(requester: UpdateRequester) {
-  return (await createManagedUpdateRequesterAuthority(requester)).isCurrent();
+  return await releasingHelperStateReaders(async () =>
+    (await createManagedUpdateRequesterAuthority(requester)).isCurrent(),
+  );
+}
+
+export async function prepareManagedUpdateRequesterIdentity(requester: UpdateRequester) {
+  return await releasingHelperStateReaders(() => prepareUpdateRequesterIdentity(requester));
 }

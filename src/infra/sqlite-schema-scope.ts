@@ -47,6 +47,7 @@ export type SchemaMutationListener = (observed?: SqliteSchemaMarkers) => void;
 
 export type SqliteSchemaOwner = {
   admitted: boolean;
+  publicationReady: boolean;
   revision: number;
   facts?: SqliteSchemaFacts;
   readDepth: number;

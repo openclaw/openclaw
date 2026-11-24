@@ -1,5 +1,3 @@
-@import "./composer-context-strip.css";
-
 .session-progress-card--composer,
 .session-progress-card__summary {
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
@@ -13,7 +11,6 @@
 
   position: relative;
   display: block;
-  box-sizing: border-box;
   width: 100%;
   max-width: none;
   border: 1px solid var(--chat-composer-hairline);
@@ -123,7 +120,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 2px;
+  gap: 4px;
 }
 
 .agent-chat__goal-command-actions {
@@ -131,15 +128,38 @@
 }
 
 .agent-chat__goal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--chat-stack-trailing-control-size);
   height: var(--chat-stack-trailing-control-size);
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.agent-chat__goal-action:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.agent-chat__goal-action svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-chat__goal-action-label {
   display: none;
 }
 
-.agent-chat__goal-resume {
+.agent-chat__goal-resume:not([aria-label]) {
   width: auto;
   gap: 5px;
   padding-inline: 7px;
@@ -147,7 +167,7 @@
   white-space: nowrap;
 }
 
-.agent-chat__goal-resume .agent-chat__goal-action-label {
+.agent-chat__goal-resume:not([aria-label]) .agent-chat__goal-action-label {
   display: inline;
 }
 
@@ -290,7 +310,6 @@
     padding-inline-end: 4px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
   }
 
   .agent-chat__goal[data-expanded="true"]
@@ -421,7 +440,6 @@
 }
 
 .agent-chat__goal-float .agent-chat__goal {
-  box-sizing: border-box;
   width: 100%;
   max-width: none;
   margin: 0;
@@ -431,17 +449,6 @@
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
   backdrop-filter: blur(8px);
-}
-
-.agent-chat__goal-float
-  :is(
-    .agent-chat__goal--blocked,
-    .agent-chat__goal--budget_limited,
-    .agent-chat__goal--usage_limited
-  ) {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, var(--card));
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
 }
 
 .agent-chat__goal-float .agent-chat__goal-row,
@@ -577,8 +584,6 @@
   display: block;
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
-  border-color: color-mix(in srgb, var(--muted) 24%, transparent);
-  border-top-color: var(--muted);
   animation-duration: 1.8s;
 }
 
@@ -608,7 +613,6 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;
@@ -680,18 +684,6 @@
   }
 }
 
-.agent-chat__goal-float .agent-chat__goal--blocked {
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
-  background:
-    radial-gradient(
-      circle at 92% 0%,
-      color-mix(in srgb, var(--warn) 13%, transparent),
-      transparent 42%
-    ),
-    color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
-  box-shadow: 7px -7px 20px -18px color-mix(in srgb, var(--warn) 45%, transparent);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .session-progress-card--composer,
   .session-progress-card__summary,
@@ -700,4 +692,31 @@
     animation: none;
     transition: none;
   }
+}
+
+/* Plugin composer tasks reuse the status band at one height, so every state swaps in place. */
+.agent-chat__composer-task {
+  block-size: 96px;
+}
+
+/* Metadata shrinks before the actions do, so Undo, Dismiss and Use stay inside the card. */
+.agent-chat__composer-task-meta {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat__composer-task > :last-child {
+  margin: 0 14px;
+}
+
+/* Two rows of steps, newest first; long labels clip at the card edge. */
+.agent-chat__composer-task-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-block-size: 40px;
+  font-size: 12px;
+  white-space: nowrap;
 }

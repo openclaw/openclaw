@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryLifecycleMutation,
   createSessionEntryWithTranscript,
@@ -126,7 +126,7 @@ it("creates a fresh session without retrying an unrelated failed export, which d
     published_at: expect.any(Number),
     last_publish_error: null,
   });
-  expect(readSessionArchiveContentSync(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
+  expect(readSessionArchiveText(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
   expect(loadSessionEntry(freshScope())).toMatchObject(freshEntry);
 });
 
@@ -222,9 +222,7 @@ it.each(["canonical", "alias"] as const)(
       });
       if (recovered) {
         expect(fs.readFileSync(collisionPath)).toEqual(Buffer.from(pendingArchive.archive_blob));
-        expect(readSessionArchiveContentSync(collisionPath)).toBe(
-          `${JSON.stringify(archivedEvent)}\n`,
-        );
+        expect(readSessionArchiveText(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
       } else {
         expect(fs.readFileSync(collisionPath, "utf8")).toBe("collision");
       }

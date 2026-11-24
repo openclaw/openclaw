@@ -175,6 +175,8 @@ Session controls:
 - `/usage <off|tokens|full|cost|reset>` (`cost` shows session, today, and 30-day costs). `reset`/`inherit`/`clear`/`default` clears the session override.
 - `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
 - `/btw <side question>` (alias: `/side`) asks without changing future session context.
+  Multiline questions follow the same ephemeral path in local mode; neither the
+  question nor its answer is added to the main session transcript.
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/queue <steer|followup|collect|interrupt> [debounce:<duration>] [cap:<n>] [drop:<summarize|old|new>]`
