@@ -70,7 +70,8 @@ final class BootstrapSetupFailureUITests: XCTestCase {
             app.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: 20, dy: statusBarHeight / 2)).tap()
         } else {
-            let back = app.buttons["Back"]
+            // The system back button: its label is the previous step's title.
+            let back = app.buttons["BackButton"]
             XCTAssertTrue(back.isHittable)
             back.tap()
             for _ in 0..<12 where !setup.isHittable {

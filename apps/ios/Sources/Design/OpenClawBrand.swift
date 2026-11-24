@@ -333,23 +333,3 @@ struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
             .contentShape(Capsule(style: .continuous))
     }
 }
-
-struct OpenClawCloseButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-    var minWidth: CGFloat = 36
-    var height: CGFloat = 36
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(OpenClawType.subheadSemiBold)
-            .foregroundStyle(self.isEnabled ? OpenClawBrand.accent : Color.secondary)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: self.minWidth, minHeight: self.height)
-            .padding(.horizontal, 7)
-            .openClawButtonSurface(.secondary, isEnabled: self.isEnabled)
-            // Visual stays 36pt; the vertical padding brings the hit area to 44pt.
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-    }
-}
