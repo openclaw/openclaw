@@ -47,6 +47,24 @@ ${prompt}`,
   },
 );
 
+it("still spawns the cron child when a notification follows the prompt", async () => {
+  const server = await startMockServer();
+  const payload = await respondOpenAi(
+    server,
+    userInputs("Cron one-shot QA mode=spawn", {
+      type: "function_call_output",
+      name: "notifications",
+      namespace: "slack",
+      output: "An unrelated notification.",
+    }),
+    { tools: [{ type: "function", name: "sessions_spawn", parameters: { type: "object" } }] },
+  );
+  expect(outputToolArgsFromItem(outputToolCall(payload, "sessions_spawn"))).toMatchObject({
+    label: "qa-one-shot-child",
+    mode: "run",
+  });
+});
+
 // stalled-turn-recovery.ts -> transcript-followup-run.ts -> formatSystemTurnPrompt.
 it("does not reissue a completed call after a producer-shaped stalled recovery", async () => {
   const server = await startMockServer();

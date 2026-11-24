@@ -390,7 +390,7 @@ export function hasToolOutput(input: ResponsesInputItem[]) {
 export function countCurrentToolOutputs(input: ResponsesInputItem[]) {
   let count = 0;
   for (const item of input.toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
+    if (isResponsesToolCallOutput(item) && readToolOutputCallId(item)) {
       count += 1;
     } else if (isUserTurn(item) && !isContinuationUserText(extractInputText(item.content))) {
       break;
@@ -416,7 +416,10 @@ export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
 }
 
 export function extractToolOutputCallId(input: ResponsesInputItem[]) {
-  const item = findCurrentToolOutput(input);
+  return readToolOutputCallId(findCurrentToolOutput(input));
+}
+
+function readToolOutputCallId(item: ResponsesInputItem | undefined) {
   return (
     [item?.call_id, item?.tool_call_id, item?.tool_use_id].find(
       (value): value is string => typeof value === "string" && value.trim().length > 0,
