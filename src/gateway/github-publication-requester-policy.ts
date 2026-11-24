@@ -102,6 +102,8 @@ function assertPublicationParticipation(
   current: { profile: UserProfileAccessFacts; aliases: ReadonlySet<string> } | undefined,
   role: GatewayOperatorRoleDefinition | undefined,
   participationFacts: PreparedPublicationSession | undefined,
+  /** Access policy is admitted once per attempt; later checks keep only identity and source fences. */
+  phase: "admission" | "current",
 ) {
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: snapshot.actor,
@@ -112,6 +114,7 @@ function assertPublicationParticipation(
   if (participation) {
     const { ceiling, target } = participation;
     const facts = readPublicationFacts(participationFacts, config);
+    const admission = phase === "admission";
     const access = resolveSessionMemberAccess({
       policy: role,
       scopes: snapshot.scopes,
@@ -137,23 +140,24 @@ function assertPublicationParticipation(
         facts.target,
         resolveAgentWorkspaceDir(config, facts.target.agentId),
       ) ||
-      facts.target.entry.archivedAt !== undefined ||
-      access.access !== "send" ||
-      access.invitedAccessCeiling !== "send" ||
       !ceiling.tools ||
       !participationAllowsTool(ceiling, "github_publish") ||
-      !participationAllowsTool(
-        {
-          ...ceiling,
-          tools: resolveParticipationTools(role?.sessions),
-          toolConstraints: undefined,
-        },
-        "github_publish",
-      ) ||
-      authorizeSessionAgentRun(
-        { cfg: config, client, target: facts.target, invitedSession: true },
-        { policy: role },
-      )
+      (admission &&
+        (facts.target.entry.archivedAt !== undefined ||
+          access.access !== "send" ||
+          access.invitedAccessCeiling !== "send" ||
+          !participationAllowsTool(
+            {
+              ...ceiling,
+              tools: resolveParticipationTools(role?.sessions),
+              toolConstraints: undefined,
+            },
+            "github_publish",
+          ) ||
+          authorizeSessionAgentRun(
+            { cfg: config, client, target: facts.target, invitedSession: true },
+            { policy: role },
+          )))
     ) {
       throw new GitHubPublicationRequesterUnavailableError();
     }
@@ -240,7 +244,15 @@ export function prepareRequesterPolicy(
   if (role?.accessPolicyPlugin && role.accessPolicyPlugin !== snapshot.grant?.pluginId) {
     throw new GitHubPublicationRequesterUnavailableError();
   }
-  assertPublicationParticipation(snapshot, session, config, current, role, participationFacts);
+  assertPublicationParticipation(
+    snapshot,
+    session,
+    config,
+    current,
+    role,
+    participationFacts,
+    "admission",
+  );
   const admitted = Object.freeze({ ...snapshot, scopes });
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: admitted.actor,
@@ -331,6 +343,7 @@ export function prepareRequesterPolicy(
         current,
         role,
         participationFacts,
+        "current",
       );
     }
     for (const target of targets) {

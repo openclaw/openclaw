@@ -236,7 +236,8 @@ it("retains a send participant across recovery without lending creator or admin 
     ).rejects.toThrow();
   }
   await setSessionMemberAccess(session, { identityId: f.guestProfile, access: "read" });
-  expect(() => restored.assertCurrent()).toThrow();
+  // A started attempt finishes; the downgrade applies to the next admission.
+  expect(() => restored.assertCurrent()).not.toThrow();
   await expect(restoreGitHubPublicationRequester(json, session, getConfig)).rejects.toThrow();
   await setSessionMemberAccess(session, { identityId: f.guestProfile, access: "send" });
   const renewed = await restoreGitHubPublicationRequester(json, session, getConfig);
