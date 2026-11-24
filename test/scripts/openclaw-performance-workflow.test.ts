@@ -1277,7 +1277,8 @@ printf '%s\\n' \
     const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
 
     expect(includeFilters).toEqual([
-      "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message",
+      "scenario:fresh-install,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message",
+      "scenario:gateway-performance",
       "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message",
       "scenario:agent-cold-warm-message",
     ]);
@@ -1290,7 +1291,8 @@ printf '%s\\n' \
     expect(runKova.run).toContain('--include "$INCLUDE_FILTERS"');
     expect(runKova.run).not.toContain("for filter in $INCLUDE_FILTERS");
     expect(expectedReleaseEntries).toEqual([
-      "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
+      "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider",
+      "gateway-performance:many-bundled-plugins",
       "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
       "agent-cold-warm-message:mock-openai-provider",
     ]);
@@ -1310,7 +1312,7 @@ printf '%s\\n' \
     const provision = readFileSync(".github/actions/setup-node-env/semantic-memory.sh", "utf8");
     const stepNames = steps.map((step) => step.name);
 
-    expect(managedServiceLanes).toEqual(["true", "true", "false"]);
+    expect(managedServiceLanes).toEqual(["true", "true", "true", "false"]);
     expect(prepare.if).toBe("steps.lane.outputs.run == 'true'");
     expect(prepare.with?.["semantic-checks"]).toBe("${{ matrix.managed_service }}");
     expect(provisionEntry).toBe(provision.split("\n").slice(1).join("\n"));

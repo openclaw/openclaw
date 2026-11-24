@@ -297,8 +297,19 @@ jobs:
             deep_profile: "false"
             live: "false"
             managed_service: "true"
-            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message"
-            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
+            include_filters: "scenario:fresh-install,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider"
+          # The 80-plugin fixture installs serially before every repeat; its own
+          # runner keeps it from serializing behind the other mock scenarios.
+          - lane: mock-plugin-pressure
+            title: Kova mock provider plugin pressure
+            auth: mock
+            repeat: input
+            deep_profile: "false"
+            live: "false"
+            managed_service: "true"
+            include_filters: "scenario:gateway-performance"
+            expected_release_entries: "gateway-performance:many-bundled-plugins"
           - lane: mock-deep-profile
             title: Kova mock provider deep profile
             auth: mock
@@ -1205,6 +1216,8 @@ jobs:
         include:
           - lane: mock-provider
             title: mock provider
+          - lane: mock-plugin-pressure
+            title: mock plugin pressure
           - lane: mock-deep-profile
             title: mock deep profile
           - lane: live-openai-candidate
