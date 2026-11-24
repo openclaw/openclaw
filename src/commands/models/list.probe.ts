@@ -34,7 +34,6 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
-import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { prepareLocalCapabilityAccountSecrets } from "../../cli/capability-cli/local-account-secrets.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
@@ -55,7 +54,11 @@ import { appendConfigPathSegment } from "../../shared/dot-path.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
 import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
 import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
-import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
+import {
+  buildProbeCandidateMap,
+  loadProbeModelCatalog,
+  selectProbeModel,
+} from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
 
 export { redactAuthProbeError };
@@ -234,19 +237,13 @@ export async function buildProbeTargets(params: {
   const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
   const candidates = buildProbeCandidateMap(modelCandidates);
-  const providersNeedingCatalog = providers.filter(
-    (provider) => !candidates.has(normalizeProviderId(provider)),
+  const requestedProviders = providerFilterKey
+    ? providers.filter((provider) => normalizeProviderId(provider) === providerFilterKey)
+    : providers;
+  const catalog = await loadProbeModelCatalog(
+    { config: cfg, agentId: params.agentId, agentDir, workspaceDir },
+    requestedProviders.filter((provider) => !candidates.has(normalizeProviderId(provider))),
   );
-  const catalog = providersNeedingCatalog.length
-    ? await readPreparedModelCatalog({
-        config: cfg,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(agentDir ? { agentDir } : {}),
-        ...(workspaceDir ? { workspaceDir } : {}),
-        readOnly: true,
-        providerDiscoveryProviderIds: providersNeedingCatalog,
-      })
-    : [];
   const targets: AuthProbeTarget[] = [];
   const results: AuthProbeResult[] = [];
   const appendTarget = (target: AuthProbeTarget) => {
@@ -257,12 +254,9 @@ export async function buildProbeTargets(params: {
     }
   };
 
-  for (const provider of providers) {
+  for (const provider of requestedProviders) {
     const providerKey = normalizeProviderId(provider);
     const authProviderKey = resolveProviderIdForAuth(providerKey, authAliasLookupParams);
-    if (providerFilterKey && providerKey !== providerFilterKey) {
-      continue;
-    }
 
     const model = selectProbeModel({
       provider: providerKey,
