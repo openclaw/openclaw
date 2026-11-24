@@ -1,5 +1,4 @@
 // A beta-to-final delta can reuse product proof, never publication artifacts.
-import { isDeepStrictEqual } from "node:util";
 import { isReleaseChangelogPath } from "./release-changelog.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 
@@ -122,7 +121,9 @@ export function classifyBetaPromotionComparison(
       if (expected.openclaw?.build?.openclawVersion === sourceVersion) {
         expected.openclaw.build.openclawVersion = version;
       }
-      if (!isDeepStrictEqual(expected, actual)) {
+      // Conditional exports/imports resolve in declaration order. Keep all key
+      // order intact while ignoring JSON whitespace, not package semantics.
+      if (JSON.stringify(expected) !== JSON.stringify(actual)) {
         throw new Error("beta-to-final package contains non-version changes: " + path);
       }
     } else if (before.replaceAll(sourceVersion, version) !== after) {

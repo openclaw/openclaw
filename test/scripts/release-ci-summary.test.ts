@@ -2146,6 +2146,7 @@ describe("release CI summary child correlation", () => {
     "advisory performance",
     "different final",
     "dependency change",
+    "conditional export order",
     "source change",
     "foreign notes",
     "renamed file",
@@ -2201,6 +2202,15 @@ describe("release CI summary child correlation", () => {
             dependencies: {
               example: sha !== root.targetSha && fault === "dependency change" ? "2" : "1",
             },
+            exports:
+              fault === "conditional export order"
+                ? {
+                    ".":
+                      sha === root.targetSha
+                        ? { node: "./node.js", default: "./default.js" }
+                        : { default: "./default.js", node: "./node.js" },
+                  }
+                : undefined,
           }),
       ),
     ).toThrow(
@@ -2211,7 +2221,7 @@ describe("release CI summary child correlation", () => {
         ? "stable qualification, soak and blocking performance"
         : fault === "different final"
           ? "versions differ"
-          : fault === "dependency change"
+          : fault === "dependency change" || fault === "conditional export order"
             ? "non-version changes"
             : fault === "incomplete comparison"
               ? "complete same-base"
