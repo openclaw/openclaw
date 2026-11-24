@@ -107,10 +107,11 @@ export function createPluginServiceCatalogExports(params: {
   getConfig(): OpenClawConfig | undefined;
 }): PluginServiceCatalogExports {
   const configPath = [...params.configPath];
-  let generation = 0;
+  let currentGrant: symbol;
   return {
     listCatalogs() {
-      const admitted = ++generation;
+      const grant = Symbol("catalog export grant");
+      currentGrant = grant;
       params.assertActive();
       params.signal.throwIfAborted();
       const config = params.getConfig();
@@ -135,7 +136,7 @@ export function createPluginServiceCatalogExports(params: {
           params.signal.throwIfAborted();
           params.assertActive();
           if (
-            admitted !== generation ||
+            grant !== currentGrant ||
             (requestedAgentId !== undefined && requestedAgentId !== agentId) ||
             params.getConfig() !== config ||
             !readAllowedIds(config, params.pluginId, configPath).has(provider.id) ||
