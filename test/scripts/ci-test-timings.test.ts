@@ -1057,6 +1057,15 @@ describe("CI test timing refit", () => {
     expect(result.contributingRunIds.blacksmith).toEqual([1, 2, 3]);
   });
 
+  it("keeps Bun spans out of the GitHub-runner plan prices", () => {
+    const runs = repeatedRuns(
+      `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all\n${compactLog(30, "bun:core-unit-src-security-2")}`,
+      "ubuntu-24.04",
+      3,
+    );
+    expectCompact(runs, { retained: 90 }, compactBaseline({}, { retained: 90 }), "github");
+  });
+
   it.each(["bun-all", "dual-all"])(
     "isolates split %s legs from serial timing history",
     (policy) => {

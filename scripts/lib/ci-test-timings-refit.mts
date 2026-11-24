@@ -1275,6 +1275,11 @@ export function refitTestTimings(
           continue;
         }
         for (const runtimeLog of splitRuntimeTimingLogs(text)) {
+          // GitHub-runner plans stay on Node prices until the Bun lane has its own sizing:
+          // real bun-all spans would pack the GitHub plan past its job cap (#204374).
+          if (profile === "github" && runtimeLog.prefix.startsWith("bun-all:")) {
+            continue;
+          }
           const compact = {
             blacksmith: new Map<string, number[]>(),
             github: new Map<string, number[]>(),
