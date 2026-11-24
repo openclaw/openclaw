@@ -80,9 +80,11 @@ describe("candidate-owned frozen qualification coverage", () => {
           evidenceSha: root.q,
           changedPaths,
           runUrl: root.parent.html_url,
-          sourceManifest: root.manifest,
+          sourceArtifact: evidence.root.artifact,
+          sourceWorkflow: { ref: root.manifest.workflowRef, sha: root.manifest.workflowSha },
         },
       });
+      expect(sealed.evidenceReuse.sourceManifest).toBeUndefined();
       const directory = tempDirs.make("frv-admitted-reuse-decision-");
       const bin = join(directory, "bin");
       mkdirSync(bin);

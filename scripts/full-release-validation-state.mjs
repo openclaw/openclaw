@@ -1115,9 +1115,7 @@ async function publicationMode(mode) {
   writeArtifact(admissionPath, record);
 }
 
-async function writeManifestMode() {
-  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
-  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+async function reuseManifestForPlan(plan) {
   let reusedManifest = plan.evidenceReuse.sourceManifest;
   if (plan.evidenceReuse.requested && !reusedManifest) {
     const reuse = await validateReuse(plan);
@@ -1126,6 +1124,13 @@ async function writeManifestMode() {
     }
     reusedManifest = reuse.sourceManifest;
   }
+  return reusedManifest;
+}
+
+async function writeManifestMode() {
+  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
+  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+  const reusedManifest = await reuseManifestForPlan(plan);
   const manifest = buildReleaseValidationManifest({
     plan,
     drain,
@@ -1719,7 +1724,7 @@ async function validateManifestMode() {
     ]),
   );
   const rootPublication = releaseManifestRootPublication(
-    executionPlan.evidenceReuse.sourceManifest,
+    await reuseManifestForPlan(executionPlan),
     executionPlan.evidenceReuse,
   );
   const expectedEvidenceReuse = executionPlan.evidenceReuse.requested
