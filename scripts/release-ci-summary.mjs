@@ -2598,11 +2598,7 @@ function recoveryManifestFromPlan(plan, sourceRunAttempt, publicationArtifacts) 
         GITHUB_REF_TYPE: "branch",
         TARGET_REF: plan.targetSha,
       }),
-      validationInputs: {
-        ...manifestContextFromEnvironment(plan.sourceAdmission, {}).validationInputs,
-        publicationArtifactSourceJson:
-          plan.sourceAdmission.coverage.publication_artifact_source_json,
-      },
+      validationInputs: manifestContextFromEnvironment(plan.sourceAdmission, {}).validationInputs,
       publicationArtifacts,
     },
   });

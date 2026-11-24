@@ -213,6 +213,10 @@ export function manifestContextFromEnvironment(source, env = process.env) {
   if (qualificationBaselines) {
     inputs.qualificationBaselinesJson = qualificationBaselines;
   }
+  // Source admission binds this pin; the manifest must echo it for validation.
+  if (coverage.publication_artifact_source_json) {
+    inputs.publicationArtifactSourceJson = coverage.publication_artifact_source_json;
+  }
   inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
   inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";
   return {

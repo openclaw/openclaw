@@ -14,6 +14,7 @@ import {
   createPublicationSourceFact as createSource,
   normalizePublicationIntent,
   publicationAdmissionContract,
+  publicationDispatchEnvelope,
   publicationIntentInputs,
   publicationObservationJson,
   publicationSourceJson,
@@ -38,6 +39,7 @@ import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-
 import { tryReadReleaseDecisionArtifact } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  publicationSelectionFixture,
   publicationSourceEnv,
   registryRecord,
 } from "./full-release-validation-state.test-support.js";
@@ -1389,7 +1391,15 @@ it.each([
     );
     expect(Buffer.byteLength(JSON.stringify(expectedChildren))).toBeGreaterThan(128 * 1024);
     const request = sourceRequest(
-      { provider: "openai" },
+      {
+        provider: "openai",
+        // Pinned historical artifacts are admitted coverage the manifest must echo.
+        trusted_workflow_json: publicationDispatchEnvelope(
+          null,
+          { validationPurpose: "publish", publicationSelection: publicationSelectionFixture() },
+          { publication_artifact_source_json: '{"runId":"51","runAttempt":1}' },
+        ),
+      },
       {
         PUBLICATION_TOOLING_JSON: JSON.stringify({
           fullRef: "refs/heads/main",
@@ -1426,6 +1436,7 @@ it.each([
         ...(source
           ? {
               ...publicationIntentInputs(oldSource),
+              publicationArtifactSourceJson: oldSource.coverage.publication_artifact_source_json,
               targetContextRef: "release/2026.9.9",
               allowUnreleasedChangelog: "false",
             }
