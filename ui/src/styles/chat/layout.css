@@ -34,7 +34,7 @@ openclaw-pending-session-create {
   grid-column: 1 / -1;
 }
 
-.chat-error .app-toast__content > .chat-error__actions {
+.chat-error .chat-error__actions {
   grid-template-rows: subgrid;
   grid-row: 1 / span 2;
   gap: 2px;
@@ -42,14 +42,9 @@ openclaw-pending-session-create {
   margin-block-start: -4px;
 }
 
-.chat-error__actions .report-issue-link {
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
-}
-
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
+  .chat-error__actions:has(> .chat-error__discard) {
     grid-template-rows: none;
     grid-row: auto;
     gap: 12px;
