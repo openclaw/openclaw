@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 
 const source = path.resolve(import.meta.dirname, "..");
@@ -120,7 +120,7 @@ async function main() {
     "win32-arm64",
     "win32-x64",
   ];
-  if (Object.keys(pin.platforms).toSorted().join() !== expected.join()) {
+  if (!isDeepStrictEqual(Object.keys(pin.platforms).toSorted(), expected)) {
     throw new Error("Incomplete native Beam cleaner platform pin");
   }
   const plugin = path.join(await fs.realpath(repo), "dist", "extensions", "beam");
