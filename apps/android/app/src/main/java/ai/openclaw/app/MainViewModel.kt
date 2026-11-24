@@ -24,6 +24,7 @@ import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionGroupCatalogSnapshot
 import ai.openclaw.app.chat.SessionRewindResult
+import ai.openclaw.app.chat.SessionWakeDeadline
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.runCatchingCancellable
@@ -548,6 +549,14 @@ class MainViewModel internal constructor(
 
   internal fun refreshSessionGroups() = ensureRuntime().chat.refreshSessionGroups()
 
+  internal val sessionBrowserRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.chat.sessionBrowserRevision }
+
+  internal val sessionWindowWake: StateFlow<SessionWakeDeadline?> = runtimeState(initial = null) { it.chat.sessionWindowWake }
+
+  internal fun refreshChatSessionsAfterWake(wake: SessionWakeDeadline) = ensureRuntime().chat.refreshSessionsAfterWake(wake)
+
+  internal fun refreshCurrentChatSessionWindow(): Unit = ensureRuntime().chat.refreshSessionsForCurrentWindow()
+
   internal suspend fun loadMoreChatSessions(): Boolean = ensureRuntime().chat.loadMoreSessions()
 
   val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
@@ -555,6 +564,7 @@ class MainViewModel internal constructor(
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
   val sessionCatalogAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionCatalogAvailable }
+  internal val personalSessionPinAccess = runtimeState(initial = PersonalSessionPinAccess.Unsupported) { it.personalSessionPinAccess }
   internal val sessionDiffAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionDiffAvailable }
   val sessionCatalogState: StateFlow<SessionCatalogState> =
@@ -1837,7 +1847,7 @@ class MainViewModel internal constructor(
   suspend fun fetchChatSessionList(
     search: String?,
     archived: Boolean,
-  ): List<ChatSessionEntry> = ensureRuntime().chat.fetchSessionList(search = search, archived = archived)
+  ): List<ChatSessionEntry>? = ensureRuntime().chat.fetchSessionList(search = search, archived = archived)
 
   fun abortChat(): Unit = ensureRuntime().chat.abort()
 

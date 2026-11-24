@@ -416,7 +416,6 @@ class ChatControllerCommandControlsTest {
           expectedSessionId = "session-main",
           clearLabel = true,
           clearCategory = true,
-          pinned = true,
           archived = false,
           unread = true,
         ),
@@ -429,7 +428,7 @@ class ChatControllerCommandControlsTest {
       assertTrue(patch.contains("\"expectedSessionId\":\"session-main\""))
       assertTrue(patch.contains("\"label\":null"))
       assertTrue(patch.contains("\"category\":null"))
-      assertTrue(patch.contains("\"pinned\":true"))
+      assertFalse(patch.contains("\"pinned\""))
       assertTrue(patch.contains("\"archived\":false"))
       assertTrue(patch.contains("\"unread\":true"))
 
