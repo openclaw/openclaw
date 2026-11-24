@@ -1,6 +1,7 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
@@ -82,6 +83,7 @@ export type ResolvedInProcessGatewayDispatch = {
   delegatedToolPolicyHandoffId?: string;
   isWebchatConnect: NonNullable<GatewayRequestOptions["isWebchatConnect"]>;
   operatorSourceClient: NonNullable<GatewayRequestOptions["client"]>;
+  parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
 };
 

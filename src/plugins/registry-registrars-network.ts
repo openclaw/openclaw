@@ -13,6 +13,7 @@ import {
   type GatewayMethodProfileAccess,
 } from "../gateway/methods/descriptor.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
+import { resolvePluginRequestPersonProfileId } from "../gateway/server-methods/gateway-personal-caller.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizePluginHttpPath } from "./http-path.js";
@@ -37,10 +38,8 @@ import {
   PluginCapabilityRemovedError,
   removedPluginCapabilityDescriptor,
 } from "./removed-capability-error.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "./runtime/gateway-request-scope.js";
+import { withPluginGatewayRequestAuthority } from "./runtime/gateway-request-authority.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginApi,
@@ -125,14 +124,36 @@ function adaptPluginGatewayMethodHandler(
       }
     };
     const scope = getPluginRuntimeGatewayRequestScope();
+    const parent = scope?.parentHttpRequestAuthority?.();
+    const operator =
+      opts.client?.internal?.authenticatedOperator && opts.client.connect.role === "operator"
+        ? opts.client
+        : undefined;
     const invoke = () => handler({ ...opts, respond, assertHandlerCurrent });
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
       const result = scope
-        ? await withPluginRuntimeGatewayRequestScope(
-            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+        ? await withPluginGatewayRequestAuthority(
+            {
+              ...scope,
+              revalidate: parent ? () => parent.revalidate() : scope.revalidate,
+              gatewayMethodDispatchAllowed: mayDispatch && scope.client != null,
+            },
             invoke,
+            parent || operator
+              ? {
+                  personProfileId: operator
+                    ? resolvePluginRequestPersonProfileId(operator)
+                    : parent?.personProfileId,
+                  assertCurrent() {
+                    parent?.assertCurrent();
+                    opts.signal?.throwIfAborted();
+                    assertHandlerCurrent();
+                    opts.sessionMutationAuthorization?.assertCurrent();
+                  },
+                }
+              : undefined,
           )
         : await invoke();
       if (!responded && result !== undefined) {

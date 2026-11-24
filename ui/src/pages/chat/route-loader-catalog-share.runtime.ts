@@ -4,8 +4,8 @@ import {
 } from "@openclaw/session-url-contract/share-build";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type {
-  SessionsCatalogContinueResult,
   SessionsCatalogListResult,
+  SessionsCatalogResolveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { pathForSession } from "../../app-session-path-builder.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
@@ -201,7 +201,7 @@ async function resolveBoundCatalogConversation(
   // A catalog pointer is discovery. Reconcile origin and destination ACLs before
   // a deleted destination could be mistaken for a new ordinary conversation.
   connection.assertCurrent();
-  const result = await client.request<SessionsCatalogContinueResult | null>(
+  const result = await client.request<SessionsCatalogResolveResult>(
     catalogMethod(connection, key.catalogId, "resolve"),
     { ...key, agentId },
     { signal },

@@ -277,14 +277,17 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                     }
                   : {}),
                 sessions: page.sessions.map((session) =>
-                  session.createdActor?.identity
-                    ? Object.assign({}, session, {
-                        createdActor: {
-                          ...session.createdActor,
-                          identity: namespace(session.createdActor.identity, source.hostId),
-                        },
-                      })
-                    : session,
+                  Object.assign({}, session, {
+                    exportPolicy: { origin: "federated" as const, automatic: false },
+                    ...(session.createdActor?.identity
+                      ? {
+                          createdActor: {
+                            ...session.createdActor,
+                            identity: namespace(session.createdActor.identity, source.hostId),
+                          },
+                        }
+                      : {}),
+                  }),
                 ),
               });
             } catch (error) {

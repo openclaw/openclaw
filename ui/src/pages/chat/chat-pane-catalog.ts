@@ -184,10 +184,8 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       this.history.catalogLoading = true;
       this.history.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
-      this.historyObserverArmed = false;
+      this.historyReaderIntent = false;
       this.transcriptScrollTop = null;
-      this.historyObserver?.disconnect();
-      this.historyObserver = null;
     }
     try {
       if (!older) {

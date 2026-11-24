@@ -245,6 +245,14 @@ blocked tool list indicates an unsupported runtime. Clients offer **Send now**
 only for `available`; blocked state should explain why the input must wait.
 `sessions.changed` with reason `agent.input.steering` refreshes this projection.
 
+For a send that must reach a previously resolved physical session, pass its
+`sessionKey` and `expectedSessionId` to `chat.send`. The Gateway checks the ID
+before preparation can create a session and again at send admission. A missing
+or replaced target returns `INVALID_REQUEST` with
+`details.reason: "session-incarnation-changed"`. Resolve the destination again
+before deciding whether to send a new request. Ordinary sends can keep using
+the logical session key across a reset.
+
 The `chat-input-custody-v1` server capability advertises `chat.send.queueMode`
 (`steer`, `followup`, `collect`, `interrupt`) and exact input receipts. It does not
 promise active-backend injection or mid-response model steering: input that

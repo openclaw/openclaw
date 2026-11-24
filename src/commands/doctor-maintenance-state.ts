@@ -235,8 +235,10 @@ export async function createDoctorMaintenanceState(options: {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
       return resources!.run(() =>
         inspections!.run(() =>
-          runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, () =>
-            capture ? capture.run(operation) : operation(),
+          runWithDoctorMigrationBackup(
+            captureFreshDoctorMigrationTables,
+            () => (capture ? capture.run(operation) : operation()),
+            params.options.stateUpgradeLiveStateDir,
           ),
         ),
       );

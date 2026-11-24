@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -360,4 +360,64 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
   expect(() =>
     parseFastTrackRequest({ ...partial, policy: original.policy, action: original.action }),
   ).toThrow();
+});
+
+it("retains one string-attempt FRV record and its failed conclusion for stable closeout", () => {
+  const shell = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+  const start = shell.indexOf("      ([.workflowRuns[]?");
+  const end = shell.indexOf("\n    '", start);
+  expect(start).toBeGreaterThan(0);
+  const filter = shell.slice(start, end);
+  const record = {
+    id: "12",
+    label: "Full Release Validation",
+    runAttempt: 1,
+    conclusion: "failure",
+  };
+  const result = JSON.parse(
+    execFileSync(
+      "jq",
+      [
+        "--arg",
+        "release_publish_run_id",
+        "30",
+        "--arg",
+        "validation_label",
+        record.label,
+        "--arg",
+        "validation_run_id",
+        record.id,
+        "--arg",
+        "validation_run_attempt",
+        "1",
+        "--arg",
+        "validation_target_sha",
+        "a".repeat(40),
+        "--arg",
+        "validation_url",
+        "https://github.com/openclaw/openclaw/actions/runs/12",
+        "--arg",
+        "validation_workflow_ref",
+        "main",
+        filter,
+      ],
+      {
+        input: JSON.stringify({
+          workflowRuns: [{ label: "Plugin NPM Release", id: "40" }, record],
+        }),
+        encoding: "utf8",
+      },
+    ),
+  );
+  expect(result.workflowRuns).toHaveLength(2);
+  expect(
+    result.workflowRuns.filter((item: { label: string }) => item.label === record.label),
+  ).toEqual([
+    expect.objectContaining({
+      id: "12",
+      runAttempt: "1",
+      conclusion: "failure",
+      targetSha: "a".repeat(40),
+    }),
+  ]);
 });
