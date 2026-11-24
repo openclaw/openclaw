@@ -369,7 +369,6 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     !props.voiceActive &&
     (!props.connected ||
       props.sending ||
-      props.isBusy ||
       Boolean(props.submitDisabledReason) ||
       Boolean(props.readDictation?.()?.locksComposer));
   const AbortAction = renderChatAbortActionSolid;
@@ -401,7 +400,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           readDictation={props.readDictation}
           onDirectDictationStart={props.onDirectDictationStart}
           microphonePicker={microphonePicker}
-          disabled={Boolean(props.voiceActive || !props.readDictation)}
+          disabled={props.voiceActive || !props.readDictation}
         />
       </Show>
       <Show when={props.onToggleVoice && (props.voiceActive || props.talkReady)}>

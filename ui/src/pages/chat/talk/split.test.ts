@@ -271,12 +271,20 @@ it.each([
     const h = harness(provider);
     const stopPlaybackTrack = vi.fn();
     if (provider) {
+      class FakePlaybackStream {
+        readonly playback = true;
+
+        getTracks() {
+          return [{ stop: stopPlaybackTrack }];
+        }
+      }
+      vi.stubGlobal("MediaStream", FakePlaybackStream);
       const OriginalAudio = FakeAudio;
       vi.stubGlobal(
         "Audio",
         class extends OriginalAudio {
           captureStream() {
-            return { playback: true, getTracks: () => [{ stop: stopPlaybackTrack }] };
+            return new FakePlaybackStream();
           }
         },
       );

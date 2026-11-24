@@ -432,7 +432,7 @@ it("keeps the dictation button stable when tapped and blocks Talk while recordin
   openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
   vi.stubGlobal("AudioContext", MockDictationAudioContext);
   const { container, query, request } = await mountTalk(
-    { realtime: { ready: true, providers: [] }, transcription: { ready: true, providers: [] } },
+    { realtime: { ready: true }, transcription: { ready: true } },
     { draft: "Keep this text" },
     true,
   );

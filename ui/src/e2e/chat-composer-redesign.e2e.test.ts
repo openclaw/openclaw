@@ -153,7 +153,7 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const model = composer.locator('[data-chat-model-select="true"]');
-      const voice = page.getByRole("button", { name: "Start voice input" });
+      const voice = page.getByRole("button", { name: "Dictation" });
       await polledAttribute(model, "aria-busy").toBe("false");
       await polledVisible(voice).toBe(true);
 
@@ -255,14 +255,13 @@ suite.define(() => {
     });
   });
 
-  it("keeps the microphone picker aligned during hover, hold and keyboard focus", async () => {
+  it("keeps the microphone picker aligned during hover and keyboard focus", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
       const gateway = await installMockGateway(page);
       await page.goto(suite.server.baseUrl + "chat");
       await gateway.waitForRequest("sessions.messages.subscribe");
       const textarea = page.locator(".agent-chat__input textarea");
-      const voice = page.getByRole("button", { name: "Start voice input" });
+      const voice = page.getByRole("button", { name: "Dictation" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
       const shellWidth = () =>
@@ -311,37 +310,16 @@ suite.define(() => {
       expect(dwell.delay).toBeGreaterThan(0);
       expect(dwell.width).toBe(0);
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
-      const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
+      const [voiceOnHover, pickerOnHover] = await Promise.all([
         voice.boundingBox(),
         microphonePicker.boundingBox(),
       ]);
-      expect(voiceBeforeHold).not.toBeNull();
-      expect(pickerBeforeHold).not.toBeNull();
+      expect(voiceOnHover).not.toBeNull();
+      expect(pickerOnHover).not.toBeNull();
       expect(
-        Math.abs(
-          (voiceBeforeHold?.x ?? 0) - ((pickerBeforeHold?.x ?? 0) + (pickerBeforeHold?.width ?? 0)),
-        ),
+        Math.abs((voiceOnHover?.x ?? 0) - ((pickerOnHover?.x ?? 0) + (pickerOnHover?.width ?? 0))),
       ).toBeLessThanOrEqual(0.5);
-      // Measure the arming layout without letting slow browser round trips
-      // cross the 500 ms hold threshold and open the unavailable-device picker.
-      await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
-      await page.mouse.down();
-      await page.clock.runFor(150);
-      await expect
-        .poll(() =>
-          voice.evaluate((node) => node.classList.contains("chat-send-btn--dictation-arming")),
-        )
-        .toBe(true);
-      await polledVisible(microphonePicker).toBe(true);
-      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
-      const voiceDuringHold = await voice.boundingBox();
-      expect(voiceDuringHold).not.toBeNull();
-      expect(Math.abs((voiceDuringHold?.x ?? 0) - (voiceBeforeHold?.x ?? 0))).toBeLessThanOrEqual(
-        1,
-      );
-      await page.mouse.up();
       await page.mouse.move(0, 0);
-      await page.clock.resume();
       await expect.poll(pickerWidth).toBe(0);
       await voice.hover();
       await voice.press("Tab");

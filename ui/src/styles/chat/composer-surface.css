@@ -1554,6 +1554,30 @@
   }
 }
 
+/* The three independent voice/send targets need their own row when
+   an embedded composer cannot fit them beside the model and effort targets. */
+@container chat-composer (max-width: 360px) {
+  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    column-gap: var(--chat-composer-chip-gap);
+  }
+
+  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) .agent-chat__composer-trail {
+    display: contents;
+  }
+
+  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) .agent-chat__composer-context {
+    margin-inline-start: auto;
+  }
+
+  .agent-chat__composer-footer:has(.chat-send-btn--talk-idle) .agent-chat__composer-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+}
+
 /* Short panes spend height on a complete editor line and the action row first.
    Context keeps its existing scrollport; neither region overflows the chat clip.
    The editor keeps its inset: a portrait phone keyboard moves the pane across

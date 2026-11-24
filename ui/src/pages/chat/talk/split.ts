@@ -122,13 +122,15 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     }
     // Tap the element's output without routing audible playback through Web Audio.
     // Browsers without captureStream still play normally and meter the microphone.
-    const element = audio as HTMLAudioElement & {
-      captureStream?: () => MediaStream;
-      mozCaptureStream?: () => MediaStream;
-    };
     try {
-      const stream = (element.captureStream ?? element.mozCaptureStream)?.call(element);
-      if (!stream) {
+      const capture =
+        "captureStream" in audio && typeof audio.captureStream === "function"
+          ? audio.captureStream
+          : "mozCaptureStream" in audio && typeof audio.mozCaptureStream === "function"
+            ? audio.mozCaptureStream
+            : undefined;
+      const stream: unknown = capture?.call(audio);
+      if (!(stream instanceof MediaStream)) {
         return undefined;
       }
       const meter = new RealtimeTalkMediaStreamMeter(onLevel);
