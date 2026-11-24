@@ -25,7 +25,10 @@ Account-reported subscription budgets remain authoritative.
 Reasoning cannot be disabled. Use `low`, `medium` (the starting default),
 `high`, `xhigh`, or `max`; `minimal` maps to `low`. Tool-bearing turns require
 the Responses API, including when an official Chat Completions adapter was
-configured. Do not send temperature, top-p, or log-probability controls.
+configured. A request that stays on the official Chat Completions endpoint
+sends `max` as `xhigh`, because that endpoint rejects `max` for these models;
+requests that use the Responses API, directly or through tool-bearing
+routing, keep `max`. Do not send temperature, top-p, or log-probability controls.
 Standard, Fast, and Ultrafast use the existing speed controls; account and
 workspace policy can restrict a tier. Ultrafast requires Pro 200 for Sol,
 Pro 500 for both models, or eligible workspace access.

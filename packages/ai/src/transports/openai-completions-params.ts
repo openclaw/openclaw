@@ -47,6 +47,7 @@ import {
 import {
   detectOpenAICompletionsCompat,
   isKnownOpenAIEndpoint,
+  isNativeOpenAIEndpoint,
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
 import {
@@ -591,6 +592,16 @@ export function buildOpenAICompletionsRequest(
     ) {
       params.reasoning_effort = nativeEffort;
     }
+  }
+  // Native GPT-6.2 Chat Completions rejects max, including catalog-backed requests.
+  // Keep the model's max capability for requests routed to Responses.
+  // https://github.com/QwenLM/qwen-code/issues/18200
+  if (
+    params.reasoning_effort === "max" &&
+    isNativeOpenAIEndpoint(model) &&
+    /^(?:openai\/)?gpt-6\.2-(?:astra|sol)(?:-\d{4}-\d{2}-\d{2})?$/iu.test(model.id.trim())
+  ) {
+    params.reasoning_effort = "xhigh";
   }
   if (direct) {
     if (compat.openRouterRouting) {

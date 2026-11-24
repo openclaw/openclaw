@@ -239,3 +239,172 @@ it.each(ids.flatMap((id) => [true, false].map((tools) => ({ id, tools }))))(
     expect(bodies[0]).not.toHaveProperty("prompt_cache_retention");
   },
 );
+
+type CapturedRequest = { bodies: Record<string, unknown>[]; urls: string[] };
+
+function captureRequests(): CapturedRequest & { restore: () => void } {
+  const bodies: Record<string, unknown>[] = [];
+  const urls: string[] = [];
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    urls.push(request.url);
+    bodies.push((await request.json()) as Record<string, unknown>);
+    return Response.json(
+      { error: { message: "synthetic request capture", type: "invalid_request_error" } },
+      { status: 400 },
+    );
+  });
+  return { bodies, urls, restore: () => spy.mockRestore() };
+}
+
+function resolveGpt62(id: (typeof ids)[number], withMetadata: boolean): Model {
+  const resolved = buildOpenAIProvider().resolveDynamicModel?.({
+    provider: "openai",
+    modelId: id,
+    modelRegistry: registry,
+  });
+  if (!resolved) {
+    throw new Error("model must resolve before transport");
+  }
+  const model: Model = { ...resolved, api: "openai-completions" };
+  if (!withMetadata && model.compat) {
+    model.compat = { ...model.compat, supportedReasoningEfforts: undefined };
+  }
+  return model;
+}
+
+const echoTools = [
+  {
+    name: "echo",
+    description: "Echo synthetic text",
+    parameters: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+  },
+];
+
+it.each(ids.flatMap((id) => [true, false].map((withMetadata) => ({ id, withMetadata }))))(
+  "caps $id max at xhigh on official Chat Completions with catalog metadata=$withMetadata",
+  async ({ id, withMetadata }) => {
+    const model = resolveGpt62(id, withMetadata);
+    const { bodies, urls } = captureRequests();
+    const dispatch = createOpenAICompletionsTransportStreamFn();
+    const result = await (
+      await dispatch(
+        model,
+        { messages: [{ role: "user", content: "Synthetic max request.", timestamp: 0 }] },
+        { apiKey: "synthetic-key", reasoning: "max", temperature: 0.7, cacheRetention: "long" },
+      )
+    ).result();
+    expect(result.stopReason).toBe("error");
+    expect(urls).toEqual(["https://api.openai.com/v1/chat/completions"]);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ model: id, reasoning_effort: "xhigh" });
+    expect(bodies[0]).not.toHaveProperty("temperature");
+    expect(bodies[0]).toHaveProperty("prompt_cache_options", { ttl: "30m" });
+  },
+);
+
+it.each(ids.flatMap((id) => [true, false].map((withMetadata) => ({ id, withMetadata }))))(
+  "keeps $id max when a tool-bearing Completions request routes to Responses with catalog metadata=$withMetadata",
+  async ({ id, withMetadata }) => {
+    const model = resolveGpt62(id, withMetadata);
+    const { bodies, urls } = captureRequests();
+    const dispatch = createOpenAICompletionsTransportStreamFn();
+    const result = await (
+      await dispatch(
+        model,
+        {
+          messages: [{ role: "user", content: "Call echo with synthetic value.", timestamp: 0 }],
+          tools: echoTools,
+        },
+        { apiKey: "synthetic-key", reasoning: "max" },
+      )
+    ).result();
+    expect(result.stopReason).toBe("error");
+    expect(urls).toEqual(["https://api.openai.com/v1/responses"]);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({
+      model: id,
+      reasoning: { effort: "max" },
+      tools: [{ type: "function", name: "echo" }],
+    });
+  },
+);
+
+it.each(ids)("keeps $id max on direct Responses requests", async (id) => {
+  const resolved = buildOpenAIProvider().resolveDynamicModel?.({
+    provider: "openai",
+    modelId: id,
+    modelRegistry: registry,
+  });
+  if (!resolved) {
+    throw new Error("model must resolve before transport");
+  }
+  const model: Model = { ...resolved, api: "openai-responses" };
+  const { bodies, urls } = captureRequests();
+  const dispatch = createOpenAIResponsesTransportStreamFn();
+  const result = await (
+    await dispatch(
+      model,
+      { messages: [{ role: "user", content: "Synthetic max request.", timestamp: 0 }] },
+      { apiKey: "synthetic-key", reasoning: "max" },
+    )
+  ).result();
+  expect(result.stopReason).toBe("error");
+  expect(urls).toEqual(["https://api.openai.com/v1/responses"]);
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]).toMatchObject({ model: id, reasoning: { effort: "max" } });
+});
+
+it("caps max at xhigh for a qualified dated GPT-6.2 model id on official Chat Completions", async () => {
+  const model: Model = {
+    ...resolveGpt62("gpt-6.2-sol", true),
+    id: "openai/gpt-6.2-sol-2026-11-17",
+  };
+  const { bodies, urls } = captureRequests();
+  const dispatch = createOpenAICompletionsTransportStreamFn();
+  const result = await (
+    await dispatch(
+      model,
+      { messages: [{ role: "user", content: "Synthetic max request.", timestamp: 0 }] },
+      { apiKey: "synthetic-key", reasoning: "max" },
+    )
+  ).result();
+  expect(result.stopReason).toBe("error");
+  expect(urls).toEqual(["https://api.openai.com/v1/chat/completions"]);
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]).toMatchObject({ reasoning_effort: "xhigh" });
+});
+
+it.each([{ provider: "openai" }, { provider: "custom" }])(
+  "keeps max on a compatible endpoint that declares support for it (provider=$provider)",
+  async ({ provider }) => {
+    const resolved = resolveGpt62("gpt-6.2-sol", true);
+    const model: Model = {
+      ...resolved,
+      provider,
+      baseUrl: "https://compat.example/v1",
+      compat: {
+        ...resolved.compat,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    };
+    const { bodies, urls } = captureRequests();
+    const dispatch = createOpenAICompletionsTransportStreamFn();
+    const result = await (
+      await dispatch(
+        model,
+        { messages: [{ role: "user", content: "Synthetic max request.", timestamp: 0 }] },
+        { apiKey: "synthetic-key", reasoning: "max" },
+      )
+    ).result();
+    expect(result.stopReason).toBe("error");
+    expect(urls).toEqual(["https://compat.example/v1/chat/completions"]);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ reasoning_effort: "max" });
+  },
+);
