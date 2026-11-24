@@ -1,5 +1,5 @@
 # Real overlapping descriptors, raw-worker snapshots, and nested acquisition cleanup
 # preserve foreign-descriptor, stale-epoch, and uncertain-close regression coverage.
 # Failure-only recovery context preserves the assertions and execution order.
-# 454 net test lines; allocate only 54 above the unchanged 400-line allowance.
-54
+# 458 net test lines; allocate only 58 above the unchanged 400-line allowance.
+58

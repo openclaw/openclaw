@@ -30,30 +30,32 @@ it("lets a raw worker's first snapshot retire a descriptor adopted after it star
   using acquisition = holdReadFileCallback(location);
   const prepared = prepareSqliteDatabaseAdmissionAsync({ location, assertCurrent() {} });
   const outcome = Promise.allSettled([prepared]);
-  let sibling: DatabaseSync | undefined;
-  let worker: Worker | undefined;
-  let exited: Promise<unknown[]> | undefined;
-  let joined: Promise<PromiseSettledResult<unknown[]>[]> | undefined;
-  let physical: DatabaseFileIdentity | undefined;
-  await using _cleanup = {
+  // Register cleanup before setup can fail, with only the resources acquired so far.
+  await using fixture: {
+    sibling?: DatabaseSync;
+    worker?: Worker;
+    joined?: Promise<PromiseSettledResult<unknown[]>[]>;
+    physical?: DatabaseFileIdentity;
+    [Symbol.asyncDispose](): Promise<void>;
+  } = {
     async [Symbol.asyncDispose]() {
       acquisition.release();
       await outcome;
-      if (worker && worker.threadId !== -1) {
-        await worker.terminate();
+      if (fixture.worker && fixture.worker.threadId !== -1) {
+        await fixture.worker.terminate();
       }
-      await joined;
-      if (sibling?.isOpen) {
-        sibling.close();
+      await fixture.joined;
+      if (fixture.sibling?.isOpen) {
+        fixture.sibling.close();
       }
       retireSqliteDatabaseAdmissionForPath(location);
       // A broken baseline can leave this exact acquired fd orphaned after all native users joined.
-      if (physical && acquisition.descriptor !== undefined) {
+      if (fixture.physical && acquisition.descriptor !== undefined) {
         let live = false;
         try {
           assertDatabaseFileIdentity(
             fs.fstatSync(acquisition.descriptor, { bigint: true }),
-            physical,
+            fixture.physical,
           );
           live = true;
         } catch (error) {
@@ -75,16 +77,16 @@ it("lets a raw worker's first snapshot retire a descriptor adopted after it star
     ),
     signal,
   );
-  sibling = openNodeSqliteDatabase(location);
+  const sibling = (fixture.sibling = openNodeSqliteDatabase(location));
   const fact = { name: "raw-worker-custody-proof" };
   publishSqliteDatabaseAdmission(sibling, fact, 42);
   const record = state.registry.forLocation(location);
   assert(record && acquisition.descriptor !== undefined);
-  physical = record.physicalIdentity;
+  fixture.physical = record.physicalIdentity;
   const read = prepareSqliteDatabaseAdmissionForPath(location, fact);
   expect(read()).toBe(42);
   expect(record.descriptor).not.toBe(acquisition.descriptor);
-  worker = new Worker(
+  const worker = (fixture.worker = new Worker(
     `
       const { parentPort, workerData } = require("node:worker_threads");
       (async () => {
@@ -112,9 +114,9 @@ it("lets a raw worker's first snapshot retire a descriptor adopted after it star
         context: new URL("./sqlite-database-admission-context.ts", import.meta.url).href,
       },
     },
-  );
-  exited = once(worker, "exit");
-  joined = Promise.allSettled([exited]);
+  ));
+  const exited = once(worker, "exit");
+  fixture.joined = Promise.allSettled([exited]);
   expect((await withinTest(once(worker, "message"), signal))[0]).toEqual({
     descriptor: record.descriptor,
     custody: record.descriptorCustody.id,

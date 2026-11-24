@@ -47,7 +47,8 @@ it("retains overlapping nested creation descriptors until their native consumers
   const closed = new Set<number>();
   let canonicalDescriptor: number | undefined;
   const close = fsSync.closeSync;
-  using _closing = vi.spyOn(fsSync, "closeSync").mockImplementation((descriptor) => {
+  using closing = vi.spyOn(fsSync, "closeSync");
+  closing.mockImplementation((descriptor) => {
     close(descriptor);
     if (descriptor === creation.descriptor || descriptor === canonicalDescriptor) {
       closed.add(descriptor);
