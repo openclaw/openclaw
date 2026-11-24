@@ -369,15 +369,13 @@ describe("requester continuation persisted automation management", () => {
         );
         expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
         release.resolve();
-        await expect(pending).rejects.toThrow(/authority|admitted run/i);
+        const message =
+          "invalid cron.get params: The message turn has ended. Start a new turn to retry.";
+        await expect(pending).rejects.toThrow(message);
         expect(responses).toHaveBeenCalledExactlyOnceWith(
           false,
           undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message:
-              "invalid cron.get params: The message turn has ended. Start a new turn to retry.",
-          }),
+          expect.objectContaining({ code: "INVALID_REQUEST", message }),
         );
       } finally {
         release.resolve();
