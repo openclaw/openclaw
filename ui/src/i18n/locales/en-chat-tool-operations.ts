@@ -4,9 +4,7 @@ import { en } from "./en.ts";
 const enChatToolOperations = {
   chat: {
     toolCards: {
-      operationUnknown: "{action} · outcome unknown",
-      operationNoResult: "{action} · no result recorded",
-      operationBlocked: "{action} · blocked",
+      noResultRecorded: "No result recorded",
       namedOperation: "{action} · {name}",
       listingChats: "Listing chats",
       listedChats: "Listed chats",
