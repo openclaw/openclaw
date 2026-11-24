@@ -261,7 +261,7 @@ describe("Codex node native readiness", () => {
       await vi.waitFor(() => expect(harness.receiver).toHaveBeenCalledOnce());
       const [receive] = harness.receiver.mock.calls[0]!;
       const requests = ["fs/getMetadata", "fs/getMetadataBatch", "fs/canonicalize"].map(
-        (method, id) => receive(Buffer.from(JSON.stringify({ id, method }))),
+        (method, id) => Promise.resolve(receive(Buffer.from(JSON.stringify({ id, method })))),
       );
       const delivered = Promise.allSettled(requests);
       await vi.waitFor(() => expect(harness.send).toHaveBeenCalledTimes(3));
