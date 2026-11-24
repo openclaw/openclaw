@@ -1187,6 +1187,12 @@ assert_legacy_operator_update_noop() {
     # Retain the inferred monthly channel and opt into its loopback selector.
     update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
   else
+    # Keep the exact-version resolver, but use the registry serving this candidate.
+    update_env+=(
+      "OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY=${NPM_CONFIG_REGISTRY:?candidate registry required}"
+      OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY_CORE=1
+      "NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"
+    )
     update_args+=(--tag "$candidate_version")
   fi
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" \
