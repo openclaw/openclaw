@@ -434,7 +434,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
-        prompts: conversationAttention.gatewayQuestionPrompts,
         sendActions: createChatPaneSendActions(state, {
           canSend: composerAvailability.canSend,
           modelRequiredReason: composerAvailability.modelRequiredReason,
