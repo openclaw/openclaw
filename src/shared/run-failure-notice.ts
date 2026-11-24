@@ -1,3 +1,7 @@
+import {
+  normalizeBillingError,
+  type BillingError,
+} from "@openclaw/normalization-core/billing-error";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Run failure code: the harness runtime must be updated; clients may offer a new session elsewhere. */
@@ -7,6 +11,7 @@ export const HARNESS_UPDATE_REQUIRED_CODE = "harness_update_required";
 export type RunFailureCause = {
   provider: string;
   failoverReason?: string;
+  billingError?: BillingError;
   code?: typeof HARNESS_UPDATE_REQUIRED_CODE;
 };
 
@@ -25,6 +30,8 @@ export function readRunFailureCause(value: unknown): RunFailureCause | undefined
   const source = asOptionalRecord(value);
   const provider = readCauseField(source?.provider);
   const failoverReason = readCauseField(source?.failoverReason);
+  const billingError =
+    failoverReason === "billing" ? normalizeBillingError(source?.billingError) : undefined;
   const updateRequired = [source?.code, source?.providerErrorCode].includes(
     HARNESS_UPDATE_REQUIRED_CODE,
   );
@@ -32,6 +39,7 @@ export function readRunFailureCause(value: unknown): RunFailureCause | undefined
     ? {
         provider,
         ...(failoverReason && { failoverReason }),
+        ...(billingError && { billingError }),
         ...(updateRequired && { code: HARNESS_UPDATE_REQUIRED_CODE }),
       }
     : undefined;

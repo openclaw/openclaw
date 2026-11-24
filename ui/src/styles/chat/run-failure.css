@@ -19,6 +19,47 @@
   background: var(--border);
 }
 
+.chat-run-failure--billing {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chat-run-failure--billing::before,
+.chat-run-failure--billing::after {
+  display: none;
+}
+
+.chat-run-failure__billing {
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  text-align: start;
+}
+
+.chat-run-failure__billing-message {
+  margin: 0;
+  font-size: calc(14px * var(--control-ui-text-scale));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.chat-run-failure__plans {
+  display: inline-block;
+  margin-top: var(--space-2);
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.chat-run-failure__plans:hover {
+  text-decoration: underline;
+}
+
 .chat-run-failure__toggle {
   display: inline-flex;
   flex: 0 1 auto;

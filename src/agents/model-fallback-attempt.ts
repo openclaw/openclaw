@@ -517,6 +517,7 @@ function buildFailedCandidateAttempt(
         ? described.rawError
         : described.message,
     reason: described.reason ?? "unknown",
+    billingError: described.billingError,
     rateLimitRetriesExhausted: described.rateLimitRetriesExhausted,
     rateLimitResetAt: described.rateLimitResetAt,
     authMode: described.authMode,
@@ -633,6 +634,7 @@ export function throwFallbackFailureSummary(params: {
   throw withAgentTerminalSnapshot(
     new FailoverError(message, {
       reason: lastAttempt?.reason ?? "unknown",
+      billingError: lastAttempt?.billingError,
       provider: lastAttempt?.provider,
       model: lastAttempt?.model,
       // Recovery must not infer OAuth from the provider after candidate errors collapse here.

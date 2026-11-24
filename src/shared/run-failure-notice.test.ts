@@ -1,5 +1,62 @@
 import { describe, expect, it } from "vitest";
-import { readRunFailureNotice } from "./run-failure-notice.js";
+import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readRunFailureCause, readRunFailureNotice } from "./run-failure-notice.js";
+
+describe("billing display projection", () => {
+  it("keeps a valid HTTP action absolute when the browser has a base URL", () => {
+    const cause = readRunFailureCause({
+      provider: "local-provider",
+      failoverReason: "billing",
+      billingError: { message: "Choose a plan.", actionUrl: "http:example.com" },
+    });
+    expect(cause?.billingError?.actionUrl).toBe("http://example.com/");
+  });
+
+  it.each(["javascript:alert(1)", "data:text/html,hello", "/plans", "https://", "x".repeat(2049)])(
+    "drops only the invalid billing link %j",
+    (actionUrl) => {
+      const detail = projectChatErrorDetail({
+        provider: "local-provider",
+        failoverReason: "billing",
+        billingError: { message: "  Choose an active plan.  ", actionUrl },
+      });
+      expect(readRunFailureCause(detail)?.billingError).toEqual({
+        message: "Choose an active plan.",
+      });
+    },
+  );
+
+  it("bounds messages and never promotes raw previews or non-billing metadata", () => {
+    expect(
+      readRunFailureCause({
+        provider: "local-provider",
+        failoverReason: "billing",
+        billingError: { message: "x".repeat(700) },
+      })?.billingError?.message,
+    ).toHaveLength(600);
+    for (const billingError of [undefined, { message: "  " }]) {
+      expect(
+        readRunFailureCause(
+          projectChatErrorDetail({
+            provider: "local-provider",
+            failoverReason: "billing",
+            billingError,
+            providerErrorMessagePreview: "Private raw billing message",
+          }),
+        )?.billingError,
+      ).toBeUndefined();
+    }
+    expect(
+      readRunFailureCause(
+        projectChatErrorDetail({
+          provider: "local-provider",
+          failoverReason: "auth",
+          billingError: { message: "Wrong category" },
+        }),
+      )?.billingError,
+    ).toBeUndefined();
+  });
+});
 
 describe("desktop failure detail", () => {
   const readDesktop = (message: unknown) => readRunFailureNotice(message, { audience: "desktop" });

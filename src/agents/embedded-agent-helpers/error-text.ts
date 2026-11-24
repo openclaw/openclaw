@@ -23,6 +23,7 @@ import {
   renderFormatErrorCopy,
   renderModelLoadFailureCopy,
 } from "../failover/assistant-request-failure-copy.js";
+import { formatProviderBillingError } from "../failover/billing.js";
 import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -97,7 +98,7 @@ type AssistantErrorTextOptions = {
   sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
-function classifyAssistantErrorFacts(
+export function classifyAssistantErrorFacts(
   msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
 ) {
@@ -108,10 +109,18 @@ function classifyAssistantErrorFacts(
   // evidence stays distinct from the full classification used for safe copy.
   const providerPlugin = opts?.providerOwner ?? null;
   const classification = classifyFailoverSignal(signal, { providerPlugin });
+  const reason = failoverReasonFromClassification(classification);
   return {
     provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
     model: opts?.model ?? msg.model,
-    reason: failoverReasonFromClassification(classification),
+    reason,
+    billingError:
+      reason === "billing"
+        ? formatProviderBillingError(signal, {
+            providerOwner: providerPlugin,
+            model: opts?.model ?? msg.model,
+          })
+        : undefined,
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),
@@ -144,6 +153,9 @@ export function formatAssistantErrorText(
     status: formatStatus,
     providerRuntimeFailureKind,
   } = classifiedFacts;
+  if (failoverReason === "billing" && classifiedFacts.billingError) {
+    return classifiedFacts.billingError.message;
+  }
   if (formatStatus === 403 && (msg.errorType ?? parseApiErrorInfo(raw)?.type) === "FreeTierError") {
     return "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
   }
@@ -323,6 +335,7 @@ function isRawAssistantErrorPassthrough(params: {
 export function formatUserFacingAssistantErrorText(
   msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
+  classifiedFacts?: ClassifiedAssistantErrorFacts,
 ): string {
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
     return REPETITIVE_OUTPUT_ERROR_MESSAGE;
@@ -345,9 +358,12 @@ export function formatUserFacingAssistantErrorText(
   if (approvalMessage) {
     return `⚠️ ${approvalMessage}`;
   }
-  const facts = classifyAssistantErrorFacts(msg, opts);
+  const facts = classifiedFacts ?? classifyAssistantErrorFacts(msg, opts);
   if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
     return MODEL_REQUEST_POLICY_DENIED_TEXT;
+  }
+  if (!facts.storageFailure && facts.reason === "billing" && facts.billingError) {
+    return facts.billingError.message;
   }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });

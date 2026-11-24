@@ -221,6 +221,35 @@ it("names a provider's billing problem with its declared label and sends its fix
   expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
 });
 
+it.each(["https://example.com/plans", undefined])(
+  "shows provider billing copy with an optional plans link: %s",
+  (actionUrl) => {
+    const message = "Using your plan in third-party apps requires an active subscription.";
+    drawNotice({
+      ...failure("Generic billing advice"),
+      runError: {
+        runId: "run-a",
+        summary: "Generic billing advice",
+        cause: {
+          provider: "fixture",
+          failoverReason: "billing",
+          billingError: { message, actionUrl },
+        },
+      },
+    });
+    expect(part("billing-message")?.textContent).toBe(message);
+    const link = container.querySelector<HTMLAnchorElement>(".chat-run-failure__plans");
+    if (actionUrl) {
+      expect(link?.textContent).toBe("View plans ↗");
+      expect(link?.getAttribute("href")).toBe(actionUrl);
+      expect(link?.getAttribute("rel")).toContain("noopener");
+    } else {
+      expect(link).toBeNull();
+    }
+    expect(part("toggle")).toBeNull();
+  },
+);
+
 it("starts an OpenClaw update session only for a harness-update failure", async () => {
   vi.useRealTimers();
   const summary = 'gpt-6.2-sol needs a newer Codex. Update with "npm i -g @openai/codex".';

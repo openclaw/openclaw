@@ -1,4 +1,5 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { BillingError } from "@openclaw/normalization-core/billing-error";
 import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import type { FailoverReason } from "./failover/signal.js";
 
@@ -24,6 +25,7 @@ export type ModelFallbackCandidate = ModelCandidate & {
 };
 
 export type FallbackAttempt = ModelCandidate & {
+  billingError?: BillingError;
   error: string;
   rateLimitRetriesExhausted?: number;
   rateLimitResetAt?: number;

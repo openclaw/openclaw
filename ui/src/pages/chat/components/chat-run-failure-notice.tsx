@@ -60,13 +60,16 @@ export function ChatRunFailureNotice(props: {
   const [open, setOpen] = createSignal(false);
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
+  const billingError = () =>
+    props.cause?.failoverReason === "billing" ? props.cause.billingError : undefined;
   const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
   const title = () =>
     t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
       provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
     });
   const app = useOptionalApplication();
-  const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
+  const openModels = () =>
+    app && fixTitle() && !billingError()?.actionUrl ? props.cause?.provider : undefined;
   const startNewSession = () =>
     props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE && props.onStartNewSession;
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
@@ -93,82 +96,117 @@ export function ChatRunFailureNotice(props: {
   onSettled(() => () => stopFollowing?.());
   return (
     <openclaw-chat-run-failure-notice style={{ display: "contents" }}>
-      <div class="chat-run-failure" role="status" data-placement={placement()} ref={setLine}>
-        <Popover
-          id={panelId}
-          class="chat-run-failure__panel"
-          label={title()}
-          positionAnchor={line()}
-          placement={placement()}
-          triggerClass="chat-run-failure__toggle"
-          triggerAriaLabel={null}
-          trigger={
-            <>
-              <span class="chat-run-failure__icon" aria-hidden="true">
-                <Icon name="circleX" />
-              </span>
-              <span class="chat-run-failure__title">{title()}</span>
-              <Show when={(props.repeatCount ?? 1) > 1}>
-                <span class="chat-run-failure__repeat">
-                  · {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
-                </span>
-              </Show>
-              <span class="chat-run-failure__chevron" aria-hidden="true">
-                <Icon name="chevronRight" />
-              </span>
-            </>
-          }
-          ref={(handle) => {
-            panel = handle;
-          }}
-          onOpenChange={(next) => {
-            stopFollowing?.();
-            stopFollowing = undefined;
-            if (next) {
-              place();
-              const initialAnchor = line();
-              const thread = initialAnchor?.closest(".chat-thread");
-              if (initialAnchor && thread) {
-                // The accepted overlay lifetime owns following its transcript anchor.
-                const follow = () => {
-                  const { top, bottom } = initialAnchor.getBoundingClientRect();
-                  const bounds = thread.getBoundingClientRect();
-                  if (bottom <= bounds.top || top >= bounds.bottom) {
-                    panel?.hide();
-                  } else {
-                    place();
-                  }
-                };
-                const stops = [
-                  listen(thread, "scroll", follow, { passive: true }),
-                  listen(window, "resize", place),
-                ];
-                stopFollowing = () => stops.forEach((stop) => stop());
+      <div
+        class={["chat-run-failure", { "chat-run-failure--billing": Boolean(billingError()) }]}
+        role="status"
+        data-placement={placement()}
+        ref={setLine}
+      >
+        <Show
+          when={billingError()}
+          fallback={
+            <Popover
+              id={panelId}
+              class="chat-run-failure__panel"
+              label={title()}
+              positionAnchor={line()}
+              placement={placement()}
+              triggerClass="chat-run-failure__toggle"
+              triggerAriaLabel={null}
+              trigger={
+                <>
+                  <span class="chat-run-failure__icon" aria-hidden="true">
+                    <Icon name="circleX" />
+                  </span>
+                  <span class="chat-run-failure__title">{title()}</span>
+                  <Show when={(props.repeatCount ?? 1) > 1}>
+                    <span class="chat-run-failure__repeat">
+                      · {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
+                    </span>
+                  </Show>
+                  <span class="chat-run-failure__chevron" aria-hidden="true">
+                    <Icon name="chevronRight" />
+                  </span>
+                </>
               }
-            }
-            setOpen(next);
-          }}
-        >
-          <Show when={lead()}>
-            <p class="chat-run-failure__summary">
-              <bdi>{lead()}</bdi>
-            </p>
-          </Show>
-          {/* Logs are technical strings, so they stay left to right in every locale. */}
-          <div class="chat-run-failure__well" dir="ltr">
-            <pre
-              ref={logRef}
-              class="chat-run-failure__log"
-              tabindex="0"
-              aria-label={t("chat.errorDetails")}
+              ref={(handle) => {
+                panel = handle;
+              }}
+              onOpenChange={(next) => {
+                stopFollowing?.();
+                stopFollowing = undefined;
+                if (next) {
+                  place();
+                  const initialAnchor = line();
+                  const thread = initialAnchor?.closest(".chat-thread");
+                  if (initialAnchor && thread) {
+                    // The accepted overlay lifetime owns following its transcript anchor.
+                    const follow = () => {
+                      const { top, bottom } = initialAnchor.getBoundingClientRect();
+                      const bounds = thread.getBoundingClientRect();
+                      if (bottom <= bounds.top || top >= bounds.bottom) {
+                        panel?.hide();
+                      } else {
+                        place();
+                      }
+                    };
+                    const stops = [
+                      listen(thread, "scroll", follow, { passive: true }),
+                      listen(window, "resize", place),
+                    ];
+                    stopFollowing = () => stops.forEach((stop) => stop());
+                  }
+                }
+                setOpen(next);
+              }}
             >
-              {detail()}
-            </pre>
-            <span class="chat-run-failure__copy">
-              <CopyButton text={props.summary} idleLabel={t("chat.copyError")} bare iconFeedback />
-            </span>
-          </div>
-        </Popover>
+              <Show when={lead()}>
+                <p class="chat-run-failure__summary">
+                  <bdi>{lead()}</bdi>
+                </p>
+              </Show>
+              {/* Logs are technical strings, so they stay left to right in every locale. */}
+              <div class="chat-run-failure__well" dir="ltr">
+                <pre
+                  ref={logRef}
+                  class="chat-run-failure__log"
+                  tabindex="0"
+                  aria-label={t("chat.errorDetails")}
+                >
+                  {detail()}
+                </pre>
+                <span class="chat-run-failure__copy">
+                  <CopyButton
+                    text={props.summary}
+                    idleLabel={t("chat.copyError")}
+                    bare
+                    iconFeedback
+                  />
+                </span>
+              </div>
+            </Popover>
+          }
+        >
+          {(billing) => (
+            <div class="chat-run-failure__billing">
+              <p class="chat-run-failure__billing-message">
+                <bdi>{billing().message}</bdi>
+              </p>
+              <Show when={billing().actionUrl}>
+                {(url) => (
+                  <a
+                    class="chat-run-failure__plans"
+                    href={url()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t("chat.recovery.viewPlans")} <span aria-hidden="true">↗</span>
+                  </a>
+                )}
+              </Show>
+            </div>
+          )}
+        </Show>
         <Show when={props.editSource}>
           <Loading fallback={null}>
             <ChatFailedMessageEditButton
@@ -207,7 +245,7 @@ export function ChatRunFailureNotice(props: {
             type="button"
             class={[
               "btn btn--sm chat-run-failure__retry",
-              { primary: !openModels() && !startNewSession() },
+              { primary: !billingError() && !openModels() && !startNewSession() },
             ]}
             onClick={() => props.onRetry?.()}
           >

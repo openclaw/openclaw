@@ -118,6 +118,8 @@ export function resolveReplyFailureSummary(params: {
             provider: failoverError?.provider,
             model: failoverError?.model,
             authMode: failoverError?.authMode,
+            billingError:
+              failoverError?.reason === "billing" ? failoverError.billingError : undefined,
           })
         : kind === "overloaded"
           ? // A host-authored refusal names its own cause; overload copy would blame the AI service.

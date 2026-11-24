@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { classifyProviderFailoverSignalWithPlugin } from "../../plugins/provider-failover.js";
 import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
+import { coerceToFailoverError, FailoverError } from "../failover-error.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
 import { isContextOverflowError } from "../failover/context-overflow.js";
+import { formatBillingErrorMessage } from "../failover/user-copy.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
-import { formatAssistantErrorText } from "./error-text.js";
+import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 
 vi.mock("../../plugins/provider-failover.js", () => ({
@@ -13,6 +15,20 @@ vi.mock("../../plugins/provider-failover.js", () => ({
 }));
 
 describe("assistant diagnostic provider ownership", () => {
+  it.each([undefined, { message: "Choose an active plan." }])(
+    "retains a typed failure's billing fact without calling the provider again: %j",
+    (billingError) => {
+      const formatBillingError = vi.fn(() => ({ message: "Replacement copy" }));
+      const failure = new FailoverError("Payment required", { reason: "billing", billingError });
+      const enriched = coerceToFailoverError(failure, {
+        authMode: "oauth",
+        providerOwner: { id: "fixture", formatBillingError },
+      });
+      expect(enriched?.billingError).toBe(billingError);
+      expect(formatBillingError).not.toHaveBeenCalled();
+    },
+  );
+
   beforeEach(() => {
     vi.mocked(classifyProviderFailoverSignalWithPlugin)
       .mockReset()
@@ -25,6 +41,43 @@ describe("assistant diagnostic provider ownership", () => {
       expect(formatAssistantErrorText(makeAssistantMessageFixture({ errorMessage }))).toBe(
         errorMessage,
       );
+      expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses explicit billing copy even when it equals the raw error, without discovery", () => {
+    const message = "Payment required. Choose an active plan for third-party apps.";
+    const assistant = makeAssistantMessageFixture({ errorMessage: message });
+    const providerOwner = {
+      id: "synthetic-owner",
+      classifyFailoverReason: () => "billing" as const,
+      formatBillingError: () => ({ message, actionUrl: "https://example.com/plans" }),
+    };
+    expect(formatAssistantErrorText(assistant, { providerOwner })).toBe(message);
+    expect(formatUserFacingAssistantErrorText(assistant, { providerOwner })).toBe(message);
+    expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    undefined,
+    () => undefined,
+    () => ({ message: "  " }),
+    () => {
+      throw new Error("private provider diagnostic");
+    },
+  ])(
+    "keeps generic billing copy when the hook supplies no usable guidance %#",
+    (formatBillingError) => {
+      const assistant = makeAssistantMessageFixture({
+        errorMessage: "403 Payment required RAW_BILLING_CANARY",
+      });
+      expect(
+        formatUserFacingAssistantErrorText(assistant, {
+          provider: "fixture",
+          model: "sample",
+          providerOwner: { id: "fixture", formatBillingError },
+        }),
+      ).toBe(formatBillingErrorMessage("fixture", "sample"));
       expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
     },
   );

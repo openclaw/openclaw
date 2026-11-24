@@ -5,7 +5,8 @@ import { resolveCompactionRecoveryLifecycleError } from "../../agents/compaction
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
-import { getFailoverErrorCode } from "../../agents/failover/error.js";
+import { resolveBillingFailure } from "../../agents/failover/billing.js";
+import { getFailoverErrorCode, isFailoverError } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import {
   AgentHarnessModelRequestPolicyError,
@@ -155,11 +156,18 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (terminalPhase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(terminalValue);
+      const billingFailure =
+        isFailoverError(terminalValue) &&
+        (terminalValue.reason === "billing" ||
+          terminalValue.attempts?.some((attempt) => attempt.reason === "billing"))
+          ? resolveBillingFailure(terminalValue)
+          : undefined;
       data.error =
         renderStorageFailureSummary(classifyGatewayStorageFailure(terminalValue)) ??
         renderAgentHarnessPreflightUserMessage(terminalValue) ??
         renderFailoverCodeUserCopy(getFailoverErrorCode(terminalValue)) ??
         (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??
+        billingFailure?.billingError?.message ??
         formatErrorMessage(terminalValue);
       if (oauthFailure?.summary) {
         data.errorObservation = {
@@ -178,6 +186,18 @@ export function createAgentLifecycleTerminalBackstop(params: {
       ) {
         // The saved sign-in needs a new login; clients offer their sign-in action for it.
         data.errorObservation = { provider: terminalValue.provider, failoverReason: "auth" };
+      } else if (billingFailure?.billingError) {
+        data.errorObservation = {
+          ...(isRecord(data.errorObservation) &&
+          data.errorObservation.provider === billingFailure.provider &&
+          data.errorObservation.model === billingFailure.model
+            ? data.errorObservation
+            : {}),
+          provider: billingFailure.provider,
+          model: billingFailure.model,
+          failoverReason: "billing",
+          billingError: billingFailure.billingError,
+        };
       } else if (terminalValue instanceof AgentHarnessModelRequestPolicyError) {
         data.errorObservation = {
           ...(isRecord(data.errorObservation) ? data.errorObservation : {}),

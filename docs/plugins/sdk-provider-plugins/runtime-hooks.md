@@ -324,6 +324,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `buildAuthDoctorHint`             | Auth repair guidance                                                                        |
 | `matchesContextOverflowError`     | Provider-owned overflow detection                                                           |
 | `classifyFailoverReason`          | Provider-owned rate-limit/overload classification                                           |
+| `formatBillingError`              | Optional provider-authored billing guidance and action link                                 |
 | `isCacheTtlEligible`              | Prompt cache TTL gating                                                                     |
 | `buildMissingAuthMessage`         | Custom missing-auth hint                                                                    |
 | `augmentModelCatalog`             | Synthetic forward-compat rows (deprecated - prefer `registerModelCatalogProvider`)          |
@@ -352,6 +353,39 @@ array to replace history. These edits do not mutate the stored transcript.
 including a healthy process reused by a restarted Gateway. Honor its
 abort signal and reject when reconciliation fails; OpenClaw blocks the
 provider request and releases the request lease.
+
+### Billing error guidance
+
+A provider can opt into specific billing guidance with the synchronous
+`formatBillingError(ctx: ProviderFailoverErrorContext)` hook. Return
+`{ message: string, actionUrl?: string }` or `undefined` to keep the generic copy.
+OpenClaw calls only the selected, prepared provider owner, after the existing
+classification identifies a billing failure. The hook does not change
+classification, retries, account selection, or fallback policy.
+
+Return deliberate user-facing copy, not a raw response body, diagnostic preview,
+credentials, or an authentication-bearing URL. The host trims and bounds the
+message to 600 characters; empty messages retain the generic copy. The optional
+action URL must be an absolute HTTP(S) URL no longer than 2,048 characters. An
+invalid URL drops only the link. Undefined, malformed, or throwing hooks retain
+the generic copy.
+
+For example, a provider that requires a plan for third-party clients can return
+constant guidance for its recognized billing error:
+
+```typescript
+formatBillingError: (ctx) =>
+  ctx.code === "third_party_plan_required"
+    ? {
+        message: "An active plan is required to use this provider in third-party apps.",
+        actionUrl: "https://example.com/plans",
+      }
+    : undefined,
+```
+
+The normalized `billingError` fact travels with billing failures through fallback
+attempts, terminal chat events, and saved run-failure notices. Presentation never
+discovers provider hooks or derives this fact from raw error text.
 
 Runtime fallback notes:
 

@@ -24,6 +24,11 @@
       "import": "./dist/agent-run-terminal-outcome.mjs",
       "default": "./dist/agent-run-terminal-outcome.mjs"
     },
+    "./billing-error": {
+      "types": "./dist/billing-error.d.mts",
+      "import": "./dist/billing-error.mjs",
+      "default": "./dist/billing-error.mjs"
+    },
     "./boolean-coercion": {
       "types": "./dist/boolean-coercion.d.mts",
       "import": "./dist/boolean-coercion.mjs",

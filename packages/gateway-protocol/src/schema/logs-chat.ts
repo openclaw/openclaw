@@ -1,3 +1,8 @@
+import {
+  BILLING_ERROR_MESSAGE_MAX_CHARS,
+  BILLING_ERROR_ACTION_URL_MAX_CHARS,
+  normalizeBillingError,
+} from "@openclaw/normalization-core/billing-error";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
@@ -581,6 +586,12 @@ const ChatErrorDetailSchema = closedObject({
   provider: ChatErrorDetailTextSchema,
   model: ChatErrorDetailTextSchema,
   failoverReason: ChatErrorDetailTextSchema,
+  billingError: Type.Optional(
+    closedObject({
+      message: Type.String({ minLength: 1, maxLength: BILLING_ERROR_MESSAGE_MAX_CHARS }),
+      actionUrl: Type.Optional(Type.String({ maxLength: BILLING_ERROR_ACTION_URL_MAX_CHARS })),
+    }),
+  ),
   providerRuntimeFailureKind: ChatErrorDetailTextSchema,
   providerErrorCode: ChatErrorDetailTextSchema,
   providerErrorType: ChatErrorDetailTextSchema,
@@ -607,6 +618,8 @@ export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | 
     provider: readText(source.provider),
     model: readText(source.model),
     failoverReason: readText(source.failoverReason),
+    billingError:
+      source.failoverReason === "billing" ? normalizeBillingError(source.billingError) : undefined,
     providerRuntimeFailureKind: readText(source.providerRuntimeFailureKind),
     providerErrorCode: readText(source.providerErrorCode),
     providerErrorType: readText(source.providerErrorType),

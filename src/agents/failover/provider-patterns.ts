@@ -1,4 +1,5 @@
 import { classifyProviderFailoverSignalWithPlugin } from "../../plugins/provider-failover.js";
+import type { ProviderPlugin } from "../../plugins/provider-plugin.types.js";
 import type { FailoverReason } from "./signal.js";
 type ProviderSpecificErrorContext = {
   provider?: string;
@@ -11,6 +12,7 @@ type ProviderSpecificErrorContext = {
 };
 export type PreparedProviderFailoverOwner = {
   id: string;
+  formatBillingError?: ProviderPlugin["formatBillingError"];
   matchesContextOverflowError?: (ctx: ProviderSpecificErrorContext) => boolean | undefined;
   classifyFailoverReason?: (ctx: ProviderSpecificErrorContext) => FailoverReason | null | undefined;
 };

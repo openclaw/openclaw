@@ -1,4 +1,5 @@
 // Error identity and timeout recognition must not load logging or provider runtime.
+import type { BillingError } from "@openclaw/normalization-core/billing-error";
 import { readErrorName } from "@openclaw/normalization-core/error-coercion";
 import {
   asOptionalObjectRecord,
@@ -49,6 +50,7 @@ export type FallbackAttemptRecord = {
   provider: string;
   model: string;
   reason: FailoverReason;
+  billingError?: BillingError;
   status?: number;
   code?: string;
   error?: string;
@@ -59,6 +61,7 @@ export type FallbackAttemptRecord = {
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
+  readonly billingError?: BillingError;
   readonly provider?: string;
   readonly model?: string;
   readonly profileId?: string;
@@ -90,6 +93,7 @@ export class FailoverError extends Error {
     super(message, { cause: params.cause });
     this.name = "FailoverError";
     this.reason = params.reason;
+    this.billingError = params.reason === "billing" ? params.billingError : undefined;
     this.provider = params.provider;
     this.model = params.model;
     this.profileId = params.profileId;

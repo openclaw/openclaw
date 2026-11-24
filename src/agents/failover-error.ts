@@ -1,3 +1,4 @@
+import type { BillingError } from "@openclaw/normalization-core/billing-error";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
@@ -15,6 +16,7 @@ import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
 import { SkillResourceDeliveryLimitError } from "../skills/runtime/resource-delivery-error.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
+import { formatProviderBillingError } from "./failover/billing.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -32,6 +34,7 @@ import {
 } from "./failover/error.js";
 import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
+import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import { resolveRetryAfterMs } from "./failover/retry-evidence.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
@@ -558,6 +561,7 @@ export function buildProviderReauthCommand(
 
 export function describeFailoverError(err: unknown): {
   message: string;
+  billingError?: BillingError;
   rawError?: string;
   rateLimitRetriesExhausted?: number;
   rateLimitResetAt?: number;
@@ -581,6 +585,7 @@ export function describeFailoverError(err: unknown): {
   if (isFailoverError(err)) {
     return {
       message: err.message,
+      billingError: err.billingError,
       rawError: err.rawError,
       rateLimitRetriesExhausted: err.rateLimitRetriesExhausted,
       rateLimitResetAt: err.rateLimitResetAt,
@@ -607,6 +612,7 @@ export function describeFailoverError(err: unknown): {
 }
 
 type FailoverErrorContext = {
+  providerOwner?: PreparedProviderFailoverOwner;
   rateLimitRetriesExhausted?: number;
   provider?: string;
   model?: string;
@@ -644,6 +650,7 @@ export function coerceToFailoverError(
         renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
         {
           reason: err.reason,
+          billingError: err.billingError,
           provider: err.provider,
           model: err.model,
           profileId: err.profileId,
@@ -679,20 +686,19 @@ export function coerceToFailoverError(
 
   const signal = normalizeErrorSignal(err);
   const message = signal.message ?? String(err);
-  const code = signal.code;
-  const status = signal.status ?? resolveFailoverStatus(reason, code);
+  const status = signal.status ?? resolveFailoverStatus(reason, signal.code);
   const retryAfterMs =
     reason === "rate_limit" ? resolveRetryAfterMs(message, Date.now(), err) : undefined;
-
-  // Suspend when hitting rate limits or billing issues in an attributed session
-  const shouldSuspend =
-    Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
   return withAgentTerminalSnapshot(
     new FailoverError(
       renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
       {
         reason,
+        billingError:
+          reason === "billing"
+            ? formatProviderBillingError({ ...signal, message, status }, context)
+            : undefined,
         rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
         rateLimitResetAt: retryAfterMs === undefined ? undefined : Date.now() + retryAfterMs,
         provider: context?.provider ?? signal.provider,
@@ -702,11 +708,11 @@ export function coerceToFailoverError(
         sessionId: context?.sessionId,
         lane: context?.lane,
         status,
-        code,
+        code: signal.code,
         rawError: message,
         cause: err instanceof Error ? err : undefined,
         timeout: context?.timeout,
-        suspend: shouldSuspend,
+        suspend: Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing"),
       },
     ),
     readAgentTerminalSnapshot(err),

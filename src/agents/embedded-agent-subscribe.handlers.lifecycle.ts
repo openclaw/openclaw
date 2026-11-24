@@ -16,6 +16,7 @@ import {
 } from "./embedded-agent-error-observation.js";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
+  classifyAssistantErrorFacts,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers/error-text.js";
@@ -381,17 +382,19 @@ export function handleAgentEnd(
   // Scheduled maintenance ends the attempt locally; it is not a model failure.
   if (isError && lastAssistant && !isMidTurnMaintenanceAssistantSignal(lastAssistant)) {
     const rawError = lastAssistant.errorMessage?.trim();
-    const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
-      providerOwner: ctx.params.providerOwner ?? null,
-    });
-    const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
+    const errorOptions = {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
       agentId: ctx.params.agentId,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
       providerOwner: ctx.params.providerOwner,
+    };
+    const facts = classifyAssistantErrorFacts(lastAssistant, errorOptions);
+    const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
+      providerOwner: ctx.params.providerOwner ?? null,
     });
+    const errorText = formatUserFacingAssistantErrorText(lastAssistant, errorOptions, facts);
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
       providerOwner: ctx.params.providerOwner,
@@ -407,6 +410,7 @@ export function handleAgentEnd(
       provider: lastAssistant.provider,
       model: lastAssistant.model,
       failoverReason,
+      billingError: facts.billingError,
       ...observedError,
       httpStatus: extractErrorHttpStatus(rawError ?? "")?.code,
     });

@@ -76,6 +76,7 @@ function makeParams(overrides: FixtureOptions = {}): Params {
       attemptedThinking: overrides.attemptedThinking ?? new Set(),
     },
     runtime: {
+      providerRuntimeHandle: { provider, modelId, prepared: true },
       lastProfileId: "openai:p1",
       thinkLevel: overrides.thinkLevel ?? "low",
       pluginHarnessOwnsTransport: overrides.pluginHarnessOwnsTransport ?? false,

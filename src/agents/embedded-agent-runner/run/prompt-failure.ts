@@ -70,7 +70,7 @@ export async function handleEmbeddedPromptFailure(input: {
   >;
   runtime: Pick<
     ReturnType<PreparedRuntime["snapshot"]>,
-    "lastProfileId" | "thinkLevel" | "pluginHarnessOwnsTransport"
+    "lastProfileId" | "thinkLevel" | "pluginHarnessOwnsTransport" | "providerRuntimeHandle"
   >;
   terminal: Pick<
     ReturnType<typeof projectAgentRunAttemptTerminal>,
@@ -119,6 +119,7 @@ export async function handleEmbeddedPromptFailure(input: {
     promptTimeoutOutcome: normalizedAttempt.attempt.promptTimeoutOutcome,
   });
   const failoverContext = {
+    providerOwner: runtime.providerRuntimeHandle?.plugin,
     provider: normalizedAttempt.activeErrorContext.provider,
     model: normalizedAttempt.activeErrorContext.model,
     profileId: runtime.lastProfileId,
@@ -344,7 +345,9 @@ export async function handleEmbeddedPromptFailure(input: {
     );
   }
   throw withAgentTerminalSnapshot(
-    retryExhaustionFailure ?? toErrorObject(terminal.promptError, "Prompt failed"),
+    retryExhaustionFailure ??
+      (normalizedPromptFailover?.billingError ? normalizedPromptFailover : undefined) ??
+      toErrorObject(terminal.promptError, "Prompt failed"),
     terminalOutcome.status === "error" && terminal.promptErrorSource === "prompt"
       ? normalizedAttempt.attempt.agentTerminal
       : undefined,

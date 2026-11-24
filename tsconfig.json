@@ -183,6 +183,9 @@
       "@openclaw/normalization-core/agent-run-terminal-outcome": [
         "./packages/normalization-core/src/agent-run-terminal-outcome.ts"
       ],
+      "@openclaw/normalization-core/billing-error": [
+        "./packages/normalization-core/src/billing-error.ts"
+      ],
       "@openclaw/normalization-core/boolean-coercion": [
         "./packages/normalization-core/src/boolean-coercion.ts"
       ],

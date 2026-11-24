@@ -3,6 +3,11 @@ import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refre
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
 import { ProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
+import {
+  appendFailedCandidateAttempt,
+  throwFallbackFailureSummary,
+} from "../../agents/model-fallback-attempt.js";
+import type { FallbackAttempt } from "../../agents/model-fallback.types.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { decodePostgresError } from "../../infra/postgres-sync/protocol.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
@@ -42,6 +47,58 @@ describe("createAgentLifecycleTerminalBackstop", () => {
   function finishing(terminal: ReturnType<typeof createTerminal>, data: Record<string, unknown>) {
     terminal.note({ stream: "lifecycle", data: { phase: "finishing", ...data } });
   }
+
+  it("preserves billing guidance and attribution through mixed fallback exhaustion", () => {
+    const billingError = {
+      message: "Choose an active plan.",
+      actionUrl: "https://example.com/plans",
+    };
+    const attempts: FallbackAttempt[] = [];
+    const billing = new FailoverError("provider billing diagnostic", {
+      reason: "billing",
+      provider: "paid-provider",
+      model: "model-a",
+      billingError,
+    });
+    const timeout = new FailoverError("request timed out", {
+      reason: "timeout",
+      provider: "other-provider",
+      model: "model-b",
+    });
+    for (const error of [billing, timeout]) {
+      assert.isDefined(error.provider);
+      assert.isDefined(error.model);
+      appendFailedCandidateAttempt({
+        attempts,
+        candidate: { provider: error.provider, model: error.model },
+        error,
+      });
+    }
+    let aggregate: unknown;
+    try {
+      throwFallbackFailureSummary({
+        attempts,
+        candidates: [],
+        lastError: timeout,
+        label: "models",
+        formatAttempt: (attempt) => attempt.error,
+      });
+    } catch (error) {
+      aggregate = error;
+    }
+    expect(aggregate).toMatchObject({ reason: "timeout" });
+    const terminal = createTerminal();
+    terminal.emit("error", aggregate);
+    expect(emitted().data).toMatchObject({
+      error: billingError.message,
+      errorObservation: {
+        provider: "paid-provider",
+        model: "model-a",
+        failoverReason: "billing",
+        billingError,
+      },
+    });
+  });
 
   it.each([
     {

@@ -18,6 +18,7 @@ import {
   isRateLimitAssistantError,
 } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
+  classifyAssistantErrorFacts,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "../../embedded-agent-helpers/error-text.js";
@@ -498,18 +499,22 @@ export async function handleEmbeddedAssistantFailure(input: {
       !timedOut &&
       (failoverFailure || listedModelRejection))
   ) {
+    const errorOptions = {
+      cfg: runInput.runParams.config,
+      sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
+      agentId: runInput.runParams.agentId,
+      provider: activeErrorContext.provider,
+      providerOwner: input.providerOwner,
+      model: activeErrorContext.model,
+      authMode,
+    };
+    const errorFacts = failedAssistant
+      ? classifyAssistantErrorFacts(failedAssistant, errorOptions)
+      : undefined;
     const message =
       (listedModelRejection ? MODEL_CHAT_REJECTED_TEXT : undefined) ||
       (failedAssistant
-        ? formatUserFacingAssistantErrorText(failedAssistant, {
-            cfg: runInput.runParams.config,
-            sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
-            agentId: runInput.runParams.agentId,
-            provider: activeErrorContext.provider,
-            providerOwner: input.providerOwner,
-            model: activeErrorContext.model,
-            authMode,
-          })
+        ? formatUserFacingAssistantErrorText(failedAssistant, errorOptions, errorFacts)
         : undefined) ||
       failedAssistant?.errorMessage?.trim() ||
       (timedOut
@@ -546,6 +551,7 @@ export async function handleEmbeddedAssistantFailure(input: {
         renderRateLimitRetryExhaustion(input.rateLimitRetriesExhausted) ?? message,
         {
           reason,
+          billingError: errorFacts?.billingError,
           rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
           rateLimitResetAt:
             assistantSignal?.retryAfterMs === undefined

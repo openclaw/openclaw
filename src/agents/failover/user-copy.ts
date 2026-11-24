@@ -20,6 +20,7 @@ import {
   ERROR_DETAILS_HINT,
   ERROR_PREFIX_RE,
 } from "./assistant-request-failure-copy.js";
+import { resolveBillingFailure } from "./billing.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
@@ -575,24 +576,15 @@ export function renderRateLimitReplyCopy(
     : RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
-export function renderBillingReplyCopy(params: {
-  provider?: string;
-  model?: string;
-  authMode?: string;
-  attempts?: readonly ReplyFallbackAttempt[];
-}): string {
-  const attempts = params.attempts ?? [];
-  const billingFailure =
-    attempts.length > 0
-      ? attempts.find(
-          (attempt) =>
-            attempt.reason === "billing" &&
-            (attempt.authMode === "oauth" || attempt.authMode === "token"),
-        )
-      : params.authMode === "oauth" || params.authMode === "token"
-        ? params
-        : undefined;
-  return billingFailure
+export function renderBillingReplyCopy(
+  params: Parameters<typeof resolveBillingFailure>[0],
+): string {
+  const billingFailure = resolveBillingFailure(params);
+  if (billingFailure?.billingError) {
+    return billingFailure.billingError.message;
+  }
+  return billingFailure &&
+    (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
     ? formatBillingErrorMessage(
         billingFailure.provider,
         billingFailure.model,
