@@ -17,8 +17,6 @@ import {
   prepareSessionSystemPrompt,
   prepareSessionToolSurface,
   persistSessionSystemPrompt,
-  promoteSessionTool,
-  readSessionPinnedToolNames,
   retainEmbeddedSessionPromptState,
   readSessionSentTools,
   retireSessionSystemPrompt,
@@ -904,35 +902,6 @@ describe("session tool surface", () => {
     expect(surface([tool("read")], [], "anthropic/claude-opus-5/anthropic-messages")).toHaveLength(
       1,
     );
-  });
-
-  it("appends a tool promoted mid-series once, keeps it across restarts and drops it at reset", async () => {
-    const entries: SessionEntry[] = [];
-    const computer = { ...tool("computer"), catalogMode: "on-demand" as const };
-    const pinned = () =>
-      readSessionPinnedToolNames({
-        state: fixture.state,
-        routeKey,
-        toolPolicy: "policy-a",
-        entries,
-      });
-    surface([tool("read"), tool("message")]);
-    await persist(entries);
-    expect([
-      promoteSessionTool(fixture.state, computer),
-      promoteSessionTool(fixture.state, computer),
-    ]).toEqual([true, false]);
-    await persist(entries);
-    fixture.reload();
-    expect(pinned().has("computer")).toBe(true);
-    // Appended after the earlier pin, so later turns change the provider list only once.
-    expect(
-      surface([tool("read"), tool("message"), computer], entries).map(({ name }) => name),
-    ).toEqual(["message", "read", "computer"]);
-    entries.push(historyEntry("reset", "reset-1"));
-    await persist(entries);
-    fixture.reload();
-    expect(pinned().has("computer")).toBe(false);
   });
 
   it("keeps the pinned description when only sibling guidance changes", async () => {

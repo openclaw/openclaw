@@ -1,6 +1,10 @@
 // An on-demand tool joins the session's sent tools after its first direct call, across restarts.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  createTurnSequenceStream,
+  makeCall,
+} from "../../../../packages/agent-core/src/agent-loop.test-support.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
@@ -17,6 +21,7 @@ import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import { openSyntheticSqliteSession } from "./attempt-session-runtime-prepare.test-support.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
+import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 
 const mocks = vi.hoisted(() => ({ agentSession: vi.fn(), manager: vi.fn(), transport: vi.fn() }));
@@ -42,9 +47,12 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-it.each([false, true])(
-  "sends github_publish only after its first direct call, then on later turns and restarts until compaction (codeMode=%s)",
-  async (codeMode) => {
+it.each([
+  [false, "compaction"],
+  [true, "reset"],
+] as const)(
+  "sends github_publish only after its first direct call, then on later turns and restarts (codeMode=%s) until %s",
+  async (codeMode, boundary) => {
     const sessionId = `on-demand-${codeMode}`;
     sessionIds.add(sessionId);
     const { scope, admittedRunContext } = await openSyntheticSqliteSession(sessionId, "on-demand");
@@ -170,22 +178,34 @@ it.each([false, true])(
       await persistSessionSystemPrompt(prepared.sessionPromptState, (type, data) =>
         manager.appendCustomEntryAsync(type, data),
       );
-      return { ...seen, entry, live: toolCatalog.toolSearchRunPlan.liveAllowedToolNames };
+      return { ...seen, entry, live: toolCatalog.toolSearchRunPlan.liveAllowedToolNames, model };
     };
     const first = await turn(true);
     expect(first.sent).not.toContain("github_publish");
     // The transport keeps an undeclared call to it native for this run's later requests.
     expect(first.deferred).toEqual(["github_publish"]);
-    expect(first.live, "the stream guard knows it before it is sent").toContain("github_publish");
+    // Repeated first-use calls stay known to the stream's unknown-tool guard (threshold 10).
+    const calls = Array.from({ length: 11 }, (_, n) => [makeCall("github_publish", `c${n}`)]);
+    const guarded = wrapStreamFnTrimToolCallNames(createTurnSequenceStream(calls), first.live, {
+      unknownToolThreshold: 10,
+    });
+    for (let call = 0; call < 11; call++) {
+      const reply = await (await guarded(first.model, { messages: [] })).result();
+      expect(reply.content, `call ${call + 1}`).toMatchObject([{ name: "github_publish" }]);
+    }
     for (const label of ["next turn", "after another restart"]) {
       const later = await turn();
       expect(later.sent, label).toEqual([...first.sent!, "github_publish"]);
       expect(later.entry, label).toBeUndefined();
     }
-    // Compaction starts a new series; the tool is deferred again until its next use.
+    // Compaction and /new or /reset start a new series; the tool is deferred again until used.
     const history = await SessionManager.openAsync(scope);
-    const kept = await history.appendMessageAsync(makeUserMessage("Earlier turn", 1));
-    await history.appendCompactionAsync("Summary.", expectDefined(kept, "kept entry"), 1_000);
+    if (boundary === "reset") {
+      await history.appendResetBoundaryAsync("reset");
+    } else {
+      const kept = await history.appendMessageAsync(makeUserMessage("Earlier turn", 1));
+      await history.appendCompactionAsync("Summary.", expectDefined(kept, "kept entry"), 1_000);
+    }
     const afterCompaction = await turn();
     expect(afterCompaction.sent).not.toContain("github_publish");
     expect(afterCompaction.entry).toBeDefined();

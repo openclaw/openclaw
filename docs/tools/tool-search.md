@@ -421,7 +421,9 @@ This exemption uses private runtime provenance, not tool-authored `gated` or
 
 Tools marked `catalogMode: "on-demand"` (currently `computer` and, on
 unsandboxed or adopting sessions, `github_publish`) start in the catalog with a
-short entry whose `call` field says to call them top-level by name. The first
+short entry whose `call` field says to call them top-level by name. The prompt
+directory marks their rows `[call directly]` and the Code Mode index marks them
+`[top-level call only; not from exec]`. The first
 direct call by name loads the tool in the embedded harness and records it in the
 session's tool pin. Every later turn of the prompt series sends it as a normal
 direct tool, including after a Gateway restart. `/new`, `/reset`, compaction and

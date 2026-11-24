@@ -1,6 +1,6 @@
 // On-demand tools stay out of the provider tool list until the session calls them by name.
 import { afterEach, expect, it } from "vitest";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "./code-mode.test-support.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
@@ -43,25 +43,25 @@ function surface(mode: Mode, options: { loads?: boolean; promoted?: string[] } =
   return { catalogRef, tools, sent: tools.map((tool) => tool.name), catalog };
 }
 
+const heavy = (names: string[]) => ["computer", "github_publish"].filter((n) => names.includes(n));
+
 it.each(["tools", "directory", "code-mode"] as const)(
-  "%s: defers both tools until promoted, then keeps the promoted one direct",
+  "%s: defers both tools until promoted, keeps the promoted one direct, and needs the runner opt-in",
   (mode) => {
     const fresh = surface(mode);
-    expect(fresh.sent).not.toContain("computer");
-    expect(fresh.sent).not.toContain("github_publish");
-    expect(fresh.catalog).toEqual(expect.arrayContaining(["computer", "github_publish"]));
+    expect([heavy(fresh.sent), heavy(fresh.catalog)]).toEqual([[], ["computer", "github_publish"]]);
     const promoted = surface(mode, { promoted: ["computer"] });
-    expect(promoted.sent).toContain("computer");
-    expect(promoted.catalog).not.toContain("computer");
-    expect(promoted.catalog).toContain("github_publish");
+    expect([heavy(promoted.sent), heavy(promoted.catalog)]).toEqual([
+      ["computer"],
+      ["github_publish"],
+    ]);
     expect(promoted.catalogRef.directOnlyToolNames?.has("computer")).toBe(true);
+    const plain = surface(mode, { loads: false });
+    expect([heavy(plain.sent), heavy(plain.catalog)]).toEqual([["computer", "github_publish"], []]);
   },
 );
 
-it("keeps on-demand tools direct for a runner that cannot load them and in a headless catalog", () => {
-  const plain = surface("tools", { loads: false });
-  expect(plain.sent).toEqual(expect.arrayContaining(["computer", "github_publish"]));
-  expect(plain.catalog).not.toContain("computer");
+it("keeps on-demand tools out of a headless catalog, like direct-only tools", () => {
   const catalogRef = createToolSearchCatalogRef();
   refs.push(catalogRef);
   registerHeadlessToolSearchCatalog({ catalogRef, tools: targets() });
@@ -72,8 +72,6 @@ it("tells the model to call it by name and refuses dispatch_action and Code Mode
   const control = (name: string) => surface("tools").tools.find((tool) => tool.name === name)!;
   const search = await control("tool_search").execute("search", { query: "computer desktop" });
   expect(JSON.stringify(search.content)).toContain("top-level by name; not dispatch_action");
-  const directory = buildToolSchemaDirectoryPrompt({ config: {}, ...surface("tools") });
-  expect(directory).toMatch(/computer \(core\) \[call directly\][^]*marked \[call directly\] by/);
   const refusal = "computer runs only as its own top-level tool call. Call computer directly";
   await expect(
     control("dispatch_action").execute("call", { id: "computer", args: { action: "screenshot" } }),
@@ -84,4 +82,20 @@ it("tells the model to call it by name and refuses dispatch_action and Code Mode
     awaitResults: true,
   });
   expect(JSON.stringify(guest.details)).toContain(refusal);
+  // Prompt directories and the Code Mode index mark them and exempt them from dispatch_action.
+  for (const [mode, rule] of [
+    ["tools", "Call tools marked [call directly] by name as top-level calls. Other deferred"],
+    ["directory", "; call tools marked [call directly] only by name."],
+  ] as const) {
+    const prompt = buildToolSchemaDirectoryPrompt({
+      config: { tools: { toolSearch: { mode } } },
+      catalogRef: surface(mode).catalogRef,
+    });
+    expect(prompt).toContain("- computer (core) [call directly]");
+    expect(prompt).toContain(rule);
+  }
+  const { catalogRef } = surface("code-mode");
+  expect(buildCodeModeCatalogPrompt({ catalogRef }, catalogRef.current!.entries)).toMatch(
+    /- computer .*\[top-level call only; not from exec\]/,
+  );
 });
