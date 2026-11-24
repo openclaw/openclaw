@@ -563,17 +563,7 @@ it.each([
         ),
       ).toBe(true);
       expect(hosts.map((host) => host.sessions[0]?.exportPolicy)).toEqual(
-        hosts.map((host) =>
-          automatic
-            ? {
-                origin: "native-local",
-                automatic: true,
-                ...(host.hostId !== fixture.CODEX_LOCAL_SESSION_HOST_ID
-                  ? { stableHostThreadIdentity: true }
-                  : {}),
-              }
-            : undefined,
-        ),
+        hosts.map(() => (automatic ? { origin: "native-local", automatic: true } : undefined)),
       );
       expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
       expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(

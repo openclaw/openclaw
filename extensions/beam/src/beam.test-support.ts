@@ -133,6 +133,7 @@ export function createBeamTestCatalog(
     items?: SessionCatalogTranscriptItem[] | ((threadId: string) => SessionCatalogTranscriptItem[]);
     hostCursor?: string;
     hostKind?: SessionCatalogHost["kind"];
+    hostId?: string;
     onList?: () => unknown;
     onRead?: (threadId: string, sourceHomeId?: string, agentId?: string) => unknown;
     processHomeFallbackAllowed?: boolean;
@@ -149,7 +150,7 @@ export function createBeamTestCatalog(
       const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
       return [
         {
-          hostId: "gateway:local",
+          hostId: params.hostId ?? "gateway:local",
           label: "Local",
           kind: params.hostKind ?? "gateway",
           connected: true,

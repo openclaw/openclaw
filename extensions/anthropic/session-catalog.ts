@@ -162,7 +162,7 @@ function toGenericClaudeHost(
               ? {
                   origin: "native-local" as const,
                   automatic: true,
-                  stableHostThreadIdentity: true as const,
+                  ...(session.sourceHomeId ? { stableHostThreadIdentity: true as const } : {}),
                 }
               : { origin: "federated" as const, automatic: false },
           ...(name ? { name } : {}),
@@ -234,6 +234,7 @@ export function createClaudeSessionCatalogRuntime(
       const page = await readClaudeSessionTranscript({
         runtime: api.runtime,
         hostId: request.hostId,
+        sourceHomeId: request.sourceHomeId,
         threadId,
         cursor: blockCursor?.[2] ?? cursor,
         limit,

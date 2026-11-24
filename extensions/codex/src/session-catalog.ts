@@ -191,10 +191,8 @@ function catalogHostMapper(
                   exportPolicy: {
                     origin: "native-local" as const,
                     automatic: true,
-                    // The primary alias can select a different home after reconfiguration.
-                    ...(host.hostId !== CODEX_LOCAL_SESSION_HOST_ID
-                      ? { stableHostThreadIdentity: true as const }
-                      : {}),
+                    // Every home can switch between primary and qualified host aliases.
+                    // Its pre-existing publication cannot be identified from this row.
                   },
                 }
               : host.kind === "node" || home?.appServer.connectionClass === "remote"

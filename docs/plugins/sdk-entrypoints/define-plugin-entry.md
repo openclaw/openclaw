@@ -65,7 +65,9 @@ export default definePluginEntry({
   background export. An unknown origin requires explicit selection. Assign the
   policy at the receiving Gateway when projecting a peer's rows. Declare
   `stableHostThreadIdentity: true` only when the host ID and thread ID uniquely
-  identify the same native source across agents, source homes, and restarts.
+  identify one historical publication across agents, source homes, and restarts.
+  Bind each read to the selected source. Refuse ambiguous backing records and
+  mutable host aliases that could address a previously released publication under a new ID.
 
   Providers whose rows require current source authorization declare
   `requiresFreshList: true`. Each list, search, and page request must reauthorize

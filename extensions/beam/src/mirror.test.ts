@@ -346,6 +346,33 @@ describe("createBeamMirrorRunner", () => {
     expect(read.mock.calls).toEqual([["shared", "stable-home", "main"]]);
   });
 
+  it("does not create a fresh v1 ID when a released primary Codex home becomes secondary", async () => {
+    const prior = beamMirrorId("codex", "gateway:local", "shared");
+    const secondary = "gateway:local:old-home";
+    expect(beamMirrorId("codex", secondary, "shared")).not.toBe(prior);
+    const read = vi.fn();
+    const source = createBeamTestCatalog({
+      id: "codex",
+      hostId: secondary,
+      onRead: read,
+      sessions: [
+        {
+          threadId: "shared",
+          sourceHomeId: "old-home",
+          recencyAt: beamTestNow,
+          exportPolicy: { origin: "native-local", automatic: true },
+        },
+      ],
+    });
+    const runner = createBeamTestRunner({
+      runtime: createBeamTestRuntime(beamTestMirrorConfig({ catalogs: ["codex"] })),
+      listCatalogs: () => [source],
+    });
+    await runner.tick();
+    expect(read).not.toHaveBeenCalled();
+    expect(fixture.sent).toEqual([]);
+  });
+
   it("requires explicit selection for a qualified source without a stable old identity", async () => {
     const read = vi.fn();
     const runner = fixture.runner({
