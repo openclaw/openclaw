@@ -1,10 +1,7 @@
 // Control UI tests cover links that open one setting: arrival, mark, focus and no writes.
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  CONTROL_UI_SETTINGS_PAGES,
-  findControlUiSetting,
-} from "../../../src/shared/control-ui-settings/index.ts";
+import { findControlUiSetting } from "../../../src/shared/control-ui-settings/index.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
@@ -31,6 +28,13 @@ const gatewayScenario = {
       "settings-deep-link-e2e",
     ),
     "models.list": { models },
+    // Thinking levels show the agent's Thinking row, which hides without them.
+    "agents.list": {
+      agents: [{ id: "main", name: "Main", thinkingLevels: [{ id: "low", label: "Low" }] }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+    },
     "models.authStatus": {
       ts: Date.now(),
       providers: [
@@ -128,7 +132,7 @@ suite.define(() => {
     );
   });
 
-  it("opens every listed place on the complete config schema", async () => {
+  it("lands a parent setting and ends the mark on a key press", async () => {
     const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
     const schema = buildConfigSchemaCore();
     await withPage(async ({ page }) => {
@@ -136,19 +140,6 @@ suite.define(() => {
         ...gatewayScenario,
         methodResponses: { ...gatewayScenario.methodResponses, "config.schema": schema },
       });
-      const listed = CONTROL_UI_SETTINGS_PAGES.flatMap((listedPage) =>
-        Object.keys(listedPage.settings).filter((id) => !id.endsWith(".*")),
-      );
-      for (const id of [...listed, "gateway.publicOrigin", "agents.defaults.timeoutSeconds"]) {
-        await page.goto(placeUrl(id));
-        const target = settingRow(page, id);
-        await expect
-          .poll(() => target.getAttribute("data-settings-arrival"), { message: id })
-          .toBe("");
-        await expect
-          .poll(async () => (await target.boundingBox())!.y, { message: id })
-          .toBeLessThan(page.viewportSize()!.height);
-      }
       // The config defines no model policy, so its fields have no rows; the link lands on
       // the policy itself.
       await page.goto(placeUrl("agents.defaults.modelPolicy.allow"));
@@ -265,7 +256,7 @@ suite.define(() => {
     });
   });
 
-  it("names every row on every Settings page", async () => {
+  it("names every row on every Settings page and opens each from its link", async () => {
     const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
     const schema = buildConfigSchemaCore();
     const paths = [
@@ -283,6 +274,7 @@ suite.define(() => {
         methodResponses: { ...gatewayScenario.methodResponses, "config.schema": schema },
       });
       const failures: string[] = [];
+      const linked = new Set<string>();
       let rows = 0;
       for (const path of new Set(paths)) {
         await page.goto(`${suite.server.baseUrl}${path.slice(1)}`);
@@ -297,24 +289,25 @@ suite.define(() => {
           const found = [
             ...document.querySelectorAll<HTMLElement>("main .settings-row, main .provider-row"),
           ];
-          const tiers = found
-            .filter((row) => row.id)
-            .map(
-              (row) =>
-                `${row.closest(".config-advanced-disclosure") ? "advanced" : "common"} ${row.id}`,
-            );
+          const ids = found.filter((row) => row.id).map((row) => row.id);
           return {
             count: found.length,
+            ids,
             unnamed: found
               .filter((row) => !row.id && !row.hasAttribute("data-settings-info"))
               .map(
                 (row) =>
                   row.querySelector(".settings-row__title")?.textContent?.trim() ?? row.className,
               ),
-            duplicates: [...new Set(tiers.filter((key, index) => tiers.indexOf(key) !== index))],
+            duplicates: [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))],
           };
         });
         rows += result.count;
+        for (const id of result.ids) {
+          if (findControlUiSetting(id)) {
+            linked.add(id);
+          }
+        }
         if (result.unnamed.length > 0) {
           failures.push(`${path}: rows without a setting ID: ${result.unnamed.join(", ")}`);
         }
@@ -324,7 +317,23 @@ suite.define(() => {
       }
       expect(failures).toEqual([]);
       expect(rows).toBeGreaterThan(300);
+
+      // Every listed row the page drew opens from the link a message would carry.
+      const missed: string[] = [];
+      for (const id of linked) {
+        await page.goto(placeUrl(id));
+        const marked = page.locator(`[id="${id}"][data-settings-arrival]`);
+        const arrived = await marked
+          .waitFor({ timeout: 6000 })
+          .then(async () => (await marked.boundingBox())!.y < page.viewportSize()!.height)
+          .catch(() => false);
+        if (!arrived) {
+          missed.push(id);
+        }
+      }
+      expect(missed).toEqual([]);
+      expect(linked.size).toBeGreaterThan(80);
     });
-    // One pass over every Settings page; each visit is a full load against the mock Gateway.
-  }, 240_000);
+    // Two passes over every Settings page; each visit is a full load against the mock Gateway.
+  }, 600_000);
 });
