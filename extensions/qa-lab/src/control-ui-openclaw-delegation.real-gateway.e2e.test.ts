@@ -3,6 +3,7 @@ import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-ru
 import type { Page, WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import { waitForControlUiGatewayReady } from "../../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   authenticateControlUi,
@@ -232,6 +233,7 @@ suite.define(() => {
           },
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await waitForControlUiGatewayReady(page);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.fill(prompt);
         await page.getByRole("button", { name: "Send message" }).click();
@@ -393,6 +395,7 @@ fullAccessSuite.define(() => {
             );
             await authenticateControlUi(page, gateway);
             await page.goto(controlUiSessionUrl(fullAccessSuite.server.baseUrl, sessionKey));
+            await waitForControlUiGatewayReady(page);
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill(prompt);
             await captureControlUi(page, proofDir, "01-request.png");
