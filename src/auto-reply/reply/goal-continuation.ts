@@ -9,7 +9,7 @@ import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway
 import { chatRef } from "../../sessions/chat-ref.js";
 import { shouldWake } from "../../sessions/owed.js";
 import {
-  hasSessionControllerQueuedWork,
+  hasSessionControllerQueuedTurn,
   withSessionControllerSource,
 } from "../../sessions/session-controller.context.js";
 import {
@@ -166,7 +166,8 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     params.operation.result?.kind !== "failed" &&
     params.operation.result?.kind !== "aborted" &&
     !isFollowupRunAborted(params.base) &&
-    !hasSessionControllerQueuedWork(
+    // A queued reply turn continues the Goal at its own end; post-turn upkeep does not.
+    !hasSessionControllerQueuedTurn(
       params.storePath,
       [params.sessionKey, params.expectedSession.sessionId],
       params.base.run.agentId,
