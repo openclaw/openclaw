@@ -34,18 +34,19 @@ const open = (
   explicit = false,
   token = "publisher-test",
   endpoint = "https://team.example/api/v2/beam",
+  assertCurrent: () => void = () => {},
 ) =>
   openBeamMirrorEnrollment({
     source,
     token,
     endpoint,
     signal: new AbortController().signal,
-    assertCurrent: () => {},
+    assertCurrent,
     explicit,
     store: createPluginStateKeyedStoreV2ForTests<MirrorPublicationStoreValue>(
       "beam",
       { namespace: "mirror-publications", retention: "retained", env: state.env },
-      { assertCurrent() {} },
+      { assertCurrent },
     ),
   });
 beforeEach(async () => {
@@ -111,5 +112,22 @@ it("replays the exact pending bytes and precondition after restart before accept
   const [attempt, replay] = vi.mocked(transport.publishBeamMirrorV2).mock.calls;
   expect(replay?.[0].intent).toEqual(attempt?.[0].intent);
   expect(replay?.[0].raw).toEqual(first);
+  expect(transport.enrollBeamMirrorV2).toHaveBeenCalledOnce();
+});
+
+it("leaves an unacknowledged enrollment inactive when its operator loses authority during the request", async () => {
+  let active = true;
+  const binding = await open(true, undefined, undefined, () => {
+    if (!active) throw new Error("operator disconnected");
+  });
+  vi.mocked(transport.enrollBeamMirrorV2).mockImplementationOnce(async () => {
+    active = false;
+    return { state: "published", head };
+  });
+  await expect(binding!.enroll(id, raw)).rejects.toThrow("operator disconnected");
+  expect((await open())?.active).toBe(false);
+  await expect((await open(true))!.enroll(id, raw)).resolves.toMatchObject({
+    state: "unconfirmed",
+  });
   expect(transport.enrollBeamMirrorV2).toHaveBeenCalledOnce();
 });

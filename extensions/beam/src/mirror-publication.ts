@@ -196,6 +196,7 @@ export async function openBeamMirrorEnrollment(params: {
         raw: Buffer.from(pending.raw, "base64"),
         intent: pending.intent,
       });
+      params.assertCurrent();
       const { pending: _pending, ...retained } = current;
       const next =
         result.state === "published"

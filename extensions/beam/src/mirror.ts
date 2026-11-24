@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { OpenClawPluginApi, OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateActionAuthority,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type {
   CatalogExportItem,
@@ -98,7 +101,18 @@ export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]
   ) {
     return `${MIRROR_CONFIG_PATH}.catalogs must explicitly list the catalog ids to mirror`;
   }
-  const apiV2 = parsedEndpoint.pathname.endsWith("/api/v2/beam");
+  const normalizedPath = parsedEndpoint.pathname.replace(/\/$/, "");
+  const apiV2 = normalizedPath.endsWith("/api/v2/beam");
+  if (apiV2) {
+    if (
+      parsedEndpoint.username ||
+      parsedEndpoint.password ||
+      parsedEndpoint.search ||
+      parsedEndpoint.hash
+    )
+      return `${MIRROR_CONFIG_PATH}.endpoint must name the final v2 receiver without user info, query, or fragment`;
+    parsedEndpoint.pathname = normalizedPath;
+  }
   // The Gateway materializes refs to strings and leaves unavailable refs as objects.
   // null means configured but unavailable; undefined keeps tokenless receivers supported.
   const token =
@@ -108,7 +122,7 @@ export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]
         ? mirror.token.trim()
         : null;
   return {
-    endpoint,
+    endpoint: apiV2 ? parsedEndpoint.href : endpoint,
     apiV2,
     token,
     catalogs: mirror.catalogs.map((id) => id.trim().toLowerCase()),
@@ -209,7 +223,9 @@ export function createBeamMirrorRunner(params: {
   catalogExports: PluginServiceCatalogExports;
   resolveExecutable: () => Promise<string>;
   cleanCandidate?: typeof cleanBeamCandidate;
-  publicationStore?: Pick<
+  getPublicationStore?: (
+    authority: PluginStateActionAuthority,
+  ) => Pick<
     PluginStateKeyedStore<MirrorPublicationStoreValue, 2>,
     "observe" | "compareAndApply" | "registerIfAbsent"
   >;
@@ -453,9 +469,9 @@ export function createBeamMirrorRunner(params: {
     };
     let binding: Awaited<ReturnType<typeof openBeamMirrorEnrollment>>;
     if (config.apiV2) {
-      if (!candidate.sourceHomeId || !params.publicationStore) return;
+      if (!candidate.sourceHomeId || !params.getPublicationStore) return;
       binding = await openBeamMirrorEnrollment({
-        store: params.publicationStore,
+        store: params.getPublicationStore({ assertCurrent }),
         endpoint,
         token: config.token,
         source: { ...candidate, sourceHomeId: candidate.sourceHomeId },
@@ -729,7 +745,7 @@ export function createBeamMirrorRunner(params: {
       !config ||
       typeof config === "string" ||
       !config.apiV2 ||
-      !params.publicationStore ||
+      !params.getPublicationStore ||
       config.token === null ||
       !config.catalogs.includes(source.catalogId)
     ) {
@@ -775,7 +791,7 @@ export function createBeamMirrorRunner(params: {
       modelProvider: row.modelProvider,
     };
     const binding = await openBeamMirrorEnrollment({
-      store: params.publicationStore,
+      store: params.getPublicationStore({ assertCurrent }),
       endpoint: config.endpoint,
       token: config.token,
       source,
@@ -817,17 +833,16 @@ export function createBeamMirrorService(params: {
         );
         return;
       }
-      let publicationStore: PluginStateKeyedStore<MirrorPublicationStoreValue, 2> | undefined;
       const active = createBeamMirrorRunner({
         catalogExports: ctx.catalogExports,
         resolveExecutable: params.resolveExecutable,
-        get publicationStore() {
-          return (publicationStore ??=
-            params.runtime.state.openKeyedStoreV2<MirrorPublicationStoreValue>({
-              namespace: "mirror-publications",
-              retention: "retained",
-            }));
-        },
+        // Bind each read and commit to the selected source and current caller.
+        // A module-scoped handle survives an operator disconnect or catalog removal.
+        getPublicationStore: (authority) =>
+          params.runtime.state.openKeyedStoreV2<MirrorPublicationStoreValue>(
+            { namespace: "mirror-publications", retention: "retained" },
+            authority,
+          ),
         runtime: params.runtime,
         logger: ctx.logger,
         signal: ctx.scheduler.signal,
@@ -871,7 +886,7 @@ export function registerBeamMirror(
   );
   api.registerGatewayMethod(
     "beam.mirror.enroll",
-    async ({ params, respond }) => {
+    async ({ params, respond, assertHandlerCurrent }) => {
       const authority = getGatewayRequestAuthorityV1();
       if (!authority?.scopes.includes("operator.admin") || !active) {
         respond(false, undefined, {
@@ -912,7 +927,13 @@ export function registerBeamMirror(
       try {
         const result = await active.enroll(
           source as BeamMirrorEnrollment,
-          authority,
+          {
+            revalidate: () => authority.revalidate(),
+            assertCurrent() {
+              assertHandlerCurrent?.();
+              authority.assertCurrent();
+            },
+          },
           params.confirmGeneration as string | undefined,
         );
         await authority.revalidate();

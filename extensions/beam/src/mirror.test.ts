@@ -59,10 +59,20 @@ describe("parseBeamMirrorConfig", () => {
     expect(parseBeamMirrorConfig({})).toBeUndefined();
   });
 
+  it("binds both v2 base path spellings to the same receiver", () => {
+    const endpoint = "https://team.example/deployment/api/v2/beam";
+    const base = parseBeamMirrorConfig(beamTestMirrorConfig({ endpoint }));
+    expect(base).toMatchObject({ endpoint, apiV2: true });
+    expect(parseBeamMirrorConfig(beamTestMirrorConfig({ endpoint: endpoint + "/" }))).toEqual(base);
+  });
+
   it.each([
     { bogus: true },
     { endpoint: "ftp://x" },
     { endpoint: "not a url" },
+    { endpoint: "https://user@team.example/api/v2/beam" },
+    { endpoint: "https://team.example/api/v2/beam/?filter=one" },
+    { endpoint: "https://team.example/api/v2/beam#other" },
     { endpoint: "http://team.example/x" },
     { catalogs: [] },
   ])("rejects invalid mirror settings %j", (overrides) => {
@@ -207,6 +217,46 @@ describe("createBeamMirrorRunner", () => {
       expect(warnings).toEqual([]);
     },
   );
+
+  it("uses the cleaner result for every v1 text field and sends nothing on cleaner failure", async () => {
+    const session = { threadId: "one", recencyAt: beamTestNow, name: "unfiltered title" };
+    const catalog = {
+      sessions: [session],
+      items: [{ type: "userMessage" as const, text: "unfiltered text" }],
+    };
+    const runner = fixture.runner(catalog, {
+      cleanCandidate: async (candidate) => {
+        expect(candidate).toMatchObject({ title: session.name, items: catalog.items });
+        const packet = {
+          version: 2 as const,
+          beamId: "a".repeat(32),
+          source: candidate.source,
+          title: "clean title",
+          updatedAt: candidate.updatedAt,
+          completed: candidate.completed,
+          items: [{ type: "userMessage" as const, text: "clean message", speaker: "p1" }],
+        };
+        return { packet, raw: Buffer.from(JSON.stringify(packet)) };
+      },
+    });
+    await runner.tick();
+    expect(fixture.sent).toHaveLength(1);
+    expect(fixture.sent[0]?.payload).toMatchObject({
+      version: 1,
+      beamId: beamMirrorId("claude", "gateway:local", "one"),
+      title: "clean title",
+    });
+    expect(fixture.sent[0]?.payload.items).toEqual([
+      { type: "userMessage", text: "clean message" },
+    ]);
+    const failing = fixture.runner(catalog, {
+      cleanCandidate: async () => {
+        throw new Error("cleaner unavailable");
+      },
+    });
+    await failing.tick();
+    expect(fixture.sent).toHaveLength(1);
+  });
 
   it("uploads chronological sanitized text, latest model and source truncation", async () => {
     const { sent } = fixture;
