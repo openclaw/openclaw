@@ -286,6 +286,22 @@
           "exactCauses": true
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "childRole": "pluginPrereleaseIndependent",
+      "jobName": "checks-node-extensions-shard-5 (node)",
+      "reason": "Operator accepts the Buzz lifecycle fixture WAL sidecar teardown race (state dir removed while agent database leases remain open; same signature seen 2026-11-23 and passed since) for this release. Preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "plugin-prerelease-suite",
+          "stepName": "Verify plugin prerelease suite",
+          "causes": [
+            "plugin-prerelease-extensions ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
     }
   ]
 }
