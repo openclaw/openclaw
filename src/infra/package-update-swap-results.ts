@@ -64,12 +64,19 @@ export function createPackageSwapResults(
       if (!params.stage.native) {
         return;
       }
+      // A published launcher that cannot start the new package leaves no CLI. Fail so the
+      // transaction restores the previous launchers instead of reporting success.
       for (const { destination } of launchers) {
         try {
-          await verifyRuntimeLauncher(destination, "openclaw.mjs");
+          if ((await verifyRuntimeLauncher(destination, "openclaw.mjs")) === "unknown-format") {
+            warnings.push(
+              `Published launcher ${destination} could not be verified: Cannot resolve the launcher's executable target. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+            );
+          }
         } catch (error) {
-          warnings.push(
-            `Published launcher ${destination} could not be verified: ${formatErrorMessage(error)}. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+          throw new Error(
+            `Published launcher ${destination} cannot start ${params.packageName}: ${formatErrorMessage(error)}`,
+            { cause: error },
           );
         }
       }

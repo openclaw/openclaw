@@ -1145,6 +1145,7 @@ src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
 src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
+src/infra/package-update-launcher-names.ts
 src/infra/package-update-publication-tree.ts
 src/infra/package-update-refusal.ts
 src/infra/path-case.ts
@@ -1172,6 +1173,7 @@ src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
+src/infra/runtime-worker-process-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
