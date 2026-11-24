@@ -271,9 +271,13 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     retainedPublicationArtifactSource(current.manifest)?.workflow.sha ??
     current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
+    // A selected retained producer is bound by the Q that admitted this validation.
     requireValue(
       authenticated.qualification.candidateSha === sourceSha &&
-        authenticated.qualification.qualificationSha === producerSha &&
+        authenticated.qualification.qualificationSha ===
+          (current.manifest.publicationArtifactSource
+            ? current.manifest.workflowSha
+            : producerSha) &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );
