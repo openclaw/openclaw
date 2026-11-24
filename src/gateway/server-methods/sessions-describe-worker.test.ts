@@ -236,7 +236,10 @@ it("reuses unchanged descriptions across readers while sampling pending titles l
     const generation = createDeferredCore<boolean>();
     const pending = sessionTitleRequests.run(
       { storePath: record.storeTarget.storePath, sessionKey: targetKey, sessionId: "original" },
-      () => generation.promise,
+      (markStarted) => {
+        markStarted();
+        return generation.promise;
+      },
     );
     try {
       expectSession(await describe(), { titlePending: true, sharingRole: "viewer" });

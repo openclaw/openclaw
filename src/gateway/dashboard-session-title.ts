@@ -465,18 +465,6 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     memory?.binding?.actor.assertReadable();
     memory?.authority.assertCurrent();
   };
-  const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
-  if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
-    return false;
-  }
-  const skillParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    entry,
-    sessionKey,
-    assertCurrent: assertMemoryCurrent,
-  };
-
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
@@ -527,10 +515,23 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : await persist();
   };
 
-  const run = async () => {
+  const run = async (markStarted: () => void) => {
+    // Own this session's eligibility read too. Otherwise a read of the unnamed
+    // row could return after the winning title is committed and its request evicted.
+    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
+    if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
+      return false;
+    }
+    markStarted();
     // Select the first usable task, not an earlier control-only turn. Carry the
     // same prepared command metadata through history selection and generation.
-    const skillCommands = await prepareTitleSkillCommands(skillParams);
+    const skillCommands = await prepareTitleSkillCommands({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry,
+      sessionKey,
+      assertCurrent: assertMemoryCurrent,
+    });
     const transcriptScope = {
       agentId: params.agentId,
       sessionEntry: entry,
