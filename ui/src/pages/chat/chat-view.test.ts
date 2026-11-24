@@ -1885,7 +1885,8 @@ describe("chat slash menu accessibility", () => {
     };
     renderSession("replay-a");
     inputDraft(container, "submitted message");
-    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    renderSession("replay-a");
+    container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.click();
     expect(getComposerTextarea(container).value).toBe("");
     const submittedTextarea = getComposerTextarea(container);
     replayInput(submittedTextarea, "submitted message");
@@ -1897,7 +1898,8 @@ describe("chat slash menu accessibility", () => {
     expect(submittedTextarea.value).toBe("submitted message");
     expect(drafts["replay-a"]).toBe("submitted message");
     // Re-arm the submitted-value marker before checking replay across sessions.
-    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    renderSession("replay-a");
+    container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.click();
     expect(getComposerTextarea(container).value).toBe("");
     expect(drafts["replay-a"]).toBe("");
     const sessionKey = "replay-b";
