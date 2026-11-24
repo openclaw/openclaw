@@ -19,7 +19,7 @@ import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/regist
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
+import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import type {
   GroupMutationOperation,
@@ -71,13 +71,26 @@ export function admitArchiveUndo(
     );
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
+  const connId = client?.connId;
+  // Ordinary RPCs can outlive the socket. Undo belongs to this exact, still-live transport.
+  const isCurrent = () =>
+    Boolean(
+      client &&
+      connId &&
+      profileId &&
+      client.authenticatedUserProfile?.profileId === profileId &&
+      client.connect.role === "operator" &&
+      !client.internal?.remoteIngressPrincipal &&
+      !client.internal?.operatorRunAuthority &&
+      !isIneligiblePersonalGatewayCaller(client) &&
+      context.isConnectionActive?.(connId, client),
+    );
   if (
-    !client?.connId ||
     !profileId ||
-    client.internal?.remoteIngressPrincipal ||
-    client.internal?.operatorRunAuthority ||
+    !connId ||
+    !client ||
+    !isCurrent() ||
     !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS) ||
-    !hasCurrentPersonalGatewaySource(client, context) ||
     resolveDatabaseFamilyEngines(context.getRuntimeConfig()).agent !== "sqlite"
   ) {
     return {
@@ -92,13 +105,10 @@ export function admitArchiveUndo(
     ok: true,
     caller: {
       profileId,
-      connId: client.connId,
+      connId,
       token,
       assertCurrent: () => {
-        if (
-          !hasCurrentPersonalGatewaySource(client, context) ||
-          client.authenticatedUserProfile?.profileId !== profileId
-        ) {
+        if (!isCurrent()) {
           throw new SessionMutationAuthorizationChangedError(
             errorShape(ErrorCodes.FORBIDDEN, "The Archive Undo connection changed."),
           );

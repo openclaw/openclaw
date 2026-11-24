@@ -124,6 +124,70 @@ extension ChatSessionSidebarArchiveUndoTests {
         #expect(batch.errors == errors)
     }
 
+    @Test func `memory only rows archive without Undo in single and mixed selections`() async throws {
+        let session = try self.row("dashboard:incognito-routed"), first = try self.row("telegram:incognito-peer")
+        // A routed description supplies the incarnation missing from the list placeholder.
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [first], currentSessionKey: session.key, activeAgentID: "research", query: "",
+            viewOptions: .init(), supplementalSessions: [session], lineageRootKey: session.key)
+        let roots = ChatSidebarSelection.visibleRoots(in: sections, searching: false, isCollapsed: { _ in false })
+        let routed = try #require(roots.first { $0.key == session.key && $0.sessionId == session.sessionId })
+        #expect(roots.contains { $0.key == first.key })
+        let denied = try self.row("denied"), last = try self.row("last")
+        var marked = try self.row("marked")
+        marked.incognito = true
+        let privateKeys = [routed.key, marked.key], batch = ChatSessionSidebarBatch()
+        var calls: [OpenClawChatGatewayRequest] = []
+        let connection = try self.connection(capabilities: self.tokenCapabilities) { request in
+            calls.append(request)
+            if request.method == "sessions.patch" {
+                if request.params["requestArchiveUndo"] != nil { throw URLError(.unsupportedURL) }
+                return try self.acknowledgement(routed, archived: true, token: "unsolicited")
+            }
+            let params = try #require(JSONSerialization
+                .jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
+            let targets = try #require(params["targets"] as? [[String: String]])
+            let patch = try #require(params["patch"] as? [String: Bool])
+            let outcomes = try targets.map { target -> [String: Any] in
+                let key = try #require(target["key"])
+                if key == denied.key || (privateKeys.contains(key) && patch["requestArchiveUndo"] == true) {
+                    return ["key": key, "ok": false, "error": ["message": "Archive refused"]]
+                }
+                return ["key": key, "ok": true, "archiveUndoToken": "ticket-\(key)"]
+            }
+            return try JSONSerialization.data(withJSONObject: ["outcomes": outcomes])
+        }
+        var archived = false
+        let receipt = await batch
+            .archive(routed, mainKey: "main", connection: connection, owner: nil) { archived = true }
+        #expect(archived && receipt == nil && batch.errors.isEmpty)
+        let ordinary = ["archived": true], negotiated = ["archived": true, "requestArchiveUndo": true]
+        #expect(calls == [.init(
+            method: "sessions.patch",
+            params: self.target(routed, ["archived": .init(true)]),
+            timeoutMs: 600_000)])
+        calls.removeAll()
+        let successes = await batch.run(
+            .archived(true),
+            rows: [first, routed, marked, denied, last],
+            mainKey: "main",
+            connection: connection)
+        #expect(successes.map(\.key) == [first.key, routed.key, marked.key, last.key])
+        #expect(batch.errors == [OpenClawChatSessionSidebarData.identity(denied): "Archive refused"])
+        let chunks = [([first], negotiated), ([routed, marked], ordinary), ([denied, last], negotiated)]
+        let expected = chunks.map { rows, patch in
+            OpenClawChatGatewayRequest(method: "sessions.patchMany", params: [
+                "targets": .init(rows.map { self.target($0) }), "patch": .init(patch),
+            ], timeoutMs: 600_000)
+        }
+        #expect(calls == expected)
+        #expect(batch.archiveUndo?.rows == [first, last])
+        #expect(batch.archiveUndo?.archiveUndoTokens == [
+            ChatSessionSidebarBatch.archiveIdentity(first): "ticket-\(first.key)",
+            ChatSessionSidebarBatch.archiveIdentity(last): "ticket-\(last.key)",
+        ])
+    }
+
     @Test(arguments: [true, false])
     func `batch tokens from another owner or without negotiation never offer undo`(_ negotiated: Bool) async throws {
         var first = try self.row(), second = first

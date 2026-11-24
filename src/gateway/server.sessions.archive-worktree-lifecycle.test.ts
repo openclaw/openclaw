@@ -244,8 +244,8 @@ test("explicit Archive Undo preserves a retired checkout while ordinary Restore 
     authenticatedUserProfile: gatewayProfile("worktree-undo-person"),
   };
   const context = {
-    getClientConnIds: (filter?: (current: GatewayClient) => boolean) =>
-      new Set(!filter || filter(client) ? [connId] : []),
+    isConnectionActive: (key: string, expected?: GatewayClient) =>
+      key === connId && expected === client,
   };
   const archive = async () => {
     const result = await directSessionReq<{ archiveUndoToken: string }>(

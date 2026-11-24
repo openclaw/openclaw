@@ -311,14 +311,10 @@ final class ChatSessionSidebarBatch {
         defer { for (row, token) in pending {
             self.finishArchive(row, token: token)
         } }
-        var fields = action.patch
-        if action == .archived(true), connection.supportsArchiveUndo {
-            fields["requestArchiveUndo"] = .init(true)
-        }
         var tokens: [String: String] = [:]
         let successful = await patch(
             action == .archived(true) ? pending.map(\.0) : rows,
-            fields: fields,
+            action: action,
             connection: connection)
         { row, token in
             tokens[Self.archiveIdentity(row)] = token
@@ -358,7 +354,7 @@ final class ChatSessionSidebarBatch {
 
     func patch(
         _ rows: [OpenClawChatSessionEntry],
-        fields: [String: AnyCodable],
+        action: Action,
         connection: OpenClawSessionMenuConnection,
         archived: (OpenClawChatSessionEntry, String) -> Void = { _, _ in }) async -> [OpenClawChatSessionEntry]
     {
@@ -367,18 +363,26 @@ final class ChatSessionSidebarBatch {
         var errors: [String: String] = [:]
         // ui/src/components/session-organizer-batch-mutations.ts:129 and sessions-patch.ts:9:
         // sequential chunks retain earlier successes when a later request fails.
-        for offset in stride(from: 0, to: rows.count, by: 100) {
+        func requestsUndo(_ row: OpenClawChatSessionEntry) -> Bool {
+            action == .archived(true) && connection.requestsArchiveUndo(for: row)
+        }
+        var remaining = rows[...]
+        while let first = remaining.first {
             guard connection.isCurrent(), !Task.isCancelled else { return [] }
-            let chunk = Array(rows[offset..<min(offset + 100, rows.count)])
+            // patchMany shares one patch across targets. Keep adjacent like requests in selection order.
+            let requestUndo = requestsUndo(first)
+            let chunk = remaining.prefix(100).prefix { requestsUndo($0) == requestUndo }
+            var fields = action.patch
+            if requestUndo { fields["requestArchiveUndo"] = .init(true) }
             do {
                 let data = try await connection.request(OpenClawChatGatewayRequests.sidebarBatchPatch(
-                    chunk,
+                    Array(chunk),
                     patch: fields))
                 let response = try JSONDecoder().decode(Response.self, from: data)
                 guard response.outcomes.count == chunk.count,
                       zip(chunk, response.outcomes).allSatisfy({ row, outcome in
                           guard row.key == outcome.key else { return false }
-                          guard fields["requestArchiveUndo"] != nil else { return true }
+                          guard requestUndo else { return true }
                           let expected = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
                           return outcome
                               .agentId == expected ||
@@ -390,7 +394,7 @@ final class ChatSessionSidebarBatch {
                 for (row, outcome) in zip(chunk, response.outcomes) {
                     if outcome.ok {
                         successful.append(row)
-                        if let token = outcome.archiveUndoToken, !token.isEmpty {
+                        if requestUndo, let token = outcome.archiveUndoToken, !token.isEmpty {
                             archived(row, token)
                         }
                     } else {
@@ -400,11 +404,12 @@ final class ChatSessionSidebarBatch {
                 }
             } catch {
                 guard connection.isCurrent(), !Task.isCancelled else { return [] }
-                for row in rows[offset...] {
+                for row in remaining {
                     errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
                 }
                 break
             }
+            remaining = remaining.dropFirst(chunk.count)
         }
         // Preserve failures published by other operations after this one began.
         self.errors.merge(errors) { _, latest in latest }

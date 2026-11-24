@@ -7,4 +7,5 @@
 # +10: compare real serialized rename receipts for personal and legacy clients without modifying the historical timestamp.
 # +5: keep the original authorized shared-pin and timestamp assertions alongside the negotiated personal-pin assertions.
 # +789: one signed Archive occurrence across legacy and personal profiles, SDK/Doctor same-value and replacement writes, retired checkout fences, v43 migration and rollback, and Mac multi-chunk partial receipts; no duplicate synthetic UI transport suites.
-2124
+# +6: an exact live transport, not a lookalike or a retained old request sharing the replacement connection ID, owns its Archive Undo.
+2130

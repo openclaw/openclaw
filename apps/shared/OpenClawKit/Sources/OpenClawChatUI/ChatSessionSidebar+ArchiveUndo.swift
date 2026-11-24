@@ -27,6 +27,17 @@ struct ChatSidebarArchiveReceipt {
     }
 }
 
+extension OpenClawSessionMenuConnection {
+    func requestsArchiveUndo(for row: OpenClawChatSessionEntry) -> Bool {
+        guard self.supportsArchiveUndo, row.incognito != true else { return false }
+        // packages/session-url-contract/src/session-key.ts: partial rows can omit the incognito flag.
+        let space = #"\p{Z}\t-\r\uFEFF"# // ECMAScript whitespace
+        let surface = "(?:dashboard|subagent|internal-session-effects)"
+        let pattern = #"^[\#(space)]*agent:[^:]+:\#(surface):incognito-[\#(space)]*[^:\#(space)][^:]*\z"#
+        return row.key.lowercased().range(of: pattern, options: .regularExpression) == nil
+    }
+}
+
 extension ChatSessionSidebarBatch {
     static func archiveIdentity(_ row: OpenClawChatSessionEntry) -> String {
         "\(OpenClawChatSessionSidebarData.identity(row))\u{0}\(row.sessionId ?? "")"
@@ -86,19 +97,23 @@ extension ChatSessionSidebarBatch {
         defer { self.finishArchive(row, token: token) }
         errors = [:]
         notices = []
+        let requestUndo = connection.requestsArchiveUndo(for: row)
         guard let receipt = await patchArchive(
             row,
             archived: true,
+            requestArchiveUndo: requestUndo,
             connection: connection,
             owner: owner) else { return nil }
         onArchived()
-        let tokens = receipt.archiveUndoToken.map { [Self.archiveIdentity(row): $0] } ?? [:]
+        let undoToken = requestUndo ? receipt.archiveUndoToken : nil
+        let tokens = undoToken.map { [Self.archiveIdentity(row): $0] } ?? [:]
         return self.offerArchiveUndo([row], connection: connection, tokens: tokens)
     }
 
     private func patchArchive(
         _ row: OpenClawChatSessionEntry,
         archived: Bool,
+        requestArchiveUndo: Bool = false,
         pinned: Bool? = nil,
         archiveUndoToken: String? = nil,
         connection: OpenClawSessionMenuConnection,
@@ -120,7 +135,7 @@ extension ChatSessionSidebarBatch {
         defer { owner?.finishMutation(token, receipt: receipt) }
         do {
             var fields: [String: AnyCodable] = ["archived": .init(archived)]
-            if archived, connection.supportsArchiveUndo {
+            if requestArchiveUndo {
                 fields["requestArchiveUndo"] = .init(true)
             }
             if let archiveUndoToken {

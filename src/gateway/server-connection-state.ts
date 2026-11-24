@@ -70,9 +70,14 @@ export function createGatewayConnectionState(params: {
   };
   // RPCs survive ordinary disconnects, so connection-owned projections still
   // validate the live transport before publishing into a retired connection.
-  const isConnectionActive = (connId: string) => {
+  const isConnectionActive = (connId: string, expectedClient?: GatewayClient) => {
     const client = clients.getByConnectionId(connId);
-    return Boolean(client && !client.invalidated && !client.connectionSignal?.aborted);
+    return Boolean(
+      client &&
+      (!expectedClient || client === expectedClient) &&
+      !client.invalidated &&
+      !client.connectionSignal?.aborted,
+    );
   };
   const sessionEventSubscribers = createSessionEventSubscriberRegistry(
     isConnectionActive,
