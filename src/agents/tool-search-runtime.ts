@@ -388,21 +388,29 @@ export class ToolSearchRuntime {
     options?: ToolSearchCallOptions,
     fullValue = false,
     match: "id-or-name" | "exact-id" = "id-or-name",
-  ) =>
-    runScheduledToolSearchCall({
+  ) => {
+    const entry = findEntry(
+      resolveCatalog(this.ctx),
+      id,
+      { ...options, codeModeSkills: this.ctx.codeModeSkills },
+      match,
+    );
+    // Bridges serialize results and cannot carry a turn handoff; the direct call can.
+    if (entry.onDemand) {
+      throw new ToolInputError(
+        `${entry.name} runs only as its own top-level tool call. Call ${entry.name} directly by name with its parameters, not through dispatch_action or exec; tool_describe or describe() returns its input schema. After that call it stays a direct tool in this session.`,
+      );
+    }
+    return runScheduledToolSearchCall({
       ctx: this.ctx,
-      entry: findEntry(
-        resolveCatalog(this.ctx),
-        id,
-        { ...options, codeModeSkills: this.ctx.codeModeSkills },
-        match,
-      ),
+      entry,
       signal: options?.signal,
       execute: (currentEntry, signal) =>
         runWithToolResultDelivery(fullValue, () =>
           this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
         ),
     });
+  };
 
   private readonly executeEntry = async (
     catalog: ToolSearchCatalogSession,

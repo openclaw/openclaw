@@ -1,6 +1,7 @@
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import type { CreateAgentSessionOptions } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { isOnDemandCatalogTool } from "../../tool-search-catalog.js";
 import { resolveToolSearchCatalogTool, TOOL_CALL_RAW_TOOL_NAME } from "../../tool-search.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
@@ -14,6 +15,7 @@ export function createAttemptDeferredToolResolver(input: {
     | "codeModeControlsEnabledForRun"
     | "deferredDirectoryToolsCallable"
     | "getToolAbortSignal"
+    | "onPromoteTool"
     | "sandboxSessionKey"
     | "toolSearchCatalogRef"
     | "catalogToolHookContext"
@@ -32,15 +34,6 @@ export function createAttemptDeferredToolResolver(input: {
     return undefined;
   }
   return ({ toolCall }) => {
-    if (codeMode) {
-      const entries = clientTools.toolSearchCatalogRef?.current?.entries;
-      if (entries?.some((entry) => entry.name === toolCall.name)) {
-        throw new Error(
-          "This tool is available through Code Mode, not as a top-level tool. This call did not execute it. Use exec with JavaScript: find its callable handle with catalog.search(...), use handle.describe() for the input schema, then await the handle with the tool arguments.",
-        );
-      }
-      return undefined;
-    }
     const toolAbortSignal = clientTools.getToolAbortSignal?.() ?? input.runAbortSignal;
     const tool = resolveToolSearchCatalogTool(
       {
@@ -55,7 +48,18 @@ export function createAttemptDeferredToolResolver(input: {
       },
       toolCall.name,
     );
-    if (tool && !clientTools.deferredDirectoryToolsCallable) {
+    // An on-demand tool loads on its first direct call in every catalog mode.
+    const onDemand = tool !== undefined && isOnDemandCatalogTool(tool);
+    if (codeMode && !onDemand) {
+      const entries = clientTools.toolSearchCatalogRef?.current?.entries;
+      if (entries?.some((entry) => entry.name === toolCall.name)) {
+        throw new Error(
+          "This tool is available through Code Mode, not as a top-level tool. This call did not execute it. Use exec with JavaScript: find its callable handle with catalog.search(...), use handle.describe() for the input schema, then await the handle with the tool arguments.",
+        );
+      }
+      return undefined;
+    }
+    if (tool && !onDemand && !clientTools.deferredDirectoryToolsCallable) {
       throw new Error(
         `Tool ${toolCall.name} is deferred and not directly callable. Call ${TOOL_CALL_RAW_TOOL_NAME} with id ${JSON.stringify(tool.name)} and its parameters in args.`,
       );
@@ -71,6 +75,10 @@ export function createAttemptDeferredToolResolver(input: {
       const originalExecute = hydratedTool.execute;
       hydratedTool.execute = (...args: Parameters<typeof originalExecute>) =>
         withEmbeddedAttemptToolActivity(attempt.runId, () => originalExecute(...args));
+      if (onDemand) {
+        // The agent loop keeps the hydrated definition for this run; the session pin keeps it after.
+        clientTools.onPromoteTool?.(hydratedTool);
+      }
     }
     return hydratedTool;
   };

@@ -74,8 +74,12 @@ or apply to Codex-native Code Mode.
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` or the native-vision `view_image` loader whose image result
-  cannot survive the guest bridge.
+  such as the native-vision `view_image` loader whose image result cannot survive
+  the guest bridge.
+- On-demand tools such as `computer` stay out of that list until the model calls
+  one by name as a top-level tool; it then stays direct for the prompt series.
+  Guest code that calls one gets an error saying to call it directly. See
+  [On-demand tools](/tools/tool-search#on-demand-tools).
 - `exec` evaluates model-generated JavaScript in the selected executor's worker
   thread.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is

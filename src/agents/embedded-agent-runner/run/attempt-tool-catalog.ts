@@ -27,6 +27,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { isOnDemandCatalogTool } from "../../tool-search-catalog.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
 import {
@@ -362,10 +363,25 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
   };
   return Object.assign(current, {
-    installToolListingPin: async (pin: NonNullable<typeof pinToolListing>) => {
+    /**
+     * Installs the session's GitHub listing pin and keeps on-demand tools the session pin already
+     * sends direct. Rebuilds the catalog once when either changes the surface.
+     */
+    installToolListingPin: async (
+      pin: NonNullable<typeof pinToolListing>,
+      readPinnedToolNames?: () => ReadonlySet<string>,
+    ) => {
       pinToolListing = pin;
       const tools = input.bundleTools.uncompactedEffectiveTools;
-      if (pin(tools, false) === tools) {
+      const catalogRef = input.preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef;
+      const onDemand = tools.filter(isOnDemandCatalogTool);
+      // Read the transcript pin only when a deferred on-demand tool could be promoted.
+      const pinnedNames =
+        catalogRef?.current && onDemand.length > 0 ? readPinnedToolNames?.() : undefined;
+      const promoted = onDemand.filter((tool) => pinnedNames?.has(tool.name)).map((t) => t.name);
+      if (catalogRef && promoted.length > 0) {
+        catalogRef.promotedToolNames = new Set(promoted);
+      } else if (pin(tools, false) === tools) {
         return false;
       }
       await withRuntimeToolSchemaQuarantine((record) => refreshTools(record, false));

@@ -246,6 +246,35 @@ function resolveSessionToolSurface(params: ToolSurfaceInput) {
   return { known, historyId };
 }
 
+/** Tool names the series' current pin sends; on-demand tools among them stay direct. */
+export function readSessionPinnedToolNames(
+  params: Omit<ToolSurfaceInput, "tools">,
+): ReadonlySet<string> {
+  return new Set(
+    resolveSessionToolSurface({ ...params, tools: [] }).known?.tools?.map((t) => t.name),
+  );
+}
+
+/**
+ * Appends an on-demand tool, first called by name in this series, after the pinned definitions,
+ * so the provider tool list changes once, at the next turn. Compaction, `/new`, `/reset` and a
+ * model change start a new pin without it.
+ */
+export function promoteSessionTool(
+  state: EmbeddedSessionPromptState,
+  tool: Pick<AnyAgentTool, "name" | "description" | "parameters">,
+): boolean {
+  const surface = state.pendingToolSurface ?? state.toolSurface;
+  if (!surface?.tools || surface.tools.some((pin) => pin.name === tool.name)) {
+    return false;
+  }
+  state.pendingToolSurface = {
+    ...surface,
+    tools: [...surface.tools, describeSessionToolDefinition(tool)],
+  };
+  return true;
+}
+
 /** Async discovery cannot rewrite an established listing before a config/tool refresh. */
 export function prepareSessionPublicationToolListing(
   params: Omit<ToolSurfaceInput, "entries"> & {
@@ -319,8 +348,10 @@ export function prepareSessionToolSurface(
       ? params.tools.filter(
           (tool) =>
             !previous.has(tool.name) ||
-            // Computer discovery supplies live facts, never a new session definition.
+            // Computer discovery supplies live facts, never a new session definition. A promoted
+            // on-demand tool keeps the definition its first direct call sent.
             (tool.name !== "computer" &&
+              tool.catalogMode !== "on-demand" &&
               !sameToolParameters(previous.get(tool.name)?.parameters, tool.parameters)),
         )
       : [];

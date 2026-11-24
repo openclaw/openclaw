@@ -338,17 +338,61 @@ it("offers current-PR preparation and lists actions gated by the Gateway", () =>
   }
   check({ action: "ready", publishingSessionKey: "another" });
   check({ action: "edit", publishingSessionKey: "another" });
-  expect(tool.description).toContain("omit action to append accepted changes to the original PR");
+  expect(tool.description).toContain("- prepare_pr: continue an existing PR by pullRequestUrl.");
   expect(tool.description).not.toContain("Imported source publication is not available");
-  expect(tool.description).toContain("used only when creating a PR");
-  expect(tool.description).toContain("retain requestId, finish the turn and await its result here");
-  expect(tool.description).toContain("do not submit another publication to recover it");
-  expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
   const actionOnly = createGitHubPublishTool({
     publicationAvailable: false,
   });
   expect(Value.Check(actionOnly.parameters, { action: "edit" })).toBe(false);
   expect(Value.Check(actionOnly.parameters, prepare)).toBe(false);
+});
+
+it("keeps the definition short and delivers each procedure in the result that needs it", async () => {
+  for (const tool of [
+    createGitHubPublishTool(),
+    createGitHubPublishTool({ sandbox: publicationSandbox() }),
+    createGitHubPublishTool({ publicationAvailable: false }),
+  ]) {
+    expect(tool.description.length, tool.description).toBeLessThanOrEqual(1_000);
+  }
+  expect(createGitHubPublishTool().description.length).toBeLessThanOrEqual(800);
+  expect(createGitHubPublishTool({ observationOnly: true }).description.length).toBeLessThan(300);
+
+  const { callGateway, execute } = setup();
+  const text = (result: { content: Array<{ type: string; text?: string }> }) =>
+    String(JSON.parse(result.content[0]?.text ?? "{}").next ?? "");
+  const published = await execute({ title: "Change" });
+  expect(text(published)).toContain("retain requestId, finish the turn and await its result here");
+  expect(text(published)).toContain("do not submit another publication to recover it");
+  // The Gateway's payload stays the tool's details.
+  expect(published.details).toEqual(publication);
+
+  callGateway.mockResolvedValueOnce({ status: "failed", requestId: "r", error: "no" });
+  expect(text(await execute({ title: "Change" }))).toBe("");
+
+  const pr = { headCommit: "a".repeat(40), title: "T", body: "B" };
+  callGateway.mockResolvedValue(pr);
+  expect(text(await execute({ action: "edit" }))).toContain(
+    "send this headCommit as expectedHeadCommit",
+  );
+  expect(
+    text(
+      await execute({
+        action: "edit",
+        title: "New",
+        expectedTitle: "T",
+        expectedHeadCommit: pr.headCommit,
+      }),
+    ),
+  ).toContain("read again with edit");
+  expect(
+    text(await execute({ action: "request_review", expectedHeadCommit: pr.headCommit })),
+  ).toContain('Only "@clawsweeper re-review" was posted');
+  expect(text(await execute({ action: "inspect" }))).toContain(
+    "full operator write access, after review and required checks pass",
+  );
+  callGateway.mockResolvedValue({ custody: { kind: "bound_workspace" } });
+  expect(text(await execute({ action: "readiness" }))).toContain("never resubmit it");
 });
 
 it.each(["responseId", "turnId"] as const)(
