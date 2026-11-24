@@ -269,6 +269,9 @@ export async function streamSpeech(
           outputFormat: providerResult.outputFormat,
           voiceCompatible: providerResult.voiceCompatible,
           fileExtension: providerResult.fileExtension,
+          ...(providerResult.sampleRate === undefined
+            ? {}
+            : { sampleRate: providerResult.sampleRate }),
           target,
         }),
       });

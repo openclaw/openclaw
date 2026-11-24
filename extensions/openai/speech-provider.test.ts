@@ -77,6 +77,59 @@ describe("buildOpenAISpeechProvider", () => {
     vi.restoreAllMocks();
   });
 
+  it("delivers PCM before the response body closes and cancels upstream on stop", async () => {
+    vi.stubEnv("OPENAI_TTS_BASE_URL", "");
+    const cancel = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        expect(parseRequestBody(init).response_format).toBe("pcm");
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1, 2]));
+            },
+            cancel,
+          }),
+        );
+      }),
+    );
+    const result = await provider.streamSynthesize!(speechRequest());
+    expect(result).toMatchObject({ outputFormat: "pcm", sampleRate: 24_000 });
+    const reader = result.audioStream.getReader();
+    try {
+      expect(await reader.read()).toEqual({ done: false, value: new Uint8Array([1, 2]) });
+    } finally {
+      await reader.cancel();
+      reader.releaseLock();
+      await result.release?.();
+    }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a complete WAV response from a buffered compatibility endpoint", async () => {
+    const fetchMock = mockSpeechFetch({ response_format: "wav" });
+    const result = await provider.streamSynthesize!(
+      speechRequest({
+        providerConfig: {
+          apiKey: "local",
+          baseUrl: "https://speech.example/v1",
+          voice: "House",
+          responseFormat: "wav",
+        },
+      }),
+    );
+    try {
+      expect(result.outputFormat).toBe("wav");
+      expect(new Uint8Array(await new Response(result.audioStream).arrayBuffer())).toEqual(
+        new Uint8Array([1, 2, 3]),
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await result.release?.();
+    }
+  });
+
   it("advertises official speech snapshots without changing the default model", () => {
     expect(provider.defaultModel).toBe("gpt-4o-mini-tts");
     expect(provider.models).toContain(OPENAI_TTS_SNAPSHOT);
