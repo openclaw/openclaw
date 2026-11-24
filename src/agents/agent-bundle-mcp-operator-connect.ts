@@ -17,6 +17,8 @@ import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { completeOperatorMcpOAuthLink, startOperatorMcpOAuthLink } from "./mcp-oauth-link.js";
 import { readMcpOAuthCredentialsStatuses } from "./mcp-oauth.js";
+import { withMcpSignInCards } from "./mcp-sign-in-elicitation.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 export type OperatorMcpConnectContext = {
   cfg: OpenClawConfig;
@@ -148,5 +150,6 @@ export async function resolveMcpConnectSurface(
           }
         : undefined;
     },
+    withSignIn: (tools: AnyAgentTool[]) => withMcpSignInCards(tools, context),
   };
 }
