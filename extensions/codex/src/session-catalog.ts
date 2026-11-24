@@ -9,6 +9,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import { isCodexAppServerProxyLaunch } from "./app-server/launch-args.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
@@ -23,6 +24,7 @@ import {
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript } from "./session-catalog-listing.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import { CodexCatalogNodeSnapshots } from "./session-catalog-node-snapshot.js";
 import {
   CatalogParamsError,
@@ -33,6 +35,7 @@ import {
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
   readGatewayParams,
+  toCatalogSession,
 } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -344,7 +347,40 @@ export function registerCodexSessionCatalog(params: {
         params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
         agentId,
       ),
-    list: (query) => runCatalogListInline(createListOperation(query)),
+    list: async ({ exportSource, ...query }) => {
+      if (!exportSource) return runCatalogListInline(createListOperation(query));
+      const { control, source } = await bindLocalRequest({
+        ...exportSource,
+        agentId: query.agentId,
+        allowProcessHomeFallback: query.allowProcessHomeFallback,
+      });
+      if (
+        !exportSource.sourceHomeId ||
+        !permitsLocalCatalogExport(source) ||
+        !query.hostIds?.includes(source.hostId)
+      )
+        return [];
+      source.assertCurrent();
+      query.signal?.throwIfAborted();
+      // The existing native action guard validates the managed marker, exact rollout
+      // metadata and archive status on the pinned home without enumerating other threads.
+      const thread = await control.requireEligibleThread(exportSource.threadId);
+      source.assertCurrent();
+      query.signal?.throwIfAborted();
+      const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+      const session = toCatalogSession(prepared, prepared.preview);
+      if (!session || session.threadId !== exportSource.threadId) return [];
+      const mapHost = catalogHostMapper(false, [source], false);
+      return [
+        mapHost({
+          hostId: source.hostId,
+          label: source.label,
+          kind: "gateway",
+          connected: true,
+          sessions: [{ ...session, sourceHomeId: source.sourceHomeId }],
+        }),
+      ];
+    },
     createListOperation,
     read: async (request) => {
       const { agentId, source, control } = await bindRequest(request);

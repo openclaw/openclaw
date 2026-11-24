@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeCatalogTimestamp } from "../../packages/gateway-protocol/src/public-session-catalog.js";
 import type {
   SessionCatalogHost,
   SessionCatalogLocator,
@@ -39,7 +40,7 @@ export type PluginServiceExportCatalog = {
   list(params: {
     agentId?: string;
     limitPerHost?: number;
-    source?: Pick<SessionCatalogLocator, "hostId" | "threadId">;
+    source?: Pick<SessionCatalogLocator, "hostId" | "threadId" | "sourceHomeId">;
   }): Promise<CatalogExportHost[]>;
   read(
     params: Omit<SessionCatalogLocator, "catalogId"> & { limit: number; cursor?: string },
@@ -178,38 +179,18 @@ export function createPluginServiceCatalogExports(params: {
               assertListing();
               if (!hosts.size) return [];
 
-              // Free-text catalog search can match titles only. Walk the selected
-              // producer's listing so its visibility and native-origin rules still apply.
-              const seen = new Set<string>();
-              let cursor: string | undefined;
-              let listed: SessionCatalogHost[];
-              for (;;) {
-                listed = await provider.list({
-                  agentId,
-                  allowProcessHomeFallback,
-                  hostIds: [...hosts],
-                  ...(source && cursor ? { cursors: { [source.hostId]: cursor } } : {}),
-                  listNodes: async () => ({ nodes: [] }),
-                  limitPerHost: Math.min(Math.max(1, request.limitPerHost ?? 50), 100),
-                  signal: params.signal,
-                });
-                assertListing();
-                if (!source) break;
-                const host = listed.find((entry) => entry.hostId === source.hostId);
-                if (
-                  !host ||
-                  host.kind !== "gateway" ||
-                  !host.connected ||
-                  host.error ||
-                  host.sessions.some((entry) => entry.threadId === source.threadId)
-                )
-                  break;
-                cursor = host.nextCursor;
-                if (!cursor) break;
-                if (seen.has(cursor) || seen.size >= 99)
-                  throw new Error("Catalog source lookup exceeded its page limit");
-                seen.add(cursor);
-              }
+              // Free-text search has no native-ID contract. The producer owns
+              // visibility, the home boundary and its cheapest authoritative lookup.
+              const listed = await provider.list({
+                agentId,
+                allowProcessHomeFallback,
+                hostIds: [...hosts],
+                ...(source ? { exportSource: source } : {}),
+                listNodes: async () => ({ nodes: [] }),
+                limitPerHost: Math.min(Math.max(1, request.limitPerHost ?? 50), 100),
+                signal: params.signal,
+              });
+              assertListing();
               return listed.flatMap((host): CatalogExportHost[] => {
                 if (
                   !hosts.has(host.hostId) ||
@@ -229,7 +210,9 @@ export function createPluginServiceCatalogExports(params: {
                 }
                 const sessions = host.sessions.flatMap((row): CatalogExportSession[] => {
                   if (
-                    (source && source.threadId !== row.threadId) ||
+                    (source &&
+                      (source.threadId !== row.threadId ||
+                        source.sourceHomeId !== row.sourceHomeId)) ||
                     collisions.has(row.threadId) ||
                     row.exportPolicy?.origin !== "native-local" ||
                     !row.exportPolicy.automatic
@@ -244,8 +227,8 @@ export function createPluginServiceCatalogExports(params: {
                       exportPolicy: row.exportPolicy,
                       name: row.name && truncateUtf16Safe(row.name, 512),
                       modelProvider: row.modelProvider,
-                      updatedAt: row.updatedAt,
-                      recencyAt: row.recencyAt,
+                      updatedAt: normalizeCatalogTimestamp(row.updatedAt),
+                      recencyAt: normalizeCatalogTimestamp(row.recencyAt),
                     },
                   ];
                 });
