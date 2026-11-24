@@ -6,37 +6,31 @@ import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import type {
-  SessionGenerationEntry,
-  SessionGenerationFacts,
-} from "./session-delivery-generation.types.js";
+import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
 
 /**
- * A stored reference names its conversation by key alone, so it follows edits, resets and
- * compaction to the current transcript. Live-writer fences pin the transcript
- * (`exactTranscript`) or the incarnation (`exactLifecycle`). A null session id leases the
- * row's absence.
+ * A chat lease follows the key to the current transcript. A transcript lease holds the
+ * writer's transcript, or a scheduled occurrence's incarnation. A null session id leases
+ * the row's absence.
  */
 export function matchesSessionGeneration(
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
 ): boolean {
   if (!entry || input.sessionId === null) {
     return Boolean(entry) !== (input.sessionId === null);
   }
-  if (input.exactTranscript && entry.sessionId !== input.sessionId) {
-    return false;
-  }
   return (
-    !(input.exactTranscript || input.exactLifecycle) ||
-    (entry.lifecycleRevision ?? null) === input.lifecycleRevision
+    !input.exact ||
+    ((input.exact === "lifecycle" || entry.sessionId === input.sessionId) &&
+      (entry.lifecycleRevision ?? null) === (input.lifecycleRevision ?? null))
   );
 }
 
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
 export async function prepareMemorySessionGeneration(
   source: CapturedSessionActorStorageOwner,
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
 ) {
   const selected = source.binding;

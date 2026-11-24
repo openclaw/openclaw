@@ -12,10 +12,10 @@ import {
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import { prepareOperatorModelPolicy } from "../../operator-model-policy.js";
@@ -57,12 +57,11 @@ export function registerReplyPromotionTests() {
       const collaborative = scenario.startsWith("collaborative-");
       const config = { session: { store: "/synthetic-workspace/sessions.sqlite" } };
       const operator = (profileId: string) =>
-        createAdmittedRunOperatorAuthority({
+        createTestOperatorAuthority({
           profileId,
           scopes: ["operator.read", "operator.write"],
           gatewayAccessGrant: null,
           modelPolicy: prepareOperatorModelPolicy({ cfg: config, policy: {} }),
-          assertCurrent() {},
         });
       const admission = prepareAgentRunAdmission({
         cfg: {},

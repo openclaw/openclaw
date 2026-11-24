@@ -649,7 +649,7 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
-  it.each(["snapshot failure", "request rejection"] as const)(
+  it.each(["snapshot failure", "preserved refusal", "request rejection"] as const)(
     "surfaces one forced worktree removal %s after confirmed session deletion",
     async (failure) => {
       const h = worktreeHarness("snapshot-failed");
@@ -658,6 +658,16 @@ describe("session organizer destructive confirmations", () => {
         h.request.mockResolvedValueOnce({
           removed: true,
           snapshotError: "nested gitlink",
+        } as never);
+      } else if (failure === "preserved refusal") {
+        h.request.mockResolvedValueOnce({
+          removed: false,
+          preserved: {
+            state: "preserved",
+            reason: "nested gitlink",
+            attempts: 1,
+            nextAttemptAt: null,
+          },
         } as never);
       } else {
         h.request.mockRejectedValueOnce(rejection);
@@ -672,9 +682,13 @@ describe("session organizer destructive confirmations", () => {
       answerConfirmDialog(worktreeActions, "confirm");
       await pending;
 
-      expect(h.request).toHaveBeenCalledWith("worktrees.remove", { id: "wt-1", force: true });
+      expect(h.request).toHaveBeenCalledWith("worktrees.remove", {
+        id: "wt-1",
+        force: true,
+        retryPreserved: true,
+      });
       expect(h.publishSessionMutationError).toHaveBeenCalledOnce();
-      expectError(h, failure === "snapshot failure" ? "nested gitlink" : rejection);
+      expectError(h, failure === "request rejection" ? rejection : "nested gitlink");
     },
   );
 
@@ -736,7 +750,8 @@ describe("session organizer destructive confirmations", () => {
             : "Automations linked to 2 of these conversations may keep running after deletion.",
         );
       expect.soft(document.body.textContent).toContain("Disable or remove them separately.");
-      expect(document.body.textContent).toContain("Nightly digest (job-1)");
+      expect(document.body.textContent).toContain("Nightly digest");
+      expect(document.body.textContent).not.toContain("job-1");
       expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
       expect(actions.textContent).toContain("Delete anyway");
       answerConfirmDialog(actions, "cancel");

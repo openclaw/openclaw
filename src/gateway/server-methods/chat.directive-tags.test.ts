@@ -100,6 +100,9 @@ import {
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
+  deniedChatCronAuthorityCases,
+  lazyChatCronAuthorityCases,
+  handedOffDashboardSession,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
   managedAudioBlocks,
@@ -1163,10 +1166,10 @@ afterAll(async () => {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   it.each([
     ["rejects an off-path leaf without a session id", "previous-leaf", undefined, false],
-    ["rejects a stale empty leaf without a session id", null, undefined, false],
+    ["accepts an active ancestor without a session id", "rendered-leaf", undefined, true],
+    ["accepts an empty starting leaf without a session id", null, undefined, true],
     ["accepts an empty starting leaf after a same-session append", null, "current", true],
     ["accepts a same-session active ancestor", "rendered-leaf", "current", true],
-    ["rejects an ancestor from a replaced session", "rendered-leaf", "replaced", false],
   ] as const)("%s", async (_name, expectedLeafEntryId, sessionId, accepted) => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-active-ancestor-",
@@ -1216,17 +1219,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    const response = expectDefined(
-      lastRespondCall(respond),
-      "active ancestor response test invariant",
-    );
+    const response = expectDefined(lastRespondCall(respond), "active ancestor response invariant");
     expect(response[0]).toBe(accepted);
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
       await captureSessionControllerSettlement({
         scope: mockState.storePath,
-        identities: [requestedSessionId],
+        identities: [requestedSessionId ?? mockState.sessionId],
       });
     } else {
       expect(response).toEqual([
@@ -1240,10 +1240,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   // A branch switch keeps the transcript identity, so the session id no longer
-  // fences a stale pane. The fence is the appended `leaf` control: a pane that
-  // still displays the pre-switch leaf, or claims the empty root, is refused even
-  // though it names the session's current id.
-  it.each(["active-sibling", null])(
+  // fences a stale pane. The active path does: a pane that still displays the
+  // pre-switch leaf is refused even though it names the session's current id.
+  it.each(["active-sibling"])(
     "rejects leaf %s from before a branch switch",
     async (expectedLeafEntryId) => {
       const { context, respond, send } = await createSqliteChatRequest(
@@ -4823,13 +4822,49 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 });
 
 describe("chat.send local operator client sender context", () => {
-  it.each([
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", true],
-    [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin", "operator.admin", true],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", false],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.write", true],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.cron", false],
-  ] as const)(
+  it.each(["operator.write", "operator.admin"])(
+    "admits only scoped scheduling for fresh %s input in a previously spawned dashboard chat",
+    async (scope) => {
+      const sessionKey = "agent:main:dashboard:delegated-task";
+      const owner = { sessionKey, agentId: "main" };
+      await createSqliteTranscriptFixture("openclaw-child-chat-scheduling-", { owner });
+      mockState.sessionEntry = { ...handedOffDashboardSession };
+      await upsertSessionEntryCore(
+        { ...owner, storePath: mockState.storePath },
+        {
+          sessionId: mockState.sessionId,
+          ...mockState.sessionEntry,
+        },
+      );
+      const probe = vi.fn();
+      mockState.cronAuthorityProbe = async (_runId, capability) => {
+        probe(capability);
+      };
+      await createChatRequestFixture().send({
+        idempotencyKey: "child-chat-scheduling",
+        sessionKey,
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              platform: "web",
+              version: "test",
+            },
+            scopes: [scope],
+          },
+          internal: { authenticatedControlUi: true, controlUiAdmin: scope === "operator.admin" },
+        },
+        expectBroadcast: false,
+      });
+      expect(probe).toHaveBeenCalledWith(
+        expect.objectContaining({ callerScopedCreation: true, callerOrigin: { kind: "unknown" } }),
+      );
+      expect(probe.mock.calls[0]?.[0]?.managementEntitlement).toBeUndefined();
+    },
+  );
+
+  it.each(lazyChatCronAuthorityCases)(
     "binds lazy configured-MCP cron authority for %s/%s/%s with %s (local: %s)",
     async (clientId, mode, platform, scope, local) => {
       await createSqliteTranscriptFixture(`openclaw-chat-send-cron-authority-${clientId}-`);
@@ -4837,7 +4872,7 @@ describe("chat.send local operator client sender context", () => {
       let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
       let resolvedGrant: { runId: string; token: string } | undefined;
       mockState.cronAuthorityProbe = async (runId, capability) => {
-        const localOwner = local && scope === "operator.admin";
+        const localOwner = local === true && scope === "operator.admin";
         expect(capability?.callerOrigin).toEqual({ kind: localOwner ? "local" : "unknown" });
         expect(capability?.callerScopedCreation).toBe(localOwner ? undefined : true);
         expect(capability?.managementEntitlement).toBeUndefined();
@@ -4880,110 +4915,67 @@ describe("chat.send local operator client sender context", () => {
             client: { id: clientId, mode, version: "dev", platform },
             scopes: [scope],
           },
-          internal: local ? { isLocalClient: true } : {},
+          internal: local === true ? { isLocalClient: true } : {},
         },
+        requestParams:
+          local === "resumed"
+            ? { sessionId: mockState.sessionId, __controlUiReconnectResume: true }
+            : {},
         expectBroadcast: false,
       });
 
       expect(resolvedGrant).toMatchObject({ runId: `idem-cron-authority-${clientId}` });
-      await expect(retainedResolver!()).rejects.toThrow(
-        "Configured MCP cron authority is no longer active",
-      );
+      await expect(retainedResolver!()).rejects.toThrow("This run's MCP cron access has ended");
       expect(() => consumeCronCreatorAuthorityGrant(resolvedGrant!)).toThrow(
-        "Configured MCP cron authority is no longer active",
+        "This run's MCP cron access has ended",
       );
     },
   );
 
-  it.each([
-    {
-      name: "internal re-entry, including Talk consults",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      directExternal: false,
-      message: "Talk realtime agent consult prompt",
-    },
-    {
-      name: "incognito session",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: { incognito: true },
-    },
-    {
-      name: "synthetic client",
-      client: {
-        internal: { isLocalClient: true, syntheticClient: true },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "input provenance",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      requestParams: { systemInputProvenance: { kind: "external_user" } },
-    },
-    {
-      name: "explicit origin",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      requestParams: { originatingChannel: "slack", originatingTo: "D123" },
-    },
-    {
-      name: "delegated handoff",
-      client: {
-        internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "spawned lineage",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: { spawnedBy: "agent:main:parent" },
-    },
-    {
-      name: "persisted cron continuation",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: {
-        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" },
-      },
-    },
-  ])("does not mint configured-MCP cron authority for $name", async (testCase) => {
-    await createSqliteTranscriptFixture("openclaw-chat-send-cron-authority-negative-");
-    mockState.sessionEntry = testCase.sessionEntry ?? {};
-    await seedSqliteSessionEntry(mockState.sessionEntry);
-    let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
-    mockState.cronAuthorityProbe = async (runId, capability) => {
-      runWithCronCreatorAuthorityCapabilityResolver({
-        capability,
-        runId,
-        resolve: async () => ({
-          tools: testCase.directExternal === false ? ["read", "configured__lookup"] : ["read"],
-          provenance: { version: 1, source: "final-executable-surface" },
-        }),
-        run: () => {
-          boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
-        },
-      });
-    };
-    await createChatRequestFixture().send({
-      idempotencyKey: `idem-cron-authority-negative-${testCase.name.replaceAll(" ", "-")}`,
-      ...(testCase.directExternal === false
-        ? { directExternal: false, message: testCase.message }
-        : {}),
-      client: {
-        connect: {
-          client: {
-            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            version: "dev",
-            platform: "web",
+  it.each(deniedChatCronAuthorityCases)(
+    "does not mint configured-MCP cron authority for $name",
+    async (testCase) => {
+      await createSqliteTranscriptFixture("openclaw-chat-send-cron-authority-negative-");
+      mockState.sessionEntry = testCase.sessionEntry ?? {};
+      await seedSqliteSessionEntry(mockState.sessionEntry);
+      let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+      mockState.cronAuthorityProbe = async (runId, capability) => {
+        runWithCronCreatorAuthorityCapabilityResolver({
+          capability,
+          runId,
+          resolve: async () => ({
+            tools: testCase.directExternal === false ? ["read", "configured__lookup"] : ["read"],
+            provenance: { version: 1, source: "final-executable-surface" },
+          }),
+          run: () => {
+            boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
           },
-          scopes: testCase.client.scopes,
+        });
+      };
+      await createChatRequestFixture().send({
+        idempotencyKey: `idem-cron-authority-negative-${testCase.name.replaceAll(" ", "-")}`,
+        ...(testCase.directExternal === false
+          ? { directExternal: false, message: testCase.message }
+          : {}),
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            scopes: testCase.client.scopes,
+          },
+          internal: testCase.client.internal,
         },
-        internal: testCase.client.internal,
-      },
-      requestParams: testCase.requestParams,
-      expectBroadcast: false,
-    });
+        requestParams: testCase.requestParams,
+        expectBroadcast: false,
+      });
 
-    expect(boundResolver!).toBeUndefined();
-  });
+      expect(boundResolver!).toBeUndefined();
+    },
+  );
 
   it.each([
     {

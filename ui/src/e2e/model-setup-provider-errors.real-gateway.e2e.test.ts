@@ -107,10 +107,8 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         await page.goto(await open("settings/model-providers"));
-        await page.getByRole("button", { name: "Add account", exact: true }).first().click();
-        const picker = page.getByRole("dialog", { name: "Add an account" });
-        await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
+        await page.locator("[data-models-catalog-search]").fill("Tencent");
+        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-setup-check");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
@@ -132,7 +130,9 @@ suite.define(() => {
 
         // A 5xx is reported after one attempt, not after the chat retry ladder (~90 s).
         await startCheck();
-        await dialog.getByText(/temporarily overloaded/i).waitFor({ timeout: 20_000 });
+        await dialog
+          .getByText(/provider is busy or limiting requests/i)
+          .waitFor({ timeout: 20_000 });
         expect(inferenceRequests).toBe(1);
 
         // A silent remote API shows the wait and fails at 30 s, not 90 s.
@@ -145,7 +145,7 @@ suite.define(() => {
         upstreamMode = "reason";
         await startCheck();
         await dialog.waitFor();
-        const failure = dialog.getByText(/default unchanged/);
+        const failure = dialog.getByText(/Your sign-in is saved/);
         await expect
           .poll(async () => (await failure.isVisible()) || !(await dialog.isVisible()), {
             timeout: 30_000,

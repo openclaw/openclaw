@@ -138,6 +138,7 @@ export function createResponsesItemConflictRecovery(
             : output.stopReason === "error" || output.stopReason === "aborted"
               ? "failed"
               : "recovered";
+        output.itemConflictRecovery = outcome;
         log.info(
           `[responses] item_conflict_recovery sessionHash=${redactIdentifier(options?.sessionId)} outcome=${outcome}`,
         );

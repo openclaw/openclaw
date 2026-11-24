@@ -24,7 +24,7 @@ import {
   readSessionKeyBySessionIdInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
 import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.js";
-import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { toDatabaseOptions } from "./session-accessor.sqlite-scope-helpers.js";
 import { readTranscriptContextStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { iterateSessionColdRecords } from "./session-cold-storage-chunks.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";

@@ -32,6 +32,8 @@ export type GatewayAgentRow = Pick<
   | "admissionRefusal"
   | "kind"
   | "name"
+  | "description"
+  | "recommendedPrompts"
   | "identity"
   | "workspace"
   | "workspaceGit"

@@ -1,13 +1,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { preparePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
 import {
   matchesSubagentChildSessionIdentity,
   resolveRecordedRequester,
+  resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
 import {
   getRecordedSubagentChildAuthority,
@@ -39,10 +42,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  isRequesterSettleWakeForRun,
-  owesRequesterCompletion,
-} from "./subagent-requester-settle-identity.js";
+import { owesRequesterCompletion } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   copySubagentRunRuntimeOwner,
@@ -71,16 +71,22 @@ export type SubagentRootRequester = {
   storePath?: string;
 };
 
-/** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
-export function resolveRootSubagentRequester(
-  sessionKey: string,
-  agentId?: string,
-): SubagentRootRequester {
-  let root: SubagentRootRequester = { sessionKey, agentId };
+/** A logical session key may exist in more than one physical store. */
+export function restartSessionOwnerKey(owner: Required<SubagentRootRequester>): string {
+  return JSON.stringify([owner.agentId, owner.storePath, owner.sessionKey]);
+}
+
+/** Follow delegated ancestry until the exact owner of an independent turn. */
+export async function resolveRootSubagentRequester(
+  start: Required<SubagentRootRequester>,
+  cfg: OpenClawConfig,
+  chatRoots: ReadonlySet<string>,
+): Promise<Required<SubagentRootRequester>> {
+  let root = start;
   const visited = new Set<string>();
-  while (isSubagentSessionKey(root.sessionKey)) {
-    const identity = JSON.stringify([root.agentId, root.sessionKey]);
-    if (visited.has(identity)) {
+  for (;;) {
+    const identity = restartSessionOwnerKey(root);
+    if (visited.has(identity) || chatRoots.has(identity)) {
       return root;
     }
     visited.add(identity);
@@ -88,26 +94,62 @@ export function resolveRootSubagentRequester(
     if (!entry) {
       return root;
     }
-    root = {
-      sessionKey: entry.requesterSessionKey,
-      agentId: resolveRecordedRequester(entry),
-      storePath: entry.requesterStorePath,
+    const authority = getRecordedSubagentChildAuthority(entry);
+    if (authority.status === "mismatch") {
+      return root;
+    }
+    const session = await readSessionEntryReadOnlyInWorker({
+      ...root,
+      projection: "list",
+    });
+    if (!matchesSubagentChildSessionIdentity(entry, session ?? null)) {
+      return root;
+    }
+    // sessions_send also registers requester edges, but does not create a child.
+    const spawnedBy = normalizeOptionalString(session?.spawnedBy);
+    if (!spawnedBy && session?.createdVia !== "spawn") {
+      return root;
+    }
+    const parent =
+      spawnedBy ??
+      normalizeOptionalString(session?.parentSessionKey) ??
+      entry.controllerSessionKey ??
+      entry.requesterSessionKey;
+    const parentAgentId =
+      parent === entry.requesterSessionKey
+        ? resolveRecordedRequester(entry)
+        : resolveSubagentChildAgentId({ childSessionKey: parent });
+    if (!parentAgentId) {
+      return root;
+    }
+    const requester = {
+      sessionKey: parent,
+      agentId: parentAgentId,
+      storePath:
+        parent === entry.requesterSessionKey
+          ? entry.requesterStorePath
+          : parent === entry.controllerSessionKey
+            ? entry.controllerStorePath
+            : undefined,
     };
+    root = { ...requester, storePath: await preparePhysicalSessionStorePath(requester, cfg) };
   }
-  return root;
 }
 
-export function listLiveSubagentRootSessions(): SubagentRootRequester[] {
-  const roots = new Map<string, SubagentRootRequester>();
+/** Snapshot live delegated inputs; restart selection resolves their ancestry. */
+export function* listLiveSubagentSessions(): Generator<
+  SubagentRootRequester & { sessionId?: string }
+> {
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
-    if (!entry || !isSubagentRunLive(entry)) {
-      continue;
+    if (entry && isSubagentRunLive(entry)) {
+      yield {
+        sessionKey: entry.childSessionKey,
+        agentId: entry.childAgentId,
+        sessionId: entry.childSessionIdentity?.sessionId,
+      };
     }
-    const root = resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId);
-    roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
   }
-  return [...roots.values()];
 }
 
 function isWaitingSubagentRun(entry: SubagentRunRecord): boolean {
@@ -213,19 +255,14 @@ export function resolveSessionYieldWait(
     return undefined;
   }
   const interruptedRunId = session.lifecycleRunId ?? session.lastRunId;
-  if (interruptedRunId?.startsWith("announce:")) {
+  if (interruptedRunId?.startsWith("announce:requester-settle:")) {
     for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
       if (
         !subagentRuns.isCompletionAuthorityRetired(child) &&
-        isRequesterSettleWakeForRun({
-          entry: child,
-          runId: interruptedRunId,
-          requesterSessionKey: sessionKey,
-          requesterAgentId: agentId,
-          runsById: subagentRuns,
-        })
+        resolveRecordedRequester(child) === agentId &&
+        child.requesterSettleWake !== undefined
       ) {
-        // The retained input owns this continuation; a separate restart turn would duplicate it.
+        // The registry owns this continuation even if recovery changed its cohort or retry ID.
         return "waiting";
       }
     }
@@ -254,10 +291,26 @@ export function resolveSessionYieldWait(
   ) {
     return undefined;
   }
-  return (
-    resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ??
-    "unreachable"
-  );
+  const source = resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set());
+  if (source) {
+    return source;
+  }
+  // A child whose continuation was lost still owes its requester a registry
+  // settlement. That completion, not a second root recovery input, owns the wake.
+  for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+    if (
+      resolveRecordedRequester(child) === agentId &&
+      (child.requesterSettleWake ||
+        (owesRequesterCompletion(child) &&
+          (child.execution.status !== "terminal" ||
+            isYieldedSubagentRun(child) ||
+            child.delivery?.status === "pending" ||
+            child.delivery?.status === "in_progress")))
+    ) {
+      return "waiting";
+    }
+  }
+  return "unreachable";
 }
 
 /** Resolve live owners through the existing aliases without scanning retained history. */
@@ -340,7 +393,7 @@ export function getSubagentSessionListRunByChildSessionKey(
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
-  options?: { excludeSuspendedDelivery?: boolean },
+  options?: { excludeSettledDelivery?: boolean },
 ): Promise<number> {
   assertCurrent();
   await prepareSubagentSessionListReadCache();

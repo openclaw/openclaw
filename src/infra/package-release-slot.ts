@@ -8,10 +8,12 @@ import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   packageReleaseGlobalRoot,
+  packageReleasePrefixOfRoot,
   PACKAGE_RELEASES_DIR,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
+import { exchangePaths, type PathExchangeResult } from "./path-exchange.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import {
   resolveExpectedInstalledVersionFromSpec,
@@ -83,9 +85,14 @@ export async function assertPackageReleaseIdentity(expected: PackageReleaseIdent
   }
 }
 
-/** Relative text keeps the link valid when the whole prefix moves. */
+/**
+ * Relative text keeps the link valid when the whole prefix moves. A Windows junction
+ * stores an absolute target, so its text is absolute, as `readlink` reports it.
+ */
 export function packageReleaseLinkTarget(slot: string, releaseRoot: string): string {
-  return path.relative(path.dirname(slot), releaseRoot);
+  return process.platform === "win32"
+    ? path.resolve(releaseRoot)
+    : path.relative(path.dirname(slot), releaseRoot);
 }
 
 /** Allocate the private npm prefix that becomes a release once the link names it. */
@@ -166,7 +173,8 @@ async function createTemporaryLink(globalRoot: string, target: string) {
     globalRoot,
     `${TEMPORARY_LINK_PREFIX}${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`,
   );
-  await fs.symlink(target, temporary);
+  // POSIX ignores the type; on Windows a junction needs no administrator rights.
+  await fs.symlink(target, temporary, "junction");
   const identity = statIdentity(await fs.lstat(temporary, { bigint: true }));
   await syncDirectoryIfSupported(globalRoot);
   return { temporary, identity };
@@ -200,6 +208,11 @@ export async function switchPackageReleaseLink(params: {
     await fs.unlink(temporary).catch(ignoreMissingPath);
     throw error;
   }
+  // Windows cannot rename onto an existing junction, so it removes the old one first; a
+  // process killed in between leaves no package path, and the next update publishes it again.
+  if (process.platform === "win32") {
+    await fs.unlink(params.slot).catch(ignoreMissingPath);
+  }
   await fs.rename(temporary, params.slot);
   const published = await fs.lstat(params.slot, { bigint: true });
   if (statIdentity(published) !== identity) {
@@ -207,9 +220,10 @@ export async function switchPackageReleaseLink(params: {
   }
   await syncDirectoryIfSupported(globalRoot);
   // Retention counts a release's age from when the link stopped naming it.
-  const deselected = path.resolve(globalRoot, params.expected.target);
-  const deselectedPrefix = path.dirname(path.dirname(path.dirname(deselected)));
-  if (packageReleaseGlobalRoot(deselectedPrefix) === path.dirname(deselected)) {
+  const deselectedPrefix = packageReleasePrefixOfRoot(
+    path.resolve(globalRoot, params.expected.target),
+  );
+  if (deselectedPrefix) {
     const now = new Date();
     await fs.utimes(deselectedPrefix, now, now).catch(() => {});
   }
@@ -218,9 +232,12 @@ export async function switchPackageReleaseLink(params: {
 
 /**
  * Turn a plain package directory into a release behind a link that still names
- * it. The package path is missing between the two renames; a process killed there
- * leaves `.openclaw.release-link-*` naming the unchanged previous release, and
- * renaming that link onto the package path restores the installation.
+ * it. One atomic exchange puts the link on the package path and the directory in
+ * its release, so the package path always resolves. Where no exchange is
+ * available, two renames do it instead and the package path is missing between
+ * them; a process killed there leaves `.openclaw.release-link-*` naming the
+ * unchanged previous release, and renaming that link onto the package path
+ * restores the installation.
  */
 export async function adoptPackageReleaseSlot(params: {
   slot: string;
@@ -228,46 +245,79 @@ export async function adoptPackageReleaseSlot(params: {
   releasePrefix: string;
   expected: { identity: string };
   assertCurrent: () => void;
-}): Promise<{ identity: string; target: string; releaseRoot: string }> {
+}): Promise<{
+  identity: string;
+  target: string;
+  releaseRoot: string;
+  /** `unavailable` says why the two renames ran instead. */
+  exchange: PathExchangeResult;
+}> {
   const globalRoot = path.dirname(params.slot);
   const releaseGlobalRoot = packageReleaseGlobalRoot(params.releasePrefix);
   const releaseRoot = path.join(releaseGlobalRoot, path.basename(params.slot));
   const target = packageReleaseLinkTarget(params.slot, releaseRoot);
-  let temporary: string | undefined;
-  try {
-    await fs.mkdir(releaseGlobalRoot, { recursive: true });
-    await sweepPackageReleaseTemporaryLinks(globalRoot);
-    const created = await createTemporaryLink(globalRoot, target);
-    temporary = created.temporary;
+  const assertCaptured = async () => {
     params.assertCurrent();
     const current = await fs.lstat(params.slot, { bigint: true });
     if (!current.isDirectory() || statIdentity(current) !== params.expected.identity) {
       throw new Error(`Package directory ${params.slot} changed since it was captured.`);
     }
-    await fs.rename(params.slot, releaseRoot);
-    try {
-      await fs.rename(temporary, params.slot);
-    } catch (error) {
-      // Put the directory back. If that fails too, keep the temporary link: it
-      // names the moved directory and is the documented way back.
-      const restored = await fs.rename(releaseRoot, params.slot).then(
-        () => true,
-        () => false,
-      );
-      if (!restored) {
-        temporary = undefined;
+  };
+  let temporary: string | undefined;
+  try {
+    await fs.mkdir(releaseGlobalRoot, { recursive: true });
+    await sweepPackageReleaseTemporaryLinks(globalRoot);
+    // The link waits where the directory will live. Its text is relative to the
+    // package path's directory, so it names nothing until the exchange moves it.
+    await fs.symlink(target, releaseRoot);
+    const waiting = statIdentity(await fs.lstat(releaseRoot, { bigint: true }));
+    await syncDirectoryIfSupported(releaseGlobalRoot);
+    await assertCaptured();
+    const exchange = await exchangePaths(params.slot, releaseRoot);
+    let identity = waiting;
+    if (exchange.status === "unavailable") {
+      await fs.unlink(releaseRoot).catch(ignoreMissingPath);
+      const created = await createTemporaryLink(globalRoot, target);
+      temporary = created.temporary;
+      identity = created.identity;
+      await assertCaptured();
+      await fs.rename(params.slot, releaseRoot);
+      try {
+        await fs.rename(temporary, params.slot);
+      } catch (error) {
+        // Put the directory back. If that fails too, keep the temporary link: it
+        // names the moved directory and is the documented way back.
+        const restored = await fs.rename(releaseRoot, params.slot).then(
+          () => true,
+          () => false,
+        );
+        if (!restored) {
+          temporary = undefined;
+        }
+        throw error;
       }
-      throw error;
     }
     await syncDirectoryIfSupported(releaseGlobalRoot);
     await syncDirectoryIfSupported(globalRoot);
-    return { identity: created.identity, target, releaseRoot };
+    return { identity, target, releaseRoot, exchange };
   } catch (error) {
     if (temporary) {
       await fs.unlink(temporary).catch(ignoreMissingPath);
     }
-    if (!(await fs.lstat(releaseRoot).catch(() => null))) {
-      await fs.rm(params.releasePrefix, { recursive: true, force: true });
+    // Never recursive: the waiting link and the empty directories go, a moved package stays.
+    const waits = await fs.lstat(releaseRoot).then(
+      (entry) => entry.isSymbolicLink(),
+      () => false,
+    );
+    if (waits) {
+      await fs.unlink(releaseRoot).catch(() => {});
+    }
+    for (const empty of [
+      releaseGlobalRoot,
+      path.dirname(releaseGlobalRoot),
+      params.releasePrefix,
+    ]) {
+      await fs.rmdir(empty).catch(() => {});
     }
     throw error;
   }
@@ -354,22 +404,16 @@ export function resolvePackageReleaseTarget(
 
 /**
  * The release stage for `openclaw update`, labelled with the version it expects
- * to install. npm only: pnpm and Bun stage their own projects, and a Git source
- * exposure keeps its link to the checkout.
+ * to install. npm only: pnpm and Bun stage their own projects.
  */
 export function resolvePackageReleaseStage(params: {
   installTarget: ResolvedGlobalInstallTarget;
   packageName: string;
   installSpec: string;
   env?: NodeJS.ProcessEnv;
-  expectedGitCheckout?: unknown;
-  activateGitRoot?: string;
 }): (PackageReleaseTarget & { label: string }) | undefined {
   const target =
-    params.installTarget.manager !== "npm" ||
-    params.installTarget.directNodeModulesRoot === true ||
-    params.expectedGitCheckout ||
-    params.activateGitRoot
+    params.installTarget.manager !== "npm" || params.installTarget.directNodeModulesRoot === true
       ? null
       : resolvePackageReleaseTarget(params.installTarget.packageRoot, params.env ?? process.env);
   return target

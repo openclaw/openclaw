@@ -16,7 +16,6 @@ import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
-import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { ensureSessionEntryInTransaction } from "./session-accessor.sqlite-initial-entry.js";
 import { readSessionPendingInputWorkerReceipt } from "./session-accessor.sqlite-pending-inputs.js";
 import {
@@ -192,38 +191,31 @@ export function applySessionActorAppend(
         ? { options: { ...input.options, expectedMutationAt: undefined } }
         : {}),
     };
-    const result = runWithCliHistoryWriter(
-      input.cliWriter
-        ? {
-            ...input.cliWriter,
-            target: scoped.scope,
-            assertCurrent: () => context.admit("transaction"),
-            assertReadable: () => context.admit("transaction"),
-          }
-        : undefined,
-      () =>
-        runWithMetadataMessageAdmission(messageContext, input.message, (authorize, beforeFresh) => {
-          const value = applySessionMetadataAppendInTransaction(
-            database,
-            scoped,
-            beforeFresh,
-            undefined,
-            persistActorMutation,
-            initializationBatch?.cursor,
+    const result = runWithMetadataMessageAdmission(
+      messageContext,
+      input.message,
+      (authorize, beforeFresh) => {
+        const value = applySessionMetadataAppendInTransaction(
+          database,
+          scoped,
+          beforeFresh,
+          undefined,
+          persistActorMutation,
+          initializationBatch?.cursor,
+        );
+        if (initializationBatch && input.initialModel) {
+          // Each append already advanced the actor; settlement only persists that watermark.
+          initializationBatch.settle(
+            true,
+            initializationBatch.cursor.batch.events.length,
+            value.projectionNeedsReconcile,
+            { steps: 0, adjustedTime: 0 },
           );
-          if (initializationBatch && input.initialModel) {
-            // Each append already advanced the actor; settlement only persists that watermark.
-            initializationBatch.settle(
-              true,
-              initializationBatch.cursor.batch.events.length,
-              value.projectionNeedsReconcile,
-              { steps: 0, adjustedTime: 0 },
-            );
-          }
-          authorize("commit");
-          value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
-          return value;
-        }),
+        }
+        authorize("commit");
+        value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
+        return value;
+      },
     );
     const value = result.value;
     finalizeProjection(value.snapshot);
@@ -322,22 +314,15 @@ export function applySessionActorAppend(
     };
   }
   const input = { ...append.input, scope: appendScope };
-  const result = runWithCliHistoryWriter(
-    input.cliWriter
-      ? {
-          ...input.cliWriter,
-          target: input.scope,
-          assertCurrent: () => context.admit("transaction"),
-          assertReadable: () => context.admit("transaction"),
-        }
-      : undefined,
-    () =>
-      runWithMetadataMessageAdmission(messageContext, input, (authorize, beforeFresh) => {
-        const value = applySessionDirectMessageInTransaction(database, input, beforeFresh);
-        authorize("commit");
-        value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
-        return value;
-      }),
+  const result = runWithMetadataMessageAdmission(
+    messageContext,
+    input,
+    (authorize, beforeFresh) => {
+      const value = applySessionDirectMessageInTransaction(database, input, beforeFresh);
+      authorize("commit");
+      value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
+      return value;
+    },
   );
   finalizeProjection(result.value.snapshot);
   return {

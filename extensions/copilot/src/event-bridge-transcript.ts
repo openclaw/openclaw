@@ -1,6 +1,7 @@
 import type { Attachment, SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNonArrayRecord,
@@ -8,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeCopilotUsage, type CopilotUsageSnapshot } from "./usage-bridge.js";
 
-export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+export type { AssistantMessage };
 export type AssistantUsageSnapshot = CopilotUsageSnapshot;
 
 export type AssistantProjectionChunk = {

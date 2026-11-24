@@ -263,7 +263,9 @@ export function segmentActivityGroup<State extends ActivityStructure>(
     context: typeof context;
   }> = [];
   const append = (item: ActivityEntry, standalone: boolean, inline: boolean, key: string) => {
-    const operation = item.operation?.group;
+    const operation =
+      item.operation?.group ??
+      (item.message?.operations.length === 1 ? item.message.operations[0] : undefined);
     const outcome = operation && resolveToolCardOutcome(operation.card, options.runActive);
     const launch = operation && resolveSessionLaunchPresentation(operation.card, outcome);
     const permission =
@@ -278,8 +280,9 @@ export function segmentActivityGroup<State extends ActivityStructure>(
           : undefined;
     const previous = result.at(-1);
     const coalescible =
-      outcome === "running" ||
-      launch?.phase === "succeeded" ||
+      (launch
+        ? launch.phase === "running" || launch.phase === "succeeded"
+        : outcome === "running") ||
       Boolean(operation && readSubagentCancellation(operation.card)?.stopped);
     const action = operation && state.actionOrder.get(operation.card);
     const runId = operation && state.toolContexts.get(operation.card)?.runId;
@@ -382,7 +385,7 @@ export function segmentActivityGroup<State extends ActivityStructure>(
       )) {
         append(
           { key: context.state.activityKeys.get(activity)!, activity },
-          isStandaloneActivity({ id: activity.itemId, name: activity.name ?? "" }),
+          isStandaloneActivity({ id: activity.itemId, name: activity.name ?? "", activity }),
           false,
           `${entry.key}:activity`,
         );

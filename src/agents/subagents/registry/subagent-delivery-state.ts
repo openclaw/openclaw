@@ -228,23 +228,17 @@ export function recordRequesterDelivery(
   }
 }
 
-export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
-  return (
-    entry.delivery?.requesterDelivery?.state === "consumed" &&
-    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
-  );
+/** A result committed to the requester transcript is never replayed. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
-/** A cancelled private continuation cannot unconsume its committed input. */
+/** A result committed to the requester transcript is delivered, whatever the turn did next. */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
-  outcome: SubagentAnnounceDeliveryResult | undefined,
-): SubagentAnnounceDeliveryResult | undefined {
-  return outcome &&
-    !outcome.delivered &&
-    entries.length > 0 &&
-    entries.every(hasConsumedPrivateRequesterInput)
+  outcome: SubagentAnnounceDeliveryResult,
+): SubagentAnnounceDeliveryResult {
+  return !outcome.delivered && entries.length > 0 && entries.every(hasConsumedRequesterInput)
     ? { delivered: true, path: "direct" }
     : outcome;
 }
@@ -257,19 +251,30 @@ export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?:
   });
 }
 
-export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
-  return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
-}
-
-/** A finished requester without its required reply receipt must not execute again implicitly. */
-export function isCompletedRequesterDeliveryBlocked(
-  entry: Pick<SubagentRunRecord, "delivery">,
+export function isDeliveryTerminalForRequesterSettle(
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason" | "requesterSettleWake">,
 ): boolean {
   return (
-    isDeliverySuspended(entry) &&
-    entry.delivery?.suspendedReason === "permanent_failure" &&
-    (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
-      entry.delivery.lastDropReason === "visible_reply_missing")
+    entry.delivery?.status === "delivered" ||
+    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
+    entry.delivery?.status === "discarded" ||
+    entry.delivery?.disposition === "delivered" ||
+    // A yielded requester's batch owns an ended child's delivery; the earlier per-child
+    // attempt may target the aborted turn and must not keep that batch unsettled.
+    entry.requesterSettleWake?.afterRequesterYield === true
+  );
+}
+
+/**
+ * Older builds parked undelivered results as suspended or failed; nothing writes either now.
+ * The sweeper settles each one into requester history once.
+ */
+export function isDeliverySuspended(
+  entry: Pick<SubagentRunRecord, "delivery" | "expectsCompletionMessage">,
+): boolean {
+  return (
+    entry.delivery?.status === "suspended" ||
+    (entry.delivery?.status === "failed" && entry.expectsCompletionMessage !== false)
   );
 }
 

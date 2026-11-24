@@ -53,6 +53,20 @@ BEGIN
 END $$;
 CREATE TRIGGER ${sync} BEFORE INSERT OR UPDATE OF ${field} ON ${table} FOR EACH ROW EXECUTE FUNCTION ${sync}();`;
 }
+/** Vector dimensions are rendered into DDL; every SQL builder checks them, not only admission. */
+function postgresVectorDimensions(dimensions: unknown): number {
+  if (
+    typeof dimensions !== "number" ||
+    !Number.isInteger(dimensions) ||
+    dimensions < 1 ||
+    dimensions > 16_000
+  ) {
+    throw new Error(
+      "PostgreSQL vector capability unavailable: dimensions must be 1–16000; choose a supported embedding dimension and rebuild the derived index.",
+    );
+  }
+  return dimensions;
+}
 const key: SqliteDatabaseFactKey<{ signature: string; vectorSearchVersion: 1 | 2 }[]> = {
   name: "database.postgres.search",
   schemaDependent: true,
@@ -85,12 +99,7 @@ export function admitPostgresSearch(
     required.add("vector");
   }
   for (const index of schema.mode === "keyword-only" ? [] : Object.values(schema.vector ?? {})) {
-    const dimensions = index.postgres?.dimensions;
-    if (!Number.isInteger(dimensions) || dimensions! < 1 || dimensions! > 16_000) {
-      throw new Error(
-        "PostgreSQL vector capability unavailable: dimensions must be 1–16000; choose a supported embedding dimension and rebuild the derived index.",
-      );
-    }
+    postgresVectorDimensions(index.postgres?.dimensions);
   }
   const extensionSchema = schema.extensionSchema ?? "public";
   const rows = db
@@ -290,19 +299,20 @@ UPDATE ${table} SET openclaw_search = ${postgresSearchVectorSql(configLiteral, f
     const table = pgSearchName(index.table),
       owner = pgSearchName(source.source),
       id = pgSearchName(source.key),
-      embedding = pgSearchName(source.embedding);
+      embedding = pgSearchName(source.embedding),
+      dimensions = postgresVectorDimensions(source.dimensions);
     // Empty canonical bytes mean a text-only row, including NOT NULL source columns.
-    const project = `INSERT INTO ${table}(id, embedding) SELECT ${id}, openclaw_vector(${embedding}, ${source.dimensions}) FROM ${owner} WHERE octet_length(${embedding}) > 0`;
+    const project = `INSERT INTO ${table}(id, embedding) SELECT ${id}, openclaw_vector(${embedding}, ${dimensions}) FROM ${owner} WHERE octet_length(${embedding}) > 0`;
     const bits =
       vectorSearchVersion === 2
-        ? `, embedding_bits bit(${source.dimensions}) GENERATED ALWAYS AS (CASE WHEN ${ext}.vector_norm(embedding) > 0 THEN ${ext}.binary_quantize(embedding)::bit(${source.dimensions}) ELSE NULL END) STORED`
+        ? `, embedding_bits bit(${dimensions}) GENERATED ALWAYS AS (CASE WHEN ${ext}.vector_norm(embedding) > 0 THEN ${ext}.binary_quantize(embedding)::bit(${dimensions}) ELSE NULL END) STORED`
         : "";
-    statements.push(`CREATE TABLE ${table} (id TEXT PRIMARY KEY REFERENCES ${owner}(${id}) ON UPDATE CASCADE ON DELETE CASCADE, embedding ${ext}.vector(${source.dimensions}) NOT NULL${bits});
+    statements.push(`CREATE TABLE ${table} (id TEXT PRIMARY KEY REFERENCES ${owner}(${id}) ON UPDATE CASCADE ON DELETE CASCADE, embedding ${ext}.vector(${dimensions}) NOT NULL${bits});
 CREATE FUNCTION ${pgSearchName(`${index.table}_sync`)}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'UPDATE' AND OLD.${embedding} IS NOT DISTINCT FROM NEW.${embedding} THEN RETURN NEW; END IF;
   IF octet_length(NEW.${embedding}) > 0 THEN
-    INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${source.dimensions}))
+    INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${dimensions}))
     ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding;
   ELSE
     DELETE FROM ${table} WHERE id = NEW.${id};
@@ -320,19 +330,24 @@ export function rebuildPostgresSearch(db: PostgresSqlConnection, schema: SearchS
   if (!db.isTransaction) {
     throw new Error("Search rebuild requires the owner's transaction");
   }
-  for (const index of Object.values(schema.text ?? {})) {
-    db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_search_gin`)}`);
-    if (index.postgres?.mode === "trigram") {
-      db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_trgm_gin`)}`);
-    }
-  }
-  if (schema.mode === "keyword-only") {
-    return;
-  }
-  for (const index of Object.values(schema.vector ?? {})) {
-    const source = index.postgres!;
-    db.exec(
-      `DELETE FROM ${pgSearchName(index.table)}; INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE octet_length(${pgSearchName(source.embedding)}) > 0`,
-    );
-  }
+  db.runTransaction(
+    () => {
+      for (const index of Object.values(schema.text ?? {})) {
+        db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_search_gin`)}`);
+        if (index.postgres?.mode === "trigram") {
+          db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_trgm_gin`)}`);
+        }
+      }
+      if (schema.mode === "keyword-only") {
+        return;
+      }
+      for (const index of Object.values(schema.vector ?? {})) {
+        const source = index.postgres!;
+        db.exec(
+          `DELETE FROM ${pgSearchName(index.table)}; INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE octet_length(${pgSearchName(source.embedding)}) > 0`,
+        );
+      }
+    },
+    { maintenance: true },
+  );
 }

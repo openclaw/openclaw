@@ -12,6 +12,7 @@ import {
 } from "../infra/clawhub-plugin-catalog.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { normalizeCatalogIconUrl } from "./catalog-icon-registry.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -39,6 +40,32 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
+import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
+
+/** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
+export function resolveManagedSetupCatalogIconUrl(params: {
+  config: OpenClawConfig;
+  iconUrl: string;
+}): string | undefined {
+  const requested = normalizeCatalogIconUrl(normalizeOptionalString(params.iconUrl) ?? "");
+  if (!requested) {
+    return undefined;
+  }
+  const allowedUrls = [
+    ...resolveManifestProviderAuthChoices({
+      config: params.config,
+      includeUntrustedWorkspacePlugins: false,
+      includeWorkspacePlugins: false,
+    }).map((choice) => choice.icon),
+    ...listRecommendedToolInstalls().map((install) => install.icon),
+  ];
+  return allowedUrls.some(
+    (iconUrl) => normalizeCatalogIconUrl(normalizeOptionalString(iconUrl) ?? "") === requested,
+  )
+    ? requested
+    : undefined;
+}
 
 export type ManagedPluginCatalogEntry = PluginCatalogEntry;
 

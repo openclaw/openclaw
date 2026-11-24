@@ -356,6 +356,12 @@ it("recovers a retargeted guest PR, retains saved data and publishes the resolve
   const stageInterruption = vi
     .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
     .mockImplementation(async (params) => {
+      if (isLocalWorkspaceBaseRefreshRef(params.stagedResultRef)) {
+        // Unchanged source must not be written into the temporary refresh payload.
+        await expect(fs.lstat(path.join(params.stagingRoot, unchangedInput))).rejects.toMatchObject(
+          { code: "ENOENT" },
+        );
+      }
       const result = await stage(params);
       if (isLocalWorkspaceBaseRefreshRef(params.stagedResultRef)) {
         throw new Error("interrupted before refresh reservation");

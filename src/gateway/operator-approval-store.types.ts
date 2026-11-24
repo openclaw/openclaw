@@ -19,6 +19,7 @@ export type OperatorApprovalResolverKind = NonNullable<
   TerminalApprovalSnapshot["resolver"]
 >["kind"];
 type OperatorApprovalRequester = {
+  profileId?: string | null;
   deviceId: string | null;
   clientId: string | null;
   deviceTokenAuth: boolean;

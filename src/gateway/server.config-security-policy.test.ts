@@ -1,17 +1,10 @@
 // A config writer receives the committed revision before its own policy retires its socket.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as configPublication from "../config/backup-rotation.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import * as configWriteMetadata from "../config/io.meta.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import * as restartSentinel from "../infra/restart-sentinel.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -19,7 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { GatewayClient, isGatewayProtocolResponseError } from "./client.js";
+import { GatewayClient } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
@@ -96,125 +89,6 @@ describe("config writer policy-close ordering", () => {
     clearPluginMetadataLifecycleCaches();
     vi.restoreAllMocks();
   });
-
-  it.each(["root", "include"] as const)(
-    "refuses a revoked requester before publishing its prepared %s config",
-    async (target) => {
-      const token = "config-publication-admin-token";
-      const gateway: NonNullable<OpenClawConfig["gateway"]> = {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUi: { enabled: false },
-        reload: { mode: "hybrid" },
-      };
-      const includePath = state.statePath("gateway.json5");
-      if (target === "include") {
-        await state.writeJson("gateway.json5", gateway);
-      }
-      await state.writeConfig({
-        gateway: target === "include" ? { $include: "./gateway.json5" } : gateway,
-        logging: { level: "silent", consoleLevel: "silent" },
-        agents: { defaults: { workspace: state.workspaceDir } },
-      });
-      const port = await getFreePort();
-      server = await startGatewayServerCore(port, { controlUiEnabled: false });
-      await server.startupSettled;
-      const identity = loadOrCreateDeviceIdentity({
-        path: state.path("writer-identity", "client", "credentials.sqlite"),
-      });
-      const pairing = await requestDevicePairing({
-        deviceId: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-        role: "operator",
-        scopes,
-        clientId: "gateway-client",
-        clientMode: "backend",
-      });
-      const approval = await approveDevicePairing(pairing.request.requestId, {
-        callerScopes: scopes,
-      });
-      const deviceToken =
-        approval?.status === "approved" ? approval.device.tokens?.operator?.token : undefined;
-      if (!deviceToken) {
-        throw new Error("Expected a real paired writer token");
-      }
-      const writer = await connectClient(port, { deviceToken, deviceIdentity: identity });
-      const admin = await connectClient(port, { token });
-      const before = await writer.client.request<ConfigSnapshot>("config.get");
-      const writtenPath = target === "include" ? includePath : state.configPath;
-      await fs.writeFile(`${writtenPath}.bak`, "retained latest backup\n");
-      await fs.writeFile(`${writtenPath}.bak.1`, "retained previous backup\n");
-      const captureFiles = async () => {
-        const basenames = [path.basename(state.configPath), path.basename(includePath)];
-        const names = (await fs.readdir(path.dirname(state.configPath)))
-          .filter((name) =>
-            basenames.some((base) => name === base || name.startsWith(`${base}.bak`)),
-          )
-          .toSorted();
-        return await Promise.all(
-          names.map(async (name) => ({
-            name,
-            bytes: await fs.readFile(path.join(path.dirname(state.configPath), name)),
-          })),
-        );
-      };
-      const beforeFiles = await captureFiles();
-      const prepared = createDeferredCore();
-      const release = createDeferredCore();
-      const prepareFile = configPublication.prepareConfigFileWrite;
-      vi.spyOn(configPublication, "prepareConfigFileWrite").mockImplementation(async (params) => {
-        const file = await prepareFile(params);
-        if (params.configPath === writtenPath) {
-          // Hold real prepared bytes; retain the original disposable and publication owner.
-          prepared.resolve();
-          await release.promise;
-        }
-        return file;
-      });
-      const request = writer.client.request("config.patch", {
-        baseHash: before.hash,
-        raw: JSON.stringify({
-          gateway: { controlUi: { allowedOrigins: ["https://next.example.test"] } },
-        }),
-      });
-      const result = request.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      try {
-        await Promise.race([
-          prepared.promise,
-          result.then(() => {
-            throw new Error("Config request settled before the publication barrier");
-          }),
-        ]);
-        const revoked = await admin.client.request("device.token.revoke", {
-          deviceId: identity.deviceId,
-          role: "operator",
-        });
-        expect(revoked).toMatchObject({
-          deviceId: identity.deviceId,
-          role: "operator",
-          revokedAtMs: expect.any(Number),
-        });
-        // The response hold postpones close; release preparation before waiting for the socket.
-        release.resolve();
-        const outcome = await result;
-        expect(isGatewayProtocolResponseError(outcome)).toBe(true);
-        expect(outcome).toMatchObject({
-          code: "UNAVAILABLE",
-          message: expect.stringContaining("Gateway requester authority changed"),
-        });
-        expect(await captureFiles()).toEqual(beforeFiles);
-        expect(await admin.client.request<ConfigSnapshot>("config.get")).toEqual(before);
-        await writer.closed;
-      } finally {
-        release.resolve();
-        await result;
-      }
-    },
-  );
 
   it.each([
     { method: "config.patch", policy: "token" },

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect, it, vi } from "vitest";
 import { createBackupResourcePlan } from "../commands/backup-resource-inventory.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";

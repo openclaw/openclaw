@@ -7,7 +7,7 @@ import {
 import "../../test-utils/prepare-compiled-subprocesses.js";
 
 it.for(["visible", "native"] as const)(
-  "keeps spawn runtimes cold and fences callers during the shared %s import",
+  "keeps spawn runtimes cold and honors cancellation during the shared %s import",
   async (stage, { signal }) => {
     vi.resetModules();
     const entered = createDeferred();
@@ -52,7 +52,6 @@ it.for(["visible", "native"] as const)(
       clearConfig = config.clearRuntimeConfigSnapshot;
       config.setRuntimeConfigSnapshot({});
       const { createSessionsSpawnTool } = await import("./sessions-spawn-tool.js");
-      const { withGatewayToolCallerIdentity } = await import("./gateway-caller-context.js");
       const tool = createSessionsSpawnTool({
         config: { tools: { swarm: false } },
         agentSessionKey: "agent:main:main",
@@ -64,17 +63,8 @@ it.for(["visible", "native"] as const)(
       suspend = true;
       const controller = new AbortController();
       const cancellation = new Error("spawn invocation cancelled");
-      let current = true;
       settlement = Promise.allSettled([
         tool.execute("aborted", { task: "cancelled child" }, controller.signal),
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            receiptAuthority: () => current,
-          },
-          () => tool.execute("expired", { task: "expired child" }),
-        ),
         tool.execute("live", { task: "live child" }),
       ]);
       await withinTest(
@@ -82,19 +72,14 @@ it.for(["visible", "native"] as const)(
         signal,
       );
       controller.abort(cancellation);
-      current = false;
       release.resolve();
-      const [aborted, expired, live] = await withinTest(settlement, signal);
+      const [aborted, live] = await withinTest(settlement, signal);
       expect(aborted).toEqual({ status: "rejected", reason: cancellation });
-      expect(expired).toMatchObject({
-        status: "rejected",
-        reason: { message: "tool invocation authority is no longer active" },
-      });
       expect(live).toMatchObject({
         status: "fulfilled",
         value: { details: { status: "accepted", runId: "run-live" } },
       });
-      expect(visible).toHaveBeenCalledTimes(stage === "visible" ? 1 : 3);
+      expect(visible).toHaveBeenCalledTimes(stage === "visible" ? 1 : 2);
       expect(spawn).toHaveBeenCalledOnce();
       expect(loadNative).toHaveBeenCalledOnce();
       expect(loadVisible).toHaveBeenCalledOnce();

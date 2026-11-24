@@ -332,6 +332,18 @@ dispatch_workflow_at_ref() {
       '$inputs + {($key): $value}')"
   done
 
+  # Carry the exact reviewed exception through the existing publication dispatch owner.
+  case "$workflow" in
+    openclaw-release-publish.yml|openclaw-npm-release.yml|plugin-npm-release.yml|plugin-clawhub-release.yml|plugin-clawhub-new.yml|plugin-clawhub-recovery.yml)
+      if [[ -n "${FAST_TRACK_APPROVAL_JSON:-}" ]]; then
+        inputs_json="$(jq -ce --arg approval "$FAST_TRACK_APPROVAL_JSON" '
+          if has("fast_track_approval") and .fast_track_approval != $approval then
+            error("Child fast-track approval differs from the parent")
+          else . + {fast_track_approval: $approval} end' <<< "$inputs_json")" || return 1
+      fi
+      ;;
+  esac
+
   dispatch_body="$(jq -cn \
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
@@ -774,15 +786,30 @@ append_clawhub_dispatch_args() {
 
 # Rendering and canonical readback must use the same frozen notice context.
 run_github_release_notes() {
-  local regular_stable_version=""
+  local regular_stable_version="" notice_body_file="" release_json
   local -a render_args=(
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
     --tag "${RELEASE_TAG}" --repository "${GITHUB_REPOSITORY}"
     "$@"
   )
   if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
-    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
-    render_args+=(--regular-stable-version "${regular_stable_version}")
+    render_args+=(--main-package-version "$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")")
+    if [[ -f "${RUNNER_TEMP}/release-notes.md" ]]; then
+      # Preparation already froze Latest. Reuse it across later workflow steps.
+      notice_body_file="${RUNNER_TEMP}/release-notes.md"
+    elif release_json="$(gh_read release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,body 2>/dev/null)" &&
+      [[ "$(printf '%s' "${release_json}" | jq -r .isDraft)" == false ]]; then
+      # A fresh recovery keeps the public notice even after Latest has advanced.
+      notice_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
+      printf '%s' "${release_json}" | jq -er '.body | strings' > "${notice_body_file}" || return 1
+      assert_initial_release_body "$(cat "${notice_body_file}")" || return 1
+    fi
+    if [[ -n "${notice_body_file}" ]]; then
+      render_args+=(--notice-body "${notice_body_file}")
+    else
+      regular_stable_version="$(gh_read api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)" || return 1
+      render_args+=(--regular-stable-version "${regular_stable_version#v}")
+    fi
     if [[ -n "${RETIRED_LINE_PUBLICATION_REASON:-}" ]]; then
       render_args+=(--retired-line-reason "${RETIRED_LINE_PUBLICATION_REASON}")
     fi
@@ -1197,6 +1224,14 @@ upload_release_evidence_assets() {
     exit 1
   fi
 
+  if [[ -n "${FAST_TRACK_APPROVAL_JSON:-}" ]]; then
+    local approval_asset="openclaw-${release_version}-fast-track-approval.json"
+    printf '%s\n' "$FAST_TRACK_APPROVAL_JSON" > "${RUNNER_TEMP}/${approval_asset}"
+    (cd "${RUNNER_TEMP}" && sha256sum "$approval_asset" > "${approval_asset}.sha256")
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}" "$approval_asset"
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}.sha256" "${approval_asset}.sha256"
+  fi
+
   cp "${manifest_path}" "${RUNNER_TEMP}/${manifest_asset}"
   cp "${evidence_path}" "${RUNNER_TEMP}/${evidence_asset}"
   (
@@ -1330,6 +1365,10 @@ verify_published_release() {
     verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
   fi
 
+  if [[ -n "${FAST_TRACK_APPROVAL_JSON:-}" ]]; then
+    verify_args+=(--full-release-validation-run "$FULL_RELEASE_VALIDATION_RUN_ID")
+  fi
+
   verifier="release-verify-beta.ts"
   if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
     verifier="release-verify-publish.ts"
@@ -1381,15 +1420,16 @@ verify_published_release() {
     --arg validation_target_sha "${target_sha}" \
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
+      ([.workflowRuns[]? | select(.label == $validation_label)] | first // {}) as $validation |
       .releasePublishRunId = $release_publish_run_id |
-      .workflowRuns += [{
+      .workflowRuns = ((.workflowRuns // []) | map(select(.label != $validation_label))) + [{
         id: $validation_run_id,
         label: $validation_label,
         runAttempt: $validation_run_attempt,
         targetSha: $validation_target_sha,
         url: $validation_url,
         workflowRef: $validation_workflow_ref
-      }]
+      } + ($validation | {conclusion} | with_entries(select(.value != null)))]
     ' \
     "${evidence_path}" > "${evidence_path}.next"
   # Expose a success receipt only after both verifier and parent binding pass.

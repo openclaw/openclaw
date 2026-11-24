@@ -606,9 +606,8 @@ suite.define(() => {
           .getByText(swarm.label, { exact: true })
           .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
-        await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("2 calls");
+        const openRow = row.locator(".subagents-desktop__open");
+        await expect.poll(() => openRow.ariaSnapshot()).toContain("2 calls");
 
         const activity = {
           sessionKey: child.key,
@@ -629,13 +628,11 @@ suite.define(() => {
           },
         };
         await gateway.emitGatewayEvent("agent", activity);
-        await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("Reading notice component");
+        await expect.poll(() => openRow.ariaSnapshot()).toContain("Reading notice component");
         await gateway.emitGatewayEvent("agent", activity);
-        expect(await row.locator(".subagents-desktop__open").getAttribute("title")).toContain(
-          "2 calls",
-        );
+        expect(await openRow.ariaSnapshot()).toContain("2 calls");
+        await openRow.hover({ position: { x: 12, y: 34 } });
+        expect(await openRow.getAttribute("title")).toBeNull();
         await gateway.emitGatewayEvent("agent", {
           sessionKey: other.key,
           agentId: "main",
@@ -646,13 +643,11 @@ suite.define(() => {
           data: { ...keyboardActivity, phase: "update" },
         });
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
-        await otherRow.locator(".subagents-desktop__open").waitFor();
+        const openOtherRow = otherRow.locator(".subagents-desktop__open");
         await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .poll(() => openOtherRow.ariaSnapshot())
           .toContain("Retry failed benchmark targets");
-        await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("1+ calls");
+        await expect.poll(() => openOtherRow.ariaSnapshot()).toContain("1+ calls");
         expect(await row.locator(".subagents-desktop__avatar").count()).toBe(1);
 
         await panel

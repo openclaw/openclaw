@@ -32,10 +32,7 @@ import {
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptToolCaller,
-} from "../../transcripts/provider-types.js";
+import type { TranscriptToolCaller } from "../../transcripts/provider-types.js";
 import { presentTranscriptSession } from "../../transcripts/read-live.js";
 import { projectTranscriptSession, projectTranscriptNotes } from "../../transcripts/read.js";
 import {
@@ -45,6 +42,7 @@ import {
 } from "../../transcripts/source-locator.js";
 import { TranscriptsSummaryChangedError } from "../../transcripts/store-errors.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "../../transcripts/store.js";
+import type { TranscriptSessionDescriptor } from "../../transcripts/types.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readNonNegativeIntegerParam, type AnyAgentTool } from "./common.js";
 import {

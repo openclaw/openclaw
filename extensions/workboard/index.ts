@@ -169,7 +169,7 @@ export default definePluginEntry({
       id: "workboard",
       label: "Workboard",
       placement: "route:workboard",
-      icon: "kanban",
+      icon: "workboard",
       group: "control",
       requiredScopes: ["operator.read"],
     });

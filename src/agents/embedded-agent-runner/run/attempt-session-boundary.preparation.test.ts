@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as pendingInputs from "../../../config/sessions/session-accessor.pending-inputs.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import { prepareForeignPendingUserTurns } from "./pre-persisted-user-turn.js";
 
 it("freezes foreign input exclusion across reload and provider conversion", async () => {

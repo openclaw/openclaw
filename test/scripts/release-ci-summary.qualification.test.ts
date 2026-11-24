@@ -10,6 +10,7 @@ import {
 import {
   buildReleaseExecutionPlanArtifact,
   composeReleaseAttemptJobs,
+  releaseExecutionPlanSha256,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { evaluateReleaseChildPolicy } from "../../scripts/lib/release-validation-waivers.mjs";
@@ -103,6 +104,164 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
+  it("rejects missing Q ledger evidence without using a fallback policy", async () => {
+    const f = candidatePublicationFixture();
+    const client = {
+      ...f.client,
+      getWorkflowSource: (sha: string, path?: string) => {
+        if (path === "scripts/lib/release-validation-waivers.json") {
+          throw new Error("gh: Not Found (HTTP 404)");
+        }
+        return f.client.getWorkflowSource(sha, path);
+      },
+    };
+    await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow("HTTP 404");
+  });
+  it("retains an empty waiver record when a frozen Q named job passed", async () => {
+    const version = "2099.1.1-beta.1";
+    const f = candidatePublicationFixture({ candidateVersion: version });
+    const client = {
+      ...f.client,
+      getWorkflowSource: (sha: string, path?: string) =>
+        path === "scripts/lib/release-validation-waivers.json"
+          ? JSON.stringify({
+              schema: "openclaw.release-validation-waivers/v1",
+              waivers: [
+                {
+                  targetVersion: version,
+                  childRole: "pluginPrereleaseCandidate",
+                  jobName: "plugin-prerelease-suite",
+                  reason: "Synthetic historical approval",
+                  aggregates: [],
+                },
+              ],
+            })
+          : f.client.getWorkflowSource(sha, path),
+    };
+    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toMatchObject({
+      waivers: [],
+    });
+  });
+
+  it("evaluates raw failed evidence against Q data rather than the verifier checkout", async () => {
+    const f = candidatePublicationFixture({
+      candidateVersion: "2099.1.1-beta.1",
+      qualificationSha: "c".repeat(40),
+    });
+    const selected = f.plan.children.find((child) => child.key === "normalCi");
+    assert(selected);
+    const originalJobs = await f.client.getRunAttemptJobs(selected.runId);
+    const gate = originalJobs.find((job) => job.name === "openclaw/ci-gate");
+    assert(gate);
+    const jobs = [
+      ...originalJobs,
+      { ...gate, id: 1598, name: "synthetic leaf", conclusion: "failure" },
+    ];
+    const policy = [
+      {
+        targetVersion: "2099.1.1-beta.1",
+        targetSha: f.c,
+        childRole: "normalCi",
+        jobName: "synthetic leaf",
+        reason: "Synthetic approval",
+      },
+    ];
+    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+      effectiveRunAttempt: 1,
+      plannedRunAttempt: 1,
+    });
+    assert(f.manifest.childEvidence.normalCi);
+    Object.assign(f.manifest.childEvidence.normalCi, {
+      jobs: composite.jobs,
+      compositeJobsSha256: composite.sha256,
+    });
+    Object.assign(f.manifest, {
+      waivers: evaluateReleaseChildPolicy({
+        child: { key: "normalCi", jobs },
+        targetVersion: "2099.1.1-beta.1",
+        targetSha: f.c,
+        waiverPolicy: policy,
+      }).waivers.map((waiver) =>
+        Object.assign({}, waiver, { runId: selected.runId, runAttempt: 1 }),
+      ),
+    });
+    let grants = policy;
+    const client = {
+      ...f.client,
+      getWorkflowSource: (sha: string, path?: string) => {
+        if (path === "scripts/lib/release-validation-waivers.json") {
+          expect(sha).toBe(f.q);
+          return JSON.stringify({
+            schema: "openclaw.release-validation-waivers/v1",
+            waivers: grants,
+          });
+        }
+        return f.client.getWorkflowSource(sha, path);
+      },
+      getRunAttemptJobs: async (id: string) =>
+        id === selected.runId
+          ? [
+              ...originalJobs,
+              {
+                ...jobs.at(-1)!,
+                steps: [{ name: "Run workload", status: "completed", conclusion: "failure" }],
+              },
+            ]
+          : f.client.getRunAttemptJobs(id),
+      getRun: async (id: string) => ({
+        ...(await f.client.getRun(id)),
+        ...(id === selected.runId ? { conclusion: "failure" } : {}),
+      }),
+    };
+    const before = JSON.stringify(f.manifest.childEvidence);
+    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toMatchObject({
+      waivers: [expect.objectContaining({ jobName: "synthetic leaf" })],
+    });
+    expect(JSON.stringify(f.manifest.childEvidence)).toBe(before);
+    grants = [];
+    await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
+      "does not pass release policy",
+    );
+  });
+  it("authenticates a never-dispatched required child only with a pinned-Q parent waiver", async () => {
+    const version = "2099.1.1-beta.1";
+    const f = candidatePublicationFixture({ candidateVersion: version });
+    const childRole = "normalCi";
+    const planned = f.plan.children.find((child) => child.key === childRole);
+    assert(planned);
+    Object.assign(planned, { result: "skipped", runId: "", runAttempt: null, url: "" });
+    f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
+    f.manifest.executionPlanSha256 = f.plan.sha256;
+    f.manifest.childRuns.normalCi = "";
+    Reflect.deleteProperty(f.manifest.childEvidence, childRole);
+    const grant = {
+      targetVersion: version,
+      targetSha: f.c,
+      childRole,
+      reason: "Synthetic missing dispatch",
+    };
+    let waivers = [grant];
+    const recorded = { ...grant, runId: "", runAttempt: null };
+    Object.assign(f.manifest, { waivers: [recorded] });
+    const client = {
+      ...f.client,
+      getWorkflowSource: (sha: string, path?: string) =>
+        path === "scripts/lib/release-validation-waivers.json"
+          ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers })
+          : f.client.getWorkflowSource(sha, path),
+    };
+    const result = await validateReleaseRunEvidence(verifier(f), client);
+    expect(result).toMatchObject({
+      conclusions: { children: { normalCi: "missing" } },
+      waivers: [recorded],
+    });
+    expect(result.children.map(({ role }) => role)).not.toContain(childRole);
+    waivers = [];
+    await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
+      "execution plan omits required child",
+    );
+  });
+
   it("verifies independent Q through the immutable plan, npm and Docker consumers", async () => {
     const f = candidatePublicationFixture({ qualificationSha: "c".repeat(40) });
     const evidence = await validateReleaseRunEvidence(verifier(f), f.client);
@@ -126,14 +285,14 @@ describe("candidate-owned publish consumer chain", () => {
     "revoked P",
   ])("selects a direct admitted root across transport refs only for %s", async (scenario) => {
     const candidateBound = scenario.startsWith("candidate-bound");
-    const version = candidateBound ? "2026.11.4" : "2026.8.28-beta.1";
+    const version = "2099.1.1-beta.1";
     const changedPaths = [
       `CHANGELOG/${version.split("-")[0]}.md`,
       `CHANGELOG/records/${version.split("-")[0]}.md`,
     ];
     const root = candidatePublicationFixture({
       candidateVersion: version,
-      ...(candidateBound ? { candidateSha: "5eb2d8052ddc363245bea3ca4ec0833815ab6e93" } : {}),
+      ...(candidateBound ? { candidateSha: "a".repeat(40) } : {}),
     });
     let evidenceClient: Parameters<typeof validateReleaseRunEvidence>[1] = root.client;
     if (candidateBound) {
@@ -143,20 +302,17 @@ describe("candidate-owned publish consumer chain", () => {
       const gate = originalJobs.find((job) => job.name === "openclaw/ci-gate");
       assert(gate);
       const jobs = [
-        ...originalJobs.filter((job) => job !== gate),
-        ...[
-          "checks-node-agentic-control-plane-runtime-state",
-          "checks-ui-e2e-real-gateway (1/2)",
-          "macos-swift (tests)",
-          gate.name,
-        ].map((name, index) =>
-          Object.assign({}, gate, {
-            id: 1501 + index,
-            name,
-            conclusion: "failure",
-            steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
-          }),
-        ),
+        ...originalJobs,
+        { ...gate, id: 1501, name: "synthetic leaf", conclusion: "failure" },
+      ];
+      const grants = [
+        {
+          targetVersion: version,
+          targetSha: root.q,
+          childRole: "normalCi",
+          jobName: "synthetic leaf",
+          reason: "Synthetic candidate-bound approval",
+        },
       ];
       const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
         effectiveRunAttempt: 1,
@@ -172,6 +328,7 @@ describe("candidate-owned publish consumer chain", () => {
           child: { key: "normalCi", jobs },
           targetVersion: version,
           targetSha: root.q,
+          waiverPolicy: grants,
         }).waivers.map((waiver) =>
           Object.assign({}, waiver, { runId: child.runId, runAttempt: 1 }),
         ),
@@ -185,15 +342,10 @@ describe("candidate-owned publish consumer chain", () => {
           ...(await original.getRun(id)),
           ...(id === child.runId ? { conclusion: "failure" } : {}),
         }),
-        getJobLog: async (id: number) =>
-          id === 1504
-            ? ["checks-ui-e2e-real-gateway", "checks-node-core-test-nondist-shard", "macos-swift"]
-                .map(
-                  (cause) =>
-                    `2026-11-15T04:00:00.0000000Z ##[error]${cause} finished with failure (selected=true)`,
-                )
-                .join("\n")
-            : original.getJobLog(id),
+        getWorkflowSource: (sha: string, path?: string) =>
+          path === "scripts/lib/release-validation-waivers.json"
+            ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: grants })
+            : original.getWorkflowSource(sha, path),
       };
     }
     const descendant = scenario.endsWith("descendant");
@@ -224,6 +376,7 @@ describe("candidate-owned publish consumer chain", () => {
       candidateVersion: version,
       policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
       workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+      baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
     });
     envelope.qualificationAdmission = current.descriptor;
     inputs.trusted_workflow_json = JSON.stringify(envelope);
@@ -295,7 +448,7 @@ describe("candidate-owned publish consumer chain", () => {
         current: { conclusion: "success" },
       });
       if (candidateBound) {
-        expect(evidence.waivers).toHaveLength(3);
+        expect(evidence.waivers).toHaveLength(1);
         expect(evidence.children.find((child) => child.role === "normalCi")).toMatchObject({
           conclusion: "failure",
         });
@@ -306,17 +459,17 @@ describe("candidate-owned publish consumer chain", () => {
       );
     } else {
       await expect(result).rejects.toThrow(
-        scenario === "revoked P" ? "qualification authority" : "exact admitted C/Q/P",
+        scenario === "revoked P" ? "qualification authority" : "exact admitted C/Q",
       );
     }
   });
 
-  it.each(["newer main P", "diverged main P"])(
-    "admits a changelog descendant through a %s only on main lineage",
+  it.each(["newer main P", "diverged main P", "same candidate newer P"])(
+    "reuses unchanged qualification with independently trusted %s",
     async (scenario) => {
       const root = candidatePublicationFixture({ protectedTag: false });
       const newerP = "c".repeat(40);
-      const candidateSha = "d".repeat(40);
+      const candidateSha = scenario === "same candidate newer P" ? root.q : "d".repeat(40);
       const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
       const inputs = structuredClone(root.plan.qualificationInputs);
       inputs.ref = candidateSha;
@@ -336,6 +489,7 @@ describe("candidate-owned publish consumer chain", () => {
         candidateVersion: "2026.8.28-beta.1",
         policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
         workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+        baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
         publisherSha: newerP,
       });
       envelope.qualificationAdmission = current.descriptor;
@@ -394,16 +548,12 @@ describe("candidate-owned publish consumer chain", () => {
         },
         client,
       );
-      if (scenario === "newer main P") {
-        await expect(result).resolves.toMatchObject({
-          valid: true,
-          directRoot: true,
-          root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
-          current: { conclusion: "success" },
-        });
-      } else {
-        await expect(result).rejects.toThrow("exact admitted C/Q/P");
-      }
+      await expect(result).resolves.toMatchObject({
+        valid: true,
+        directRoot: true,
+        root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
+        current: { conclusion: "success" },
+      });
     },
   );
 

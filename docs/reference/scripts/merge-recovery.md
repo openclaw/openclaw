@@ -9,6 +9,13 @@ title: "PR merge recovery"
 
 Investigate retained outcomes before acting. A failed command, open PR, or absent process does not prove that a remote write did not execute. For fresh admission rules, see [PR merge admission](/reference/scripts/merge-admission).
 
+To leave opportunistic shared dependency-cache collection for a later invocation,
+set `OPENCLAW_PR_DEFER_CACHE_COLLECTION=1` on the recovery command only. This
+does not repair a cache, release another operation's holds, or bypass native
+recovery admission. Source authentication, dependency qualification, lifetime
+registration, locks, and task-owned cleanup still run. See
+[PR tooling](/reference/scripts/pr-tooling#defer-shared-cache-collection).
+
 Ordinary `merge-run` reconciliation checks the retained receipt head. It cannot validate a selected replacement head before its successor intent exists. If replacement admission refuses before the successor-intent CAS, that attempt does not consume the previous outcome. For a confirmed-cancelled auto request, do not cancel it again or reconcile the replacement as the retained head. Investigate the refusal before choosing another explicit same-scope recovery under the rules below. A local pre-dispatch refusal alone does not authorize a retry.
 
 - `merge-run` owns remote dispatch separately from the process lock. Before any merge/auto/queue request it records the exact repository identity, PR, main target, prepared head, observed main, method, route, and attempt in `refs/openclaw/pr-merge-outcomes/<PR>`. Private Git commits retain the required objects across worktree removal and GC. Do not delete or push these refs; process-lock recovery never clears them.
@@ -51,3 +58,11 @@ After ownership checks and session departure, run from the persistent checkout. 
 
 - A confirmed merge receipt precedes audits, comments, and cleanup. A comment POST has one attempt marker and is never blindly repeated. Recovery searches authoritative comments for that marker, reports completion pending, and leaves cleanup to the operator after ownership checks; it works without the original worktree/prep artifacts. Normal uninterrupted completion preserves comments and cleanup, with exact-head leased remote deletion. Authoritative branch absence completes cleanup; inspect warnings for advanced or inaccessible branches. Delayed recovery never deletes a recreated branch by name.
 - After ownership-checked cleanup, explicitly finish a verified receipt with `scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion`. It revalidates the exact retained receipt and remote merge, requires native worktree/local branch/remote head branch absence, and never dispatches a merge or deletes resources. A `merged` receipt may post its first completion comment; `commenting`/`commented` require the existing exact attempt marker and never repost. Missing or ambiguous comments preserve pending state. For a retained prior-CI admin receipt, delayed completion reconstructs the historical parent comparison from retained admission main and the verified landed commit before checking cleanup absence. It labels the audit reconstructed after merge, claims no original at-landing audit, and retains the historical CI caveat. Legacy admin receipts without retained prior-CI proof still require owner review; no original audit is fabricated. Read the current outcome OID again after a state transition; stale OIDs are refused. Default `merge-run` remains reconciliation-only.
+
+## Explicit resource retention
+
+A version-2 `--retain-resources` intent binds the original remote repository/ref/head, native checkout identity/head/tree, local PR refs, workflow binding, and observed deletion protection. These identities and the retention choice are immutable. Reconciliation with `merge-run <PR>` inherits retention when the flag is omitted. Conflicting modes refuse; an unresolved dispatch never permits another merge request. Exact-OID `merge-recover` also reconciles the same retained attempt, without successor dispatch.
+
+After exact merged-receipt verification, the normal attempt-marked completion comment reports that resources remain. Completion records phase `retained`, not `complete`, and leaves the binding active. `merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion` can finish or recheck this same retained outcome without cleanup; repeated completion does not repost the comment. Lost comment responses use authoritative marker lookup, never a blind second POST. Changed resources or deletion policy remain unresolved without reset or recreation.
+
+Native GC and stale-worktree provisioning refuse a version-2 retention intent even when capture files are absent. Finalized-task cleanup still requires phase `complete`, so it also refuses retained outcomes. Retention does not grant later deletion authority or change version-1 cleanup/recovery behavior. Admin retention is unsupported; existing live and reconstructed admin parent audits remain on the unchanged default path.

@@ -73,7 +73,11 @@ export async function createAccountOwnedScheduledJob(params: {
         operationalRunInstance,
         approvalAuthority: authority,
         approvalSignals: [controller.signal],
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(authority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
         gatewayContextResolver: resolveGatewayContext,
       },
       async () => {

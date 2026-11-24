@@ -48,7 +48,7 @@ export function createRuntime() {
     pushTextMessageWithQuickReplies: vi
       .spyOn(send, "pushTextMessageWithQuickReplies")
       .mockImplementation(async () => lineResult("m-quick")),
-    createQuickReplyItems: vi.spyOn(send, "createQuickReplyItems"),
+    createQuickReplyItems: vi.spyOn(templates, "createQuickReplyItems"),
     buildTemplateMessageFromPayload: vi
       .spyOn(templates, "buildTemplateMessageFromPayload")
       .mockImplementation(() => ({

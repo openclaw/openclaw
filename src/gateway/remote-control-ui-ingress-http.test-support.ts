@@ -30,7 +30,7 @@ export function defineIdMemberPluginHttpTests(
   },
 ) {
   it.each(["initial", "cookie"] as const)(
-    "retains the ID membership ceiling for %s plugin HTTP reads of a local admin profile",
+    "retains the profile ceiling across ID and local %s plugin HTTP reads",
     async (handoff) => {
       const { factory, pluginRegistry, workspaceDir, options, foreignSessionKey, configureAuth } =
         getFixture();
@@ -40,7 +40,7 @@ export function defineIdMemberPluginHttpTests(
         { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false },
         TEAM_ROLES,
       );
-      const profile = await createIngressPerson(`http-member-${handoff}`, "admin", workspaceDir);
+      const profile = await createIngressPerson(`http-member-${handoff}`, "reader", workspaceDir);
       const claw = await linkedClaw();
       const peerKey = formatIrohEndpointKey(
         new Uint8Array(32).fill(handoff === "initial" ? 173 : 174),
@@ -169,7 +169,7 @@ export function defineIdMemberPluginHttpTests(
         expect(allowed.status).toBe(200);
         expect(await allowed.json()).toHaveProperty(
           "payload.sessions",
-          expect.arrayContaining([foreignSession]),
+          expect.not.arrayContaining([foreignSession]),
         );
       } finally {
         await binding?.close();

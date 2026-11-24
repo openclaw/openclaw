@@ -4,9 +4,12 @@ import path from "node:path";
 import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES as MODES,
+  GATEWAY_CLIENT_NAMES as NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   loadExactSessionEntryCandidates,
@@ -35,6 +38,73 @@ import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
+export const handedOffDashboardSession = {
+  createdVia: "spawn",
+  spawnedBy: "agent:main:main",
+  parentSessionKey: "agent:main:main",
+  spawnDepth: 1,
+} as const;
+
+/** `local: "resumed"` sends the Control UI reconnect marker; admission matches a fresh send. */
+export const lazyChatCronAuthorityCases = [
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", true],
+  [NAMES.CLI, MODES.CLI, "darwin", "operator.admin", true],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", false],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.write", true],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.cron", false],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", "resumed"],
+] as const;
+
+export const deniedChatCronAuthorityCases = [
+  {
+    name: "internal re-entry, including Talk consults",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    directExternal: false,
+    message: "Talk realtime agent consult prompt",
+  },
+  {
+    name: "incognito session",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    sessionEntry: { incognito: true },
+  },
+  {
+    name: "synthetic client",
+    client: {
+      internal: { isLocalClient: true, syntheticClient: true },
+      scopes: ["operator.admin"],
+    },
+  },
+  {
+    name: "input provenance",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    requestParams: { systemInputProvenance: { kind: "external_user" } },
+  },
+  {
+    name: "explicit origin",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    requestParams: { originatingChannel: "slack", originatingTo: "D123" },
+  },
+  {
+    name: "delegated handoff",
+    client: {
+      internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
+      scopes: ["operator.admin"],
+    },
+  },
+  {
+    name: "spawned lineage",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    sessionEntry: { spawnedBy: "agent:main:parent" },
+  },
+  {
+    name: "persisted cron continuation",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    sessionEntry: {
+      cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" },
+    },
+  },
+];
+
 export function createExpectedAcpUserTurn(params: {
   content: string;
   idempotencyKey: string;
@@ -48,7 +118,7 @@ export function createExpectedAcpUserTurn(params: {
     idempotencyKey: params.idempotencyKey,
     __openclaw: {
       chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      modelSelection: { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL },
+      modelSelection: { provider: "openai", model: "gpt-6-astra" },
       requesterOrigin: {
         sessionKey: "agent:main:main",
         messageProvider: "webchat",
@@ -205,8 +275,16 @@ export function readChatDirectiveConfig(
   state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey" | "storePath">,
 ): OpenClawConfig {
   const session = state.config.session as OpenClawConfig["session"];
-  return inheritLegacyDefaultAgentId(state.config, {
-    ...state.config,
+  const agents = state.config.agents as OpenClawConfig["agents"];
+  // Chat runs need a configured model; fixtures that name none get the test default.
+  const withModel = agents?.defaults?.model
+    ? state.config
+    : {
+        ...state.config,
+        agents: { ...agents, defaults: { ...agents?.defaults, model: "openai/gpt-6-astra" } },
+      };
+  return inheritLegacyDefaultAgentId(withModel, {
+    ...withModel,
     session: {
       ...session,
       mainKey: state.mainSessionKey,

@@ -112,6 +112,7 @@ metadata: |
         content = """---
 name: invocable-skill
 description: A manually invoked skill
+version: 1.0.0
 user-invocable: true
 disable-model-invocation: true
 command-dispatch: tool

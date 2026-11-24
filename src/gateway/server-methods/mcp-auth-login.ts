@@ -9,6 +9,10 @@ import {
   operatorMcpOAuthIdentity,
 } from "../../agents/mcp-oauth-identity.js";
 import {
+  completeOperatorMcpOAuthLink,
+  startOperatorMcpOAuthLink,
+} from "../../agents/mcp-oauth-link.js";
+import {
   McpOAuthCredentialsRetainedError,
   type McpOAuthLoginLifecycle,
 } from "../../agents/mcp-oauth-provider.js";
@@ -20,13 +24,13 @@ import {
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { resolveOperatorMcpOAuthConnection } from "../../plugins/mcp-auth-status.js";
+import {
+  ProviderAuthFailure,
+  readProviderAuthFailure,
+} from "../../plugins/provider-auth-failure.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { WizardSession } from "../../wizard/session.js";
-import {
-  createProviderBrowserAuthSession,
-  ProviderBrowserSignInError,
-  ProviderBrowserSignInUnavailableError,
-} from "../provider-browser-auth.js";
+import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
 import { startGatewayWizard } from "./setup-admission.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -57,8 +61,37 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       getPluginRuntimeGatewayRequestScope()?.pluginRegistry === methodRegistry?.pluginRegistry;
     if (!connection || !isOperatorOwned()) {
       reject(
-        "This MCP server cannot use operator browser sign-in. Check its existing account settings.",
+        "sessionId" in params
+          ? "This MCP server cannot use operator browser sign-in. Check its existing account settings."
+          : "This MCP server has no shared OAuth sign-in. Check its name and OAuth settings; per-requester servers connect through the channel.",
       );
+      return;
+    }
+    if (!("sessionId" in params)) {
+      const input = {
+        cfg: context.getRuntimeConfig(),
+        metadata,
+        serverName: params.serverName,
+      };
+      try {
+        const result =
+          params.callbackUrl === undefined
+            ? await startOperatorMcpOAuthLink(input, connection)
+            : {
+                status: await completeOperatorMcpOAuthLink(
+                  { ...input, callbackUrl: params.callbackUrl },
+                  connection,
+                ),
+                serverName: params.serverName,
+              };
+        respond(true, result);
+      } catch (error) {
+        reject(
+          error instanceof Error
+            ? error.message
+            : "MCP sign-in could not be completed. Try connecting again.",
+        );
+      }
       return;
     }
     const { config } = connection;
@@ -67,9 +100,8 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       config.url,
       context.getRuntimeConfig(),
     );
-    // Plugin-declared servers have no CLI sign-in path, so recovery points at the plugin.
     const terminalLogin = mcpOAuthCliLoginSteps(identity);
-    const settingsOwner = terminalLogin ? "MCP server" : "plugin";
+    const settingsOwner = identity.configured === false ? "plugin" : "MCP server";
     if (!client.browserOrigin) {
       reject(
         terminalLogin
@@ -80,9 +112,6 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
     }
     const initialServer = structuredClone(connection.server);
     const assertServerCurrent = () => {
-      if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
-        throw new Error("Sign-in authority is no longer active.");
-      }
       if (
         context.getGatewayMethodRegistry?.() !== methodRegistry ||
         !isDeepStrictEqual(initialServer, resolveConnection()?.server) ||
@@ -109,6 +138,8 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
             ]),
             browserOrigin: client.browserOrigin,
             authPolicy: client.authPolicy,
+            onRefusal: (failure) =>
+              runner.pushProgress(failure.message, undefined, failure.message, failure.reason),
             openUrl: async (url) => {
               login.assertCurrent();
               await prompter.openUrl?.(url);
@@ -134,8 +165,8 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
             new Error(
               saved
                 ? `Authentication saved, but sign-in cleanup did not finish. Close this dialog and check the ${settingsOwner} before trying again.`
-                : terminalLogin
-                  ? `Sign-in did not finish. Check the MCP server settings and try again, or sign in from this Gateway's terminal: ${terminalLogin}.`
+                : settingsOwner === "MCP server"
+                  ? "Sign-in did not finish. Check the MCP server settings and try again."
                   : "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
             );
           try {
@@ -154,7 +185,7 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
                 result !== "authorized" &&
                 (await completeOAuthCallback(identity, config, result, login)) !== "authorized"
               ) {
-                throw new ProviderBrowserSignInError("expired");
+                throw new ProviderAuthFailure("timed_out");
               }
             } finally {
               browser.close();
@@ -166,8 +197,12 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
             if (saved) {
               throw failure();
             }
-            if (error instanceof ProviderBrowserSignInUnavailableError) {
-              throw error;
+            const providerFailure = readProviderAuthFailure(error);
+            if (providerFailure) {
+              context.logGateway.warn(
+                `MCP sign-in failed for server "${params.serverName}": ${providerFailure.reason}`,
+              );
+              throw providerFailure;
             }
             const {
               AuthorizationServerMismatchError,
@@ -186,12 +221,6 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
               reason = "provider-mismatch";
               message =
                 "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.";
-            } else if (error instanceof ProviderBrowserSignInError) {
-              reason = error.reason;
-              message =
-                error.reason === "expired"
-                  ? "This sign-in attempt expired. Close this dialog and start sign-in again."
-                  : "The provider did not approve sign-in. Close this dialog and try again.";
             } else if (error instanceof McpOAuthCredentialsRetainedError) {
               reason = "credentials-retained";
               message =

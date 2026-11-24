@@ -185,5 +185,3 @@ export function makeManagerRuntime(
     true,
   );
 }
-
-export type SessionMcpRuntimeManager = ReturnType<typeof createSessionMcpRuntimeManager>;

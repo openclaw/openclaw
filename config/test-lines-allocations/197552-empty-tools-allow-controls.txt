@@ -1,0 +1,2 @@
+11
+# Regression for #197552: an empty tools.allow stays unrestricted when runtime controls are merged in, while a non-empty allowlist still receives them.

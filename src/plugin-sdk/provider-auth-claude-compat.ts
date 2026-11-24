@@ -221,9 +221,6 @@ type ClaudeNativeLoginOptions = {
 /** Anthropic's account lookup for a Claude OAuth access token, the one Claude CLI itself uses. */
 const CLAUDE_OAUTH_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const CLAUDE_OAUTH_PROFILE_TIMEOUT_MS = 3_000;
-// Claude CLI refreshes a token within 5 minutes of expiry when it starts, before it accepts
-// a prompt. Add slack so a token that is refresh-due by send time is already treated so here.
-const CLAUDE_NATIVE_LOGIN_REFRESH_MARGIN_MS = 10 * 60_000;
 const CLAUDE_NATIVE_LOGIN_ATTESTATION_LIMIT = 64;
 // Fingerprints are keyed per process, so they name a token only inside this process and
 // are never persisted. A token belongs to one account for its whole life, so an entry can
@@ -236,45 +233,26 @@ function fingerprintClaudeNativeLoginToken(token: string): string {
 }
 
 /**
- * Owner of the login a local `claude` process would use, as Anthropic attested it for the
- * exact access token it reads (Keychain, then the credentials file), or undefined when no
- * attestation in this process covers that token. Synchronous and local: never makes a
- * network call, so a rotated or replaced token has no owner until
- * {@link attestClaudeNativeLoginOwner} runs again. Never returns token material and never
- * uses the interactive Keychain path.
- */
-export function readClaudeNativeLoginOwner(
-  options: ClaudeNativeLoginOptions = {},
-): string | undefined {
-  const token = readClaudeNativeLoginCredential(options);
-  return token
-    ? claudeNativeLoginAttestations.get(fingerprintClaudeNativeLoginToken(token.value))
-    : undefined;
-}
-
-/**
  * Attest the owner of the login a local `claude` process would use: the account uuid
  * Anthropic's OAuth profile endpoint returns for the access token itself. The token goes
  * only to that endpoint, with a short timeout, and is never logged, stored or refreshed
  * here. Any failure, an expired token, or a response without an account uuid yields no
- * owner. `refreshDueAt` is when Claude CLI starts rotating the token, which it does before
- * it accepts a prompt, so a check at send time can see a token attested only after the run.
+ * owner.
  */
 export async function attestClaudeNativeLoginOwner(
   options: ClaudeNativeLoginOptions & {
     /** Test seam; production always calls the global fetch on the Anthropic endpoint. */
     fetchFn?: typeof fetch;
   } = {},
-): Promise<{ owner?: string; refreshDueAt?: number }> {
+): Promise<{ owner?: string }> {
   const token = readClaudeNativeLoginCredential(options);
   if (!token) {
     return {};
   }
-  const refreshDueAt = token.expires - CLAUDE_NATIVE_LOGIN_REFRESH_MARGIN_MS;
   const fingerprint = fingerprintClaudeNativeLoginToken(token.value);
   const attested = claudeNativeLoginAttestations.get(fingerprint);
   if (attested || token.expires <= Date.now()) {
-    return { ...(attested ? { owner: attested } : {}), refreshDueAt };
+    return attested ? { owner: attested } : {};
   }
   let owner: string | undefined;
   try {
@@ -307,7 +285,7 @@ export async function attestClaudeNativeLoginOwner(
       }
     }
   }
-  return { ...(owner ? { owner } : {}), refreshDueAt };
+  return owner ? { owner } : {};
 }
 
 /** The access token a local `claude` process would authenticate with, or undefined. */

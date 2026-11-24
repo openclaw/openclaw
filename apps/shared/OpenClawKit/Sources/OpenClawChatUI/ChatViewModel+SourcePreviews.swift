@@ -31,8 +31,8 @@ final class ChatSourcePreviewState {
         }
     }
 
+    /// Favicon leaves key their loads on this value, so it changes only when the context does.
     private(set) var context: OpenClawChatSourceContext?
-    private(set) var revision = UUID()
     private(set) var previews: [UUID: [ChatSourcePreview]] = [:]
     @ObservationIgnored private var projector = ChatSourcePreviewProjector()
     @ObservationIgnored private var messages: [OpenClawChatMessage] = []
@@ -60,29 +60,37 @@ final class ChatSourcePreviewState {
         return previews.filter { preview in links.contains(where: preview.represents) }
     }
 
-    func refresh(transport: any OpenClawChatTransport) {
-        self.invalidate()
+    /// The current context stays in place until the new one lands, so a refresh that finds the
+    /// same context changes nothing and one that finds a new context changes it once.
+    func refresh(_ load: @escaping @MainActor @Sendable () async -> OpenClawChatSourceContext?) {
+        self.task?.cancel()
         self.task = Task { [weak self] in
-            let context = await transport.loadSourceContext()
+            let context = await load()
             guard !Task.isCancelled, let self else { return }
-            self.context = context
-            self.update(self.messages)
             self.task = nil
+            self.apply(context)
         }
     }
 
+    /// The connection that served the context is gone; cards and favicons drop it now.
     func invalidate() {
         self.task?.cancel()
         self.task = nil
-        self.revision = UUID()
-        self.context = nil
+        self.apply(nil)
+    }
+
+    private func apply(_ context: OpenClawChatSourceContext?) {
+        guard context != self.context else { return }
+        self.context = context
         self.update(self.messages)
     }
 }
 
 extension OpenClawChatViewModel {
     func refreshSourceContext() {
-        self.sourcePreviewState.refresh(transport: self.transport)
+        self.sourcePreviewState.refresh { [transport = self.transport] in
+            await transport.loadSourceContext()
+        }
     }
 
     func sourcePreviews(for message: OpenClawChatMessage) -> [ChatSourcePreview] {

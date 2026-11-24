@@ -13,6 +13,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseCronCommandArgv } from "./input-options.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
@@ -30,7 +31,6 @@ import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
   buildCronCommandShellArgvForGateway,
-  parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronNoOutputTimeoutOption,
   parseCronStringList,

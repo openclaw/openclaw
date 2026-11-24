@@ -6,7 +6,7 @@ import { isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { list as listTar, Parser } from "tar";
+import { list as listTar, Parser } from "tar/raw";
 import { toErrorObject } from "./error-format.mts";
 import { hashFile } from "./gateway-bench-installed-package.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";

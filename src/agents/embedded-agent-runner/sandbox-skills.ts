@@ -8,6 +8,7 @@ import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { resolveExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
+import { prepareSkillReadIndex } from "../../skills/runtime/skill-read-index.js";
 import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type {
   SkillEligibilityContext,
@@ -197,6 +198,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
         discoverySkills,
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       };
+      prepareSkillReadIndex(selectedSnapshot);
     }
     return {
       ...(params.sandbox.skillsEligibility

@@ -14,16 +14,12 @@
  * Use a smaller separately prepared corpus for owner measurements, alternating >=5 runs:
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-cold-navigation.ts \
  *     --action measure --state-dir "$PWD/.local/cold-navigation-owner" \
- *     --arm retained --iterations 2000 [--allocation]
- * Repeat with --arm restore. Both arms use the current restoration owner; the restore
- * arm includes harmless navigation-delete checks absent from the old owner.
- * Each arm prepares its required stored representation outside measurement. Restore uses
- * the real verification/restoration owner then the SAME bounded page reader, rolling each
- * restoration back to repeat identical work. Its CPU includes rollback but no durable
- * commit/fsync or worker transport; retained reads use normal read snapshots. Both return
- * identical payloads, generation and display cursors. This is an owner comparison, not a
- * substitute for the subscription or built-Gateway workload. Allocation runs are separate
- * from timing, include collected objects, and cover this executing isolate only.
+ *     --iterations 2000 [--allocation]
+ * Navigation preparation is outside measurement; reads use normal read snapshots.
+ * The former rollback-only restore arm cannot model bounded, durable restoration.
+ * Use session-cold-writer.mjs --restore-flow on fresh closed fixtures for that workload.
+ * This page-owner measurement does not cover subscription or built-Gateway transport.
+ * Allocation runs are separate from timing, include collected objects, and cover this isolate.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -44,7 +40,6 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "2048" },
     events: { type: "string", default: "1024" },
     iterations: { type: "string", default: "2000" },
-    arm: { type: "string", default: "retained" },
     allocation: { type: "boolean" },
   },
 });
@@ -375,7 +370,6 @@ function storage() {
 
 async function measure() {
   assert(globalThis.gc, "Run with --expose-gc");
-  assert(values.arm === "retained" || values.arm === "restore");
   const fixture = readFixture();
   const iterations = numberOption(values.iterations, "iterations");
   const database = agent.openOpenClawAgentDatabase(options);
@@ -389,24 +383,20 @@ async function measure() {
     await import("../../src/config/sessions/session-accessor.sqlite-history-query.js");
   const { resolveWorkerVisibleHistoryProjection } =
     await import("../../src/config/sessions/session-accessor.sqlite-history-projection.worker.js");
-  if (values.arm === "restore") {
-    removeNavigation();
-  } else {
-    for (let index = 0; index < fixture.sessions; index++) {
-      const id = sessionId(index);
-      const query = getNodeSqliteKysely<DB>(database.db);
-      const existing = executeSqliteQueryTakeFirstSync(
-        database.db,
-        query.selectFrom("transcript_events").select("seq").where("session_id", "=", id).limit(1),
-      );
-      if (!existing) {
-        agent.runOpenClawAgentWriteTransaction((current) => {
-          backfillSessionColdNavigationInTransaction(
-            current,
-            readSessionColdTranscript(current.db, id)!,
-          );
-        }, options);
-      }
+  for (let index = 0; index < fixture.sessions; index++) {
+    const id = sessionId(index);
+    const query = getNodeSqliteKysely<DB>(database.db);
+    const existing = executeSqliteQueryTakeFirstSync(
+      database.db,
+      query.selectFrom("transcript_events").select("seq").where("session_id", "=", id).limit(1),
+    );
+    if (!existing) {
+      agent.runOpenClawAgentWriteTransaction((current) => {
+        backfillSessionColdNavigationInTransaction(
+          current,
+          readSessionColdTranscript(current.db, id)!,
+        );
+      }, options);
     }
   }
   const read = (index: number) => {
@@ -439,36 +429,8 @@ async function measure() {
     }
     return result.value;
   };
-  const run = async (iteration: number) => {
-    const index = iteration % fixture.sessions;
-    if (values.arm === "retained") {
-      return read(index);
-    }
-    const id = sessionId(index);
-    const archive = readSessionColdTranscript(database.db, id)!;
-    const plan = {
-      kind: "cold-restore" as const,
-      databaseOptions: options,
-      sessionId: id,
-      archive,
-    };
-    const records = await owner.prepareSessionColdRestoreInWorker(plan);
-    let result: ReturnType<typeof read> | undefined;
-    try {
-      agent.runOpenClawAgentWriteTransaction(() => {
-        assert(owner.mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored);
-        result = read(index);
-        throw rollback;
-      }, options);
-    } catch (error) {
-      if (error !== rollback) {
-        throw error;
-      }
-    }
-    assert(result);
-    return result;
-  };
-  const expected = await run(0);
+  const run = (iteration: number) => read(iteration % fixture.sessions);
+  const expected = run(0);
   assert.equal(expected.events.length, 40);
   assert.partialDeepStrictEqual(expected.events[0]?.event, { id: `event-${fixture.events - 40}` });
   assert.partialDeepStrictEqual(expected.events.at(-1)?.event, {
@@ -476,7 +438,7 @@ async function measure() {
   });
   const digest = createHash("sha256").update(JSON.stringify(expected)).digest("hex");
   for (let index = 0; index < 5; index++) {
-    await run(index);
+    run(index);
   }
   globalThis.gc();
   const inspector = values.allocation ? new Session() : undefined;
@@ -492,7 +454,7 @@ async function measure() {
   const latency: number[] = [];
   for (let index = 0; index < iterations; index++) {
     const begin = performance.now();
-    const result = await run(index);
+    const result = run(index);
     latency.push(performance.now() - begin);
     assert.equal(result.events.length, 40);
   }
@@ -510,8 +472,8 @@ async function measure() {
   }
   const sorted = latency.toSorted((a, b) => a - b);
   return {
-    scope: "page owner; restore includes rollback, excludes transport and durable commit",
-    arm: values.arm,
+    scope: "retained cold page owner; excludes transport",
+    arm: "retained",
     allocationPass: Boolean(values.allocation),
     fixture,
     iterations,

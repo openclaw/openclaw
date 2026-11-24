@@ -171,13 +171,26 @@
   "providerAuthChoices": [
     {
       "provider": "opencode",
+      "method": "oauth",
+      "choiceId": "opencode-console",
+      "appGuidedAuth": "oauth",
+      "credentialOnly": true,
+      "channelLogin": {},
+      "choiceLabel": "OpenCode Console (browser sign-in)",
+      "choiceHint": "Sign in in your browser and pick an OpenCode Console workspace",
+      "groupId": "opencode",
+      "groupLabel": "OpenCode",
+      "groupHint": "Browser sign-in or shared Zen + Go API key"
+    },
+    {
+      "provider": "opencode",
       "method": "api-key",
       "choiceId": "opencode-zen",
       "appGuidedSecret": true,
       "choiceLabel": "OpenCode Zen catalog",
       "groupId": "opencode",
       "groupLabel": "OpenCode",
-      "groupHint": "Shared API key infrastructure for Zen + Go",
+      "groupHint": "Browser sign-in or shared Zen + Go API key",
       "optionKey": "opencodeZenApiKey",
       "cliFlag": "--opencode-zen-api-key",
       "cliOption": "--opencode-zen-api-key <key>",

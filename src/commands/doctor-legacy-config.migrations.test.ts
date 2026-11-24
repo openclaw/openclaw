@@ -212,19 +212,17 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
+    // No implicit model remains, so the first live fallback becomes the primary.
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-6-astra",
-      fallbacks: ["custom/kept"],
+      primary: "custom/kept",
+      fallbacks: ["openai/gpt-6-astra"],
     });
-    expect(result.config.agents?.defaults?.models).toEqual({
-      "custom/kept": { alias: "kept" },
-      "openai/gpt-6-astra": {},
-    });
+    expect(result.config.agents?.defaults?.models).toEqual({ "custom/kept": { alias: "kept" } });
     expect(result.config.agents?.entries?.main).toMatchObject({
-      models: { "plugin-provider/kept": {}, "openai/gpt-6-astra": {} },
+      models: { "plugin-provider/kept": {}, "custom/kept": {} },
     });
     expect(result.config.agents?.entries?.main?.model).toBeUndefined();
-    expect(result.changes).toHaveLength(8);
+    expect(result.changes).toHaveLength(7);
   });
 
   it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
@@ -285,6 +283,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
   it("evaluates and repairs every canonical keyed agent", () => {
     fixture.seedProviderCatalog("main");
+    fixture.seedProviderCatalog("worker");
     mockPluginProviders();
     const result = repairModelRefs({
       agents: {
@@ -293,7 +292,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-6-astra");
+    expect(result.config.agents?.defaults?.model).toBe("agent-local/model");
     expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
     expect(result.changes).toContain(
       'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
@@ -303,7 +302,12 @@ describe("normalizeCompatibilityConfigValues", () => {
   it("keeps a repaired model allowlist restrictive", () => {
     mockPluginProviders();
     const result = repairModelRefs({
-      agents: { defaults: { model: "deleted/main", models: { "deleted/main": {} } } },
+      agents: {
+        defaults: {
+          model: { primary: "deleted/main", fallbacks: ["openai/gpt-6-astra"] },
+          models: { "deleted/main": {} },
+        },
+      },
     });
 
     expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });

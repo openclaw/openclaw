@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { merge } from "solid-js";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -6,8 +5,10 @@ import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-ava
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import type { AutomationProjection } from "../chat-automation-projection-loader.ts";
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -39,7 +40,10 @@ import {
   createTranscriptActions,
   createTranscriptMessageOptions,
 } from "./chat-transcript-actions.ts";
-import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
+import {
+  createLiveStatusSignature,
+  projectTranscriptActivity,
+} from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
   resolveTranscriptAssistantIdentity,
@@ -61,7 +65,6 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptContextDependencies,
-  type TranscriptDependencyItem,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -71,6 +74,7 @@ export function projectChatTranscript(
   props: ChatThreadProps,
   transcript: ChatTranscriptSession,
   search = getTranscriptState(props.paneId).search.snapshot,
+  projectAutomations?: AutomationProjection,
 ) {
   const state = getTranscriptState(props.paneId);
   const { actions, dependencies: actionDependencies } = createTranscriptActions(
@@ -80,7 +84,17 @@ export function projectChatTranscript(
   const actionProps = merge(props, actions);
   const recordedStopNames = indexRecordedSubagentStopNames(props.messages);
   const recordedStopNamesKey = JSON.stringify([...recordedStopNames]);
-  const subagentActions = merge(actionProps, { recordedStopNames });
+  const subagentActions = merge(actionProps, {
+    recordedStopNames,
+    onOpenSession: actions.onOpenSessionLink
+      ? (sessionKey: string) => {
+          const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+          if (agentId) {
+            actions.onOpenSessionLink?.({ sessionKey, agentId });
+          }
+        }
+      : undefined,
+  });
   const asyncQuestionGeneration = state.asyncQuestionGeneration;
   const realtimeConversation = projectRealtimeTalkConversation(props);
   const { asyncQuestions, selectedSession: activeSession } = props;
@@ -102,6 +116,7 @@ export function projectChatTranscript(
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
+    projectAutomations,
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     get stream() {
@@ -244,7 +259,8 @@ export function projectChatTranscript(
     (!props.historyPagination?.hasMore || search.open);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
   transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
-  const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
+  const isLoading = props.loading && transcriptItems.length === 0 && !hasTypingActors;
+  const showLoadingSkeleton = isLoading && props.selectedSession?.hasMessages === true;
   // Pending nonempty rows must not settle an empty viewport or overwrite its saved reader.
   transcript.layout.ready &&= isEmpty;
   const presented =
@@ -380,40 +396,20 @@ export function projectChatTranscript(
       searchResult: searchFiltering,
     } satisfies NativeMessageGroupOptions;
   };
-  // Only working indicators depend on live usage and subagent status.
+  // Only working indicators depend on live usage and subagent wait status.
   const workingUsageKey = JSON.stringify([
     runOutputTokens,
     subagents.statusKey,
     presented,
     bubbleActivityGroupKey,
   ]);
-  const liveStatusSignature = (item: TranscriptDependencyItem): string => {
-    if (item.kind === "reading-indicator") {
-      return workingUsageKey;
-    }
-    if (item.kind === "stream-run") {
-      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
-    }
-    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
-      return "";
-    }
-    const duration = item.runId ? transcriptChain.runDurations.get(item.runId) : undefined;
-    const statusKey = `${duration ?? ""}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
-    if (item.kind === "agent-run-frame") {
-      const hasWorkingIndicator = item.parts.some(
-        (part) =>
-          part.kind === "stream-run" &&
-          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
-      );
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
-    }
-    const continuation = continuations.get(item.key);
-    // Continuation options already participate in the shared render context.
-    const continuationKey = continuation
-      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
-      : "";
-    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
-  };
+  const liveStatusSignature = createLiveStatusSignature(
+    workingUsageKey,
+    transcriptChain.runDurations,
+    latestAssistantItemKey,
+    continuations,
+    searchFiltering,
+  );
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
@@ -693,16 +689,16 @@ export function projectChatTranscript(
               : message,
         },
     isEmpty,
+    isLoading,
     showLoadingSkeleton,
     searchOpen: search.open,
-    renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) => {
+    renderRows: (header: TranscriptHeader | null = null) => {
       transcript.layout.ready = !props.loading;
       return transcript.render(
         transcriptRows,
         renderRow,
         latestTranscriptAnnouncement(collapsedItems, liveItem),
         props.announceTranscript !== false && !search.open && !props.loading,
-        overlay,
         header,
         props.transcriptVisible ?? true,
         props.applicationContext,

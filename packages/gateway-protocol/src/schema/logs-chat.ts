@@ -88,7 +88,20 @@ export const ChatPendingInputsPageSchema = closedObject({
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
-      cancelledByUser: Type.Optional(Type.Literal(true)),
+      endCause: Type.Optional(
+        Type.String({
+          enum: [
+            "user-stop",
+            "delete",
+            "reset",
+            "revoked",
+            "restart-unrecoverable",
+            "overflow",
+            "policy-refused",
+            "failed",
+          ],
+        }),
+      ),
       steerNow: Type.Optional(
         closedObject({
           status: Type.Enum(["available", "blocked"]),
@@ -405,6 +418,8 @@ export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
   agentId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
+  // An explicit physical destination must still exist when a new send is admitted.
+  expectedSessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
   appContext: Type.Optional(

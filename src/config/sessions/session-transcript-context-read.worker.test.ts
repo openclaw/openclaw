@@ -32,6 +32,7 @@ import * as contextWorker from "./session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 function createTranscriptTarget(sessionId: string, storePath: string) {
@@ -134,6 +135,68 @@ it.for(["same", "unrelated"] as const)(
     });
   },
 );
+
+it("loads bounded model context across large transcript sequence gaps", async () => {
+  await withOpenClawTestState({ label: "model-context-sparse-sequences" }, async (state) => {
+    const target = createTranscriptTarget("sparse", state.statePath("transcript.sqlite"));
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const original = await SessionManager.openAsync(target);
+    const parentId = await original.appendMessageAsync({
+      role: "user",
+      content: "before the gap",
+      timestamp: 1,
+    });
+    const answer = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "after the gap" }],
+    });
+    const options = { agentId: target.agentId, path: target.storePath };
+    // Retain a sparse persisted sequence as an imported transcript can.
+    await runOpenClawAgentWriteAdmission(options, () => {
+      const { db } = openOpenClawAgentDatabase(options);
+      createTranscriptEventInserter(
+        db,
+        target.sessionId,
+      )({
+        seq: 4_000_000,
+        createdAt: 2,
+        eventJson: JSON.stringify({
+          type: "message",
+          id: "abc123ef",
+          parentId,
+          timestamp: new Date(2).toISOString(),
+          message: answer,
+        }),
+      });
+    });
+    const manager = await SessionManager.openAsync(target);
+    const { databaseClaim } = await loadSessionEntryForAdmission(target);
+    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+      throw new Error("Expected admitted durable session reader");
+    }
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: target,
+          sessionReader: databaseClaim.reader,
+          withTranscriptWrite: async (write) => write(),
+        },
+        async () => {
+          const readContext = async () =>
+            (
+              await SessionManager.openModelContextAsync(target, {
+                limits: { maxBytes: 4096, maxEvents: 10 },
+              })
+            ).buildSessionContext().messages;
+          await expect(readContext()).resolves.toEqual(manager.buildSessionContext().messages);
+          await manager.appendMessageAsync({ role: "user", content: "follow-up", timestamp: 2 });
+          await expect(readContext()).resolves.toEqual(manager.buildSessionContext().messages);
+        },
+      );
+    } finally {
+      await databaseClaim.release();
+    }
+  });
+});
 
 it("captures a caller's transcript anchor before asynchronous reading", async () => {
   await withOpenClawTestState({ label: "context-anchor-snapshot" }, async (state) => {

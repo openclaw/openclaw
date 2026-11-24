@@ -102,7 +102,8 @@ that can feed validation, run the integrated exact-HEAD gate:
 pnpm release:push
 ```
 
-This wrapper refreshes and pins `origin/main` and release tags, requires a clean canonical
+This wrapper refreshes and pins `origin/main` and release tags, fetching complete
+history first when the checkout is shallow so the audit can resolve its merge base. It requires a clean canonical
 `release/YYYY.M.PATCH` worktree, captures `HEAD`, verifies that it fast-forwards
 the remote release branch, and runs only a short `git diff --check` plus the
 dependency-free release-changelog layout check. It pushes that captured SHA
@@ -144,7 +145,7 @@ and contribution-record gates at the Code SHA and refuse to dispatch on failure.
 A record target lost to a squash merge needs a corrected record and a new Code SHA.
 
 Record C/Q and independently trusted P. The helper defaults Q=C; on its
-candidate route, `--workflow-sha <Q>` may select a reviewed main-ancestor Q
+candidate route, `--workflow-sha <Q>` may select a reviewed exact Q
 without changing C. P performs lightweight admission before this same helper
 creates the exact Q transport and dispatches FRV. Missing Q contracts need a
 deliberate Q repair or candidate backport; never borrow moving-main requirements.
@@ -412,8 +413,8 @@ immutable child artifacts on recovery; never rebuild or republish successful
 versions. Each lane's own parent approval receipt lets its children skip their
 human gates; the detached ClawHub lane never reuses the core parent's receipt.
 Find that run in the core summary or `clawhub-detached-dispatch-<run>-<attempt>`
-artifact, then approve and monitor its own gate independently. The legacy
-`wait_for_clawhub` input never rejoins ClawHub to the core path.
+artifact, then approve and monitor its own gate independently. Core publication
+never waits for ClawHub.
 The npm children publish in `npm-publish` from the same protected tooling tag
 and require the parent attempt to remain live. Direct human npm recovery still
 requires its own `npm-release` approval. ClawHub children must never be approved

@@ -19,6 +19,7 @@ import {
   inspectActionsArtifactZipWithPolicy,
 } from "./actions-artifact-archive.mjs";
 import { verifyNpmRegistrySignatures } from "./npm-registry-signatures.mjs";
+import { releaseEvidenceProducerTuple } from "./release-evidence-identity.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
@@ -74,7 +75,7 @@ function one(values, label) {
   return values[0];
 }
 
-export function validateRecoveryRun(run, expected) {
+function validateRecoveryRun(run, expected) {
   for (const [key, value] of Object.entries({
     id: Number(id(expected.id)),
     run_attempt: Number(id(expected.attempt)),
@@ -106,7 +107,7 @@ function readSuccessfulRecoveryRun(runId, workflow, expectedSha) {
   });
 }
 
-export function requireRecoveryJob(jobs, run, name) {
+function requireRecoveryJob(jobs, run, name) {
   const job = one(
     jobs.filter((entry) => entry.name === name),
     name,
@@ -215,7 +216,7 @@ function historicalPublishStepLog(logs, job, step) {
 
 // The exact attempt archive owns step names/numbers. Only the first runner
 // input group of that successful step is evidence; its stdout is not.
-export function readRecoveryStepInputs(log, job, stepName) {
+function readRecoveryStepInputs(log, job, stepName) {
   const step = one(
     job.steps.filter((entry) => entry.name === stepName),
     stepName,
@@ -369,7 +370,7 @@ async function registryBytes(url, maxBytes) {
   }
   return Buffer.concat(chunks);
 }
-export function validateRecoveryProvenance(results, expected) {
+function validateRecoveryProvenance(results, expected) {
   const statements = results
     .map((result) => result.verificationResult?.statement)
     .filter((statement) => statement?.predicateType === "https://slsa.dev/provenance/v1");
@@ -603,9 +604,10 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     WORKFLOW_FULL_REF: originalDispatch.value.toolingFullRef,
   });
   requireValue(npm.head_branch === original.head_branch, "npm tooling ref mismatch.");
+  const qualificationProducer = releaseEvidenceProducerTuple(manifest);
   const validationInputs = {
-    FULL_RELEASE_VALIDATION_RUN_ID: id(manifest.runId),
-    FULL_RELEASE_VALIDATION_RUN_ATTEMPT: id(manifest.runAttempt),
+    FULL_RELEASE_VALIDATION_RUN_ID: id(qualificationProducer.runId),
+    FULL_RELEASE_VALIDATION_RUN_ATTEMPT: id(qualificationProducer.runAttempt),
     RELEASE_TAG: evidence.releaseTag,
   };
   expectInputs(
@@ -699,7 +701,10 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
       releaseTag: tag,
       sourceSha,
       toolingSha: npm.head_sha,
-      fullReleaseValidation: { runId: id(manifest.runId), runAttempt: id(manifest.runAttempt) },
+      fullReleaseValidation: {
+        runId: id(qualificationProducer.runId),
+        runAttempt: id(qualificationProducer.runAttempt),
+      },
       originalParent: {
         runId: originalId,
         runAttempt: originalAttempt,

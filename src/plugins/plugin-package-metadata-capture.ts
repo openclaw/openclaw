@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -14,6 +13,7 @@ import {
   createPluginSourceValidationError,
   markPluginSourceAcquisitionError,
 } from "./plugin-instance-error.js";
+import { pluginSourceCaptureDirectory } from "./plugin-source-capture-context.js";
 import {
   retainLoadedPluginSourceCapture,
   retainPluginSourceCaptureInstance,
@@ -643,20 +643,18 @@ export function createPluginPackageMetadataCapture(params: {
   };
 }
 
-const sourceCaptureDirectory = new AsyncLocalStorage<{ directory: string; managedRoot?: string }>();
-
 /** A compute worker's parent reclaims this scratch directory after confirmed exit. */
 export function withPluginSourceCaptureDirectory<T>(
   directory: string,
   run: () => T,
   managedRoot?: string,
 ): T {
-  return sourceCaptureDirectory.run({ directory, managedRoot }, run);
+  return pluginSourceCaptureDirectory.run({ directory, managedRoot }, run);
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
 export function createPluginSourceCapture() {
-  const override = sourceCaptureDirectory.getStore();
+  const override = pluginSourceCaptureDirectory.getStore();
   const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
   let created: string | undefined;
   let directory: string;

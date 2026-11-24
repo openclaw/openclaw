@@ -19,6 +19,22 @@ import {
 } from "../schema/typebox.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
+export const CRON_CREATION_PLAN_MAX_SLOTS = 24;
+export const CronCreationSlotsSchema = Type.Array(
+  Type.Object(
+    {
+      slotId: Type.String({ minLength: 1, maxLength: 64 }),
+      name: Type.String({ minLength: 1, maxLength: 200 }),
+    },
+    { additionalProperties: false },
+  ),
+  {
+    minItems: 1,
+    maxItems: CRON_CREATION_PLAN_MAX_SLOTS,
+    description: "Plan: ordered slots, with distinct IDs and user-facing names.",
+  },
+);
+
 export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 export const CRON_TOOL_LIST_MAX_LIMIT = 200;
 
@@ -31,6 +47,7 @@ const CRON_ACTIONS = [
   "status",
   "list",
   "get",
+  "plan",
   "add",
   "update",
   "remove",
@@ -499,6 +516,33 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           : actions,
       ),
       ...gatewayCallOptionSchemaProperties(),
+      ...(!managementOnly && !options?.selfRemoveOnly
+        ? {
+            names: Type.Optional(
+              Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
+                minItems: 1,
+                maxItems: CRON_CREATION_PLAN_MAX_SLOTS,
+                description:
+                  "Plan: supply all automation names from the request in order, even for one job.",
+              }),
+            ),
+            position: optionalPositiveIntegerSchema({
+              maximum: CRON_CREATION_PLAN_MAX_SLOTS,
+              description: "Add: one-based position in your plan; omit for a single job.",
+            }),
+            slots: Type.Optional(CronCreationSlotsSchema),
+            planId: Type.Optional(
+              Type.String({
+                description: "Optional explicit binding for callers using slots instead of names.",
+              }),
+            ),
+            slotId: Type.Optional(
+              Type.String({
+                description: "Optional explicit slot binding; not needed with names and position.",
+              }),
+            ),
+          }
+        : {}),
       includeDisabled: Type.Optional(
         Type.Boolean({ description: "List: false by default; true includes disabled saved jobs." }),
       ),

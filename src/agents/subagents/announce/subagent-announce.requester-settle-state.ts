@@ -6,50 +6,13 @@ import type {
 } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
 
-export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
-const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
-
-export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
-  return (
-    entry.execution.status !== "running" &&
-    entry.pauseReason !== "sessions_yield" &&
-    hasSubagentRunEnded(entry)
-  );
-}
-
 export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
   return entry.delivery?.status !== "delivered";
-}
-
-/** Delivery classification owns replay safety; every retryable result retains a bounded wake. */
-export function resolveRequesterSettleRetryState(params: {
-  state: RequesterSettleWakeBatchState;
-  delivery: SubagentAnnounceDeliveryResult;
-  attemptCount: number;
-  now: number;
-}): RequesterSettleWakeBatchState | undefined {
-  const { state, delivery, attemptCount } = params;
-  const retryDelay = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptCount - 1];
-  if (
-    delivery.disposition !== "retryable" ||
-    attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS ||
-    retryDelay === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    ...state,
-    status: "pending",
-    attemptCount,
-    nextAttemptAt: params.now + retryDelay,
-    lastError: delivery.error ?? delivery.reason ?? "undelivered",
-  };
 }
 
 type RequesterSettleWakeBatchCallbacks = {

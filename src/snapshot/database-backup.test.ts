@@ -112,7 +112,7 @@ it.each(["empty", "duplicate", "invalid-namespace", "unreadable"])(
       db.exec("CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)");
       if (kind !== "empty") {
         db.prepare("INSERT INTO openclaw_engine_anchor VALUES ('store-1', 'postgres', ?)").run(
-          kind === "invalid-namespace" ? "invalid-schema" : "valid_schema",
+          kind === "invalid-namespace" ? "invalid.schema" : "valid_schema",
         );
         if (kind === "duplicate") {
           db.exec("INSERT INTO openclaw_engine_anchor SELECT * FROM openclaw_engine_anchor");

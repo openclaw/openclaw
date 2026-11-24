@@ -9,11 +9,18 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CONFIG_AUDIT_SCOPE, type ConfigAuditRecord } from "../../config/io.audit.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../../infra/cli-root-options.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSqliteAuditRecordReader } from "../../infra/sqlite-audit-record-store.async.js";
 import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-record.kernel.js";
-import { SYSTEM_AGENT_AUDIT_SCOPE, type SystemAgentAuditEntry } from "../../system-agent/audit.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
+import type { UserProfileRoleChange } from "../../state/user-profile-writes.js";
+import {
+  appendSystemAgentAuditEntry,
+  SYSTEM_AGENT_AUDIT_SCOPE,
+  type SystemAgentAuditEntry,
+} from "../../system-agent/audit.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 const DEFAULT_CHANGE_LIMIT = 50;
@@ -29,6 +36,46 @@ const CONFIG_WRITE_PREFIXES = new Map<SystemChangeEntry["source"], string>([
   ["system-agent", "OpenClaw updated configuration"],
   ["cli", "CLI updated configuration"],
 ]);
+
+const ROLE_ASSIGNMENT_OPERATION = "users.setRole";
+
+/**
+ * Records one committed `users.setRole` transition in the shared change history.
+ * The role already committed, so a failed record only warns and never fails the request.
+ */
+export async function recordRoleAssignmentChange(
+  change: UserProfileRoleChange,
+  client: GatewayClient | null,
+  log: Pick<SubsystemLogger, "warn">,
+): Promise<void> {
+  // Keep only the most specific requester identifier; never link profile and device.
+  const profileId =
+    client?.internal?.operatorRunAuthority?.profileId ??
+    client?.authenticatedUserProfile?.profileId;
+  const deviceId = client?.connect?.device?.id;
+  const actor = profileId
+    ? { kind: "profile", id: profileId }
+    : deviceId
+      ? { kind: "device", id: deviceId }
+      : { kind: "client", id: client?.connect?.client?.id ?? "unknown" };
+  const by = `${actor.kind} ${actor.id}`;
+  // Role names are free-form; JSON quoting keeps embedded quotes and newlines unambiguous.
+  const from = change.previousRole === null ? "no role" : JSON.stringify(change.previousRole);
+  try {
+    await appendSystemAgentAuditEntry({
+      operation: ROLE_ASSIGNMENT_OPERATION,
+      summary:
+        change.role === null
+          ? `Role for profile ${change.profileId} cleared (was ${from}) by ${by}`
+          : `Role for profile ${change.profileId} changed from ${from} to ${JSON.stringify(change.role)} by ${by}`,
+      details: { ...change, actor },
+    });
+  } catch (error) {
+    log.warn(
+      `users.setRole committed, but its change-history record failed: ${formatErrorMessage(error)}`,
+    );
+  }
+}
 
 type PendingCollapse = {
   transition: string;
@@ -163,7 +210,8 @@ function toSystemAgentCandidate(
       id: `${SYSTEM_AGENT_AUDIT_SCOPE}:${record.sequence}`,
       at: parseDateStringTimestampMs(record.value.timestamp) ?? record.createdAt,
       kind: "operation",
-      source: "system-agent",
+      // Role assignments arrive through the Gateway admin API; v4 has no narrower source.
+      source: record.value.operation === ROLE_ASSIGNMENT_OPERATION ? "config-rpc" : "system-agent",
       summary: record.value.summary,
     },
     transition: transitionKey(record.value.configHashBefore, record.value.configHashAfter),

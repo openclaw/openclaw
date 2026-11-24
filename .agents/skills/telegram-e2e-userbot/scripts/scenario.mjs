@@ -40,8 +40,8 @@ const ACTION_KEYS = {
 };
 
 function resetMode(action, label) {
-  if (action.reset !== "before-forward" && action.reset !== "after-forward") {
-    throw new Error(`${label}.reset must be "before-forward" or "after-forward".`);
+  if (!["before-forward", "after-forward", "hang"].includes(action.reset)) {
+    throw new Error(`${label}.reset must be "before-forward", "after-forward", or "hang".`);
   }
   if (action.retryAfter !== undefined) {
     throw new Error(`${label} cannot combine reset and retryAfter.`);

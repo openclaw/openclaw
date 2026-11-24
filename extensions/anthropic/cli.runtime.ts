@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
+  CliBackendInputImage,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
@@ -14,6 +15,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import * as promptHooks from "./cli-runtime-prompt-context.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
@@ -21,13 +23,8 @@ import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 
-/**
- * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
- * whose history owner can change while the run lasts (a native login) passes a check for
- * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
- */
+/** Host-internal, like the forwarded auth credential and not part of the plugin SDK. */
 export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
-  assertPrivateInputCurrent?: () => void;
   prepareCredentialUse?: () => Promise<void>;
 };
 type ClaudeCliTurn = {
@@ -105,24 +102,6 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   }
 }
 
-function privateInputHolds(turn: ClaudeCliTurn): boolean {
-  try {
-    turn.context.assertPrivateInputCurrent?.();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
-  return (
-    request.callback_id === "UserPromptSubmit" &&
-    isRecord(response) &&
-    isRecord(response.hookSpecificOutput) &&
-    response.hookSpecificOutput.additionalContext !== undefined
-  );
-}
-
 async function authorizeTool(
   session: ClaudeCliSession,
   request: Record<string, unknown>,
@@ -196,15 +175,14 @@ async function handleRequest(
   }
   const input = request.input;
   const turn = activeTurn(session);
-  if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
+  const slot = promptHooks.promptContextHookSlot(request.callback_id);
+  if (slot >= 0 && input.hook_event_name === "UserPromptSubmit") {
     if (!turn || signal.aborted) {
       return {};
     }
     turn.promptSubmitted = true;
     const promptContext = resolvePromptContext(turn, input.prompt);
-    const additionalContext = [promptContext?.prependContext, promptContext?.appendContext]
-      .filter(Boolean)
-      .join("\n\n");
+    const additionalContext = promptHooks.promptContextHookValue(promptContext, slot);
     // Native can rewrite the prompt and rerun hooks; only its final pass is persisted.
     return additionalContext
       ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } }
@@ -248,10 +226,24 @@ function createUserInput(
   text: string,
   uuid: string,
   hostGenerated = false,
+  images: readonly CliBackendInputImage[] = [],
 ) {
   return {
     type: "user",
-    message: { role: "user", content: text },
+    // Same-turn images go to the model as native content blocks; the first prompt uses @paths.
+    message: {
+      role: "user",
+      content: images.length
+        ? [
+            // Anthropic rejects empty text blocks; an image-only input sends just the images.
+            ...(text ? [{ type: "text", text }] : []),
+            ...images.map(({ data, mimeType }) => ({
+              type: "image",
+              source: { type: "base64", media_type: mimeType, data },
+            })),
+          ]
+        : text,
+    },
     parent_tool_use_id: null,
     uuid,
     // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
@@ -275,7 +267,9 @@ async function injectInput(
   turn: ClaudeCliTurn,
   text: string,
   withCurrent: (submit: () => void) => Promise<void>,
-  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
+  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext"> & {
+    images?: readonly CliBackendInputImage[];
+  },
 ): Promise<void> {
   const uuid = randomUUID();
   const started = createDeferred<void>();
@@ -290,7 +284,7 @@ async function injectInput(
     turn.injectedInputs.set(uuid, { text, started, promptContext: options?.promptContext });
     turn.submittedInputUuids.add(uuid);
     written = session.transport.send(
-      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
+      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host", options?.images),
     );
     // Host admission cleanup may await after the synchronous write.
     void written.catch(() => {});
@@ -660,7 +654,7 @@ export async function* executeClaudeCli(
             systemPromptSnapshot: false,
             excludeDynamicSections,
             hooks: {
-              UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
+              UserPromptSubmit: [{ hookCallbackIds: promptHooks.PROMPT_CONTEXT_HOOK_IDS }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
             },
           },
@@ -675,10 +669,7 @@ export async function* executeClaudeCli(
             // The transport invokes this synchronously at its final write, after all awaits.
             return () => {
               if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
-                // Saved turn context leaves here, so it takes the private-input check too.
-                return carriesTurnContext(request, response) && !privateInputHolds(admittedTurn)
-                  ? {}
-                  : response;
+                return response;
               }
               const message = "The OpenClaw run is no longer active.";
               if (request.subtype === "can_use_tool") {
@@ -711,7 +702,6 @@ export async function* executeClaudeCli(
       }
       await context.prepareCredentialUse?.();
       context.assertCurrent?.();
-      context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }
@@ -749,6 +739,7 @@ export async function* executeClaudeCli(
       await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
       context.registerMessageInjection?.({
         isAvailable: () => canInjectInput(session, turn),
+        acceptsImages: true,
         queueMessage: (text, withCurrent, options) =>
           injectInput(session, turn, text, withCurrent, options),
       });

@@ -14,6 +14,7 @@ function usageCostTotals(totalTokens: number, totalCost = 0) {
     cacheReadCost: 0,
     cacheWriteCost: 0,
     missingCostEntries: 0,
+    cacheUnmeasuredInput: 0,
   };
 }
 

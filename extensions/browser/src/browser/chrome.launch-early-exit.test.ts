@@ -1,6 +1,7 @@
 import type * as ChildProcessModule from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import type * as TimerPromises from "node:timers/promises";
 import type * as SecurityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,14 +74,9 @@ vi.mock("./chrome.executables.js", async (importOriginal) => ({
   processCommandUsesHeadlessChrome: () => false,
   resolveBrowserExecutableForPlatform: () => ({ kind: "custom", path: "/synthetic/chrome" }),
 }));
-vi.mock("./output-directories.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./output-directories.js")>()),
-  ensureOutputDirectory: vi.fn(),
-}));
-vi.mock("./chrome.profile-decoration.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./chrome.profile-decoration.js")>()),
-  usesOpenClawMockKeychain: () => false,
-  prepareOpenClawProfile: vi.fn(),
+vi.mock("../../profile-filesystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../profile-filesystem.js")>()),
+  prepareProfileFilesystem: vi.fn(async () => ({})),
 }));
 // Keep process-discovery timing independent of cross-process profile-lock I/O.
 vi.mock("./chrome.profile-lifecycle-lock.js", async (importOriginal) => ({
@@ -88,8 +84,8 @@ vi.mock("./chrome.profile-lifecycle-lock.js", async (importOriginal) => ({
   withChromeProfileLifecycleLock: <T>(_profile: string, run: () => Promise<T>) => run(),
 }));
 
+import { prepareProfileFilesystem } from "../../profile-filesystem.js";
 import { launchOpenClawChrome, ManagedChromeCleanupError } from "./chrome.js";
-import { prepareOpenClawProfile } from "./chrome.profile-decoration.js";
 
 function makeProc() {
   const proc = Object.assign(new EventEmitter(), {
@@ -142,8 +138,9 @@ beforeEach(() => {
   proc = makeProc();
   spawnMock.mockReturnValue(proc);
   vi.spyOn(fs, "existsSync").mockReturnValue(true);
-  vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
-  vi.spyOn(fs, "readlinkSync").mockImplementation(() => {
+  vi.spyOn(fsp, "mkdir").mockResolvedValue(undefined);
+  vi.spyOn(fsp, "access").mockResolvedValue(undefined);
+  vi.spyOn(fsp, "readlink").mockImplementation(async () => {
     throw Object.assign(new Error("synthetic missing profile lock"), { code: "ENOENT" });
   });
   readVersionMock.mockRejectedValue(new Error("synthetic unavailable CDP"));
@@ -252,11 +249,20 @@ describe("managed Chrome early child exit", () => {
 
   it("does not spawn after cancellation while preparing the profile", async () => {
     const preparation = Promise.withResolvers<void>();
-    vi.mocked(prepareOpenClawProfile).mockReturnValueOnce(preparation.promise);
+    vi.mocked(prepareProfileFilesystem).mockImplementation(async (command) => {
+      if (command.type === "decorate") {
+        await preparation.promise;
+      }
+      return {};
+    });
     const controller = new AbortController();
     const reason = new Error("synthetic profile preparation cancellation");
     const outcome = launchFailure(controller.signal);
-    await vi.waitFor(() => expect(prepareOpenClawProfile).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(prepareProfileFilesystem).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "decorate" }),
+      ),
+    );
     controller.abort(reason);
     preparation.resolve();
     expect(await outcome).toBe(reason);

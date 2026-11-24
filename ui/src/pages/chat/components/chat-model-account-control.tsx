@@ -1,26 +1,59 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, For, Show, useContext } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../../lib/reactive/observers.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
+
+function AccountPageSentinel(props: { onVisible: () => void }) {
+  const [sentinel, setSentinel] = createSignal<HTMLSpanElement>();
+  createIntersectionObserver(
+    () => {
+      const target = sentinel();
+      return target ? [target] : [];
+    },
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        props.onVisible();
+      }
+    },
+  );
+  // Intersect just inside the last row so keyboard focus can reveal the sentinel too.
+  return (
+    <span
+      ref={setSentinel}
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: "-12px 0 auto",
+        height: "1px",
+        "pointer-events": "none",
+      }}
+    />
+  );
+}
 
 export function ChatModelAccountSectionView(
   props: ReturnType<ChatModelAccountSection["viewProps"]>,
 ) {
   const id = createUniqueId();
+  const pending = () => !props.disabled && !props.open && props.loading === "initial";
   return (
     <span class="chat-controls__account-section" data-chat-account-selection={props.selectionKind}>
       <Popover
         id={id}
         label={t("chat.modelAccounts.section")}
-        triggerClass="chat-controls__account-trigger"
+        triggerClass={[
+          "chat-controls__account-trigger",
+          { "chat-controls__account-trigger--locked": props.disabled },
+        ]}
         class="chat-controls__settings-popover chat-controls__account-popover"
         placement="bottom-start"
         sameRoot
-        disabled={props.disabled}
+        disabled={props.disabled || pending()}
         open={props.open}
         onOpenChange={(open) => {
           if (open !== props.open) {
@@ -36,13 +69,22 @@ export function ChatModelAccountSectionView(
                   props.selectedIdentity)}
             </span>
             <Show when={!props.disabled}>
-              <Icon name="chevronDown" />
+              <Show when={pending()} fallback={<Icon name="chevronDown" />}>
+                <span
+                  class="btn__spinner chat-controls__account-spinner"
+                  aria-hidden="true"
+                  style={{ color: "var(--muted)" }}
+                />
+              </Show>
             </Show>
           </>
         }
       >
         <ChatModelAccountOptions {...props} />
       </Popover>
+      <span class="sr-only" role="status">
+        {pending() ? t("common.loading") : ""}
+      </span>
     </span>
   );
 }
@@ -56,6 +98,45 @@ export function ChatModelAccountOptions(
     const renderer = renderRow();
     return renderer ? renderer(key, render) : render();
   };
+  const pagination = () => (
+    <Show when={!renderRow() && props.open && (props.onNextPage || props.loading)}>
+      <div role="presentation" style={{ position: "relative", height: "34px" }}>
+        <Show when={props.onNextPage}>{(next) => <AccountPageSentinel onVisible={next()} />}</Show>
+        <Show when={props.loading}>
+          <div
+            class="chat-controls__account-page-loader"
+            role="status"
+            style={{ display: "grid", height: "100%", "place-items": "center" }}
+          >
+            <Show
+              when={props.loading === "more"}
+              fallback={
+                <span
+                  class="btn__spinner chat-controls__account-spinner"
+                  aria-hidden="true"
+                  style={{ color: "var(--muted)" }}
+                />
+              }
+            >
+              <span
+                class="chat-controls__account-page-skeleton"
+                aria-hidden="true"
+                style={{
+                  "justify-self": "start",
+                  width: "42%",
+                  height: "12px",
+                  "margin-inline-start": "8px",
+                  "border-radius": "4px",
+                  background: "var(--skeleton-base-raised)",
+                }}
+              />
+            </Show>
+            <span class="sr-only">{t("common.loading")}</span>
+          </div>
+        </Show>
+      </div>
+    </Show>
+  );
   return (
     <>
       <div
@@ -64,12 +145,14 @@ export function ChatModelAccountOptions(
         data-chat-model-list="true"
         role="listbox"
         aria-label={t("chat.modelAccounts.section")}
+        aria-busy={props.loading ? "true" : "false"}
       >
         <For each={props.options} keyed={(option) => option.value}>
           {(option, index) => {
             const key = createMemo(() => `account:${option().value}`);
             return (
               <>
+                <Show when={option().value === "manage"}>{pagination()}</Show>
                 {row(key(), () => (
                   <div
                     class={
@@ -82,9 +165,7 @@ export function ChatModelAccountOptions(
                       class={[
                         "chat-controls__inline-select-option chat-controls__model-option",
                         {
-                          "chat-controls__account-row": !["loading", "more", "manage"].includes(
-                            option().value,
-                          ),
+                          "chat-controls__account-row": option().value !== "manage",
                           "chat-controls__account-manage": option().value === "manage",
                         },
                         {
@@ -114,9 +195,7 @@ export function ChatModelAccountOptions(
                       data-chat-model-provider-label="account"
                       hidden={search?.row(`account:${option().value}`)?.hidden ?? !props.open}
                       aria-disabled={option().disabled ? "true" : undefined}
-                      disabled={
-                        props.disabled || Boolean(option().disabled && option().value !== "more")
-                      }
+                      disabled={props.disabled || option().disabled}
                       onClick={(event) => props.onSelect(option().value, event)}
                     >
                       <Show when={option().value === "manage"}>
@@ -148,12 +227,24 @@ export function ChatModelAccountOptions(
             );
           }}
         </For>
+        <Show when={!props.options.some((option) => option.value === "manage")}>
+          {pagination()}
+        </Show>
       </div>
       <Show when={props.error}>
         {row("error:accounts", () => (
-          <span class="chat-controls__account-error" role="alert">
-            {props.error}
-          </span>
+          <div class="chat-controls__account-error">
+            <span role="alert">{props.error}</span>{" "}
+            <Show when={!props.loading && !props.disabled}>
+              <button
+                type="button"
+                class="btn btn--sm"
+                onClick={(event) => props.onSelect("retry", event)}
+              >
+                {t("common.retry")}
+              </button>
+            </Show>
+          </div>
         ))}
       </Show>
     </>

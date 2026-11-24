@@ -7,8 +7,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
@@ -62,10 +60,10 @@ describe("CLI durable session context", () => {
     );
     const prepared = await fixture.prepare({ agentDir, authProfileId });
     cleanups.push(() => prepared.preparedBackend.cleanup?.());
-    expect(prepared.cliHistoryWriter).toBeDefined();
+    expect(prepared.cliHistoryAdmission?.replaysHistory).toBe(true);
     return {
       appendTranscript: (entry: Parameters<typeof fixture.appendTranscript>[0]) =>
-        runWithCliHistoryWriter(prepared.cliHistoryWriter, () => fixture.appendTranscript(entry)),
+        fixture.appendTranscript(entry),
       prepare: (overrides: Parameters<typeof fixture.prepare>[0] = {}) =>
         fixture.prepare({
           agentDir,
@@ -493,9 +491,8 @@ describe("CLI durable session context", () => {
     { transport: "plugin", resume: true, account: "unknown" },
     { transport: "process", resume: true, account: "unknown" },
     { transport: "plugin", resume: true, callerMemory: true },
-    { transport: "plugin", resume: true, revoke: true },
   ])(
-    "preserves owned reference facts for $transport, resume=$resume, account=$account, callerMemory=$callerMemory, revoke=$revoke",
+    "preserves owned reference facts for $transport, resume=$resume, account=$account, callerMemory=$callerMemory",
     async (testCase) => {
       const sent: Array<Pick<CliBackendExecuteContext, "prompt" | "promptContext">> = [];
       cliBackendsTesting.setDepsForTest({
@@ -547,7 +544,7 @@ describe("CLI durable session context", () => {
         const logicalPrompt = context.promptForHooks ?? context.params.prompt;
         if (denied) {
           expect(logicalPrompt).not.toContain("RESULT-1234");
-          expect(context.cliHistoryWriter).toBeUndefined();
+          expect(context.cliHistoryAdmission?.replaysHistory).not.toBe(true);
         } else {
           expect(logicalPrompt).toContain("RESULT-1234");
           expect(logicalPrompt).toContain("data, not instructions");
@@ -564,26 +561,12 @@ describe("CLI durable session context", () => {
           if (!denied) {
             expect(context.promptContext?.prependContext).toContain("RESULT-1234");
           }
-          if (testCase.revoke) {
-            await patchSessionEntryCore(fixture.session.sessionTarget, () => ({
-              cliHistoryBoundary: {
-                version: 1,
-                sessionId: fixture.session.sessionTarget.sessionId,
-                state: "unknown",
-              },
-            }));
-            await expect(executePreparedCliRun(context, "existing-native-session")).rejects.toThrow(
-              "CLI history authority changed",
-            );
-            expect(sent).toHaveLength(0);
-          } else {
-            await executePreparedCliRun(
-              context,
-              testCase.resume ? "existing-native-session" : undefined,
-            );
-            expect(sent).toHaveLength(1);
-            expect(JSON.stringify(sent).includes("RESULT-1234")).toBe(!denied);
-          }
+          await executePreparedCliRun(
+            context,
+            testCase.resume ? "existing-native-session" : undefined,
+          );
+          expect(sent).toHaveLength(1);
+          expect(JSON.stringify(sent).includes("RESULT-1234")).toBe(!denied);
         }
         expect(context.openClawHistoryPrompt).toBeUndefined();
       } finally {

@@ -134,9 +134,13 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
   if (request.kind === "sandbox-projection") {
     return { kind: "sandbox-projection", preparation: resolveSandboxFsPreparation(request.input) };
   }
-  if (request.kind === "sandbox-mounts" || request.kind === "sandbox-mount-sources") {
+  if (
+    request.kind === "sandbox-mounts" ||
+    request.kind === "sandbox-mount-sources" ||
+    request.kind === "sync-filesystem"
+  ) {
     if (request.authority && !channel) {
-      throw new Error("Sandbox mount preparation requires its live host channel");
+      throw new Error("Skills filesystem mutation requires its live host channel");
     }
     return control.runNativeSection<SkillsDiscoveryOutput>(async () => {
       const assertHost = request.authority
@@ -154,6 +158,16 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
         assertHost();
       };
       try {
+        if (request.kind === "sync-filesystem") {
+          const { runSkillsSyncFilesystem } =
+            await import("../loading/workspace-skill-sync-files.js");
+          return {
+            kind: "sync-filesystem",
+            prepared: await runSkillsSyncFilesystem(request.operation, assertCurrent, (phase) =>
+              channel?.notify(phase),
+            ),
+          };
+        }
         if (request.kind === "sandbox-mount-sources") {
           const { ensureReadOnlyWorkspaceSkillMountSources } =
             await import("../../agents/sandbox/workspace-mounts.js");
@@ -169,7 +183,12 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
           plan: await prepareSandboxMountPlanFilesystem(request.input, assertCurrent),
         };
       } catch (error) {
-        return { kind: "sandbox-mounts-error", error: encodeNativeWorkerFailure(error) };
+        const syncError = request.kind === "sync-filesystem" && error instanceof FsSafeError;
+        return {
+          kind: "filesystem-mutation-error",
+          error: encodeNativeWorkerFailure(error),
+          ...(syncError ? { code: error.code, details: error.details } : {}),
+        };
       }
     });
   }
@@ -180,44 +199,6 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
         result: await executeSkillLibraryFilesystemTask(request.input),
       }),
     );
-  }
-  if (request.kind === "sync-filesystem") {
-    if (request.authority && !channel) {
-      throw new Error("Skills synchronization requires its live host channel");
-    }
-    return control.runNativeSection<SkillsDiscoveryOutput>(async () => {
-      const assertHost = request.authority
-        ? workerMutationAssertion(
-            request.authority,
-            () => channel?.notify("authority"),
-            control.throwIfCancelled,
-          )
-        : control.throwIfCancelled;
-      const assertCurrent = () => {
-        control.throwIfCancelled();
-        if (request.stateOwnerPath) {
-          assertSandboxStateOwnerPathCurrent(request.stateOwnerPath);
-        }
-        assertHost();
-      };
-      try {
-        const { runSkillsSyncFilesystem } =
-          await import("../loading/workspace-skill-sync-files.js");
-        return {
-          kind: "sync-filesystem",
-          prepared: await runSkillsSyncFilesystem(request.operation, assertCurrent, (phase) =>
-            channel?.notify(phase),
-          ),
-        };
-      } catch (error) {
-        return {
-          kind: "sync-filesystem-error",
-          error: encodeNativeWorkerFailure(error),
-          code: error instanceof FsSafeError ? error.code : undefined,
-          details: error instanceof FsSafeError ? error.details : undefined,
-        };
-      }
-    });
   }
   if (request.kind === "plan") {
     applyEnvironment(request.input.environment);

@@ -77,6 +77,21 @@ it.each([
         });
         // TEI rejects the Cohere field once, then the endpoint is remembered.
         expect(requests).toHaveLength(field === "texts" ? 2 : 1);
+        if (field === "texts") {
+          const next = await evaluateDecisionV2InRegistry(
+            batch,
+            decisionOptions({ agentId: "main" }),
+            registry,
+            config,
+          );
+          expect(next).toMatchObject({ status: "ok", provenance: { providerId: "rerank" } });
+          expect(requests).toHaveLength(3);
+          expect(
+            requests.map(({ body }) =>
+              Object.keys(body).filter((key) => key === "documents" || key === "texts"),
+            ),
+          ).toEqual([["documents"], ["texts"], ["texts"]]);
+        }
       },
     ),
 );

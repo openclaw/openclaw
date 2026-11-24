@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,6 +10,9 @@ import {
 } from "../cli/update-cli/schema-preflight.js";
 import { startSqliteConcurrentWriter } from "../infra/sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
+import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { withArtifactPreservingStateReads } from "./artifact-preserving-state-reads.js";
 import {
   compatible,
   databaseFixture,
@@ -218,6 +221,208 @@ it("inspects incompatible agent schemas while an independent WAL writer keeps co
     await writer.stop();
   }
 }, 30_000);
+
+// A Gateway-like owner in its own process. "churn" commits 128 KiB batches with SQLite's
+// default WAL auto-checkpoint, so the WAL restarts while a byte copy runs. "idle" commits a
+// newer schema only to the WAL, then holds the connection open without writing.
+const agentOwner = `
+  const { DatabaseSync } = require("node:sqlite");
+  const [file, mode, version] = process.argv.slice(1);
+  const database = new DatabaseSync(file);
+  database.exec("PRAGMA busy_timeout = 30000; PRAGMA journal_mode = WAL");
+  let running = true;
+  let commits = 0;
+  process.on("message", (message) => {
+    if (message === "commits") process.send({ commits });
+    else running = false;
+  });
+  if (mode === "idle") {
+    database.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA user_version = " + version);
+    process.send("ready");
+  }
+  const insert = database.prepare("INSERT INTO churn (value) VALUES (randomblob(16384))");
+  const trim = database.prepare("DELETE FROM churn WHERE rowid < (SELECT max(rowid) - 512 FROM churn)");
+  (function batch() {
+    if (!running) { database.close(); process.disconnect(); return; }
+    if (mode === "idle") { setTimeout(batch, 20); return; }
+    database.exec("BEGIN IMMEDIATE");
+    for (let index = 0; index < 8; index += 1) insert.run();
+    if (commits % 16 === 0) trim.run();
+    database.exec("COMMIT");
+    commits += 1;
+    if (commits === 1) process.send("ready");
+    setImmediate(batch);
+  })();
+`;
+
+async function withAgentOwner(
+  file: string,
+  mode: "churn" | "idle",
+  version: number,
+  run: (commits: () => Promise<number>) => Promise<void>,
+) {
+  const owner = spawn(
+    process.execPath,
+    ["--input-type=commonjs", "-e", agentOwner, file, mode, String(version)],
+    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  );
+  const closed = new Promise((resolve) => {
+    owner.once("close", resolve);
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      owner.once("message", resolve);
+      owner.once("close", reject);
+    });
+    await run(
+      () =>
+        new Promise((resolve) => {
+          owner.once("message", (reply: { commits: number }) => resolve(reply.commits));
+          owner.send("commits");
+        }),
+    );
+  } finally {
+    if (owner.connected) {
+      owner.send("stop");
+    }
+    await closed;
+  }
+}
+
+// Candidate admission preserves source artifacts for every store it reads. A live agent
+// store must be read in place: its private copy costs its full size and never stabilizes.
+async function admitPreservingArtifacts(env: NodeJS.ProcessEnv, livePath: string) {
+  const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+  const result = await withArtifactPreservingStateReads(() =>
+    checkTargetDatabaseSchemasForContexts(supportedVersions, [{ env, config: {} }]),
+  );
+  expect(copies.mock.calls.map(([source]) => source)).not.toContain(
+    fs.realpathSync.native(livePath),
+  );
+  return result;
+}
+
+function agentFixture(version: number, payloadMiB = 0) {
+  const fixture = createFixture();
+  fixture.main.db.exec(`
+        CREATE TABLE payloads (value BLOB NOT NULL) STRICT;
+        WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < ${payloadMiB * 16})
+        INSERT INTO payloads SELECT zeroblob(65536) FROM rows;
+        CREATE TABLE churn (value BLOB NOT NULL);
+        PRAGMA user_version = ${version};
+      `);
+  fixture.close();
+  return fixture;
+}
+
+it("admits a live agent store's schema without a stable copy while it keeps checkpointing", async () => {
+  const foundVersion = supportedVersions.agent + 1;
+  const fixture = agentFixture(foundVersion, 32);
+  const stateBefore = sourceArtifacts([fixture.state.path]);
+  await withAgentOwner(fixture.main.path, "churn", foundVersion, async (commits) => {
+    const before = await commits();
+    expect(await admitPreservingArtifacts(fixture.env, fixture.main.path)).toEqual({
+      incompatible: [
+        expect.objectContaining({ kind: "agent", path: fixture.main.path, foundVersion }),
+      ],
+      indeterminate: [],
+    });
+    // The owner kept committing (and checkpointing) across the check.
+    expect(await commits()).toBeGreaterThan(before);
+  });
+  expect(sourceArtifacts([fixture.state.path])).toEqual(stateBefore);
+}, 60_000);
+
+it("refuses a newer schema committed only to an open WAL without changing a source byte", async () => {
+  const foundVersion = supportedVersions.agent + 1;
+  const fixture = agentFixture(supportedVersions.agent);
+  await withAgentOwner(fixture.main.path, "idle", foundVersion, async () => {
+    const before = sourceArtifacts(fixture.paths);
+    expect(await admitPreservingArtifacts(fixture.env, fixture.main.path)).toEqual({
+      incompatible: [
+        expect.objectContaining({ kind: "agent", path: fixture.main.path, foundVersion }),
+      ],
+      indeterminate: [],
+    });
+    // No reader mark is masked: the read-only index leaves -shm untouched as well.
+    expect(sourceArtifacts(fixture.paths)).toEqual(before);
+  });
+}, 60_000);
+
+// Hold the first committed WAL family until the reader is ready, then repeatedly close
+// the last connection while the reader may be opening it.
+const closingOwner = `
+  const { DatabaseSync } = require("node:sqlite");
+  const file = process.argv[1];
+  let running = true;
+  const held = new DatabaseSync(file);
+  held.exec("PRAGMA busy_timeout = 2000; INSERT OR REPLACE INTO owner_cycles VALUES (1)");
+  process.once("message", (command) => {
+    held.close();
+    if (command !== "start") { process.disconnect(); return; }
+    process.once("message", () => { running = false; });
+    cycle();
+  });
+  process.send("ready");
+  function cycle() {
+    if (!running) { process.disconnect(); return; }
+    const database = new DatabaseSync(file);
+    database.exec("PRAGMA busy_timeout = 2000; INSERT OR REPLACE INTO owner_cycles VALUES (1)");
+    database.close();
+    setImmediate(cycle);
+  }
+`;
+
+it("reads a held WAL family and requests a private snapshot after its last owner closes", async () => {
+  const root = tempDirs.make("openclaw-preflight-close-race-");
+  const file = path.join(root, "agent.sqlite");
+  {
+    using database = openRawDatabase(file);
+    database.exec(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE owner_cycles (id INTEGER PRIMARY KEY);
+      PRAGMA user_version = ${supportedVersions.agent};
+    `);
+  }
+  const owner = spawn(process.execPath, ["--input-type=commonjs", "-e", closingOwner, file], {
+    stdio: ["ignore", "ignore", "inherit", "ipc"],
+  });
+  const closed = new Promise<number | null>((resolve, reject) => {
+    owner.once("error", reject);
+    owner.once("close", resolve);
+  });
+  const inspect = () =>
+    tryInspectSqliteReadOnlyInProcess(
+      file,
+      (database) => database.prepare("PRAGMA user_version").get(),
+      { preserveSourceArtifacts: true },
+    );
+  try {
+    await new Promise((resolve, reject) => {
+      owner.once("message", resolve);
+      owner.once("error", reject);
+      owner.once("close", () => reject(new Error("SQLite owner closed before readiness")));
+    });
+    expect(inspect()?.value).toEqual({ user_version: supportedVersions.agent });
+    owner.send("start");
+    // Either result is valid during the race; scheduling need not produce both.
+    for (let read = 0; read < 300; read += 1) {
+      const inspection = inspect();
+      if (inspection) {
+        expect(inspection.value).toEqual({ user_version: supportedVersions.agent });
+      }
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+  } finally {
+    if (owner.connected) {
+      owner.send("stop");
+    }
+    expect(await closed).toBe(0);
+  }
+  expect(inspect()).toBeUndefined();
+}, 60_000);
 
 it("ignores uncommitted writer versions without ending the owning transactions", async () => {
   const fixture = createFixture();
