@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheck, HealthCheckContext } from "../flows/health-checks.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
@@ -36,6 +37,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { maybeMigrateHeartbeatFilesToScratch } from "./doctor-heartbeat-scratch-migration.js";
 import { assertHeartbeatScratchMigrationUnambiguous } from "./doctor-heartbeat-scratch-preflight.js";
 import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
+import { withReadOnlyPluginStateSnapshot } from "./doctor-lint-state-snapshot.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { verifyDoctorLintOAuthStateIsolation } from "./doctor-lint.oauth-isolation.test-support.js";
 import { verifyDoctorLintPrivateAuthRetirement } from "./doctor-lint.private-auth-retirement.test-support.js";
@@ -654,6 +656,21 @@ describe("doctor lint state isolation", () => {
             errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
           }),
         ],
+      });
+    });
+  });
+
+  it("snapshots client/credentials.sqlite into the isolated doctor lint state dir", async () => {
+    await withOpenClawTestState({ prefix: "doctor-lint-client-creds-" }, async (state) => {
+      const sourceClientCredPath = resolveClientCredentialStorePath(state.env);
+      fs.mkdirSync(path.dirname(sourceClientCredPath), { recursive: true });
+      fs.writeFileSync(sourceClientCredPath, "sqlite-client-creds-marker");
+      await withReadOnlyPluginStateSnapshot(state.env, async (inspect) => {
+        await inspect(async (privateEnv) => {
+          const privateClientCredPath = resolveClientCredentialStorePath(privateEnv);
+          expect(privateClientCredPath).not.toBe(sourceClientCredPath);
+          expect(fs.readFileSync(privateClientCredPath, "utf8")).toBe("sqlite-client-creds-marker");
+        });
       });
     });
   });
