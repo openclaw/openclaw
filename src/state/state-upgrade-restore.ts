@@ -5,12 +5,14 @@ import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
+import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
 import { readTrial, resolvePrefix, type Trial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { fsyncPath, isSqliteFile, type UpgradePlan } from "./state-upgrade-tree.js";
 
 type RestoreFile = { live: string; preimage: string | null };
 type RestoreManifest = { v: 1; runId: string; files: RestoreFile[] };
+type RestoreImageReport = { linked: number; copied: string[]; symlinks: number };
 export type StateUpgradeRestore = {
   file: string;
   runId: string;
@@ -55,7 +57,8 @@ function readManifest(file: string): RestoreManifest | undefined {
   }
   const files: RestoreFile[] = [];
   const seen = new Set<string>();
-  for (const entry of value.files as unknown[]) {
+  const entries: unknown[] = value.files;
+  for (const entry of entries) {
     if (
       !entry ||
       typeof entry !== "object" ||
@@ -119,12 +122,7 @@ function checkpointOriginal(file: string): void {
   try {
     const db = openNodeSqliteDatabase(file);
     try {
-      const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
-      if (checkpoint?.busy !== 0) {
-        throw new Error(
-          `Cannot checkpoint ${file} for update recovery. Stop other processes using this database and retry the update.`,
-        );
-      }
+      truncateSqliteWal(db, file);
     } finally {
       db.close();
     }
@@ -143,8 +141,8 @@ export function publishStateUpgradeRestore(
   restore: StateUpgradeRestore | undefined,
   plan: Pick<UpgradePlan, "ops">,
   resuming = false,
-): { linked: number; copied: string[]; symlinks: number } {
-  const report = { linked: 0, copied: [] as string[], symlinks: 0 };
+): RestoreImageReport {
+  const report: RestoreImageReport = { linked: 0, copied: [], symlinks: 0 };
   if (!restore) {
     return report;
   }
