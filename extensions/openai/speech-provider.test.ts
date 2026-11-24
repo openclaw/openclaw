@@ -78,14 +78,14 @@ describe("buildOpenAISpeechProvider", () => {
   });
 
   it.each(["cancel", "release"] as const)(
-    "delivers PCM before EOF and leaves the next request usable after %s",
+    "delivers the default encoded audio before EOF and closes the response after %s",
     async (stop) => {
       vi.stubEnv("OPENAI_TTS_BASE_URL", "");
       const cancel = vi.fn();
       vi.stubGlobal(
         "fetch",
         vi.fn(async (_url: string, init?: RequestInit) => {
-          expect(parseRequestBody(init).response_format).toBe("pcm");
+          expect(parseRequestBody(init).response_format).toBe("mp3");
           return new Response(
             new ReadableStream<Uint8Array>({
               start(controller) {
@@ -93,11 +93,13 @@ describe("buildOpenAISpeechProvider", () => {
               },
               cancel,
             }),
+            { headers: { "content-type": "audio/mpeg" } },
           );
         }),
       );
       const result = await provider.streamSynthesize!(speechRequest());
-      expect(result).toMatchObject({ outputFormat: "pcm", sampleRate: 24_000 });
+      expect(result.outputFormat).toBe("mp3");
+      expect(result).not.toHaveProperty("sampleRate");
       const reader = result.audioStream.getReader();
       try {
         expect(await reader.read()).toEqual({ done: false, value: new Uint8Array([1, 2]) });
@@ -107,22 +109,20 @@ describe("buildOpenAISpeechProvider", () => {
         } else {
           await result.release?.();
         }
-        reader.releaseLock();
-        await result.release?.();
       }
       expect(cancel).toHaveBeenCalledOnce();
-
-      mockSpeechFetch({ response_format: "pcm" });
-      const next = await provider.streamSynthesize!(speechRequest());
-      try {
-        expect(new Uint8Array(await new Response(next.audioStream).arrayBuffer())).toEqual(
-          new Uint8Array([1, 2, 3]),
-        );
-      } finally {
-        await next.release?.();
-      }
     },
   );
+
+  it("rejects a non-audio response before returning a stream", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"error":"nope"}', { headers: { "content-type": "application/json" } })),
+    );
+    await expect(provider.streamSynthesize!(speechRequest())).rejects.toThrow(
+      "OpenAI TTS API error: malformed audio response",
+    );
+  });
 
   it("accepts a complete WAV response from a buffered compatibility endpoint", async () => {
     const fetchMock = mockSpeechFetch({ response_format: "wav" });

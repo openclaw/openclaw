@@ -62,7 +62,6 @@ export type SpeechSynthesisResult = {
 /** Streaming speech synthesis result; release frees provider transport resources. */
 export type SpeechSynthesisStreamResult = Omit<SpeechSynthesisResult, "audioBuffer"> & {
   audioStream: ReadableStream<Uint8Array>;
-  sampleRate?: number;
   release?: () => Promise<void>;
 };
 
@@ -129,7 +128,6 @@ export type TtsSynthesisResult = TtsVoiceMediaOutcome & {
 
 export type TtsStreamResult = TtsVoiceMediaOutcome & {
   audioStream?: ReadableStream<Uint8Array>;
-  sampleRate?: number;
   release?: () => Promise<void>;
 };
 

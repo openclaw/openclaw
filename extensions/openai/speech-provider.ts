@@ -176,7 +176,6 @@ const parseDirectiveToken = createSpeechDirectiveParser({
 async function requestOpenAISpeech(
   req: SpeechSynthesisRequest,
   mode: "buffered" | "telephony" | "stream",
-  signal?: AbortSignal,
 ) {
   const config = normalizeOpenAIProviderConfig(req.providerConfig, "resolved");
   const model = normalizeOptionalString(req.providerOverrides?.model) ?? config.model;
@@ -190,7 +189,6 @@ async function requestOpenAISpeech(
   const responseFormat =
     (mode === "telephony" ? "pcm" : undefined) ??
     config.responseFormat ??
-    (mode === "stream" && !isGroqSpeechBaseUrl(config.baseUrl) ? "pcm" : undefined) ??
     (isGroqSpeechBaseUrl(config.baseUrl) ? "wav" : req.target === "voice-note" ? "opus" : "mp3");
   const { resolveGeneratedMediaMaxBytes } =
     await import("openclaw/plugin-sdk/media-generation-runtime");
@@ -250,7 +248,6 @@ async function requestOpenAISpeech(
       body: requestBody,
     },
     timeoutMs,
-    signal,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(config.baseUrl),
     capture: false,
     pinDns: debugProxyFetchPatchInstalled ? false : undefined,
@@ -306,49 +303,39 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, mode: "buffer
 }
 
 async function streamOpenAISpeech(req: SpeechSynthesisRequest) {
-  const [{ responseWithRelease }, { isVoiceMessageCompatibleAudio }] = await Promise.all([
-    import("openclaw/plugin-sdk/fetch-runtime"),
-    import("openclaw/plugin-sdk/media-runtime"),
-  ]);
-  const abort = new AbortController();
-  const { response, release, responseFormat, maxBytes } = await requestOpenAISpeech(
-    req,
-    "stream",
-    abort.signal,
-  );
-  if (!response.body) {
+  const [{ createBoundedProviderBinaryStream }, { assertProviderBinaryResponseContent }] =
+    await Promise.all([
+      import("openclaw/plugin-sdk/provider-binary-stream"),
+      import("openclaw/plugin-sdk/provider-http"),
+    ]);
+  const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");
+  const { response, release, responseFormat, maxBytes } = await requestOpenAISpeech(req, "stream");
+  try {
+    assertProviderBinaryResponseContent(response, "OpenAI TTS API error", "audio");
+    if (!response.body) {
+      throw new Error("OpenAI TTS response has no audio body");
+    }
+    const bounded = createBoundedProviderBinaryStream(response.body, {
+      maxBytes,
+      createOverflowError: ({ maxBytes: limit }) =>
+        new Error(`OpenAI TTS API error: audio response exceeds ${limit} bytes`),
+      createReleaseError: () => new Error("OpenAI TTS stream released"),
+      cleanup: release,
+    });
+    const fileExtension = `.${responseFormat}`;
+    return {
+      audioStream: bounded.stream,
+      outputFormat: responseFormat,
+      fileExtension,
+      voiceCompatible:
+        req.target === "voice-note" &&
+        isVoiceMessageCompatibleAudio({ fileName: `speech${fileExtension}` }),
+      release: bounded.release,
+    };
+  } catch (error) {
     await release();
-    throw new Error("OpenAI TTS response has no audio body");
+    throw error;
   }
-  let bytes = 0;
-  const limitedBody = response.body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        bytes += chunk.byteLength;
-        if (bytes > maxBytes) {
-          throw new Error(`OpenAI TTS audio response exceeds ${maxBytes} bytes`);
-        }
-        controller.enqueue(chunk);
-      },
-    }),
-    { signal: abort.signal },
-  );
-  // The wrapper closes the guarded request on EOF, stream failure, or cancellation.
-  const audioStream = responseWithRelease(new Response(limitedBody), release).body!;
-  const fileExtension = `.${responseFormat}`;
-  return {
-    audioStream,
-    outputFormat: responseFormat,
-    fileExtension,
-    voiceCompatible:
-      req.target === "voice-note" &&
-      isVoiceMessageCompatibleAudio({ fileName: `speech${fileExtension}` }),
-    ...(responseFormat === "pcm" ? { sampleRate: 24_000 } : {}),
-    release: async () => {
-      abort.abort();
-      await release();
-    },
-  };
 }
 
 export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
