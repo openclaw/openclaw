@@ -130,6 +130,9 @@ const config = {
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         // The manual-only release approval suite keeps its .checks.ts name out of CI discovery.
         "test/manual-release-approval.checks.ts!",
+        "test/manual-fast-track-button.checks.ts!",
+        "test/manual-fast-track-publication.checks.ts!",
+        "test/manual-fast-track-receipt.checks.ts!",
         // CLI subprocess fixtures consume the shared native-report collector.
         "src/cli/cli-process-child.test-helpers.test.ts!",
         // Core bootstrap packaging and source updates consume shared script owners.
