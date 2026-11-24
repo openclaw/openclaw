@@ -163,11 +163,7 @@ async function prepareSessionGenerationLease(
         // store, current permissions, and actual closure remain checked below.
         return;
       }
-      if (
-        change.scope === "sessions" &&
-        change.factsInvalidated === undefined &&
-        retained
-      ) {
+      if (change.scope === "sessions" && change.factsInvalidated === undefined && retained) {
         // Committed writers publish row facts separately from the session-list notice.
         // The next assertion still checks the retained source and current facts.
         return;
