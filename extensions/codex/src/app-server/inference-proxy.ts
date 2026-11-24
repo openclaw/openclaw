@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage } from "node:http";
-import { Writable, type Duplex } from "node:stream";
+import type { Duplex } from "node:stream";
 import {
   createDeferred,
   createPermitPool,
@@ -31,7 +31,12 @@ import {
 import {
   OVERLOAD_BODY,
   OVERLOAD_HEADERS,
+  REQUEST_TIMEOUT_MS,
+  isCodexCatalogRequest,
   rejectBusyUpgrade,
+  rejectUnsupportedHttpOperation,
+  relayCodexCatalogRequest,
+  relayHttpResponse,
   relayHeaders,
 } from "./inference-proxy-http.js";
 import {
@@ -47,7 +52,6 @@ const MAX_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_WEBSOCKETS = 64;
 // Preserve the former 64 WS + 16 HTTP envelope; uploads no longer own response slots.
 const MAX_RESIDENTS = MAX_WEBSOCKETS + MAX_UPLOADS;
-const REQUEST_TIMEOUT_MS = 30_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const IDLE_WEBSOCKET_MS = 60_000;
 
@@ -214,6 +218,7 @@ export async function createCodexInferenceProxy(params: {
     return {
       target,
       path: incoming.pathname,
+      query: incoming.searchParams,
     };
   };
   const { prepare, prepareHttp } = createCodexInferenceDispatch({
@@ -240,9 +245,11 @@ export async function createCodexInferenceProxy(params: {
     // A fresh request owns its admission, not the listener's closed startup lease.
     void runInDetachedAsyncContext(async () => {
       try {
-        const { target, path } = resolveTarget(req);
-        if (req.method !== "POST") {
-          throw new Error(FAILURE);
+        const { target, path, query } = resolveTarget(req);
+        const catalog = !params.oauth && isCodexCatalogRequest(req, path, query);
+        if (!catalog && req.method !== "POST") {
+          rejectUnsupportedHttpOperation(res);
+          return;
         }
         resident = reserveResident(socket, signal, deadlineAtMs);
         const admitted = resident && (await resident.ready);
@@ -250,6 +257,10 @@ export async function createCodexInferenceProxy(params: {
         assertCurrent();
         if (!admitted) {
           res.writeHead(503, OVERLOAD_HEADERS).end(OVERLOAD_BODY);
+          return;
+        }
+        if (catalog) {
+          await relayCodexCatalogRequest(req, res, target, signal, assertCurrent);
           return;
         }
         releasePermit = await acquireUpload(signal, deadlineAtMs);
@@ -318,15 +329,7 @@ export async function createCodexInferenceProxy(params: {
           throw new Error(FAILURE);
         }
         upload.assertCurrent();
-        // fetch decodes response content encodings. Never forward stale encoding/length headers.
-        const headers = Object.fromEntries(guarded.response.headers);
-        delete headers["content-encoding"];
-        res.writeHead(guarded.response.status, relayHeaders(headers));
-        if (!guarded.response.body) {
-          res.end();
-        } else {
-          await guarded.response.body.pipeTo(Writable.toWeb(res), { signal: upload.signal });
-        }
+        await relayHttpResponse(guarded.response, res, upload.signal);
       } catch (error) {
         // Errors can contain headers, bodies, or the private URL: never log/reflect them.
         if (!res.headersSent && !res.destroyed) {
