@@ -780,6 +780,7 @@ describe("release validation no-push transport", () => {
 
     expect(umbrellaGroups).toEqual([
       "all",
+      "build-only",
       "ci",
       "plugin-prerelease",
       "install-smoke",

@@ -10273,7 +10273,7 @@ describe("package artifact reuse", () => {
     }
     expect(jobNeeds(qualify)).toEqual(["resolve_target", "evidence_reuse", "prepare_npm_package"]);
     expect(qualify.if).toBe(
-      "${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}",
+      "${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('[\"all\",\"build-only\"]'), inputs.rerun_group) && needs.prepare_npm_package.result == 'success' }}",
     );
     expect(qualify.env?.ARTIFACT_RUN_ID).toBe("${{ needs.prepare_npm_package.outputs.run_id }}");
     expect(workflowStepById(prepare, "bundle").env?.ARTIFACT_OUTPUT).toBe("raw");
@@ -14172,7 +14172,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "${{ steps.plugin_compatibility.outputs.required }}",
     );
     expect(pluginCompatibilityJob.needs).toEqual(["resolve_target"]);
-    expect(pluginCompatibilityJob.if).toBeUndefined();
+    expect(pluginCompatibilityJob.if).toBe("inputs.rerun_group != 'build-only'");
     expect(enforcePluginCompatibility.if).toBe(
       "needs.resolve_target.outputs.plugin_compatibility_required == 'true'",
     );
