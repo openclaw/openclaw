@@ -296,7 +296,6 @@ async function recoverRequesterCompletionCustody(params: {
     try {
       settledWithoutNotice = await settleRefusedRestartCompletions({
         chat: { agentId, sessionKey, storePath, sessionId: entry.sessionId },
-        lifecycleRevision: entry.lifecycleRevision,
         refused,
         assertCurrent,
       });
@@ -334,7 +333,6 @@ function latestRecordedTime(child: SubagentRunRecord): number {
  */
 async function settleRefusedRestartCompletions(params: {
   chat: { agentId: string; sessionKey: string; storePath: string; sessionId: string };
-  lifecycleRevision: string | undefined;
   refused: readonly SubagentRunRecord[];
   assertCurrent: () => void;
 }): Promise<number> {
@@ -352,26 +350,23 @@ async function settleRefusedRestartCompletions(params: {
         .join("\n"),
     );
     const result = await runWithoutOwnedSessionTranscriptWrites(() =>
-      appendSessionTranscriptReport(
-        { ...chat, expectedLifecycleRevision: params.lifecycleRevision },
-        {
-          kind: "custom",
-          customTypes: ["openclaw.system-note"],
-          // A repeat after a failed settle write names the same results; do not post it twice.
-          selectReport: (latest) => {
-            return isRecord(latest?.details) &&
-              latest.details.source === REFUSED_NOTICE_SOURCE &&
-              latest.details.resultsKey === resultsKey
-              ? undefined
-              : {
-                  customType: "openclaw.system-note",
-                  content: RESTART_COMPLETION_REFUSED_NOTICE,
-                  display: true,
-                  details: { source: REFUSED_NOTICE_SOURCE, resultsKey },
-                };
-          },
+      appendSessionTranscriptReport(chat, {
+        kind: "custom",
+        customTypes: ["openclaw.system-note"],
+        // A repeat after a failed settle write names the same results; do not post it twice.
+        selectReport: (latest) => {
+          return isRecord(latest?.details) &&
+            latest.details.source === REFUSED_NOTICE_SOURCE &&
+            latest.details.resultsKey === resultsKey
+            ? undefined
+            : {
+                customType: "openclaw.system-note",
+                content: RESTART_COMPLETION_REFUSED_NOTICE,
+                display: true,
+                details: { source: REFUSED_NOTICE_SOURCE, resultsKey },
+              };
         },
-      ),
+      }),
     );
     if (!result.ok) {
       throw new Error(

@@ -20,6 +20,7 @@ import { prepareRestartStores } from "./session-restart-resume-discovery.js";
 
 // Only requester admission is replaced, so each case chooses the exact refusal class;
 // custody, the subagent registry and the chat transcripts are the real owners.
+// mock-isolation: real admission would need a live plugin grant owner for every refusal class.
 vi.mock("./operator-run-recovery.js", () => ({
   restoreGatewayQueuedOperatorRecovery: vi.fn(),
 }));
