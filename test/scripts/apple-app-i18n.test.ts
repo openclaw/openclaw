@@ -138,7 +138,7 @@ it.each(["ios", "macos"] as const)(
     const active = expectDefined(strings[activeKey], "active catalog entry");
     expectDefined(active.localizations, "active localizations").de = unit("Aktiv %@");
     const retired = "Retired empty title";
-    const obsolete = {
+    const obsolete: typeof catalog & { strings: typeof strings } = {
       ...catalog,
       strings: {
         ...strings,
