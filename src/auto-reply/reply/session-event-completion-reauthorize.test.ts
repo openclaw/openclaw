@@ -87,7 +87,6 @@ function policy(revoke?: Revocation, commandOwner?: true): Partial<OpenClawConfi
   };
 }
 
-const retired = "agent harness host capability is no longer active";
 const rows: Array<{
   label: string;
   requester: string;
@@ -133,20 +132,21 @@ const rows: Array<{
     revoke: "guild channel",
     outcome: "absent",
   },
-  // Revoking publishes config, which retires the admitted turn's tool host before the call.
+  // Authority is decided once when the completion turn starts (#202513, #204105): a revocation
+  // published after admission applies to the next start, so this turn keeps the tool it was given.
   {
     label: "sender revoked after admission",
     requester: OWNER,
     revoke: "sender",
     after: true,
-    outcome: retired,
+    outcome: "ran",
   },
   {
     label: "DM revoked after admission",
     requester: OWNER,
     revoke: "DM",
     after: true,
-    outcome: retired,
+    outcome: "ran",
   },
 ];
 
