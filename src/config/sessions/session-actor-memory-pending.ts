@@ -290,6 +290,12 @@ export function createSessionActorMemoryPending(
             };
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
+        for (const key of input.absorbedIdempotencyKeys ?? []) {
+          const absorbed = state.pendingInputs.get(key);
+          if (absorbed?.state === "queued" && absorbed.consumed_event_id === null) {
+            state.pendingInputs.delete(key);
+          }
+        }
       } else if (input.kind === "complete") {
         const retained = completion(input);
         if (

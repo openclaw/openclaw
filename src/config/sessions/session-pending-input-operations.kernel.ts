@@ -231,6 +231,24 @@ export function mutatePendingInput(
             actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
             actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
           }
+          const absorbed = input.absorbedIdempotencyKeys ?? [];
+          if (absorbed.length > 0) {
+            executeSqliteQuerySync(
+              current.db,
+              getSessionKysely(current.db)
+                .deleteFrom("session_pending_inputs")
+                .where("session_id", "=", input.sessionId)
+                .where("idempotency_key", "in", [...absorbed])
+                .where("state", "=", "queued")
+                .where("consumed_event_id", "is", null),
+            );
+            if (actor) {
+              actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
+              for (const key of absorbed) {
+                actor.pendingInputs.delete(key);
+              }
+            }
+          }
         } else if (input.kind === "complete") {
           if (!tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);

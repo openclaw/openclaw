@@ -23,7 +23,7 @@ import { logWarn } from "../logger.js";
 import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
-import { isOwedPending, owe, withhold, type Owed } from "../sessions/owed.js";
+import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
   listFinishedSessions,
@@ -259,7 +259,7 @@ export function wakeOwedExec(
   retries = 0,
 ): void {
   const wakeAgain =
-    retries > 0 ? () => wakeOwedExec(owed, options, onWake, retries - 1) : undefined;
+    retries > 0 ? (stored: Owed) => wakeOwedExec(stored, options, onWake, retries - 1) : undefined;
   let receipt: ReturnType<typeof enqueueSessionEvent>;
   try {
     receipt = enqueueSessionEvent(owed.text, {
@@ -281,29 +281,30 @@ export function wakeOwedExec(
 }
 
 /**
- * Settles a wake by the stored row, not by its outcome; a row its turn appended needs nothing.
- * A completed wake that left the row pending answered it inside a shared turn's input, which
- * carries every result it answers; the row is hidden. A failed wake with a retry left wakes the
- * chat again from this row; each member of a failed shared turn retries its own row. A stop, or
- * a failure with no retry left, withholds the result with that cause. Restart drains leave the
- * row owed for restart recovery.
+ * Settles a wake by the stored row, not by its outcome; a row its turn appended or a fold
+ * consumed needs nothing. A completed wake that left the row pending answered it inside a shared
+ * turn's input (its fold failed); the row is hidden. A failed wake with a retry left wakes the
+ * chat again from the stored row, whose text a fold may have joined. A stop, or a failure with
+ * no retry left, withholds the result with that cause. Restart drains leave the row owed for
+ * restart recovery.
  */
 async function settleOwedExecWake(
   owed: Owed,
   outcome: SessionEventOutcome,
-  wakeAgain?: () => void,
+  wakeAgain?: (stored: Owed) => void,
 ) {
   if (outcome.status === "failed") {
     logWarn(`exec: completion delivery failed (${outcome.error}); inspect the process result.`);
   }
   try {
-    if (isGatewayRestartDraining() || !(await isOwedPending(owed))) {
+    const stored = isGatewayRestartDraining() ? undefined : await readPendingOwed(owed);
+    if (!stored) {
       return;
     }
     if (outcome.status === "completed") {
       await withhold(owed, "failed", "interrupted");
     } else if (outcome.status === "failed" && wakeAgain) {
-      wakeAgain();
+      wakeAgain(stored);
     } else {
       await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }

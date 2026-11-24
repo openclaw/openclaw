@@ -63,6 +63,16 @@ async function openOwed(item: Owed) {
   }
 }
 
+const owedMessage = (item: Owed) => ({
+  role: "user",
+  content: item.text,
+  timestamp: Date.now(),
+  idempotencyKey: item.id,
+  provenance: { kind: "internal_system", sourceTool: item.kind },
+  kind: item.kind,
+  ...(item.originFacts ? { originFacts: item.originFacts } : {}),
+});
+
 /** The only writer of new owed rows. A second write of the same id keeps the first row. */
 export async function owe(item: Owed): Promise<void> {
   const opened = await openOwed(item);
@@ -74,15 +84,7 @@ export async function owe(item: Owed): Promise<void> {
     if (snapshot.existing || snapshot.committed) {
       return;
     }
-    const message = {
-      role: "user",
-      content: item.text,
-      timestamp: Date.now(),
-      idempotencyKey: item.id,
-      provenance: { kind: "internal_system", sourceTool: item.kind },
-      kind: item.kind,
-      ...(item.originFacts ? { originFacts: item.originFacts } : {}),
-    };
+    const message = owedMessage(item);
     await store.mutate(
       {
         ...identity,
@@ -102,11 +104,45 @@ export async function owe(item: Owed): Promise<void> {
   }
 }
 
-/** True while the row is neither appended nor withheld. */
-export async function isOwedPending(item: Owed): Promise<boolean> {
+/**
+ * One shared turn answers several owed results. In one transaction the first row takes their
+ * joined text and the other rows are consumed, so each result is delivered exactly once even if
+ * the Gateway stops at any point.
+ */
+export async function fold(first: Owed, others: readonly Owed[]): Promise<void> {
+  const opened = await openOwed(first);
+  if (!opened?.pending) {
+    await opened?.store.release();
+    return;
+  }
+  const { store, identity, snapshot, pending } = opened;
+  try {
+    await store.mutate(
+      {
+        ...identity,
+        kind: "stage",
+        expected: snapshot,
+        trackCompletion: false,
+        runId: pending.run_id,
+        requestHash: pending.request_hash,
+        lifecycleGeneration: pending.lifecycle_generation,
+        inputId: pending.input_id,
+        messageJson: JSON.stringify(owedMessage(first)),
+        absorbedIdempotencyKeys: others.map((other) => other.id),
+      },
+      () => {},
+    );
+  } finally {
+    await store.release();
+  }
+}
+
+/** The stored item while its row is neither appended nor withheld; a folded row has joined text. */
+export async function readPendingOwed(item: Owed): Promise<Owed | undefined> {
   const opened = await openOwed(item);
   await opened?.store.release();
-  return opened?.pending !== undefined;
+  const content = opened?.pending && JSON.parse(opened.pending.message_json).content;
+  return typeof content === "string" ? { ...item, text: content } : undefined;
 }
 
 /**
