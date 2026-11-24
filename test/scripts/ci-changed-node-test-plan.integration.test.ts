@@ -269,17 +269,26 @@ it.each([
   "packages/agent-core/src/harness/compaction/summarization-completion.ts",
   "packages/ai/src/transports/anthropic-messages.ts",
 ])("selects the declared behavior tests and same-directory importers when %s changes", (source) => {
-  const selected = new Set(
-    resolveChangedNodeTestTargets([source], { selectionMode: "aggressive" }),
+  // PR CI excludes PR-exempt files; the declared set opts its matches in regardless.
+  const declared = new Set(
+    resolveChangedNodeTestTargets([source], {
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    }),
   );
   for (const test of [
     "src/agents/embedded-agent-runner.prompt-cache.test.ts",
     "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
     "src/auto-reply/reply/agent-runner-compaction-fallback.test.ts",
     "src/cron/session-context-accounting.gateway.integration.test.ts",
+    "src/agents/command/cli-compaction.test.ts",
   ]) {
-    expect(selected.has(test), test).toBe(true);
+    expect(declared.has(test), test).toBe(true);
   }
+  const selected = new Set(
+    resolveChangedNodeTestTargets([source], { selectionMode: "aggressive" }),
+  );
   const directory = source.replace(/[^/]+$/u, "");
   const importers = resolveAffectedTestsFromImportGraph(source, process.cwd(), {
     tooling: true,

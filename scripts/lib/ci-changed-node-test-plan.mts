@@ -584,6 +584,12 @@ export function resolveChangedNodeTestTargets(
     return target.includes("*") ? allFiles().filter((file) => path.matchesGlob(file, target)) : [];
   };
   const expanded = new Map(owners.map((target) => [target, expandTarget(target)]));
+  // The declared behavior set is an explicit owner opt-in, including PR-exempt files.
+  for (const target of declaredBehavior) {
+    for (const file of expanded.get(target) ?? []) {
+      optInTargets.add(file);
+    }
+  }
   const files = [...expanded.values()].flat();
   const selected = [...new Set([...files, ...smoke])]
     .filter(
