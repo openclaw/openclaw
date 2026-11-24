@@ -91,8 +91,7 @@ class FixtureGatewayTls {
 
     @JvmStatic
     @Implementation
-    fun buildGatewayTlsConfig(params: GatewayTlsParams?): GatewayTlsConfig? =
-      params?.let { buildGatewayTlsConfig(it, requireNotNull(defaultTrust)) }
+    fun buildGatewayTlsConfig(params: GatewayTlsParams?): GatewayTlsConfig? = params?.let { buildGatewayTlsConfig(it, requireNotNull(defaultTrust)) }
   }
 }
 
