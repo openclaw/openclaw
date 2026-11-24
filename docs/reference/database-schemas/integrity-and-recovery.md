@@ -314,6 +314,14 @@ an interrupted check must restart from the beginning. Low process priority is no
 an I/O bandwidth limit; the bounded concurrency and inspection deadline do not
 provide page-level pacing or resumability.
 
+Background verification releases its own reader when a checkpoint is blocked and
+the WAL exceeds both twice the main database size and 64 MiB. The checkpoint
+owner publishes this byte-pressure fact; repeated blocked warnings alone do not
+cancel verification. Cancellation joins the native child and leaves verification
+inconclusive, without a seal or a corruption refusal. Foreground reads and writes
+continue. This reclaims a maintenance reader; it is not a WAL size cap and does
+not end user or external readers.
+
 This policy accepts the interval between bounded admission and a background
 corruption finding: previously untouched damaged pages can exist while ordinary
 requests run. SQLite still detects malformed pages it accesses, and existing
