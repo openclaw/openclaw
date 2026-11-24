@@ -222,7 +222,7 @@ export async function preflightStateUpgrade(
 ): Promise<string | undefined> {
   const stateDir = path.resolve(resolveStateDir(env));
   if (!fs.existsSync(stateDir)) {
-    return;
+    return undefined;
   }
   const { targets } = await discoverDatabases(stateDir, config, env);
   const postgres = targets.filter((target) => target.engine === "postgres");
@@ -236,4 +236,5 @@ export async function preflightStateUpgrade(
       config,
     );
   }
+  return undefined;
 }
