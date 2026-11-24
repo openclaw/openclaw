@@ -34,7 +34,9 @@ You can answer from any supported conversation surface:
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
   keeps the full question alongside your answer in a compact summary. Skipped
-  or expired questions keep their wording alongside the outcome.
+  or expired questions keep their wording alongside the outcome. When you reply
+  in the main composer instead, your text stays visible as a user message and
+  the resolved question disappears without a summary or **Skipped** rows.
   A pending question from a direct child session also docks in the parent
   chat, marked **Asked by** with a link to the child's session. The parent's
   composer stays available, including its draft and attachments. Collapsing the
@@ -199,14 +201,18 @@ For an ordinary decision question, if it expires or is cancelled before an answe
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question.
 
-In the Control UI, sending a new ordinary prompt from the composer supersedes
-the Gateway questions already docked in that conversation, including child-session
-questions shown there. They are cancelled through the normal question lifecycle,
-not answered: an ordinary question returns `status: "no_answer"`, and a required
-manual step remains `action_unresolved`. A new prompt never grants approval, requests
-verification, or proves the manual step complete. Blank, rejected, command, and
-explicitly queued submissions do not dismiss questions. Questions arriving during the send remain
-answerable; failed cancellation leaves the question and its error visible.
+In the Control UI, a reply from the main composer can answer one ordinary
+question in the active turn, including an answer outside its options. It appears
+as a user message without starting another turn. For a multi-question prompt,
+the Gateway passes the text to that same turn as a new instruction instead of
+guessing which question it answers. The question panel and its summary disappear.
+
+The same replacement behavior applies to required manual steps and credential
+requests, but does not complete the step or store a credential. The manual step
+remains `action_unresolved` and dependent actions remain blocked; credentials
+belong in the protected question input, never the chat composer. Child-session
+questions, MCP forms, commands, and explicitly queued messages keep their existing
+input handling. A rejected message does not dismiss the pending question.
 
 Gateway question records include the optional originating `runId`. Clients can
 use it to keep the prompt and its terminal answer summary with the correct agent

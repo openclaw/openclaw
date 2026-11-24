@@ -16,7 +16,8 @@ import {
   runPluginHttpRoute,
 } from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginGatewayRequestAuthority } from "../../plugins/runtime/gateway-request-authority.js";
+import type { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
@@ -130,6 +131,8 @@ function createPluginRouteRuntimeClient(
 async function withPluginRouteRuntimeScope<T>(
   scope: PluginRouteRuntimeScope,
   run: () => Promise<T>,
+  auth: AuthorizedGatewayHttpRequest | undefined,
+  isOpen: () => boolean,
 ): Promise<T> {
   // HTTP clients are not in the connected-client set. Keep their prepared role/aliases
   // current across handler and projection awaits, using the same publication owner.
@@ -139,7 +142,21 @@ async function withPluginRouteRuntimeScope<T>(
       ? onUserProfilesChanged(() => prepareGatewayRecipientProfile(client))
       : undefined;
   try {
-    return await withPluginRuntimeGatewayRequestScope(scope, run);
+    return await withPluginGatewayRequestAuthority(
+      scope,
+      run,
+      auth
+        ? {
+            personProfileId: auth.personProfileId,
+            assertCurrent() {
+              if (!isOpen()) {
+                throw new Error("Gateway HTTP request closed");
+              }
+              assertRemoteControlUiIngressCurrent(client?.remoteControlUiIngress);
+            },
+          }
+        : undefined,
+    );
   } finally {
     stop?.();
   }
@@ -376,6 +393,8 @@ export function createGatewayPluginRequestHandler(params: {
               }),
               async () =>
                 runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
+              route.auth === "gateway" ? gatewayRequestAuth : undefined,
+              () => !res.writableEnded && !res.destroyed,
             )) !== false
           );
         };
@@ -493,6 +512,8 @@ export function createGatewayPluginUpgradeHandler(params: {
                   handleUpgrade(req, socket, head),
                 );
               },
+              route.auth === "gateway" ? gatewayRequestAuth : undefined,
+              () => !socket.destroyed,
             )) !== false,
         );
         if (handled) {

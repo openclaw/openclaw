@@ -24,6 +24,16 @@ openclaw plugins enable beam
 Enablement applies to a running Gateway automatically. If it is offline, start
 it to use Beam. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
+Before configuring an outbound mirror, check the installed cleaner:
+
+```bash
+openclaw beam doctor --json
+```
+
+The command verifies the native cleaner for this machine and exits with status
+1 if the executable is missing or fails verification. Receiving and viewing
+snapshots work independently of the sender's cleaner.
+
 Equivalent config:
 
 ```json5

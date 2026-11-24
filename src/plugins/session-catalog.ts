@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
   SessionCatalogLocator,
+  SessionCatalogRouteMethods,
   SessionCatalogSourceProfileRelation,
   SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
@@ -202,6 +203,12 @@ export type SessionCatalogProvider = {
   supportsProfileRelation?: true;
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
+  /** Owned RPCs used when the caller lacks the shared operation's scope. The host verifies ownership. */
+  ownedRoute?: {
+    methods: Partial<SessionCatalogRouteMethods>;
+    /** Owning methods require the caller's live role-required policy from this plugin. */
+    requiredGrantPluginId?: string;
+  };
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Local hosts this producer can enumerate without contacting peers or paired nodes. */

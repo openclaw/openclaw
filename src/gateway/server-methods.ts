@@ -11,6 +11,7 @@ import {
   getPluginRuntimeGatewayNodeAuthorities,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -121,6 +122,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
   "context" | "isWebchatConnect" | "signal" | "hasCurrentClientAuthority"
 > & {
+  parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
   methodRegistry: GatewayMethodRegistryView;
   requestParams?: unknown;
   admission?: "continuation";
@@ -223,9 +225,10 @@ export async function runWithGatewayRequestEnvelope<T>(
       !client.internal.syntheticClient &&
       (method === "themes.list" || method === "users.prefs.get" || method === "agents.list");
     try {
+      const parentScope = getPluginRuntimeGatewayRequestScope();
       const pluginRegistry =
         (options.methodRegistry.pluginRegistry as PluginRegistry | undefined) ??
-        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+        parentScope?.pluginRegistry ??
         getActivePluginRegistry() ??
         undefined;
       return await withPluginRuntimeGatewayRequestScope(
@@ -234,6 +237,7 @@ export async function runWithGatewayRequestEnvelope<T>(
           // Detached turn admission needs the live instance resolver, not a captured request context.
           resolveGatewayContext: options.context.resolveGatewayContext,
           client,
+          parentHttpRequestAuthority: options.parentHttpRequestAuthority,
           ...(interactiveStateRead
             ? { canUseInteractiveStateReadCapacity: () => interactiveStateRead }
             : {}),
@@ -273,6 +277,7 @@ export async function runWithGatewayRequestEnvelope<T>(
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & {
+    parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
     extraHandlers?: GatewayRequestHandlers;
     admission?: "continuation";
     requestEntry?: GatewayRequestEntry;
@@ -523,10 +528,7 @@ export async function handleGatewayRequest(
               assertCurrent,
             });
             if (result.ok) {
-              handlerOptions.respond(
-                true,
-                result.sessionKey ? { sessionKey: result.sessionKey } : null,
-              );
+              handlerOptions.respond(true, result.destination);
             } else {
               handlerOptions.respond(false, undefined, result.error);
             }
@@ -587,6 +589,7 @@ export async function handleGatewayRequest(
         isWebchatConnect,
         signal,
         hasCurrentClientAuthority,
+        parentHttpRequestAuthority: opts.parentHttpRequestAuthority,
         methodRegistry,
         requestParams: req.params,
         admission: opts.admission,
