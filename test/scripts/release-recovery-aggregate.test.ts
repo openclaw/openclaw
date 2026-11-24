@@ -2,12 +2,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { preparedDockerEvidenceFromFullRelease } from "../../scripts/docker-release-artifacts.mjs";
+import {
+  preparedDockerEvidenceFromFullRelease,
+  verifyDockerReleaseProducer,
+} from "../../scripts/docker-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import type { ReusableReleaseChildSelection } from "../../scripts/lib/full-release-child-reuse.mjs";
-import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import {
+  validateFullReleaseNpmPreflight,
+  verifyNpmPreflightPublicationLineage,
+} from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
   validateReleaseRunEvidence,
   runReleaseRecoveryCli,
@@ -23,7 +29,7 @@ afterEach(() => {
   }
 });
 
-function fixture(substitute = false) {
+function fixture(substitute = false, recoveryAttempt = 1) {
   const origin = candidatePublicationFixture({
     runId: "500",
     ...(substitute ? { candidateSha: "c".repeat(40), qualificationSha: "e".repeat(40) } : {}),
@@ -80,12 +86,13 @@ function fixture(substitute = false) {
     replacement.url = "https://github.com/openclaw/openclaw/actions/runs/998";
   }
   f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
-  const producer = { ...f.admission.producer, runId: 991, runAttempt: 1 };
+  const producer = { ...f.admission.producer, runId: 991, runAttempt: recoveryAttempt };
   const run = {
     ...f.admission.run,
     status: "in_progress",
     conclusion: null as string | null,
     id: 991,
+    run_attempt: recoveryAttempt,
     head_sha: f.p,
     head_branch: producer.workflowHeadBranch,
     path: producer.workflowPath,
@@ -95,7 +102,7 @@ function fixture(substitute = false) {
   const artifact = {
     ...originalArtifact,
     id: 992,
-    name: "full-release-validation-991-1",
+    name: `full-release-validation-991-${recoveryAttempt}`,
     workflow_run: { id: 991, head_sha: f.p, head_branch: producer.workflowHeadBranch },
   };
   const rerun = vi.fn(() => {
@@ -156,9 +163,9 @@ function fixture(substitute = false) {
         return { selection, run: await origin.client.getRun(normal.runId), receipt: {}, jobs: [] };
       },
     ),
-    loadManifest: vi.fn((id: string) => {
-      if (id !== "991") {
-        throw new Error("original manifest is absent");
+    loadManifest: vi.fn((id: string, attempt: number) => {
+      if (id !== "991" || attempt !== recoveryAttempt) {
+        throw new Error("Only the sealed recovery attempt has a manifest");
       }
       return { manifest: sealed, artifact };
     }),
@@ -188,18 +195,18 @@ function fixture(substitute = false) {
           const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
           if (
             endpoint.endsWith("actions/runs/991") ||
-            endpoint.endsWith("actions/runs/991/attempts/1")
+            endpoint.endsWith(`actions/runs/991/attempts/${recoveryAttempt}`)
           ) {
             return JSON.stringify(run);
           }
-          if (endpoint.endsWith("actions/runs/991/attempts/1/jobs?per_page=100")) {
+          if (endpoint.endsWith(`actions/runs/991/attempts/${recoveryAttempt}/jobs?per_page=100`)) {
             return JSON.stringify({
               total_count: 1,
               jobs: [
                 {
                   name: "Seal retained qualification",
                   run_id: 991,
-                  run_attempt: 1,
+                  run_attempt: recoveryAttempt,
                   status: run.status,
                   conclusion: run.conclusion,
                   steps: [
@@ -224,6 +231,7 @@ function fixture(substitute = false) {
   );
   return {
     f,
+    origin,
     normalCiSelection,
     producer,
     run,
@@ -299,6 +307,49 @@ it("seals the original plan without an original manifest or any new CI/old-paren
   ).toEqual(manifest.publicationArtifacts.docker);
 });
 
+it("authenticates the sealed recovery attempt while npm and Docker keep their original producers", async () => {
+  const { f, origin, normalCiSelection, producer, client, rerun, setSealed } = fixture(true, 2);
+  const { env, manifestPath } = await cliFixture(f, producer, client, normalCiSelection);
+  await runReleaseRecoveryCli(["--seal-recovery"], env, client);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  setSealed(manifest);
+  expect(manifest).toMatchObject({
+    runId: f.runId,
+    runAttempt: "1",
+    workflowSha: f.q,
+    recovery: { producer: { runId: 991, runAttempt: 2, workflowSha: f.p } },
+  });
+  const publisher = {
+    publisherSha: f.p,
+    publisherFullRef: producer.workflowFullRef,
+    evidenceClient: client,
+  };
+  const [npm, docker] = await Promise.all([
+    verifyNpmPreflightPublicationLineage({
+      ...publisher,
+      manifest,
+      repository: f.repository,
+      sourceSha: f.c,
+      toolingSha: origin.q,
+      producerRunId: origin.runId,
+      producerRunAttempt: "1",
+    }),
+    verifyDockerReleaseProducer(origin.docker, {
+      ...publisher,
+      fullReleaseManifest: manifest,
+      readApi: origin.readApi,
+    }),
+  ]);
+  expect(npm).toEqual(origin.npmQualified);
+  expect(docker.manifest).toBe(origin.docker);
+  docker.revalidateAuthority();
+  expect(client.loadManifest.mock.calls.map(([id, attempt]) => [id, attempt])).toEqual([
+    ["991", 2],
+    ["991", 2],
+  ]);
+  expect(rerun).not.toHaveBeenCalled();
+});
+
 async function cliFixture(
   f: ReturnType<typeof fixture>["f"],
   producer: ReturnType<typeof fixture>["producer"],
@@ -340,7 +391,7 @@ async function cliFixture(
       GITHUB_EVENT_PATH: eventPath,
       GITHUB_REPOSITORY: f.repository,
       GITHUB_RUN_ID: "991",
-      GITHUB_RUN_ATTEMPT: "1",
+      GITHUB_RUN_ATTEMPT: String(producer.runAttempt),
       GITHUB_EVENT_NAME: "workflow_dispatch",
       GITHUB_REF_NAME: producer.workflowHeadBranch,
       GITHUB_REF: producer.workflowFullRef,
