@@ -45,6 +45,13 @@ then uses GitHub's job-rerun API on the job's accepted attempt. GitHub also
 reruns dependent jobs. Other failures stay visible and require their own retry;
 a targeted retry never declares the parent recovered while blockers remain.
 
+Successful `verify` output ends with a verdict, the qualification tooling SHA (Q)
+as informational identity, and reusable candidate inputs (target SHA, validation
+run, and release profile). With `release:candidate`, independently pin publication
+tooling (P) using `--workflow-sha <P>` or `--publish-workflow-ref <tag>`; Q is not a
+publication-tooling selection. Supply the intended tag, channel, route, and any
+required SDK acknowledgement separately. `--json` retains the verifier evidence alone.
+
 `watch` resolves child runs from the parent's `Dispatched <workflow>: <url>
 (attempt N)` dispatch-job log lines and reports each attempt transition and
 failed job once, with runner labels. Transient network failures retry on the next
