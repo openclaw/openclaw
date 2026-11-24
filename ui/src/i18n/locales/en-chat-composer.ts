@@ -8,6 +8,10 @@ const catalog = {
       workingDetails: "Agent is working. View details",
     },
     composer: {
+      collectQueued: "Queue and group follow-ups in this chat",
+      collectQueuedHelp:
+        "Wait for the active run, then send compatible waiting messages together. You can still steer explicitly.",
+      collectQueuedSaveError: "Couldn't save the queue preference for this chat.",
       composerInput: "Chat composer",
       workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",

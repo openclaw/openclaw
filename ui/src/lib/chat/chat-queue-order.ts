@@ -17,6 +17,7 @@ export function isMovableChatQueueItem(item: ChatQueueItem): boolean {
   return (
     !item.pendingRunId &&
     !item.intent &&
+    !item.collectedBatch &&
     (item.sendAttempts ?? 0) === 0 &&
     (item.sendState === undefined ||
       item.sendState === "waiting-idle" ||

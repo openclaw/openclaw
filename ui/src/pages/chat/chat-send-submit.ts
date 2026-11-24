@@ -3,7 +3,6 @@ import {
   captureChatWorkContext,
   formatChatWorkContext,
 } from "../../../../src/chat/work-context.js";
-import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
@@ -31,6 +30,7 @@ import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-st
 import { loadChatHistory } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
+import { prepareQueuedCollection, resolveChatSubmitFollowUpMode } from "./chat-queue-preference.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
@@ -48,7 +48,7 @@ import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
   canSendVolatileQueueItem,
   reconnectSafeQueuedSendState,
-  waitForPendingChatSettings,
+  waitForSubmittedRoute,
 } from "./chat-send-eligibility.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
@@ -88,14 +88,6 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatGoalsEnglish();
 registerMcpEnglish();
-
-async function waitForSubmittedRoute(host: ChatHost, sessionKey: string): Promise<boolean> {
-  const pending = getPendingChatPickerPatch(host, sessionKey);
-  if (pending && !(await waitForPendingChatSettings(host, sessionKey, pending))) {
-    return false;
-  }
-  return host.sessionKey === sessionKey;
-}
 
 export async function handleSendChat(
   host: ChatHost,
@@ -575,15 +567,21 @@ export async function handleSendChat(
     // store write, so a rejected write leaves the original queued and editable.
     const resumedEdit =
       requestedEditId && resumedEditCandidate?.id === requestedEditId ? resumedEditCandidate : null;
-    // Editing preserves the row's delivery choice; current composer defaults must
-    // not turn an explicitly queued message into a steer or interrupt.
-    const followUpMode = initialTurnPending
-      ? "queue"
-      : resumedEdit
-        ? (resumedEdit.source.queueMode ?? "queue")
-        : (opts?.followUpMode ??
-          host.chatFollowUpMode ??
-          normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
+    const admission = captureChatOutboxAdmission(host, host.sessionKey);
+    const preparedCollection =
+      rawParsedCommand || intent || isInlineEditSubmission
+        ? undefined
+        : prepareQueuedCollection(host, admission.scope, opts?.followUpMode);
+    const collection = preparedCollection && (await preparedCollection);
+    if (preparedCollection && (!submissionOwnerIsCurrent() || admissionHoldReason())) {
+      return;
+    }
+    const followUpMode = resolveChatSubmitFollowUpMode(
+      host,
+      opts?.followUpMode,
+      initialTurnPending || Boolean(preparedCollection),
+      resumedEdit?.source,
+    );
     const activeRunQueueMode =
       !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
     const allowActiveRunSend = !intent && applyRunPolicy && followUpMode !== "queue";
@@ -593,10 +591,10 @@ export async function handleSendChat(
     if (!queuedText.text && !deliveredAttachments.length) {
       return;
     }
-    const admission = captureChatOutboxAdmission(host, host.sessionKey);
     const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
     let queued: ChatQueueItem = {
       storageScope: outboxStorageScope(host),
+      ...collection,
       id: generateUUID(),
       text: intent ? quotedMessage : queuedText.text,
       ...(queuedText.mentions ? { mentions: queuedText.mentions } : {}),

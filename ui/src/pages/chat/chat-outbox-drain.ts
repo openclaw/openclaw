@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { isCopiedOutboxPayloadTab } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
@@ -18,6 +19,7 @@ import {
   type ChatCommandTarget,
 } from "./chat-commands.ts";
 import { setChatError } from "./chat-history-state.ts";
+import { stageQueuedBatch } from "./chat-outbox-collect.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   consumeChatOutboxRetry,
@@ -175,9 +177,16 @@ async function drainStoredChatOutbox(
       outbox.queue.find(
         (entry) =>
           lane.freshAdmissions.has(entry.id) ||
-          (!parked?.has(entry.id) && (entry.sendState !== "failed" || entry.localCommandName)),
+          (!parked?.has(entry.id) &&
+            (entry.sendState !== "failed" || entry.collectedBatch || entry.localCommandName)),
       );
     if (!storedItem) {
+      return;
+    }
+    // Copied sessionStorage can contain a pre-batch snapshot. It must not deliver
+    // those member IDs independently or bypass their FIFO position. A restored
+    // original tab, including text-only rows with no payload, is not a copy.
+    if (storedItem.collectTabId && (await isCopiedOutboxPayloadTab(storedItem.collectTabId))) {
       return;
     }
     const freshItem = lane.freshAdmissions.has(storedItem.id);
@@ -402,6 +411,20 @@ async function drainStoredChatOutbox(
     if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
       lane.pendingOptions.delete(item.id);
       continue;
+    }
+    if (!freshAdmission && currentItem.collectClient && !currentItem.collectedBatch) {
+      const batch = await stageQueuedBatch(
+        host,
+        currentOutbox,
+        currentItem,
+        (id) => lane.freshAdmissions.has(id) || lane.pendingOptions.has(id),
+      );
+      if (batch === "staged") {
+        continue;
+      }
+      if (batch === "stale") {
+        return;
+      }
     }
     chatOutboxOwner(host).syncHost(host);
     const result = await dependencies.sendQueuedChatMessage(
