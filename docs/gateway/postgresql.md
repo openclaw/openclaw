@@ -65,6 +65,10 @@ package-activation journals remain **local by design**, not missing PostgreSQL
 families. There are no other configurable families. Device caches, external
 read-only sources and file artifacts also remain outside engine selection.
 
+Protected-copy prerequisites, including database `CREATE`, apply to release trials.
+An ordinary start after a manual package upgrade keeps the existing in-place
+migration-on-open path and does not acquire copy-only privilege requirements.
+
 ## Server-major qualification
 
 The `PGQUAL-MAJORS-UPGRADE` runs on 2026-10-19 used Homebrew PostgreSQL 16.15_1,

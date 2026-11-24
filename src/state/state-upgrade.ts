@@ -346,20 +346,21 @@ export async function upgradeStateDirectory(params: {
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
+  const trial = await readTrial(resolvePrefix(env));
+  const protectedTrial = trial?.phase === "pending" || trial?.phase === "trial";
   const upgradeRefusal = stateUpgradeRefusal(inventory, stateDir);
   if (upgradeRefusal) {
-    const trial = await readTrial(resolvePrefix(env));
-    if (trial?.phase === "pending" || trial?.phase === "trial") {
+    if (protectedTrial) {
       return { status: "refused", reason: upgradeRefusal };
     }
     // Manual installs and plain restarts have no release to roll back. The existing
     // database-open/Doctor migration owner must still be able to bring them online.
     return resumed ? { status: "resumed" } : { status: "current" };
   }
-  const postgres = targets.filter((target) => target.engine === "postgres");
+  // Ordinary starts retain PostgreSQL's existing migration-on-open owner.
+  const postgres = protectedTrial ? targets.filter((target) => target.engine === "postgres") : [];
   const sqliteOutdated = outdated.filter((target) => target.engine === "sqlite");
   try {
-    // The size decision precedes these copy-only prerequisites.
     if (postgres.length > 0) {
       await preflightPostgresUpgrade(
         postgres.map((target) => target.path),

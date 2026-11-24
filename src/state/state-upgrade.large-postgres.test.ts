@@ -22,10 +22,11 @@ afterEach(async () => {
 });
 
 it.each([
-  { gib: 6, trial: true },
-  { gib: 7, trial: true },
-  { gib: 7, trial: false },
-])("protects $gib GiB without size admission (trial: $trial)", async ({ gib, trial }) => {
+  { gib: 6, trial: true, canCreate: true },
+  { gib: 7, trial: true, canCreate: true },
+  { gib: 7, trial: false, canCreate: false },
+  { gib: 7, trial: true, canCreate: false },
+])("upgrades $gib GiB (trial: $trial, CREATE: $canCreate)", async ({ gib, trial, canCreate }) => {
   const root = dirs.make("state-upgrade-pg-size-");
   const statePath = path.join(root, "state", "openclaw.sqlite");
   const agentPath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -58,7 +59,11 @@ it.each([
     retainedAgentIds: [],
     registeredAgentDatabases: [],
   });
-  vi.spyOn(backup, "preflightPostgresUpgrade").mockResolvedValue(undefined);
+  vi.spyOn(backup, "preflightPostgresUpgrade").mockImplementation(async () => {
+    if (!canCreate) {
+      throw new Error("PostgreSQL protected copy requires database CREATE privilege");
+    }
+  });
   vi.spyOn(backup, "clonePostgresUpgrade").mockImplementation(async (source, anchor) => {
     fs.copyFileSync(source, anchor);
     using db = new DatabaseSync(anchor);
@@ -67,8 +72,15 @@ it.each([
   });
   vi.spyOn(backup, "validatePostgresUpgrade").mockResolvedValue(undefined);
   const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
-  await preflightStateUpgrade(env, {});
+  if (trial && !canCreate) {
+    await expect(preflightStateUpgrade(env, {})).rejects.toThrow(/CREATE privilege/);
+    expect(fs.readFileSync(statePath)).toEqual(original);
+    expect(readBackupEngine(agentPath)).toMatchObject({ namespace: "original_agent" });
+    expect(fs.readdirSync(root).some((name) => name.startsWith(".upgrade-"))).toBe(false);
+    return;
+  }
   if (trial) {
+    await preflightStateUpgrade(env, {});
     await createTrialPending(
       {
         runId: "synthetic-size-trial",
@@ -87,7 +99,7 @@ it.each([
       expect(stateDir).not.toBe(root);
       expect(fs.readFileSync(statePath)).toEqual(original);
       expect(readBackupEngine(path.join(stateDir, path.relative(root, agentPath)))).toMatchObject({
-        namespace: "private_agent",
+        namespace: trial ? "private_agent" : "original_agent",
       });
       using state = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
       state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
@@ -95,7 +107,9 @@ it.each([
     },
   });
   expect(result).toMatchObject({ status: "upgraded", mode: "chain", pinned: false });
-  expect(readBackupEngine(agentPath)).toMatchObject({ namespace: "private_agent" });
+  expect(readBackupEngine(agentPath)).toMatchObject({
+    namespace: trial ? "private_agent" : "original_agent",
+  });
   using state = new DatabaseSync(statePath, { readOnly: true });
   expect(state.prepare("PRAGMA user_version").get()).toEqual({
     user_version: OPENCLAW_STATE_SCHEMA_VERSION,
