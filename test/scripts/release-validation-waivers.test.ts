@@ -150,13 +150,18 @@ it("matches release-wide grants and explicit candidate or execution restrictions
   for (const restriction of [
     { targetSha: "b".repeat(40) },
     { evidence: { runId: "42", runAttempt: 1 } },
-    { evidence: { runId: "99", runAttempt: 2 } },
+    { evidence: { runId: 99, runAttempt: 2 } },
+    { evidence: { runId: "042", runAttempt: 2 } },
+    { evidence: { runId: 42, runAttempt: 1 } },
   ]) {
     expect(evaluate([{ ...grant, ...restriction }]).waivers).toEqual([]);
   }
-  expect(
-    evaluate([{ ...grant, targetSha, evidence: { runId: "42", runAttempt: 2 } }]).waivers,
-  ).toHaveLength(1);
+  for (const runId of ["42", 42]) {
+    const pinned = { ...grant, targetSha, evidence: { runId, runAttempt: 2 } };
+    expect(evaluate([pinned]).waivers).toEqual([
+      expect.objectContaining({ evidence: pinned.evidence }),
+    ]);
+  }
   for (const conclusion of ["cancelled", "timed_out", "skipped"]) {
     expect(evaluate([grant], { ...child, jobs: [{ ...leaf, conclusion }] }).waivers).toEqual([]);
   }
