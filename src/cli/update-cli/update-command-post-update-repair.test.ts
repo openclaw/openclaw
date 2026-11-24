@@ -32,6 +32,7 @@ import { finishUpdate } from "./update-command-post-update.js";
 import { successfulPluginUpdate, taskRecovery } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
+import { registerUpdateStateRestartHandoffTests } from "./update-command-state-handoff.test-support.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -208,6 +209,8 @@ describe("post-activation failure settlement without inference", () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   });
+
+  registerUpdateStateRestartHandoffTests(fixture, mocks.restart);
 
   it.each(["ok", "readiness-pending", "still-starting"] as const)(
     "records the bounded readiness outcome and retains only unverified backups (%s)",

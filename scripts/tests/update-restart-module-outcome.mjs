@@ -251,6 +251,8 @@ async function fixture({
     readBuiltGatewayBuildId: async () => undefined,
     readActiveGatewayLockPort: async () => 19305,
     resolveOpenClawStateSqlitePath: () => "/fixture/state.sqlite",
+    closeOpenClawStateDatabaseByPathAsync: async () => false,
+    revokeSqliteDatabaseAdmissionsForPath: () => {},
     assertUpdateRecoveryAdmission: async () => {},
     readGatewayOwnerLease: async () => undefined,
   };
@@ -268,6 +270,7 @@ async function fixture({
   const realNames = [
     "update-command-service",
     "update-command-post-update",
+    "update-command-state-handoff",
     "update-command-mutable-signals",
     "update-command-execution-guards",
     "update-command-result",

@@ -44,6 +44,7 @@ export async function finishAlreadyCurrentUpdate(
     | "controlPlaneUpdateSentinelMeta"
     | "packageUpdateNodeRunner"
     | "ownedManagedUpdateEnv"
+    | "suspendProgress"
   > & {
     managedServiceRootRedirect: ManagedServiceRootRedirect | null;
     managedServiceRoot?: string;

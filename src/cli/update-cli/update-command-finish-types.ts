@@ -35,6 +35,8 @@ export type FinishUpdateParams = UpdateRestartParams & {
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
+  /** Prevent the driver's progress observer from re-opening state during a restart. */
+  suspendProgress?: () => () => void;
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   activationConfig?: import("./update-command-config-snapshot.js").UpdateConfigSnapshot;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";

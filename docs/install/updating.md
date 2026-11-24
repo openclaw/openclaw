@@ -76,6 +76,14 @@ ownership before rechecking profile-backed requester authority. Service custody
 remains with the updater; the next Doctor acquires its own database ownership.
 This avoids refusing the updater's own policy reads during its maintenance window.
 
+During a managed Gateway restart, the updater pauses progress polling and
+releases its shared-state handles. If the new Gateway's startup upgrade replaces
+`state/openclaw.sqlite`, the updater reopens the current file after the restart
+attempt and records the outcome there. This requires the running updater to
+contain the fix; installing a newer candidate does not change the old updater's
+open handles. For an older updater reporting a state-pathname error after a Git
+update, confirm the target version is serving before retrying `openclaw update` to finish maintenance.
+
 Plugin lifecycle work in update finalization and repair renews its lease from a
 worker, so a blocked main thread cannot expire the lease. Native Doctor and plugin
 install/update operations share this renewal behavior. Ownership checks,

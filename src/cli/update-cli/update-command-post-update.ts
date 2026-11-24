@@ -45,10 +45,8 @@ import {
   admitInstalledGatewayRecovery,
   refuseUnsettledDoctorRecovery,
 } from "./update-command-service-recovery.js";
-import {
-  maybeRestartService,
-  maybeRestartServiceAfterFailedMutableUpdate,
-} from "./update-command-service.js";
+import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service.js";
+import { restartServiceWithStateHandoff } from "./update-command-state-handoff.js";
 import {
   completeUpdateCommandResult,
   captureUpdateFinalization,
@@ -532,7 +530,7 @@ async function finishSettledUpdate(
       let verificationFailure = "restart-unhealthy";
       const restart = async () => {
         const restarted = await forward(() =>
-          maybeRestartService({
+          restartServiceWithStateHandoff(params.suspendProgress, {
             onGatewayStartAttempted,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,

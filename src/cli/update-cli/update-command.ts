@@ -295,6 +295,10 @@ async function updateCommandInternal(
 
     const finalizationContext = {
       opts,
+      suspendProgress: () => {
+        presentation.suspend();
+        return presentation.resume;
+      },
       root,
       previousInstallRoot: discoveredRoot,
       requestedChannel,
