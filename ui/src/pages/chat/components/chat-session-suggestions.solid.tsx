@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type {
   SessionSharingRole,
   SessionSuggestion,
@@ -31,6 +31,7 @@ export function ChatSessionSuggestions(props: {
   canResolve: boolean;
   onResolve?: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
 }) {
+  const [expanded, setExpanded] = createSignal(false);
   const canResolve = () => props.canResolve && (props.role === "owner" || props.role === "admin");
   const visible = createMemo(() =>
     props.suggestions.filter(
@@ -51,7 +52,10 @@ export function ChatSessionSuggestions(props: {
   return (
     <Show when={visible().length > 0}>
       <div class="session-suggestions" aria-live="polite">
-        <For each={visible()} keyed={(suggestion) => suggestion.id}>
+        <For
+          each={expanded() ? visible() : visible().slice(0, 3)}
+          keyed={(suggestion) => suggestion.id}
+        >
           {(suggestion) => {
             const author = () => suggestion().author.label ?? suggestion().author.id;
             const awaitingApproval = () =>
@@ -62,12 +66,17 @@ export function ChatSessionSuggestions(props: {
                 class={["session-suggestion", { preview: awaitingApproval() }]}
                 data-suggestion-id={suggestion().id}
               >
-                <b class="session-suggestion__author">
-                  <Show when={awaitingApproval()} fallback={author()}>
-                    <PersonReferenceLabel profileId={suggestion().author.id} label={author()} />
-                  </Show>
-                </b>
-                <span class="session-suggestion__text">{suggestion().text}</span>
+                <details class="session-suggestion__details">
+                  <summary class="session-suggestion__summary">
+                    <b class="session-suggestion__author">
+                      <Show when={awaitingApproval()} fallback={author()}>
+                        <PersonReferenceLabel profileId={suggestion().author.id} label={author()} />
+                      </Show>
+                    </b>
+                    <span class="session-suggestion__text">{suggestion().text}</span>
+                  </summary>
+                  <div class="session-suggestion__body">{suggestion().text}</div>
+                </details>
                 <Show
                   when={canResolve() && suggestion().state === "pending"}
                   fallback={
@@ -87,6 +96,7 @@ export function ChatSessionSuggestions(props: {
                         <IconButton
                           size={28}
                           glyph="row"
+                          class="session-suggestion__action"
                           icon="x"
                           label={t("common.close")}
                           onClick={() => props.onClose?.(suggestion().id)}
@@ -122,6 +132,18 @@ export function ChatSessionSuggestions(props: {
             );
           }}
         </For>
+        <Show when={visible().length > 3}>
+          <button
+            type="button"
+            class="session-suggestions__more"
+            aria-expanded={expanded() ? "true" : "false"}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded()
+              ? t("chat.messages.showLess")
+              : t("chat.sessionSuggestions.more", { count: String(visible().length - 3) })}
+          </button>
+        </Show>
       </div>
     </Show>
   );

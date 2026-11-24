@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionSuggestion } from "../../../../../packages/gateway-protocol/src/index.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSessionSuggestions } from "./chat-session-suggestions.solid.tsx";
 
 const suggestion: SessionSuggestion = {
@@ -111,4 +113,34 @@ it("lets the author close a dismissed outcome without a resolution request", () 
   close?.click();
   expect(onClose).toHaveBeenCalledWith(suggestion.id);
   expect(onResolve).not.toHaveBeenCalled();
+});
+
+it("bounds the tray, retains keyed disclosures on refresh, and keeps busy resolutions disabled", async () => {
+  const [suggestions, setSuggestions] = createSignal(
+    Array.from({ length: 5 }, (_, index) => ({ ...suggestion, id: `suggestion-${index}` })),
+  );
+  const view = mountSolid(() => (
+    <ChatSessionSuggestions
+      suggestions={suggestions()}
+      role="owner"
+      busyIds={new Set(["suggestion-0"])}
+      archived={false}
+      canResolve
+    />
+  ));
+  const rows = () => view.container.querySelectorAll(".session-suggestion");
+  expect(rows()).toHaveLength(3);
+  const first = rows()[0]!;
+  const disclosure = first.querySelector("details")!;
+  disclosure.open = true;
+  expect([...first.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
+  view.getByRole("button", { name: "+2 more" }).click();
+  await waitForSolid(() => expect(rows()).toHaveLength(5));
+  setSuggestions((items) => items.map((item) => ({ ...item, text: "Updated proposal" })));
+  await waitForSolid(() => expect(first.textContent).toContain("Updated proposal"));
+  expect(rows()[0]).toBe(first);
+  expect(disclosure.open).toBe(true);
+  view.getByRole("button", { name: "Show less" }).click();
+  await waitForSolid(() => expect(rows()).toHaveLength(3));
+  expect(disclosure.open).toBe(true);
 });

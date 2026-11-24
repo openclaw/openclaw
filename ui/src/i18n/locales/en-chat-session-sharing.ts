@@ -14,6 +14,7 @@ const catalog = {
       inviteSend: "Can send",
     },
     sessionSuggestions: {
+      more: "+{count} more",
       sendNow: "Send {author}'s suggestion now",
       queue: "Queue {author}'s suggestion",
       edit: "Edit {author}'s suggestion",
