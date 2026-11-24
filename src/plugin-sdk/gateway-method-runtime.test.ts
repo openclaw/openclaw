@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+import { makeGatewayClient } from "../gateway/server-request-context.test-support.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -124,7 +125,11 @@ it.each([
     }
     const result = await withPluginRuntimeGatewayRequestScope(
       {
-        client: { id: "plugin" } as GatewayRequestHandlerOptions["client"],
+        client: makeGatewayClient({
+          connId: "plugin",
+          clientId: "test",
+          scopes: ["operator.write"],
+        }),
         gatewayMethodDispatchAllowed: true,
         isWebchatConnect: () => false,
       },

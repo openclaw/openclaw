@@ -66,10 +66,10 @@ export async function sendToResolvedSession(
   }
   try {
     const reply = await dispatchGatewayMethod("chat.send", send.params);
-    if (reply.ok === false && reply.error?.code === "FORBIDDEN") {
+    if (!reply.ok && reply.error?.code === "FORBIDDEN") {
       return "forbidden";
     }
-    return reply.ok === true && send.acknowledged(reply.payload) ? "accepted" : "unconfirmed";
+    return reply.ok && send.acknowledged(reply.payload) ? "accepted" : "unconfirmed";
   } catch (error) {
     return error instanceof GatewayMethodDispatchForbidden ? "forbidden" : "unconfirmed";
   }
