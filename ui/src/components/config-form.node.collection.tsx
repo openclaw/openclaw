@@ -168,6 +168,7 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
         >
           <summary
             id={configSettingId(props.params.path)}
+            data-settings-info={configSettingId(props.params.path) ? undefined : ""}
             class="settings-row settings-row--nav cfg-object__summary"
           >
             <div class="settings-row__text">
@@ -430,7 +431,7 @@ function ConfigArrayRow(
       when={props.params.compact || !isObjectItem()}
       fallback={
         <>
-          <div class="settings-row cfg-collection-row">
+          <div class="settings-row cfg-collection-row" data-settings-info>
             <div class="settings-row__text">
               <span class="settings-row__title">#{props.index + 1}</span>
             </div>
@@ -492,6 +493,9 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
         <div class="cfg-block cfg-array">
           <div
             id={current().showLabel ? configSettingId(props.params.path) : undefined}
+            data-settings-info={
+              current().showLabel && configSettingId(props.params.path) ? undefined : ""
+            }
             class="settings-row cfg-collection-row"
           >
             <div class="settings-row__text">

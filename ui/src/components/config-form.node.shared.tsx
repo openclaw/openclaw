@@ -209,6 +209,8 @@ export function FieldRow(props: {
   return (
     <div
       id={targetId()}
+      // Unlabeled rows are list items and parts of a setting named above them.
+      data-settings-info={targetId() ? undefined : ""}
       class={[
         "settings-row",
         {

@@ -251,7 +251,7 @@ export function ConfigCollectionDraft(
             valueInput?.focus();
           });
           return (
-            <div class="settings-row settings-row--stacked cfg-collection-draft">
+            <div class="settings-row settings-row--stacked cfg-collection-draft" data-settings-info>
               <div class="settings-row__control">
                 <div class="cfg-collection-draft__controls">
                   <Show when={props.existingKeys}>

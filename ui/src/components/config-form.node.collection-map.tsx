@@ -108,7 +108,11 @@ function ConfigMapRow(
   );
   return (
     <>
-      <div id={configSettingId(valuePath())} class="settings-row cfg-collection-row">
+      <div
+        id={configSettingId(valuePath())}
+        data-settings-info={configSettingId(valuePath()) ? undefined : ""}
+        class="settings-row cfg-collection-row"
+      >
         <div class="settings-row__text">
           <input
             type="text"
@@ -230,6 +234,8 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
       <div class="cfg-block cfg-map" aria-busy={visible.pending() ? "true" : undefined}>
         <div
           id={props.heading ? configSettingId(props.params.path) : undefined}
+          // Without a heading the entries continue the setting their section names.
+          data-settings-info={props.heading && configSettingId(props.params.path) ? undefined : ""}
           class="settings-row cfg-collection-row"
         >
           <Show

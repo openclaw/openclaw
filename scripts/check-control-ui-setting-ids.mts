@@ -67,9 +67,14 @@ export function isSettingsSource(file: string) {
   );
 }
 
-function registryIds() {
+type SettingsList = {
+  pages: ReadonlyArray<{ path: string; settings: Readonly<Record<string, unknown>> }>;
+  aliases: Readonly<Record<string, string>>;
+};
+
+function registryIds(pages: SettingsList["pages"]) {
   const ids = new Map<string, string>();
-  for (const page of CONTROL_UI_SETTINGS_PAGES) {
+  for (const page of pages) {
     for (const id of Object.keys(page.settings)) {
       if (ids.has(id)) {
         throw new Error(`Setting ID ${id} is listed for both ${ids.get(id)} and ${page.path}`);
@@ -120,17 +125,21 @@ function hasRowClass(node: ts.Node | undefined): boolean {
 
 export function checkSettingIds(
   root = process.cwd(),
-  { write = false, writeBaseline = false } = {},
-) {
+  {
+    write = false,
+    writeBaseline = false,
+    list = { pages: CONTROL_UI_SETTINGS_PAGES, aliases: CONTROL_UI_SETTING_ID_ALIASES },
+  }: { write?: boolean; writeBaseline?: boolean; list?: SettingsList } = {},
+): string[] {
   const failures: string[] = [];
-  const ids = registryIds();
+  const ids = registryIds(list.pages);
   const baselinePath = path.join(root, BASELINE);
   const baseline = new Set(
     fs.existsSync(baselinePath)
       ? fs.readFileSync(baselinePath, "utf8").split("\n").filter(Boolean)
       : [],
   );
-  const aliases = new Set(Object.keys(CONTROL_UI_SETTING_ID_ALIASES));
+  const aliases = new Set(Object.keys(list.aliases));
   const references = new Map<string, Array<{ file: string; at: string }>>();
   const unnamed = new Map<string, string[]>();
   const sources = readInventorySources(root, { roots: ["ui/src"] });
@@ -219,7 +228,7 @@ export function checkSettingIds(
   if (writeBaseline) {
     // Only for adopting the check: the list may shrink afterwards, never grow.
     fs.writeFileSync(baselinePath, `${[...unnamed.keys()].toSorted().join("\n")}\n`);
-    return checkSettingIds(root, { write });
+    return checkSettingIds(root, { write, list });
   }
   for (const file of baseline) {
     if (!unnamed.has(file)) {
