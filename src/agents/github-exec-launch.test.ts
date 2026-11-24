@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as cliInvocation from "../../cli-invocation.mjs";
 import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
@@ -393,7 +393,11 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
         ];
         const { code, stdout, stderr } = await run([runtime, ...argv], root, {
           cwd: commandCwd,
-          env: { ZDOTDIR: root },
+          // Keep this checkout's source aliases while exercising a foreign command cwd.
+          env: {
+            ZDOTDIR: root,
+            TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+          },
           stdio: ["ignore", "pipe", "pipe", "pipe"],
         });
         expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
