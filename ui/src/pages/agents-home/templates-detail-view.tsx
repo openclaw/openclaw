@@ -333,7 +333,6 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                     packageName={selected().packageName}
                   />
                 }
-                rail
                 identity={renderPublisherIdentity({
                   // The handle names the publisher; a display name only when it says more.
                   name: publisher().ownerHandle === "openclaw" ? "OpenClaw" : undefined,

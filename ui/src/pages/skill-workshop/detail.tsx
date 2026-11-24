@@ -37,7 +37,6 @@ export function WorkshopDetailShell(props: {
     <div class={["sw-detail", `sw-detail--${props.kind}`]}>
       <PluginDetailShell
         id={id}
-        rail
         name={props.name}
         summary={props.summary}
         backHref={props.view().context.router.getState().location.pathname}

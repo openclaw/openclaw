@@ -484,12 +484,49 @@ it.each([
       expect(image.naturalWidth).toBe(width);
       const frameBounds = frame.getBoundingClientRect();
       const imageBounds = image.getBoundingClientRect();
-      expect(imageBounds).toMatchObject({ width: frameBounds.width, height: frameBounds.height });
+      // The production rail gives header artwork a 14px inset on its tile.
+      const inset = selector === ".plugin-catalog-detail__icon" ? 28 : 0;
+      expect(imageBounds).toMatchObject({
+        width: frameBounds.width - inset,
+        height: frameBounds.height - inset,
+      });
       expect(getComputedStyle(image)).toMatchObject({ padding: "0px", objectFit: "contain" });
       expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
     }
   },
 );
+
+it("preserves shelf counts, row tracks, and focus across viewport breakpoints and RTL", async () => {
+  const entries = Array.from({ length: 8 }, (_, index) => plugin("shelf-" + index));
+  await renderCatalog({
+    query: "",
+    result: { items: entries },
+    categories: [{ slug: "tools", label: "Tools", description: "Tools", icon: "wrench", order: 0 }],
+  });
+  const shelf = find('[data-catalog-section="tools"]');
+  for (const direction of ["ltr", "rtl"]) {
+    container.dir = direction;
+    for (const [width, count, columns] of [
+      [1440, 8, 2],
+      [1100, 6, 2],
+      [900, 6, 1],
+      [640, 5, 1],
+      [390, 5, 1],
+    ] as const) {
+      await page.viewport(width, 900);
+      await nextFrame();
+      const cards = [...shelf.querySelectorAll<HTMLElement>(".plugin-catalog-card")];
+      expect(cards.filter((card) => getComputedStyle(card).display !== "none")).toHaveLength(count);
+      expect(
+        getComputedStyle(find(".plugin-catalog-grid", shelf)).gridTemplateColumns.split(" "),
+      ).toHaveLength(columns);
+      const link = find(".plugin-catalog-card__primary-link", cards[0]);
+      link.focus();
+      expect(document.activeElement).toBe(link);
+      expect(Number.parseFloat(getComputedStyle(cards[0]!).outlineWidth)).toBeGreaterThan(0);
+    }
+  }
+});
 
 it("fills the remaining viewport with card-sized placeholders across resizes", async () => {
   await renderCatalog({
@@ -559,13 +596,13 @@ it.each([390, 768, 1366, 1440])(
     const oneColumn =
       getComputedStyle(find(".plugin-catalog-detail__content")).gridTemplateColumns.split(/\s+/u)
         .length === 1;
-    // One column puts the facts between what the plugin adds and its README.
-    const above = oneColumn ? sidebar : capabilities;
+    // The rail follows the reading column, so facts never separate capabilities from README.
+    const above = capabilities;
     const gap = () => readme.getBoundingClientRect().top - above.getBoundingClientRect().bottom;
     if (oneColumn) {
       expect(
-        sidebar.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom,
-      ).toBeLessThanOrEqual(32);
+        sidebar.getBoundingClientRect().top - readme.getBoundingClientRect().bottom,
+      ).toBeGreaterThanOrEqual(32);
     }
     expect(gap()).toBeGreaterThanOrEqual(20);
     expect(gap()).toBeLessThanOrEqual(32);

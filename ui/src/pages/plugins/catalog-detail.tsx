@@ -139,7 +139,6 @@ function CatalogDetailContent(props: {
           loading={artworkLoading(iconUrl()) || artworkLoading(authorIconUrl())}
         />
       }
-      rail
       titleAction={
         <Show when={result()}>
           {(loaded) => (
