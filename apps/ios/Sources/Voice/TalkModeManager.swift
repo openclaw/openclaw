@@ -2776,12 +2776,13 @@ final class TalkModeManager {
         transcriptProcessingGeneration generation: UInt64,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
+        let useTalkSettings = await context.gateway.supportsServerCapability(
+            .talkChatSettings, ifCurrentRoute: context.route) == true
         let request = Self.chatSendRequest(
             message: message,
             sessionKey: context.sessionKey,
             idempotencyKey: idempotencyKey,
-            useTalkSettings: await context.gateway.supportsServerCapability(
-                .talkChatSettings, ifCurrentRoute: context.route) == true)
+            useTalkSettings: useTalkSettings)
         let res = try await withGatewayStartupAdmission(method: request.method) {
             guard self.isCurrentTranscriptProcessing(generation) else { throw CancellationError() }
             return try await context.gateway.request(request, ifCurrentRoute: context.route)
