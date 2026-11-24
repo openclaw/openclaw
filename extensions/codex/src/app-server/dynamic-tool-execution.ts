@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   copyInternalToolResultState,
+  readAutomationToolCreation,
   runWithAsyncWorkResources,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -191,7 +192,14 @@ export async function handleDynamicToolCallWithTimeout(
           ? { executionStarted: observedExecutionStarted }
           : {}),
         outcome: response.success ? "success" : "failure",
-        ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
+        ...(!response.success
+          ? {
+              failure: {
+                error: readDynamicToolResponseText(response),
+                ...(response.unknownTool ? { unknownTool: true as const } : {}),
+              },
+            }
+          : {}),
       });
       if (terminalResolution) {
         response.terminalResolution = terminalResolution;
@@ -373,24 +381,28 @@ export function toCodexDynamicToolProtocolResponse(
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
-): CodexDynamicToolCallResponse & {
-  details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
-} {
+  toolName: string,
+) {
   const transcriptDetails = isJsonObject(response.transcriptDetails)
     ? response.transcriptDetails
     : undefined;
   const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
     ? transcriptDetails.mcpAppPreview
     : undefined;
-  if (response.asyncStarted !== true && !mcpAppPreview) {
+  const automationCreation =
+    protocolResponse.success && !response.asyncStarted
+      ? readAutomationToolCreation(toolName, transcriptDetails)
+      : undefined;
+  if (response.asyncStarted !== true && !mcpAppPreview && !automationCreation) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    details:
-      response.asyncStarted === true
-        ? { ...(mcpAppPreview ? { mcpAppPreview } : {}), async: true, status: "started" }
-        : { mcpAppPreview },
+    details: {
+      ...(mcpAppPreview ? { mcpAppPreview } : {}),
+      ...(response.asyncStarted ? { async: true, status: "started" } : {}),
+      ...(automationCreation ? { automationCreation } : {}),
+    },
   };
 }
 

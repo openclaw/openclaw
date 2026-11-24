@@ -14,10 +14,10 @@ import {
   consumeCronCreatorAuthorityGrant,
   mintCronCreatorAuthorityGrant,
 } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
-  retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
@@ -122,7 +122,7 @@ it.each([
 });
 
 it.each(["agent", "chat"] as const)(
-  "keeps %s creator grants bound to the original caller after request completion",
+  "keeps %s creator grants after the issuing device is revoked mid-run, until the run closes",
   async (entry) => {
     const context = {};
     const caller = captureGatewayDeviceRevocation(
@@ -131,34 +131,29 @@ it.each(["agent", "chat"] as const)(
       () => true,
     );
     const admission = expectDefined(
-      entry === "agent"
-        ? admitAgent({ isCurrent: caller.isCurrent })
-        : admitChat({ isCurrent: caller.isCurrent }),
+      entry === "agent" ? admitAgent() : admitChat(),
       "expected direct operator admission",
     );
-    const release = retainGatewayDeviceRevocation(admission.isCurrent);
-    caller.release();
     const capability = expectDefined(
       createCronCreatorAuthorityCapability(
         admission.runId,
         admission.callerOrigin,
         admission.managementEntitlement,
-        admission.isCurrent,
       ),
       "expected creator capability",
     );
+    let unspent: CronCreatorAuthorityGrant | undefined;
     try {
       await runWithCronCreatorAuthorityCapability(capability, async () => {
         const grant = mintCronCreatorAuthorityGrant(capability);
         invalidateGatewayDeviceRevocation(context, "original-device", "operator");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-          "cron authority is no longer active",
-        );
+        expect(consumeCronCreatorAuthorityGrant(grant).assertCurrent).not.toThrow();
+        unspent = mintCronCreatorAuthorityGrant(capability);
       });
     } finally {
       caller.release();
-      release?.();
     }
+    expect(() => consumeCronCreatorAuthorityGrant(unspent!)).toThrow("cron access has ended");
   },
 );
 
@@ -173,6 +168,25 @@ it.each([
   expect(isDirectGatewayChatUserTurn(params)).toBe(true);
   expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
   expect(isDirectGatewayChatUserTurn({ ...params, isDirectExternalUser: false })).toBe(false);
+});
+
+it.each([
+  ["channel origin", { hasExplicitOrigin: true }],
+  ["channel ingress", { isDirectExternalUser: false }],
+  ["non-WebChat client", { client: createClient() }],
+  ["supervised child", { isUncontrolledDashboardChild: false }],
+  ["internal input", { isSystemGenerated: true }],
+  ["resumed input", { isReconnectResume: true }],
+  ["incognito", { isIncognito: true }],
+] as const)("keeps %s outside the dashboard handoff exception", (_label, overrides) => {
+  const params = createChatParams({
+    spawnedBy: "agent:main:parent",
+    isUncontrolledDashboardChild: true,
+    client: createClient({ authenticatedControlUi: true }),
+    ...overrides,
+  });
+  expect(isDirectGatewayChatUserTurn(params)).toBe(false);
+  expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
 });
 
 it.each([true, undefined] as const)(

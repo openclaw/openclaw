@@ -51,7 +51,10 @@ import {
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import { validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
+import {
+  resolveQualificationBaselines,
+  validateQualificationBaselines,
+} from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { validateActiveExtendedStableLine } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
@@ -210,7 +213,8 @@ function usage() {
        node scripts/full-release-validation-at-sha.mjs --resume-request <path>
 
 Admitted candidate qualification is the default: Q defaults to C. Explicitly
-select --workflow-sha to freeze an independent main-provenance Q. Invoking it
+select --workflow-sha to freeze an independent canonical-repository Q, including
+off-main tooling. Invoking it
 attests that the exact candidate and selected qualification policy are reviewed. The existing
 prepare workflow at independently trusted P authenticates the complete request;
 then this same dispatch owner runs the candidate workflow graph at Q. P defaults
@@ -552,9 +556,20 @@ export function parseArgs(argv: string[]) {
   if (Object.hasOwn(args.inputs, "expected_sha")) {
     throw new Error("SHA-pinned release validation reserves expected_sha for the resolved --sha");
   }
-  if (Object.hasOwn(args.inputs, "qualification_baselines_json")) {
+  if (
+    Object.hasOwn(args.inputs, "qualification_baselines_json") &&
+    args.trustedWorkflowRef !== "candidate"
+  ) {
+    throw new Error("Explicit qualification baselines require candidate admission");
+  }
+  if (
+    Object.hasOwn(args.inputs, "publication_artifact_source_json") &&
+    (args.trustedWorkflowRef !== "candidate" ||
+      args.inputs.rerun_group !== "all" ||
+      args.inputs.reuse_evidence !== "true")
+  ) {
     throw new Error(
-      "SHA-pinned qualification resolves its candidate-owned baselines before admission; qualification_baselines_json is reserved",
+      "Explicit publication artifacts require candidate admission, rerun_group=all, and reuse_evidence=true",
     );
   }
   if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
@@ -969,45 +984,52 @@ function warnCandidateToolingLag(candidateSha: string) {
     );
     return;
   }
-  const mainSha = resolveSha("origin/main");
-  if (candidateSha === mainSha) {
-    return;
-  }
-  const commitCount = Number(
-    run("git", [
-      "rev-list",
-      "--count",
-      "--right-only",
-      "--no-merges",
-      `${candidateSha}...${mainSha}`,
-    ]),
-  );
-  // Long-lived release branches can differ from main by tens of thousands of
-  // paths; --shortstat keeps the count bounded instead of buffering every name.
-  const changedPathCount = Number(
-    /^\s*(\d+) files? changed/u.exec(
-      run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
-    )?.[1] ?? 0,
-  );
-  if (commitCount > 0 && changedPathCount > 0) {
-    const changedAreas = run("git", [
-      "diff",
-      "--no-renames",
-      "--dirstat=files,1",
-      candidateSha,
-      mainSha,
-    ])
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    console.warn(
-      formatCandidateToolingLagWarning(
+  try {
+    const mainSha = resolveSha("origin/main");
+    if (candidateSha === mainSha) {
+      return;
+    }
+    const commitCount = Number(
+      run("git", [
+        "rev-list",
+        "--count",
+        "--right-only",
+        "--no-merges",
+        `${candidateSha}...${mainSha}`,
+      ]),
+    );
+    // Long-lived release branches can differ from main by tens of thousands of
+    // paths; --shortstat keeps the count bounded instead of buffering every name.
+    const changedPathCount = Number(
+      /^\s*(\d+) files? changed/u.exec(
+        run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
+      )?.[1] ?? 0,
+    );
+    if (commitCount > 0 && changedPathCount > 0) {
+      const changedAreas = run("git", [
+        "diff",
+        "--no-renames",
+        "--dirstat=files,1",
         candidateSha,
         mainSha,
-        commitCount,
-        changedPathCount,
-        changedAreas,
-      ),
+      ])
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      console.warn(
+        formatCandidateToolingLagWarning(
+          candidateSha,
+          mainSha,
+          commitCount,
+          changedPathCount,
+          changedAreas,
+        ),
+      );
+    }
+  } catch {
+    // Drift reporting is advisory; the independent qualification gates below remain fatal.
+    console.warn(
+      "WARNING: candidate tooling lag is unavailable because the Git comparison failed; continuing with the existing qualification checks.",
     );
   }
 }
@@ -1073,17 +1095,23 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     publication_selection_json,
     extension_test_exclude_patterns_json,
     qualification_baselines_json,
+    publication_artifact_source_json,
     known_flaky_jobs_json,
     ...wireOverrides
   } = overrides;
   const laneInputs =
-    extension_test_exclude_patterns_json === undefined && qualification_baselines_json === undefined
+    extension_test_exclude_patterns_json === undefined &&
+    qualification_baselines_json === undefined &&
+    publication_artifact_source_json === undefined
       ? undefined
       : {
           ...(extension_test_exclude_patterns_json === undefined
             ? {}
             : { extension_test_exclude_patterns_json }),
           ...(qualification_baselines_json === undefined ? {} : { qualification_baselines_json }),
+          ...(publication_artifact_source_json === undefined
+            ? {}
+            : { publication_artifact_source_json }),
         };
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
@@ -2215,11 +2243,9 @@ async function main() {
   const workflowSha = candidateOwned
     ? resolveSha(args.workflowSha || targetSha)
     : resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);
-  if (candidateOwned && workflowSha !== targetSha) {
-    // An explicit Q is frozen here, never replaced by the fetched main tip. P
-    // independently repeats provenance and operator admission before Q can run.
-    resolveTrustedWorkflowSha(workflowSha, "main");
-  }
+  // Candidate admission freezes the operator-selected Q without requiring main
+  // ancestry. P reads its immutable source from the canonical repository; the
+  // dispatch owner verifies the exact release-ci transport before execution.
   const trustedWorkflowHarness = assertTrustedWorkflowHarness(workflowSha);
   if (candidateOwned) {
     const workflow = parseYaml(run("git", ["show", `${workflowSha}:${TRUSTED_WORKFLOW_PATH}`]));
@@ -2253,14 +2279,26 @@ async function main() {
         publishedVersions.every((entry) => typeof entry === "string"),
       "npm did not return the published baseline version inventory",
     );
-    args.inputs.qualification_baselines_json = JSON.stringify(
-      resolveQualificationBaselines({
-        candidateVersion: targetVersion,
-        targetContextRef,
-        publishedVersions,
-        oldestSupportedVersion: baselinePolicy.oldestSupportedBaseline,
-      }),
+    const selectedBaselines =
+      args.inputs.qualification_baselines_json === undefined
+        ? resolveQualificationBaselines({
+            candidateVersion: targetVersion,
+            targetContextRef,
+            publishedVersions,
+            oldestSupportedVersion: baselinePolicy.oldestSupportedBaseline,
+          })
+        : validateQualificationBaselines(JSON.parse(args.inputs.qualification_baselines_json), {
+            candidateVersion: targetVersion,
+            targetContextRef,
+          });
+    requireDispatch(
+      selectedBaselines.upgradeSurvivorBaselines.every((spec: string) =>
+        publishedVersions.includes(spec.slice("openclaw@".length)),
+      ),
+      "Selected qualification baselines must be published stable predecessors",
     );
+    // Freeze explicit selections before admission, just like freshly resolved tuples.
+    args.inputs.qualification_baselines_json = JSON.stringify(selectedBaselines);
   }
   const candidateAuthorityActor =
     args.inputs.validation_purpose === "publish"

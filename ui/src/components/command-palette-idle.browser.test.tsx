@@ -47,10 +47,9 @@ it("keeps an idle search settled across usage updates and still accepts command 
   input.focus();
   await userEvent.keyboard("zzidlequery");
   await vi.advanceTimersByTimeAsync(200);
-  await expect
-    .poll(() => palette.textContent)
-    .toContain("Archived sessions are not included in message search.");
   await expect.poll(() => palette.textContent).not.toMatch(/Searching (commands|sessions)/);
+  // Cold-stored transcripts are not a reason to show a notice.
+  expect(palette.textContent).not.toContain("Archived sessions");
   expect(palette.textContent).toContain("zzidlequery old skill");
   expect(palette.textContent).toContain("zzidlequery old model");
   expect(palette.textContent).toContain("zzidlequery plugin");
@@ -67,9 +66,6 @@ it("keeps an idle search settled across usage updates and still accepts command 
   expect(input.value).toBe("zzidlequery");
   expect(request.mock.calls).toHaveLength(initialReads);
   expect(list).toHaveBeenCalledTimes(1);
-  const note = palette.querySelector<HTMLElement>(".cmd-palette__archive-note")!;
-  expect(note.closest(".cmd-palette__footer")).not.toBeNull();
-  expect(Number.parseFloat(getComputedStyle(note).fontSize)).toBeLessThan(12);
   expect(palette.textContent).not.toContain("Searching commands");
   expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).not.toBe("true");
   expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1);

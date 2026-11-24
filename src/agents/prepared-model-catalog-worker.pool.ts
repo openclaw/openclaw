@@ -1,10 +1,12 @@
 /** Builds model-catalog worker pools that report their first close to the pool owner. */
+import type { MessagePort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/state-dir.js";
 import {
   getDatabaseEngineSelection,
   type DatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
+import { createDirectoryWatchChannel } from "../infra/directory-watch-host.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
@@ -16,6 +18,7 @@ import type { PluginCaptureResourceRoot } from "../plugins/plugin-capture-native
 
 export type PreparedModelCatalogWorkerData = {
   databaseEngineSelection?: DatabaseEngineSelection;
+  directoryWatchPort?: MessagePort;
   sourceCaptureDirectory: string;
   sourceCaptureManagedRoot?: string;
 };
@@ -29,7 +32,7 @@ const CATALOG_WORKER_HEAP_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenera
  * while no task is waiting. It reports its first close so the owner can tell that from its own.
  */
 export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, Output> {
-  private captures?: ReturnType<typeof createPluginCaptureOwner>;
+  private captures?: Awaited<ReturnType<typeof createPluginCaptureOwner>>;
   private preparingRoot?: Promise<void>;
   private releasingRoot?: Promise<void>;
   // The pool's input factory settles before prepareWorker consumes this owned root.
@@ -52,14 +55,21 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
       prepareWorker: () => {
         assertCurrent?.();
         const capture = this.sourceCapture;
+        const watch = createDirectoryWatchChannel();
         return {
-          releaseResources: () => this.releaseRoot(),
+          releaseResources: () => {
+            // Bun does not always notify the peer port when the worker is terminated.
+            watch.close();
+            return this.releaseRoot();
+          },
           options: {
             workerData: {
               databaseEngineSelection: getDatabaseEngineSelection(),
+              directoryWatchPort: watch.port,
               sourceCaptureDirectory: capture.directory,
               sourceCaptureManagedRoot: capture.managedRoot,
             } satisfies PreparedModelCatalogWorkerData,
+            transferList: [watch.port],
             // Establish state/config before imported modules observe process.env.
             env,
           },
@@ -72,15 +82,15 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
   override run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
     return super.run(async () => {
       await (this.preparingRoot ??= (async () => {
-        const captures = await (this.captures ??= createPluginCaptureOwner(
+        this.captures = await createPluginCaptureOwner(
           captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
           {
             native() {
               throw new Error("Catalog execution owns its native captures locally");
             },
           },
-        ));
-        this.sourceCapture = await captures.createSource(
+        );
+        this.sourceCapture = await this.captures.createSource(
           0,
           { stateDir: resolveStateDir(this.env), placement: "state" },
           "openclaw-model-catalog-",
@@ -101,7 +111,7 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
 
   private releaseRoot(): Promise<void> {
     return (this.releasingRoot ??= (async () => {
-      await (await this.captures)?.releaseSource(0);
+      await this.captures?.releaseSource(0);
     })());
   }
 
@@ -113,7 +123,7 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
     }
     return closed.then(async () => {
       await this.releaseRoot();
-      await (await this.captures)?.close();
+      await this.captures?.close();
     });
   }
 }

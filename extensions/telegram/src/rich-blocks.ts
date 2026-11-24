@@ -323,14 +323,24 @@ function irRangeToRichText(
     stack.length = shared;
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
-      const node: RichText =
-        item.kind === "html"
-          ? item.wrap(container)
-          : item.kind === "link"
-            ? item.target.kind === "url"
+      let node: RichText;
+      switch (item.kind) {
+        case "html":
+          node = item.wrap(container);
+          break;
+        case "link":
+          node =
+            item.target.kind === "url"
               ? richTextLink(container, item.target.href)
-              : { type: "anchor_link", text: container, anchor_name: item.target.name }
-            : { type: item.kind === "annotation" ? "code" : item.style, text: container };
+              : { type: "anchor_link", text: container, anchor_name: item.target.name };
+          break;
+        case "annotation":
+          node = { type: "code", text: container };
+          break;
+        case "style":
+          node = { type: item.style, text: container };
+          break;
+      }
       currentText().push(node);
       stack.push({ span: item, text: container });
     }

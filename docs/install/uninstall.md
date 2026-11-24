@@ -16,6 +16,12 @@ Remove the service and selected local data first, then [any remaining CLI instal
 
 The command attempts independent requested cleanup scopes and returns a nonzero status if any scope fails or is blocked. Service teardown remains the safety gate for state and workspace deletion; if that gate fails, those data scopes are preserved while app cleanup is still attempted. Partial cleanup is reported explicitly and is never followed by an unconditional completion result.
 
+On Linux hosts without a service manager, service removal is a no-op only when
+OpenClaw can verify that no service or installed definition exists. Selected
+state and workspace cleanup can then proceed. A missing or inaccessible user
+bus alone is not proof of absence. A running Gateway or other live state owner
+still blocks data removal; stop it through its supervisor or terminal first.
+
 Before uninstalling, run `openclaw doctor --fix`. It reclaims retained updater
 runtimes (`openclaw-update-runtime-*` directories in the system temporary
 directory or beside the installation); `openclaw uninstall` has no scope for

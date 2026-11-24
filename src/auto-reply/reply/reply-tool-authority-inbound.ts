@@ -49,6 +49,14 @@ import {
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
+export function assertIssuedOperatorAuthority(
+  authority: AdmittedRunOperatorAuthority | undefined,
+): void {
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+  }
+}
+
 /** Classify ordinary guidance without changing the selected execution's authority. */
 export function captureReplyToolAuthorityContinuation({
   snapshot,
@@ -132,17 +140,7 @@ export function captureReplyToolAuthorityContinuation({
       ) {
         return undefined;
       }
-      return () => {
-        if (shared) {
-          assertAdmittedRunOperatorAuthority(shared);
-          shared.assertCurrent();
-        }
-        if (!collaborative && owner?.isCurrent() !== true) {
-          throw new MessageInjectionAuthorityError({
-            cause: new Error("Channel owner authority is no longer current"),
-          });
-        }
-      };
+      return () => assertIssuedOperatorAuthority(shared);
     })();
   const continuationKind = backgroundOwner
     ? "owner-guidance"
@@ -171,10 +169,7 @@ export function captureReplyToolAuthorityContinuation({
     continuationKind,
     allowPendingUserInputAnswer,
     assertCurrent: () => {
-      if (backgroundOwner) {
-        assertAdmittedRunOperatorAuthority(backgroundOwner);
-        backgroundOwner.assertCurrent();
-      }
+      assertIssuedOperatorAuthority(backgroundOwner);
       if (matchingProfile && !matchingProfile.isCurrent()) {
         throw new MessageInjectionAuthorityError({
           cause: new Error("Requester profile binding is no longer current"),
@@ -221,7 +216,6 @@ export function projectReplyToolAuthorityInput(
   ) {
     if (participant.operatorAuthority) {
       assertAdmittedRunOperatorAuthority(participant.operatorAuthority);
-      participant.operatorAuthority.assertCurrent();
     }
     return snapshot;
   }

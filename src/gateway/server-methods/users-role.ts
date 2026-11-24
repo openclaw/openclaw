@@ -3,15 +3,21 @@ import {
   type UsersListParams,
   type UsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { readUserProfileSnapshot } from "../../state/user-profile-list.js";
+import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
+import {
+  readUserProfileSnapshot,
+  prepareUserProfileCatalog,
+} from "../../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { listProfiles } from "../../state/user-profiles.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
 } from "../operator-role-policy.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { respondError } from "./response.js";
+import { recordRoleAssignmentChange } from "./system-changes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import {
   prepareUserProfileAdministration,
@@ -23,29 +29,26 @@ export async function handleUsersSetRole(
 ): Promise<void> {
   const { context, params, respond } = options;
   const { profileId, role } = params;
+  const assertCurrent = await prepareUserProfileAdministration(options);
+  const target = await prepareUserProfileRoleAuthority(profileId);
   const roleAssignmentError = () =>
-    resolveUserRoleAssignmentError(() => context.getRuntimeConfig(), role);
-  const isMemberProfile =
-    role !== null
-      ? await context.openclawIdService?.prepareMemberProfileCheck(profileId)
-      : undefined;
-  const memberRoleMessage = "This member's role is managed on the Access page.";
-  if (isMemberProfile?.()) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, memberRoleMessage);
-    return;
-  }
+    resolveUserRoleAssignmentError(
+      () => context.getRuntimeConfig(),
+      role,
+      operatorRoleSubject(target),
+    );
   const assignmentError = roleAssignmentError();
   if (assignmentError) {
     respondError(respond, ErrorCodes.INVALID_REQUEST, assignmentError);
     return;
   }
-  const assertCurrent = await prepareUserProfileAdministration(options);
   holdGatewayPolicyResponse(respond);
-  const profile = await setCanonicalUserProfileRole(profileId, role, {
+  let recorded: Promise<void> | undefined;
+  const write = setCanonicalUserProfileRole(profileId, role, {
     assertCurrent: () => {
       assertCurrent();
-      if (isMemberProfile?.()) {
-        throw new Error(memberRoleMessage);
+      if (target && !target.isCurrent()) {
+        throw new Error("Target profile changed; retry the role assignment.");
       }
       const error = roleAssignmentError();
       if (error) {
@@ -56,8 +59,16 @@ export async function handleUsersSetRole(
       invalidateOperatorRolePolicy(canonicalProfileId, { roleOnly: true });
       context.disconnectClientsForUserProfile?.(canonicalProfileId, { roleOnly: true });
     },
+    onRoleChanged: (change) => {
+      recorded = recordRoleAssignmentChange(change, options.client, context.logGateway);
+    },
   });
-  respond(true, { profile });
+  // Committed history lands before the reply or a result-delivery error.
+  await write.then(
+    () => recorded,
+    () => recorded,
+  );
+  respond(true, { profile: await write });
 }
 
 export async function listUserProfiles({
@@ -72,19 +83,25 @@ export async function listUserProfiles({
       : await readUserProfileSnapshot(githubAccountIds);
   const cfg = context.getRuntimeConfig();
   const profilesById = new Map(result.profiles.map((profile) => [profile.id, profile]));
-  respond(true, {
-    ...result,
-    profiles: result.profiles.map((profile) => {
-      const canonical = profilesById.get(profile.mergedInto ?? profile.id) ?? profile;
-      return Object.assign(
-        profile,
-        resolveOperatorRoleSelection(
-          canonical.id,
-          canonical.role ?? null,
-          cfg,
-          canonical.githubIdentity?.host ? null : (canonical.githubIdentity?.login ?? null),
-        ),
-      );
-    }),
-  });
+  const catalog = await prepareUserProfileCatalog();
+  try {
+    respond(true, {
+      ...result,
+      profiles: result.profiles.map((profile) => {
+        const canonical = profilesById.get(profile.mergedInto ?? profile.id) ?? profile;
+        return Object.assign(
+          profile,
+          resolveOperatorRoleSelection(
+            canonical.id,
+            canonical.role ?? null,
+            cfg,
+            canonical.githubIdentity?.host ? null : (canonical.githubIdentity?.login ?? null),
+            operatorRoleSubject(catalog.readCurrentIdentity(canonical.id)),
+          ),
+        );
+      }),
+    });
+  } finally {
+    catalog.release();
+  }
 }

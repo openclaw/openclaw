@@ -131,6 +131,7 @@ function readPluginSdkEntrypointBudgetEnv(
   return Object.freeze({ ...fallback, ...overrides });
 }
 
+// Dallin Romney approved accounting for the existing surface below on 2026-11-24 at 06:12 UTC.
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1 each: legacy AgentHarness remains projected through the core and plugin-entry
   // compatibility barrels while external harnesses migrate to AgentHarnessV2.
@@ -176,7 +177,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // provider-auth.updateAuthProfileStoreWithLock. resolveAuthStorePathForDisplay
   // stays compatible; its resolveAuthStorePathForDisplayAsync replacement is core-internal.
   // +1: released snapshot publication remains during its approved async replacement.
-  "agent-runtime": 15,
+  // +1: retain deprecated DEFAULT_PROVIDER while plugins adopt explicit model selection (#203271).
+  "agent-runtime": 16,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -239,7 +241,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: reconcile the accepted public entrypoint inventory after the cron budget update.
       // +1: settled execution lifecycle classifiers for plugin subscribers (#192413).
       // +1: shared Decisions HTTP execution subpath (#195641), captured in the feature cut.
-      163,
+      // +1: read-only host resource-profile subpath (#202478).
+      164,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -323,7 +326,20 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // Binding inspection: +1 (#192623); service V3 types in core and plugin-entry: +8 (#176886).
       // Decisions HTTP replaces the unshipped OpenAI executor: +3 net (#195641).
       // Gateway person principal and access-refresh classifier: +2 (#196276, #176886).
-      3888,
+      // +6: expose the existing model-request hook (#193550) and metric (#198455) types through plugin-entry.
+      // +2: owner-approved stored-session Control UI path resolver and parser on session-discussion (#203044).
+      // +2: owner-approved SessionCatalogProfileRelation and SessionCatalogSourceProfileRelation
+      // (#203063). Also approved: sessionCatalogPaging.encodeScopedCursor and
+      // sessionCatalogPaging.decodeScopedCursor; object members add no counted callables.
+      // +3: resource-profile type, getter, and subscription (#202478).
+      // +5: Control UI composer handle, task, step, proposal, and outcome types (#201695).
+      // +2: Gateway publication reader type and preparer (#201073); +1: reader identity loader (#201075).
+      // +1: agent harness runtime update-required error (#201130).
+      // +1: native command argument-menu model catalog loader (#201254).
+      // +3: interactive agent control text and stamping helpers (#201764).
+      // +4: provider auth failure class, reason, recovery, and OAuth failure converter (#203394).
+      // +1: shipped reply session-init conflict classifier (#201363).
+      3919,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -380,7 +396,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same appendReplyMediaFailures receipt formatter (#186751).
       // +7 net: the callable subset of the same source-audited feature-cut exports.
       // Harness +2, transcript replay +1, binding inspection +1, Decisions +1 net, Gateway +2.
-      2243,
+      // +2: the same stored-session Control UI path resolver and parser (#203044).
+      // +2: resource-profile getter and subscription (#202478).
+      // +1: Gateway publication reader preparer (#201073); +1: reader identity loader (#201075).
+      // +1: native command argument-menu model catalog loader (#201254).
+      // +3: interactive agent control text and stamping helpers (#201764).
+      // +1: OAuth failure converter; ProviderAuthFailure is construct-only (#203394).
+      // +1: shipped reply session-init conflict classifier (#201363).
+      2255,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -402,7 +425,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // proxy initialization, approval preparation, and command authorization.
       // +1: released snapshot publication remains during its approved async replacement.
       // +2: retained Workshop guidance exports migrate to listToolPromptGuidance (#187661).
-      221,
+      // +1: deprecated agent-runtime DEFAULT_PROVIDER remains available during migration (#203271).
+      222,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

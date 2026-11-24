@@ -89,7 +89,6 @@ it.for(["message", "interrupted", "shared-message"] as const)(
                     completion: { required: true },
                     delivery: {
                       status: "pending",
-                      ...(waiting ? { disposition: "intentional_non_delivery" } : {}),
                     },
                     requesterSettleWake: {
                       status: "pending",

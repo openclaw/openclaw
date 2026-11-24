@@ -11,6 +11,7 @@ import {
   cronJob,
   cronList,
   cronSidebarFeatureMethods,
+  editAutomation,
   openAutomation,
 } from "./cron-fixtures.test-support.ts";
 
@@ -52,7 +53,7 @@ suite.define(() => {
           methodResponses: durationResponses([job]),
         });
         await page.goto(`${suite.server.baseUrl}cron`);
-        await openAutomation(page, job.id);
+        await editAutomation(page, job.id);
         const at = page.locator("#cron-schedule-at");
         const submit = page.locator('[data-test-id="cron-submit"]');
         expect(await at.inputValue()).toBe("2027-11-07T01:30");
@@ -73,13 +74,15 @@ suite.define(() => {
           const saved = { ...job, ...patch, configRevision: `dst-${previous}` };
           await gateway.setMethodResponse("cron.list", durationResponses([saved])["cron.list"]);
           await gateway.resolveDeferred("cron.update", saved);
+          // A saved edit returns to the prompt; Edit reopens the form for the next instant.
+          await page.locator('[data-test-id="cron-edit"]').click();
           await page.locator('[data-test-id="cron-submit"]:not(:disabled)').waitFor();
         }
         const previous = (await gateway.getRequests("cron.update")).length;
         await at.fill("2027-03-14T02:30");
         expect(await at.getAttribute("aria-invalid")).toBe("true");
         expect(await submit.isDisabled()).toBe(true);
-        expect(await page.locator(".cron-schedule-summary").count()).toBe(0);
+        expect(await page.locator('[data-test-id="cron-schedule-note"]').count()).toBe(0);
         expect(await gateway.getRequests("cron.update")).toHaveLength(previous);
       },
     );

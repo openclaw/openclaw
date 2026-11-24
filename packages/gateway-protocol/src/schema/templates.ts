@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { MAX_TEMPLATE_UPLOAD_BASE64_LENGTH } from "../template-source-limits.js";
 import { closedObject } from "./closed-object.js";
 import { PluginDeclaredSurfaceSchema, PluginOperatorGrantsSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
@@ -10,13 +11,14 @@ const TemplatePackageName = Type.String({
 });
 const TemplateArtifactIntegrity = Type.String({ pattern: "^sha256-[A-Za-z0-9+/]{43}=$" });
 const TemplateBundledDigest = Type.String({ pattern: "^sha256:[a-f0-9]{64}$" });
-const TemplateCatalogCoordinateSchema = closedObject({
+export const TemplateCatalogCoordinateSchema = closedObject({
   packageName: TemplatePackageName,
   version: NonEmptyString,
 });
 
 export const TemplatesCatalogSearchParamsSchema = closedObject({
   overview: Type.Optional(Type.Boolean()),
+  includeCategoryEntries: Type.Optional(Type.Boolean()),
   query: Type.Optional(Type.String({ maxLength: 200 })),
   category: Type.Optional(Type.String({ maxLength: 40 })),
   featured: Type.Optional(Type.Boolean()),
@@ -47,6 +49,7 @@ export const TemplatesCatalogSearchResultSchema = closedObject({
         closedObject({
           category: NonEmptyString,
           entries: Type.Array(TemplatesCatalogEntrySchema),
+          additionalEntries: Type.Optional(Type.Array(TemplatesCatalogEntrySchema)),
         }),
       ),
     }),
@@ -102,6 +105,7 @@ const TemplatesCatalogContentsSchema = closedObject({
       enabled: Type.Boolean(),
       schedule: NonEmptyString,
       timezone: NonEmptyString,
+      message: NonEmptyString,
     }),
   ),
 });
@@ -289,13 +293,26 @@ export const TemplateSkillAcknowledgementSchema = Type.Union([
 ]);
 
 export const TemplatesAddPlanParamsSchema = closedObject({
-  source: TemplateCatalogCoordinateSchema,
+  source: Type.Union([
+    TemplateCatalogCoordinateSchema,
+    closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+    closedObject({
+      kind: Type.Literal("upload"),
+      archiveBase64: Type.String({ minLength: 4, maxLength: MAX_TEMPLATE_UPLOAD_BASE64_LENGTH }),
+    }),
+  ]),
   agentId: Type.Optional(NonEmptyString),
 });
 
-/** Add from a reviewed plan. The setup helper installs through exactly this shape. */
 export const TemplatesAddReviewedApplyParamsSchema = closedObject({
-  source: TemplateCatalogCoordinateSchema,
+  source: Type.Union([
+    TemplateCatalogCoordinateSchema,
+    closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+    closedObject({
+      kind: Type.Literal("upload"),
+      archiveBase64: Type.String({ minLength: 4, maxLength: MAX_TEMPLATE_UPLOAD_BASE64_LENGTH }),
+    }),
+  ]),
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),
   acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
@@ -551,6 +568,16 @@ export const TemplateLifecyclePlanResultSchema = closedObject({
   ),
   trustWarning: Type.Optional(NonEmptyString),
   manifestDisclosure: Type.Optional(TemplateManifestDisclosureSchema),
+  // Local-source review text read from the same verified archive as this plan.
+  reviewFiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        content: Type.Optional(Type.String()),
+        workspacePaths: Type.Optional(Type.Array(NonEmptyString)),
+      }),
+    ),
+  ),
   riskAcknowledgementRequired: Type.Boolean(),
   configuredAccess: Type.Optional(TemplateConfiguredAccessSchema),
   scheduledJobs: Type.Optional(TemplateScheduledJobsSchema),

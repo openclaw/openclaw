@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
-import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
+import {
+  patchConfigHealthEntryToStore,
+  readConfigHealthStateFromStore,
+} from "../config/io.health-state.js";
 import { createConfigIO } from "../config/io.js";
 import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -34,6 +37,163 @@ async function expectClobbered(configPath: string, original?: string) {
     await expectFiles({ [path.join(stateDir, files[0]!)]: original });
   }
 }
+
+it.for([
+  "intact-backup",
+  "newer-backup",
+  "last-good-only",
+  "edited-truncation",
+  "repeated-edited-truncation",
+  "observed-repeated-truncation",
+] as const)(
+  "explicitly repairs an already-observed valid truncation using %s",
+  async (candidate, { configPath, home }) => {
+    const healthy = JSON.stringify({
+      gateway: {
+        mode: "local",
+        port: 19201,
+        trustedProxies: Array.from(
+          {
+            length:
+              candidate === "repeated-edited-truncation"
+                ? 34
+                : candidate === "observed-repeated-truncation"
+                  ? 46
+                  : 80,
+          },
+          (_, index) => `192.0.2.${index}`,
+        ),
+      },
+      plugins: { enabled: false },
+    });
+    await fs.writeFile(configPath, healthy);
+    const io = createConfigIO({ configPath });
+    const baseline = await io.readConfigFileSnapshot();
+    expect(await io.promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+    let expected = healthy;
+    if (candidate === "newer-backup") {
+      await io.writeConfigFile(
+        { ...baseline.sourceConfig, update: { channel: "beta" } },
+        { baseSnapshot: baseline },
+      );
+      expected = await fs.readFile(configPath, "utf8");
+    }
+    if (candidate !== "last-good-only") {
+      await fs.writeFile(`${configPath}.bak`, expected);
+    }
+    const truncated = '{"gateway":{"mode":"local","port":19202}}\n';
+    await fs.writeFile(configPath, truncated);
+    const observed = await io.readConfigFileSnapshot();
+    expect(observed.valid).toBe(true);
+    const entry = readConfigHealthStateFromStore({
+      env: process.env,
+      homedir: () => home,
+      logger: console,
+    }).entries?.[configPath];
+    expect(entry?.lastObservedSuspiciousSignature).toContain(`${observed.hash}:size-drop-`);
+
+    // Observation deduplication still governs passive recovery and startup previews.
+    expect(await io.prepareConfigRecovery(observed)).toBeNull();
+    await io.readConfigFileSnapshot({ recoverSuspicious: true });
+    await expectFiles({ [configPath]: truncated });
+    let rejected = truncated;
+    const baselineBytes = Buffer.byteLength(healthy);
+    const sizeDropThreshold = Math.floor(baselineBytes / 2);
+    const edits: { port: number; trustedProxies?: string[] }[] =
+      candidate === "observed-repeated-truncation"
+        ? [
+            // Put the stamped backup and the final edit on opposite sides of the size threshold
+            // with enough margin for both stable and prerelease writer metadata.
+            { port: 19203, trustedProxies: ["198.51.100.1", "198.51.100.2", "198.51.100.3"] },
+            { port: 19204, trustedProxies: undefined },
+          ]
+        : candidate === "repeated-edited-truncation"
+          ? [{ port: 19203 }, { port: 19204 }]
+          : candidate === "edited-truncation" || candidate === "newer-backup"
+            ? [{ port: 19203 }]
+            : [];
+    for (const gatewayEdit of edits) {
+      const before = await io.readConfigFileSnapshot();
+      const predecessor = rejected;
+      await io.writeConfigFile(
+        { ...before.sourceConfig, gateway: { ...before.sourceConfig.gateway, ...gatewayEdit } },
+        { baseSnapshot: before },
+      );
+      rejected = await fs.readFile(configPath, "utf8");
+      // Later metadata-stamped predecessors can hide the original size reduction.
+      await expectFiles({ [`${configPath}.bak`]: predecessor });
+      if (gatewayEdit.trustedProxies) {
+        expect(Buffer.byteLength(rejected)).toBeGreaterThanOrEqual(sizeDropThreshold);
+      }
+    }
+    if (candidate === "observed-repeated-truncation") {
+      const rejectedBytes = Buffer.byteLength(rejected);
+      expect(rejectedBytes).toBeLessThan(sizeDropThreshold);
+      const reread = await io.readConfigFileSnapshot();
+      expect(
+        readConfigHealthStateFromStore({ env: process.env, homedir: () => home, logger: console })
+          .entries?.[configPath]?.lastObservedSuspiciousSignature,
+      ).toBe(`${reread.hash}:size-drop-vs-last-good:${baselineBytes}->${rejectedBytes}`);
+    }
+    if (candidate === "newer-backup") {
+      // The health owner witnessed this newer backup before the loss was inherited.
+      await fs.writeFile(`${configPath}.bak`, expected);
+    }
+    await runDoctorConfigPreflight({ ...repairOptions, repairPrefixedConfig: false });
+    await expectFiles({ [configPath]: rejected });
+    await expectClobbered(configPath);
+
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.valid).toBe(true);
+    await expectFiles({
+      [configPath]: expected,
+      [`${configPath}.last-good`]: healthy,
+    });
+    await expectClobbered(configPath, rejected);
+  },
+);
+
+it.for(["healthy-reseed", "tampered-promotion", "intentional-reduction"] as const)(
+  "does not roll back valid config for %s during explicit repair",
+  async (scenario, { configPath }) => {
+    const config = {
+      gateway: {
+        mode: "local" as const,
+        trustedProxies: Array.from({ length: 80 }, (_, index) => `192.0.2.${index}`),
+      },
+      plugins: { enabled: false },
+    };
+    const healthy = JSON.stringify(config);
+    await fs.writeFile(configPath, healthy);
+    const io = createConfigIO({ configPath });
+    const baseline = await io.readConfigFileSnapshot();
+    expect(await io.promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+    let original = JSON.stringify({
+      ...config,
+      gateway: { ...config.gateway, port: 19202 },
+    });
+    if (scenario === "intentional-reduction") {
+      await io.writeConfigFile(
+        { gateway: { mode: "local", port: 19202 }, plugins: { enabled: false } },
+        { baseSnapshot: baseline, allowConfigSizeDrop: true },
+      );
+      original = await fs.readFile(configPath, "utf8");
+      // Leave only the older promotion: a healthy accepted reduction is not loss.
+      await fs.unlink(`${configPath}.bak`);
+    } else {
+      if (scenario === "tampered-promotion") {
+        original = '{"gateway":{"mode":"local","port":19202}}\n';
+        await fs.writeFile(`${configPath}.last-good`, healthy + "\n");
+      }
+      await fs.writeFile(configPath, original);
+    }
+    await io.readConfigFileSnapshot();
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.valid).toBe(true);
+    await expectFiles({ [configPath]: original });
+    await expectClobbered(configPath);
+  },
+);
 
 it.for([true, false])(
   "keeps the active included prompt grant %s ahead of an opposite older backup",

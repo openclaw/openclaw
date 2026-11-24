@@ -133,10 +133,20 @@ it.each([false, true])(
         if (!id) {
           return commandResult("", `no container with name or id ${args.at(-1)} found`);
         }
+        if (args[2]?.includes('"State":{{json .State}}')) {
+          return commandResult(
+            JSON.stringify({
+              Id: id,
+              State: { Running: true, Paused: false },
+              ReadonlyRootfs: true,
+              Labels: {},
+              Mounts: [],
+            }),
+          );
+        }
         const fields: Record<string, string> = {
           "{{.State.Running}}": "true",
           "{{.Id}}": id,
-          '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}': `${id}\ntrue\ntrue\n`,
           "{{.ImageName}}\t{{.Image}}": `${cfg.docker.image}\tsha256:fixture`,
         };
         return commandResult(

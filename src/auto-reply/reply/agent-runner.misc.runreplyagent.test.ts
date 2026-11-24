@@ -49,6 +49,7 @@ import {
   runCliAgentMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
+  registerRawTracePayloadTest,
   runtimeErrorMock,
   sessionFixture,
   sessionState,
@@ -373,10 +374,8 @@ describe("runReplyAgent auto-compaction token update", () => {
             compactionCount: 0,
           });
           if (compactAfterFlush) {
-            expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledWith(
-              expect.objectContaining({ trigger: "budget" }),
-              expect.objectContaining({ requestBudget: { ...requestBudget, pendingTokens: 0 } }),
-            );
+            // Fitting maintenance waits for the next attempt's request boundary.
+            expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
           }
         }
       } finally {
@@ -682,143 +681,20 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  it("appends raw trace payloads with escaped fences when trace raw is enabled", async () => {
-    const { tmp, storePath, sessionKey, sessionEntry, scope, reply } = await storedSession({
-      traceLevel: "raw",
-      compactionCount: 3,
-    });
-    const transcript = await SessionManager.openAsync(scope, tmp);
-    await transcript.appendMessageAsync({ role: "user", content: "Earlier turn", timestamp: 0 });
-    await transcript.appendMessageAsync(
-      makeAssistantMessageFixture({
-        content: [{ type: "text", text: "Earlier reply" }],
-        stopReason: "stop",
-        errorMessage: undefined,
-        usage: {
-          ...createUsageFixture(200, 10, 235),
-          cacheRead: 20,
-          cacheWrite: 5,
-        },
-      }),
-    );
-
-    runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
-      result: await runFallbackModelAttempt(params, "anthropic", "claude", "timeout"),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [
-        {
-          provider: "openai",
-          model: "gpt-5.5",
-          error: "LLM request timed out.",
-          reason: "timeout",
-          status: 408,
-        },
-      ],
-    }));
-    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
-      params.onCompactionAccounting?.({
-        kind: "durable",
-        count: 1,
-        currentContextSnapshot: { tokens: 1250 },
-        target: {
+  registerRawTracePayloadTest({
+    run: (sessionKey, reply) =>
+      channelRun("telegram", "chat:1", {
+        context: { CommandBody: "/trace raw show me everything" },
+        run: {
           agentId: "main",
-          sessionId: sessionEntry.sessionId,
           sessionKey,
-          storePath,
-          lifecycleRevision: sessionEntry.lifecycleRevision,
-          activeWriterRunId: undefined,
+          sessionFile: sessionKey,
+          reasoningLevel: "on",
+          thinkLevel: "low",
+          traceAuthorized: true,
         },
-      });
-      return replyResult("Visible reply", {
-        finalPromptText:
-          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything\n~~~\nnot a fence",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "<final>Visible reply\n~~~\nresponse</final>",
-        executionTrace: {
-          winnerProvider: "anthropic",
-          winnerModel: "claude",
-          runner: "embedded",
-          fallbackUsed: false,
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              result: "success",
-              stage: "assistant",
-              elapsedMs: 4200,
-            },
-          ],
-        },
-        toolSummary: {
-          calls: 2,
-          tools: ["active-memory", "github-search"],
-          failures: 0,
-          totalToolTimeMs: 481,
-        },
-        completion: { finishReason: "stop", stopReason: "end_turn", refusal: false },
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
-          lastCallUsage: {
-            input: 1000,
-            output: 45,
-            cacheRead: 750,
-            cacheWrite: 150,
-            total: 1945,
-          },
-          promptTokens: 1250,
-          compactionCount: 1,
-        },
-      });
-    });
-
-    const result = await channelRun("telegram", "chat:1", {
-      context: { CommandBody: "/trace raw show me everything" },
-      run: {
-        agentId: "main",
-        sessionKey,
-        sessionFile: sessionKey,
-        reasoningLevel: "on",
-        thinkLevel: "low",
-        traceAuthorized: true,
-      },
-      reply,
-    }).run();
-
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as { text?: string }[])[0]?.text).toBe("Visible reply");
-    const traceText = (result as { text?: string }[])[1]?.text ?? "";
-    expect(traceText).toContain("🔎 Usage (Session Total):");
-    expect(traceText).toContain("🔎 Usage (Last Turn Total):");
-    expect(traceText).toContain("used=1,250 tok (1.3k)");
-    expect(traceText).toContain("winner=anthropic/claude");
-    expect(traceText).toContain("fallbackUsed=yes");
-    expect(traceText).toContain("attempts=2");
-    expect(traceText).toContain("1. openai/gpt-5.5");
-    expect(traceText).toContain("result=timeout");
-    expect(traceText).toContain("status=408");
-    expect(traceText).toContain("2. anthropic/claude");
-    expect(traceText).toContain("result=success");
-    expect(traceText).toContain("thinking=low");
-    expect(traceText).toContain("reasoning=on");
-    expect(traceText).toContain("active_memory_plugin=");
-    expect(traceText).toContain("user_message=");
-    expect(traceText).toContain("tools=active-memory, github-search");
-    expect(traceText).toContain("finishReason=stop");
-    expect(traceText).toContain("stopReason=end_turn");
-    expect(traceText).toContain("refusal=no");
-    expect(traceText).toContain("sessionCompactions=4");
-    expect(traceText).toContain("lastTurnCompactions=1");
-    expect(traceText).toContain("🔎 Model Input (User Role):");
-    expect(traceText).toContain("🔎 Model Output (Assistant Role):");
-    expect(traceText).toContain("Summary: winner=claude 🧠 low fallback=yes attempts=2");
-    expect(traceText).not.toContain("🔎 Provider Usage (Turn Total):");
-    expect(traceText).not.toContain("🔎 Provider Usage (Last Provider Call):");
-    expect(traceText).toContain("show me everything\n\\~~~\nnot a fence");
-    expect(traceText).toContain("<final>Visible reply\n\\~~~\nresponse</final>");
+        reply,
+      }).run(),
   });
 });
 

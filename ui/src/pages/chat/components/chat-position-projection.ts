@@ -1,5 +1,6 @@
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
+import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -46,7 +47,14 @@ export function projectChatPositions(
   ) => {
     const marker = markers.get(id);
     if (marker) {
-      marker.message = message;
+      // Inline commentary must not replace a delivered answer in the position rail.
+      if (
+        role !== "assistant" ||
+        resolveAssistantReplyPhase(message) !== "commentary" ||
+        resolveAssistantReplyPhase(marker.message) !== "final_answer"
+      ) {
+        marker.message = message;
+      }
     } else {
       markers.set(id, { id, role, anchorId: messageId, message });
     }

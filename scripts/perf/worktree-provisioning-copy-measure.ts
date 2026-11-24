@@ -18,6 +18,10 @@
  * Both require identical bytes/mode/mtime/path set, independent writes and CoW
  * extents. Gateway provisionCopy must be <10 seconds.
  * Run A/A controls and >=5 interleaved pairs in fresh processes/destinations.
+ * --symlink-target /absolute/synthetic/file adds file/directory symlinks that
+ * must be skipped. For mixed-device proof, bind-mount selected dependency groups
+ * from tmpfs after seeding. Diagnostic-only changes must preserve counts and
+ * correctness with no >20% wall/CPU/allocation regression.
  * Natural GC; verification and cleanup excluded. No production data is read.
  */
 import assert from "node:assert/strict";
@@ -49,6 +53,7 @@ const { values } = parseArgs({
     seed: { type: "boolean", default: false },
     profile: { type: "string" },
     dependencies: { type: "boolean", default: false },
+    "symlink-target": { type: "string" },
     "resident-gib": { type: "string" },
   },
 });
@@ -60,6 +65,9 @@ const paths = values.dependencies
   ? dependencyFixturePaths()
   : Array.from({ length: 50_000 }, (_, i) => `prepared/${Math.floor(i / 100)}/${i % 100}.bin`);
 const payload = Buffer.alloc(values.dependencies ? dependencyFileBytes : 20_000, 120);
+const symlinkPaths = values["symlink-target"]
+  ? ["file-link", `directory-link/${path.basename(values["symlink-target"])}`]
+  : [];
 const ticksPerSecond = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }));
 const childCpuMs = () => {
   const fields = readFileSync("/proc/self/stat", "utf8").split(") ")[1]!.split(" ");
@@ -104,6 +112,13 @@ if (isMainThread && values["resident-gib"] !== undefined && !values.seed) {
     }
     await fs.writeFile(path.join(source, ".gitignore"), "prepared/\n");
     await fs.writeFile(path.join(source, ".worktreeinclude"), "prepared/**\n");
+  }
+  if (values["symlink-target"]) {
+    await fs.symlink(path.resolve(values["symlink-target"]), path.join(source, "file-link"));
+    await fs.symlink(
+      path.dirname(path.resolve(values["symlink-target"])),
+      path.join(source, "directory-link"),
+    );
   }
   console.log(
     JSON.stringify({
@@ -165,23 +180,28 @@ if (isMainThread && values["resident-gib"] !== undefined && !values.seed) {
     const allocationBefore = getHeapStatistics().total_allocated_bytes;
     const cpuBefore = process.cpuUsage();
     const start = performance.now();
-    const copied = await owner.copyProvisionedPaths(source, destination, paths, {
-      copyDetails,
-      assertCurrent() {
-        const started = performance.now();
-        authorityCalls++;
-        if (decision) {
-          Atomics.store(decision, 0, 0);
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no Window target origin.
-          parentPort?.postMessage("authority");
-          while (Atomics.load(decision, 0) === 0) {
-            Atomics.wait(decision, 0, 0);
+    const copied = await owner.copyProvisionedPaths(
+      source,
+      destination,
+      [...paths, ...symlinkPaths],
+      {
+        copyDetails,
+        assertCurrent() {
+          const started = performance.now();
+          authorityCalls++;
+          if (decision) {
+            Atomics.store(decision, 0, 0);
+            // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no Window target origin.
+            parentPort?.postMessage("authority");
+            while (Atomics.load(decision, 0) === 0) {
+              Atomics.wait(decision, 0, 0);
+            }
           }
-        }
-        copyDetails.authorityChecks++;
-        copyDetails.authorityMs += performance.now() - started;
+          copyDetails.authorityChecks++;
+          copyDetails.authorityMs += performance.now() - started;
+        },
       },
-    });
+    );
     const wallMs = performance.now() - start;
     const cpu = process.cpuUsage(cpuBefore);
     let allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
@@ -240,11 +260,9 @@ if (isMainThread && values["resident-gib"] !== undefined && !values.seed) {
     }
     const entries = await listDirectoryTreeStrict(destination);
     assert.equal(entries.filter((entry) => !entry.dirent.isDirectory()).length, paths.length);
-    const extents = execFileSync(
-      "btrfs",
-      ["filesystem", "du", "-s", "--raw", source, destination],
-      { encoding: "utf8" },
-    );
+    const extents = execFileSync("btrfs", ["filesystem", "du", "-s", "--raw", destination], {
+      encoding: "utf8",
+    });
     await fs.writeFile(path.join(destination, paths[0]!), "independent destination");
     payload.writeUInt32LE(0, 0);
     assert.deepEqual(await fs.readFile(path.join(source, paths[0]!)), payload);

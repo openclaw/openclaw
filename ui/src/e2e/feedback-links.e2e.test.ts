@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -14,6 +15,87 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it.each([1280, 820, 400])(
+    "keeps failed-reply copy compact with reachable feedback at %ipx",
+    async (width) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page, context }) => {
+        const sessionKey = "agent:main:main";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [
+            {
+              key: sessionKey,
+              status: "failed",
+              hasActiveRun: false,
+              lastRunId: "failed-run",
+              lastRunError: "Synthetic reply failure for layout verification.",
+            },
+          ],
+          historyMessages: [{ role: "user", content: "Check the example operation." }],
+        });
+        await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
+        const notice = page.locator(".chat-error");
+        const title = notice.locator(".app-toast__message");
+        const description = notice.locator(".app-toast__description");
+        const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
+        const report = notice.getByRole("link", { name: "Report a bug", exact: true });
+        await report.waitFor();
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          notice,
+          [title, description, refresh, report],
+          {
+            elements: [notice, title, description, refresh, report],
+            animations: "disabled",
+          },
+        );
+        const bounds = frame.elements.map((element) => element.bounds);
+        const [cardBox, titleBox, descriptionBox] = bounds;
+        const fontSize = await report.evaluate((element) => getComputedStyle(element).fontSize);
+        await writeFile(path.join(suite.artifactDir, `layout-${width}.png`), frame.png);
+        await writeFile(
+          path.join(suite.artifactDir, `layout-${width}.json`),
+          JSON.stringify(
+            {
+              viewport: page.viewportSize(),
+              bounds,
+              fontSize,
+              gap: descriptionBox!.y - titleBox!.y - titleBox!.height,
+            },
+            null,
+            2,
+          ),
+        );
+        const gap = descriptionBox!.y - titleBox!.y - titleBox!.height;
+        expect.soft(gap).toBeGreaterThanOrEqual(2);
+        expect.soft(gap).toBeLessThanOrEqual(6);
+        expect
+          .soft(fontSize)
+          .toBe(await description.evaluate((element) => getComputedStyle(element).fontSize));
+        if (width === 1280) {
+          expect.soft(cardBox!.height).toBeLessThanOrEqual(104);
+        }
+        await context.route("https://github.com/**", (route) =>
+          route.fulfill({ body: "Issue form destination verified" }),
+        );
+        const popupPromise = page.waitForEvent("popup");
+        await report.click();
+        const popup = await popupPromise;
+        await popup.waitForLoadState();
+        expect(new URL(popup.url()).pathname).toBe("/openclaw/openclaw/issues/new");
+        await popup.close();
+        await notice.locator("summary").press("Enter");
+        await notice.getByLabel("Error details", { exact: true }).waitFor();
+        expect(await notice.locator("details").getAttribute("open")).not.toBeNull();
+        const reads = (await gateway.getRequests("chat.history")).length;
+        await refresh.click();
+        await gateway.waitForRequest("chat.history", { after: reads });
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await notice.getByRole("button", { name: "Dismiss error", exact: true }).click();
+        await notice.waitFor({ state: "hidden" });
+      });
+    },
+  );
   it("opens the appropriate public issue template without attaching runtime data", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

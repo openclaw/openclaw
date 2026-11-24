@@ -15,7 +15,10 @@ import {
 } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawConfig } from "../types.js";
-import type { SessionColdBatchInput } from "./session-accessor.sqlite-archive-types.js";
+import type {
+  SessionColdBatchInput,
+  SessionColdCleanupCursor,
+} from "./session-accessor.sqlite-archive-types.js";
 import { prepareSqliteColdArchiveBatch } from "./session-accessor.sqlite-archive.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
@@ -50,6 +53,7 @@ import {
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const operations = new Map<string, StoreWriterQueue>();
+const cleanupCursors = new Map<string, SessionColdCleanupCursor>();
 const log = createSubsystemLogger("session-cold-storage");
 const oversizedUntil = new Map<string, number>();
 let nextStore = 0;
@@ -95,6 +99,7 @@ async function archiveSessionColdBatch(
         }
       }
       const input: SessionColdBatchInput & { source: SessionColdSource } = {
+        cleanupCursor: cleanupCursors.get(storePath),
         source,
         databaseOptions: workerDatabaseOptions(options.databaseOptions),
         admissionIdentities: [
@@ -229,6 +234,12 @@ async function archiveSessionColdBatch(
         );
       }
       assertCurrent();
+      // Advance only after cleanup succeeds. Restarting loses progress, never pending work.
+      if (batch.cleanupCursor) {
+        cleanupCursors.set(storePath, batch.cleanupCursor);
+      } else {
+        cleanupCursors.delete(storePath);
+      }
       return {
         archivedTranscripts: result.archivedTranscripts,
         externalizedTranscripts: result.externalizedTranscripts,

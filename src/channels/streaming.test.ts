@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
+import { resolveChannelStreamingChunkMode as readChunkMode } from "./streaming-config-readers.js";
 import {
   type AgentPlanStep,
   type ChannelProgressDraftLineInput,
@@ -18,7 +19,6 @@ import {
   formatChannelProgressDraftLine as formatLine,
   isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockCoalesce as readCoalesce,
-  resolveChannelStreamingChunkMode as readChunkMode,
   resolveChannelStreamingNativeTransport as readNative,
   resolveChannelStreamingPreviewCommandText as readCommand,
   resolveChannelStreamingPreviewChunk as readChunk,

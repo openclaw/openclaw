@@ -24,7 +24,8 @@ export function createModelProviderConfigActions(deps: {
   mutations: ReturnType<typeof createModelProviderMutationPresentation>;
   getAgentEpoch: () => number;
   canMutate: () => boolean;
-  clearProbe: (provider: string) => void;
+  clearProbe: (provider: string) => () => boolean;
+  setProbeResult: (provider: string, result: ModelsProbeResult) => void;
   refresh: () => Promise<void>;
   setBusy: (key: string, busy: boolean) => void;
   setMessage: (key: string, message: ModelProviderRowMessage | null) => void;
@@ -38,6 +39,7 @@ export function createModelProviderConfigActions(deps: {
     getAgentEpoch,
     canMutate,
     clearProbe,
+    setProbeResult,
     refresh,
     setBusy,
     setMessage,
@@ -79,6 +81,7 @@ export function createModelProviderConfigActions(deps: {
     configKey: string;
     action: "edit" | "add";
     activateProfileId?: string;
+    ownsProbe: () => boolean;
   }): Promise<ModelProviderRowMessage | null> {
     // With no usable model yet, activation runs the same check and makes the key the default.
     if (params.activateProfileId) {
@@ -96,7 +99,10 @@ export function createModelProviderConfigActions(deps: {
       }
       return activated.message;
     }
-    if (isGatewayMethodAdvertised(context.gateway.snapshot, "models.probe") === false) {
+    if (
+      !params.ownsProbe() ||
+      isGatewayMethodAdvertised(context.gateway.snapshot, "models.probe") === false
+    ) {
       return null;
     }
     let result: ModelsProbeResult;
@@ -106,12 +112,26 @@ export function createModelProviderConfigActions(deps: {
         agentId: params.agentId,
       });
     } catch (error) {
+      if (!params.ownsProbe()) {
+        return null;
+      }
+      const detail = modelProviderErrorMessage(error);
+      setProbeResult(params.provider, {
+        provider: params.configKey,
+        status: "unknown",
+        error: detail,
+        results: [],
+      });
       return {
         kind: "warning",
         text: t("modelProviders.apiKey.checkUnavailable"),
-        warning: modelProviderErrorMessage(error),
+        warning: detail,
       };
     }
+    if (!params.ownsProbe()) {
+      return null;
+    }
+    setProbeResult(params.provider, result);
     if (result.status === "ok") {
       return {
         kind: "success",
@@ -159,7 +179,7 @@ export function createModelProviderConfigActions(deps: {
     const agentId = state.selectedAgentId;
     const isCurrent = () =>
       gateway.isCurrent({ client, epoch: clientEpoch }) && getAgentEpoch() === capturedAgentEpoch;
-    clearProbe(provider);
+    const isLatestProbe = clearProbe(provider);
     const result = await mutations.run(
       "apiKey",
       () =>
@@ -178,6 +198,7 @@ export function createModelProviderConfigActions(deps: {
                   provider,
                   configKey,
                   action,
+                  ownsProbe: () => isCurrent() && isLatestProbe(),
                   ...(activate && receipt.profileId
                     ? { activateProfileId: receipt.profileId }
                     : {}),

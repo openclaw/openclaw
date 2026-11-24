@@ -11,11 +11,21 @@ import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 const UNCONFIRMED_DESCENDANT_CLEANUP_NOTE =
   "OpenClaw could not confirm that every process started by this command stopped; a detached process (such as a daemon or tmux server) may still be running. Use background: true for long-running services.";
 
+/**
+ * A foreground result reports OpenClaw's note as a warning, so the output a
+ * program parses stays exactly what the command wrote. A backgrounded command
+ * returned its tool result already; only its log and follow-up can still say it.
+ */
 function withNote(
   session: ProcessSession,
   outcome: ExecProcessOutcome,
+  warnings: string[],
   note: string,
 ): ExecProcessOutcome {
+  if (!session.backgrounded) {
+    warnings.push(note);
+    return outcome;
+  }
   appendOutput(session, "stderr", `\n${note}\n`);
   return { ...outcome, aggregated: joinExecFailureOutput(outcome.aggregated, note) };
 }
@@ -29,6 +39,7 @@ export async function settleHostExecDescendants(
   session: ProcessSession,
   managedRun: ManagedRun,
   outcome: ExecProcessOutcome,
+  warnings: string[],
 ): Promise<ExecProcessOutcome> {
   const handsOff =
     managedRun.releasesOnRootExit === true &&
@@ -52,13 +63,13 @@ export async function settleHostExecDescendants(
     logWarn(
       `exec: descendant cleanup after completion was not confirmed (${redactToolPayloadText(formatErrorMessage(error))}).`,
     );
-    finalOutcome = withNote(session, outcome, UNCONFIRMED_DESCENDANT_CLEANUP_NOTE);
+    finalOutcome = withNote(session, outcome, warnings, UNCONFIRMED_DESCENDANT_CLEANUP_NOTE);
   }
   session.cleanupUncertain ||= extinction?.status === "uncertain";
   if (extinction?.status === "released" && extinction.survivors.length > 0) {
     const lines = adoptExecSurvivors(session, extinction.survivors);
     if (lines.length > 0) {
-      finalOutcome = withNote(session, finalOutcome, lines.join("\n"));
+      finalOutcome = withNote(session, finalOutcome, warnings, lines.join("\n"));
     }
   }
   if (session.requestCancelled && session.cleanupUncertain) {

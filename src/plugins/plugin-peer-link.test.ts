@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { safeRealpathSync } from "./path-safety.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
@@ -18,6 +19,8 @@ import {
   repairInstalledOpenClawHostLinks,
 } from "./plugin-peer-link.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+
+vi.mock("./path-safety.js", { spy: true });
 
 const tempDirs: string[] = [];
 
@@ -149,6 +152,25 @@ describe("plugin peer links", () => {
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(bundle));
     expect(await linkOpenClawPeerDependencies(install)).toEqual({ repaired: 1, skipped: 0 });
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(seed));
+  });
+
+  it("admits another spelling of the host directory but not a different directory", () => {
+    const { root, packageDir, linkPath, oldHost: host } = peerFixture("stale-link");
+    const otherHost = path.join(root, "other-host");
+    fs.mkdirSync(otherHost);
+    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${host}/`).href);
+    // Windows realpath returns the spelling a junction stored, not the on-disk spelling.
+    vi.mocked(safeRealpathSync).mockImplementation((target) =>
+      fs.existsSync(target) ? target : null,
+    );
+    try {
+      expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
+      fs.unlinkSync(linkPath);
+      fs.symlinkSync(otherHost, linkPath, "junction");
+      expect(auditOpenClawPeerDependencyLinkSync({ packageDir })?.reason).toContain("instead of");
+    } finally {
+      vi.mocked(safeRealpathSync).mockReset();
+    }
   });
 
   it.each([

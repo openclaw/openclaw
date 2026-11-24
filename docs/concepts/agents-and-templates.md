@@ -90,9 +90,9 @@ agent can offer to turn it into an automation.
 ## Package it as a Template
 
 Once an agent does its job well, you can package it so other people can start
-from the same setup. Templates are an experimental feature. Enable **Templates**
-in **Settings → Labs** first, or set `gateway.controlUi.experimental.templates`
-to `true` on a headless installation.
+from the same setup. Templates are available by default, without a Labs opt-in.
+An existing advanced `gateway.controlUi.experimental.templates: false` still
+disables them; see [Templates](/cli/templates).
 
 A Template can include agent instructions, workspace files, skills, plugins,
 MCP servers, and automations. It does not include your memories, conversations,
@@ -106,14 +106,14 @@ and needs an administrator connection.
    agent drafts a private proposal and opens a review card in the same
    conversation. It writes the proposal for a new owner instead of copying your
    workspace.
-2. Review what it prepared. The card shows the exact files in the package and
-   the skills, plugins, MCP servers, and automations it declares. The review is
+2. If the card asks you to **Sign in**, approve ClawHub access in your browser.
+   When the draft is ready, its card appears in the same chat. Select **Preview**
+   to inspect the exact files, skills, plugins, MCP servers, and automations. The preview is
    read-only, so ask the agent to revise the proposal when something should
    change. Known private paths and credential-like text are rejected, but read
    the remaining text for personal details yourself.
-3. Publish it to ClawHub so others can add it. Sign in with `clawhub login` on
-   the Gateway host, then select **Publish** on the review card. Publishing is
-   your decision; the agent cannot publish for you. The card shows **Pending**
+3. To share the Template, select **Publish** on the card or in the preview.
+   The agent cannot publish for you. The card shows **Pending**
    while ClawHub checks the submission and **Published** once the Template is
    available, with a link you can share.
 
@@ -122,9 +122,8 @@ You can also write a Template by hand. See
 
 ## Start from someone else's Template
 
-Published Templates live on [ClawHub](/clawhub). Enable **Templates** in
-**Settings → Labs**, then open **Templates** under **Pages** in the Control UI
-to browse and search them. With the same switch on, you can also add a Template
+Published Templates live on [ClawHub](/clawhub). Open **Customize → Templates**
+to browse and search them. If Customize is not pinned, find it in **Pages**. You can also add a Template
 from the command line when someone shares its ClawHub reference:
 
 ```bash

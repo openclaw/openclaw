@@ -10,10 +10,8 @@ import { persistInternalSourceReply } from "../../../gateway/internal-source-rep
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-} from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnInput } from "../../../sessions/user-turn-input.types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -254,7 +252,7 @@ export async function withInterruptedTurn(
         );
       });
     }
-    previous.finishPendingInput!("interrupted");
+    previous.releasePendingInput!();
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
@@ -343,7 +341,7 @@ export async function withInterruptedTurn(
           }),
       });
     } finally {
-      recorder.finishPendingInput!("interrupted");
+      recorder.finishPendingInput!("interrupted", "failed");
       await lifecycle.dispose();
       await selected?.databaseClaim.release();
       clearEmbeddedSessionPromptStates([target.sessionId]);

@@ -41,7 +41,7 @@ export function consumeGatewayFastPathRootOptionToken(
 export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] | null {
   const positionals = getCommandPositionalsWithRootOptions(argv, {
     commandPath: ["gateway"],
-    // Supervisor commands use full parsing but still need Gateway startup selection.
+    // Internal supervisor flags still participate in Gateway invocation parsing.
     booleanFlags: [...GATEWAY_RUN_BOOLEAN_FLAGS, WINDOWS_TASK_SUPERVISOR_FLAG],
     valueFlags: [...GATEWAY_RUN_VALUE_FLAGS, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG],
     maxPositionals: depth - 1,
@@ -60,7 +60,7 @@ export function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 export function resolveGatewayRunPreBootstrapOptions(
   argv: string[],
-): { force: boolean; reset: boolean } | null {
+): { force: boolean; reset: boolean; taskSupervisor?: true } | null {
   const args = getCommandArgsWithRootOptions(argv, {
     commandPath: ["gateway"],
     mode: "command-path",
@@ -70,6 +70,7 @@ export function resolveGatewayRunPreBootstrapOptions(
   }
   let force = false;
   let reset = false;
+  let taskSupervisor = false;
   let sawRun = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -95,10 +96,14 @@ export function resolveGatewayRunPreBootstrapOptions(
       index += consumed - 1;
       continue;
     }
+    if (arg === WINDOWS_TASK_SUPERVISOR_FLAG) {
+      taskSupervisor = true;
+      continue;
+    }
     if (!arg.startsWith("-")) {
       return null;
     }
   }
 
-  return { force, reset };
+  return taskSupervisor ? { force, reset, taskSupervisor: true } : { force, reset };
 }

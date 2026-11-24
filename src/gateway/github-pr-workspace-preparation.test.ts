@@ -1,6 +1,6 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks, observeManagedLayoutCaptures } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, admitSharedParent, fixture, mocks, observeManagedLayoutCaptures } from "./github-pr-workspace-preparation.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,11 +11,9 @@ import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import { acquireSandboxGatewayOwner } from "../agents/sandbox/registry.test-support.js";
 import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import {
-  linkCanonicalUserProfileEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
@@ -207,37 +205,19 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
-  it.each(["narrowed", "missing", "revoked"] as const)(
+  it.each(["narrowed", "missing"] as const)(
     "refuses a maintainer's %s selected authority before changing the guest workspace",
     async (condition) => {
       const f = await fixture();
       const before = f.readSession();
       const hostHead = await f.git("rev-parse", "HEAD");
       const guestHead = await f.guestGit("rev-parse", "HEAD");
-      let revoked = false;
-      if (condition === "revoked") {
-        const transport = mocks.runCommand.getMockImplementation()!;
-        mocks.runCommand.mockImplementation(async (...args) => {
-          const result = await transport(...args);
-          if (
-            !revoked &&
-            args[0].includes("fetch") &&
-            args[0].some((arg: string) => arg.split(":")[0] === f.headCommit)
-          ) {
-            await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-            revoked = true;
-          }
-          return result;
-        });
-      }
       await expect(
         f.invoke({}, f.sandbox, undefined, {
           requester: "maintainer",
-          caller:
-            condition === "missing" ? null : condition === "narrowed" ? "guest" : "maintainer",
+          caller: condition === "missing" ? null : "guest",
         }),
-      ).rejects.toThrow(condition === "revoked" ? undefined : "Only the person who started");
-      expect(revoked).toBe(condition === "revoked");
+      ).rejects.toThrow("Only the person who started");
       expect(f.readSession().worktree).toEqual(before.worktree);
       expect(await f.git("rev-parse", "HEAD")).toBe(hostHead);
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
@@ -497,7 +477,7 @@ describe("existing PR preparation through the registered agent action", () => {
   it.each(["clean", "authored directory", "cache-only directory"] as const)(
     "admits only pristine source after native managed sandbox layout (%s)",
     async (contents) => {
-      const f = await fixture({ empty: true, fork: true });
+      const f = await fixture({ empty: true, fork: true, sandboxLayout: true });
       f.config.agents ??= {};
       f.config.agents.defaults ??= {};
       f.config.agents.defaults.sandbox = {
@@ -525,7 +505,7 @@ describe("existing PR preparation through the registered agent action", () => {
           },
         });
         expect(sandbox?.workspaceSource).toBe("managed-worktree");
-        expect(captures.observations).toEqual(["scan:canonical"]);
+        expect(captures.observations).toEqual([]);
         if (contents === "authored directory") {
           await fs.mkdir(path.join(f.projection, "saved-empty"));
           await expect(f.invoke({}, sandbox)).rejects.toThrow(
@@ -747,102 +727,133 @@ describe("existing PR preparation through the registered agent action", () => {
     "lifecycle",
     "archived",
     "aborted",
-  ])("keeps private source transfer bound to the current requester (%s)", async (variant) => {
-    const f = await fixture({ fork: true });
-    const cancellation = new AbortController();
-    f.pr.base.repo.private = true;
-    f.pr.head.repo.private = true;
-    if (variant === "wrong author") {
-      f.pr.user.id = 999;
-    }
-    const snapshot = async () => ({
-      worktree: structuredClone(f.readSession().worktree),
-      hostHead: await f.git("rev-parse", "HEAD"),
-      guestHead: await f.guestGit("rev-parse", "HEAD"),
-      hostIndex: await f.git("write-tree"),
-      guestIndex: await f.guestGit("write-tree"),
-      hostStatus: await f.git("status", "--porcelain"),
-      guestStatus: await f.guestGit("status", "--porcelain"),
-    });
-    const before = await snapshot();
-    const transport = mocks.runCommand.getMockImplementation()!;
-    let privateAccessReads = 0;
-    let fetched = false;
-    let authorityChanged = false;
-    mocks.runCommand.mockImplementation(
-      async (
-        argv: string[],
-        options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
-      ) => {
-        if (argv[0] === "gh" && argv.includes("GET") && argv.at(-1) === "user/101") {
-          return commandResult(JSON.stringify({ id: 101, login: "contributor" }));
-        }
-        if (
-          argv[0] === "gh" &&
-          argv.includes("GET") &&
-          argv.at(-1)?.endsWith("/collaborators/contributor/permission")
-        ) {
-          privateAccessReads += 1;
-          return commandResult(
-            JSON.stringify({ permission: "read", user: { id: 101, login: "contributor" } }),
-          );
-        }
-        const result = await transport(argv, options);
-        if (argv.includes("fetch") && argv.some((arg) => arg.split(":")[0] === f.headCommit)) {
-          expect(result.code).toBe(0);
-          fetched = true;
-          if (!authorityChanged && variant === "role") {
-            await f.revoke();
-            authorityChanged = true;
-          } else if (!authorityChanged && variant === "linked identity") {
-            await linkCanonicalUserProfileEmail(
-              "publication-guest@example.test",
-              f.maintainerProfile,
-            );
-            authorityChanged = true;
-          } else if (!authorityChanged && ["session", "lifecycle", "archived"].includes(variant)) {
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey: f.session.sessionKey },
-              variant === "session"
-                ? { sessionId: randomUUID() }
-                : variant === "lifecycle"
-                  ? { lifecycleRevision: randomUUID() }
-                  : { archivedAt: Date.now() },
-            );
-            authorityChanged = true;
-          } else if (!authorityChanged && variant === "aborted") {
-            cancellation.abort(new Error("PR preparation cancelled"));
-            authorityChanged = true;
-          }
-        }
-        return result;
-      },
-    );
-    if (variant === "authorized") {
-      await expect(f.invoke()).resolves.toMatchObject({
-        status: "prepared",
-        headCommit: f.headCommit,
-      });
-      expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
-        "original PR contents\n",
-      );
-    } else {
-      await expect(f.invoke({}, f.sandbox, cancellation.signal)).rejects.toThrow(
-        variant === "wrong author" ? "could not be verified as yours" : undefined,
-      );
-      expect(await snapshot()).toEqual(before);
-      for (const directory of [f.cwd, f.projection]) {
-        await expect(fs.stat(path.join(directory, "pr.txt"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+    "sharing",
+  ])(
+    "keeps private source transfer on its bound requester and destination (%s)",
+    async (variant) => {
+      const f = await fixture({ fork: true });
+      const sharingScope = { agentId: "main", sessionKey: "agent:main:publication-parent" };
+      const client = variant === "sharing" ? await admitSharedParent(f, sharingScope) : undefined;
+      const cancellation = new AbortController();
+      f.pr.base.repo.private = true;
+      f.pr.head.repo.private = true;
+      if (variant === "wrong author") {
+        f.pr.user.id = 999;
       }
-    }
-    expect(privateAccessReads).toBeGreaterThan(0);
-    expect(fetched).toBe(variant !== "wrong author");
-    expect(authorityChanged).toBe(variant !== "authorized" && variant !== "wrong author");
-    expect(f.writes).toEqual([]);
-    expect(f.externalWrites).toEqual([]);
-  });
+      const snapshot = async () => ({
+        worktree: structuredClone(f.readSession().worktree),
+        hostHead: await f.git("rev-parse", "HEAD"),
+        guestHead: await f.guestGit("rev-parse", "HEAD"),
+        hostIndex: await f.git("write-tree"),
+        guestIndex: await f.guestGit("write-tree"),
+        hostStatus: await f.git("status", "--porcelain"),
+        guestStatus: await f.guestGit("status", "--porcelain"),
+      });
+      const before = await snapshot();
+      const transport = mocks.runCommand.getMockImplementation()!;
+      let privateAccessReads = 0;
+      let fetched = false;
+      let authorityChanged = false;
+      let observing = true;
+      let commandsAfterRevocation = 0;
+      const sandboxCommand = f.sandbox.backend!.runShellCommand.bind(f.sandbox.backend);
+      vi.spyOn(f.sandbox.backend!, "runShellCommand").mockImplementation(async (input) => {
+        if (observing && authorityChanged) {
+          commandsAfterRevocation += 1;
+        }
+        return sandboxCommand(input);
+      });
+      mocks.runCommand.mockImplementation(
+        async (
+          argv: string[],
+          options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
+        ) => {
+          if (observing && authorityChanged && argv[0] === "git") {
+            commandsAfterRevocation += 1;
+          }
+          if (argv[0] === "gh" && argv.includes("GET") && argv.at(-1) === "user/101") {
+            return commandResult(JSON.stringify({ id: 101, login: "contributor" }));
+          }
+          if (
+            argv[0] === "gh" &&
+            argv.includes("GET") &&
+            argv.at(-1)?.endsWith("/collaborators/contributor/permission")
+          ) {
+            privateAccessReads += 1;
+            return commandResult(
+              JSON.stringify({ permission: "read", user: { id: 101, login: "contributor" } }),
+            );
+          }
+          const result = await transport(argv, options);
+          if (argv.includes("fetch") && argv.some((arg) => arg.split(":")[0] === f.headCommit)) {
+            expect(result.code).toBe(0);
+            fetched = true;
+            if (!authorityChanged && variant === "role") {
+              await f.revoke();
+              authorityChanged = true;
+            } else if (!authorityChanged && variant === "linked identity") {
+              await linkCanonicalUserProfileEmail(
+                "publication-guest@example.test",
+                f.maintainerProfile,
+              );
+              authorityChanged = true;
+            } else if (
+              !authorityChanged &&
+              ["session", "lifecycle", "archived"].includes(variant)
+            ) {
+              await upsertSessionEntryCore(
+                { agentId: "main", sessionKey: f.session.sessionKey },
+                variant === "session"
+                  ? { sessionId: randomUUID() }
+                  : variant === "lifecycle"
+                    ? { lifecycleRevision: randomUUID() }
+                    : { archivedAt: Date.now() },
+              );
+              authorityChanged = true;
+            } else if (!authorityChanged && variant === "aborted") {
+              cancellation.abort(new Error("PR preparation cancelled"));
+              authorityChanged = true;
+            } else if (!authorityChanged && variant === "sharing") {
+              await removeSessionMember(sharingScope, f.guestProfile);
+              authorityChanged = true;
+            }
+          }
+          return result;
+        },
+      );
+      if (variant === "authorized" || variant === "sharing") {
+        await expect(
+          f.invoke({}, f.sandbox, cancellation.signal, { client }),
+        ).resolves.toMatchObject({
+          status: "prepared",
+          headCommit: f.headCommit,
+        });
+        observing = false;
+        expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+          "original PR contents\n",
+        );
+      } else {
+        await expect(f.invoke({}, f.sandbox, cancellation.signal, { client })).rejects.toThrow(
+          variant === "wrong author" ? "could not be verified as yours" : undefined,
+        );
+        observing = false;
+        expect(await snapshot()).toEqual(before);
+        for (const directory of [f.cwd, f.projection]) {
+          await expect(fs.stat(path.join(directory, "pr.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+      }
+      expect(privateAccessReads).toBeGreaterThan(0);
+      expect(fetched).toBe(variant !== "wrong author");
+      expect(authorityChanged).toBe(variant !== "authorized" && variant !== "wrong author");
+      if (variant !== "sharing") {
+        expect(commandsAfterRevocation).toBe(0);
+      }
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
 
   it("checks current write eligibility before binding or changing the workspace", async () => {
     const f = await fixture({ fork: true });

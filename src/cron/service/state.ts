@@ -57,6 +57,8 @@ export type { CronAddOptions } from "./job-options.types.js";
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
 type CronEventContext = {
   runNotStarted?: boolean;
+  /** Expected scheduling deferral (outside active hours, or idle-only while busy). */
+  admissionDeferredReason?: "busy" | "active-hours";
   quietTrigger?: boolean;
   failureNotificationDetail?: CronFailureNotificationDetail;
 };
@@ -207,6 +209,7 @@ export type CronServiceDeps = {
       agentId?: string;
       sessionKey?: string;
       contextKey?: string;
+      deliver?: false;
       deliveryContext?: DeliveryContext;
       expectedTarget?: SessionEventTarget;
       createIfMissing?: true;
@@ -244,6 +247,7 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    providerRunSlot?: import("./timer-execution-timeout.js").CronProviderRunSlot;
     executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
     CronRunOutcome &
@@ -265,6 +269,7 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    providerRunSlot?: import("./timer-execution-timeout.js").CronProviderRunSlot;
     executionIdentity?: CronExecutionIdentityAdmission;
     job: CronStoredJob;
     text: string;
@@ -324,6 +329,8 @@ export type CronServiceDeps = {
     payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
+    target?: ResolvedFailureAlert["target"];
+    directPolicy?: ResolvedFailureAlert["directPolicy"];
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
@@ -620,6 +627,8 @@ export type CronStatusSummary = {
   sqlitePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
+  /** Account-scoped jobs that cannot resolve a creator channel and fail closed until reauthorized. */
+  reauthorizationRequired: number;
 };
 
 export type CronRunResult =

@@ -460,8 +460,12 @@ describe("X publication production-owner composition", () => {
       "delegation-revoked": { error: expect.stringContaining("authorization changed") },
       revoked: { error: expect.stringContaining("publication policy changed") },
       "author-revoked": { error: expect.stringContaining("X allowlist changed") },
-      // The outer Gateway binding surfaces retirement before the publication guard.
-      "owner-retired": { error: "Error: Gateway instance unavailable for sessions.create" },
+      // Either owner guard can surface retirement; both must prevent child creation.
+      "owner-retired": {
+        error: expect.stringMatching(
+          /^Error: (Gateway instance unavailable for sessions\.create|Public ingress owner is no longer current\.)$/,
+        ),
+      },
     };
     const spawnErrors = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();

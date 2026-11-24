@@ -69,6 +69,10 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+Growing final-answer text uses the assistant stream. Answer-candidate telemetry
+publishes snapshots when a candidate starts, completes with authoritative text,
+is superseded, or is selected; it does not repeat the full answer for every delta.
+
 After a transient provider retry, final-answer recovery uses the original
 persisted user prompt and the completed tool results. It can produce a summary
 when the native turn finishes without text, without running those tools again.

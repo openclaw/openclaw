@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -21,6 +21,8 @@ import {
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   mintAgentRuntimeIdentityToken,
@@ -38,10 +40,11 @@ import {
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { MEMBER_ROLE_PRESETS } from "../openclaw-id/member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
@@ -143,6 +146,10 @@ function heldCron(testConfig: OpenClawConfig) {
 }
 
 installRequesterCronAuthorityTestHooks();
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
+});
 beforeEach(async () => {
   config = {
     ...baseCfg,
@@ -199,12 +206,19 @@ it.each([
       kind: "member",
       peerKey: `iroh:${"ec".repeat(32)}`,
       accountId: "script-creator",
-      role: "operator",
+      role: "display-only",
       authority: { clawId: "creator-claw", rootPub: "creator-root", listedSeq: 1 },
     };
     if (ocid) {
+      setUserProfileRole(profile.id, "operator");
+      linkOpenClawIdUserProfile(
+        { profileId: profile.id, accountId: principal.accountId, email: null },
+        {},
+      );
+      setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
       config.gateway = {
         ...config.gateway,
+        openclawId: { enabled: true },
         roles: {
           ...config.gateway?.roles,
           definitions: {
@@ -225,7 +239,7 @@ it.each([
       authMethod: ocid ? "trusted-proxy" : "token",
     });
     const original = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context: fixture.context,
         sourceAuthority: null,
@@ -294,7 +308,7 @@ it.each([
   },
 );
 it.each(["operator.cron", "operator.write"])(
-  "persists only owned jobs through signed %s requester grants and fences revocation",
+  "persists only owned jobs through signed %s requester grants, also after device revocation",
   async (scope) => {
     const caller = captureGatewayDeviceRevocation(
       fixture.context,
@@ -303,10 +317,7 @@ it.each(["operator.cron", "operator.write"])(
     );
     const client = createOperatorClient({ profileName: "scoped-cron", scopes: [scope] });
     const runId = "signed-scoped-creator";
-    const creatorAdmission = expectDefined(
-      admission(runId, client, undefined, caller.isCurrent),
-      "scoped creator admission",
-    );
+    const creatorAdmission = expectDefined(admission(runId, client), "scoped creator admission");
     const job = {
       name: "Signed requester job",
       schedule: { kind: "every" as const, everyMs: 60_000 },
@@ -377,15 +388,11 @@ it.each(["operator.cron", "operator.write"])(
             ).rejects.toThrow(`Automation not found: ${foreign.id}.`);
             expect(await fixture.read()).toEqual(before);
           }
-          await fixture.rejectMutation(
-            () => request("cron.add", { ...job, name: "Revoked requester job" }),
-            /authority.*no longer active/i,
-            () =>
-              invalidateGatewayDeviceRevocation(
-                fixture.context,
-                "scoped-creator-device",
-                "operator",
-              ),
+          // Admission checked the device once; revoking it mid-run does not refuse this run.
+          invalidateGatewayDeviceRevocation(fixture.context, "scoped-creator-device", "operator");
+          await request("cron.add", { ...job, name: "After device revocation" });
+          expect((await fixture.read()).map((entry) => entry.name)).toContain(
+            "After device revocation",
           );
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
           expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
@@ -406,7 +413,7 @@ it.each([
   ["embedded", "template-setup", "device"],
   ["embedded", "local", "skill selection"],
 ] as const)(
-  "fences a real %s %s creator mutation on %s change while its run remains admitted",
+  "keeps a real %s %s creator mutation admitted on %s change, fencing only session data",
   { timeout: 30_000 },
   async (transport, origin, reason) => {
     const { release } = fixture;
@@ -424,7 +431,6 @@ it.each([
             runId,
             resolvedSessionKey: SESSION,
             client,
-            isCurrent: caller.isCurrent,
             inputProvenance: { kind: "internal_system", sourceTool: "template_add_setup" },
             hasExplicitOrigin: false,
             hasRestoredCronContinuation: false,
@@ -438,7 +444,6 @@ it.each([
               runId,
               resolvedSessionKey: SESSION,
               client,
-              isCurrent: caller.isCurrent,
               hasExplicitOrigin: false,
               hasRestoredCronContinuation: false,
               isIncognito: false,
@@ -447,7 +452,7 @@ it.each([
               turnKind: "main",
               isDirectExternalUser: true,
             })
-          : admission(runId, client, undefined, caller.isCurrent),
+          : admission(runId, client),
       "fresh operator admission",
     );
     let transportTools: CreatorTransportTools | undefined;
@@ -508,13 +513,19 @@ it.each([
           }
           expect(before[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
           expect(before[0]?.runtimeAuthority).toBeUndefined();
-          await fixture.rejectMutation(
-            () => invoke("Revoked creator"),
-            reason === "skill selection"
-              ? /Creator session changed before scheduling/
-              : /authority.*no longer active/i,
-            () => {
-              if (reason === "skill selection") {
+          if (reason === "device") {
+            // A started run keeps its admitted creator after the issuing device is revoked.
+            invalidateGatewayDeviceRevocation(fixture.context, "creator-device", "operator");
+            await invoke("After device revocation");
+            // A template declaration converges onto its existing job instead of adding one.
+            expect((await fixture.read()).map((entry) => entry.name)).toContain(
+              origin === "template-setup" ? "Live creator" : "After device revocation",
+            );
+          } else {
+            await fixture.rejectMutation(
+              () => invoke("Revoked creator"),
+              /Creator session changed before scheduling/,
+              () => {
                 const session = expectDefined(
                   loadSessionEntry({ sessionKey: SESSION }),
                   "creator session",
@@ -532,12 +543,9 @@ it.each([
                 };
                 replaceSessionEntrySync({ sessionKey: SESSION }, updated);
                 expect(loadSessionEntry({ sessionKey: SESSION })).toEqual(updated);
-                expect(caller.isCurrent()).toBe(true);
-              } else {
-                invalidateGatewayDeviceRevocation(fixture.context, "creator-device", "operator");
-              }
-            },
-          );
+              },
+            );
+          }
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegated);
           expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
           if (tools.mcpCapture) {
@@ -561,7 +569,7 @@ it.each([
   },
 );
 
-it.each(["admin", "caller", "non-admin", "revoked"] as const)(
+it.each(["admin", "caller", "non-admin"] as const)(
   "enforces native-app final-write authority: %s",
   async (scenario) => {
     const scope = scenario === "caller" ? "caller" : undefined;
@@ -595,7 +603,6 @@ it.each(["admin", "caller", "non-admin", "revoked"] as const)(
       runId,
       resolvedSessionKey: SESSION,
       client,
-      isCurrent: caller.isCurrent,
       hasExplicitOrigin: false,
       hasRestoredCronContinuation: false,
       isIncognito: false,
@@ -647,12 +654,6 @@ it.each(["admin", "caller", "non-admin", "revoked"] as const)(
             await expect(
               tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
             ).rejects.toThrow("not found");
-            return;
-          }
-          if (scenario === "revoked") {
-            await fixture.rejectMutation(update, /authority.*no longer active/i, () =>
-              invalidateGatewayDeviceRevocation(fixture.context, "native-admin-device", "operator"),
-            );
             return;
           }
           await update();

@@ -15,6 +15,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { findReplaySafeRunAbort } from "../../agents/embedded-agent-runner/transcript-conflict.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
+import { isHostMissingReplyNoticeText } from "../../agents/reply-completion.js";
 import type {
   FollowupCompletionOwner,
   FollowupReply,
@@ -88,7 +89,7 @@ export function dispatchAgentRunFromGateway(params: {
    * touching a same-runId entry owned by a concurrent chat.send.
    */
   abortController: Pick<AbortController, "signal" | "abort">;
-  cleanupAbortController: () => void | Promise<void>;
+  cleanupAbortController: (failure?: unknown) => void | Promise<void>;
   io: AgentTurnIo;
   context: AgentTurnContext;
   commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
@@ -200,6 +201,7 @@ export function dispatchAgentRunFromGateway(params: {
   };
   let runOwnerCleanedUp = false;
   let runOwnerCleanup: Promise<void> | undefined;
+  let runFailure: unknown;
   const cleanupRunOwner = () => {
     if (runOwnerCleanedUp) {
       return runOwnerCleanup;
@@ -212,15 +214,17 @@ export function dispatchAgentRunFromGateway(params: {
     if (ownsGlobalRegistration && ownsRunRegistration()) {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
     }
-    return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController()).then(() => {
-      runOwnerSettled = true;
-      // Recovery can replace the replay while finish is pending; publish through this same owner.
-      if (pendingReplay) {
-        const entry = pendingReplay;
-        pendingReplay = undefined;
-        publishReplay(entry);
-      }
-    }));
+    return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController(runFailure)).then(
+      () => {
+        runOwnerSettled = true;
+        // Recovery can replace the replay while finish is pending; publish through this same owner.
+        if (pendingReplay) {
+          const entry = pendingReplay;
+          pendingReplay = undefined;
+          publishReplay(entry);
+        }
+      },
+    ));
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
     ? (params.cronCreatorAuthority.boundRunScope ??
@@ -474,6 +478,10 @@ export function dispatchAgentRunFromGateway(params: {
             : responseStatus === "error"
               ? "failed"
               : "completed",
+        // agent.wait reads this replay. Keep the host's retry guidance, never arbitrary diagnostics.
+        ...(responseStatus === "error" && isHostMissingReplyNoticeText(terminalOutcome.error)
+          ? { error: terminalOutcome.error }
+          : {}),
         ...(responseStatus !== "ok" && terminalOutcome.stopReason
           ? { stopReason: terminalOutcome.stopReason }
           : {}),
@@ -521,6 +529,7 @@ export function dispatchAgentRunFromGateway(params: {
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {
+      runFailure = cause;
       const replaySafeAbort = findReplaySafeRunAbort(cause);
       const abortCause = replaySafeAbort?.cause ?? cause;
       const operation = params.admittedRunEntry?.input.claim?.operation;

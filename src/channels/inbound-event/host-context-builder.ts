@@ -1,8 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import {
-  bindCommandOwnerAuthority,
-  CommandOwnerRevokedError,
-} from "../../auto-reply/command-owner-authority.js";
+import { bindCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import {
   bindRequesterProfile,
   bindUnlinkedChannelRequester,
@@ -90,9 +87,9 @@ export function createHostChannelInboundEventContextBuilder<
               prepareSessionParticipantInput(built, input.identity, input.promptedAt);
             }
           }
-          // Public intent is stricter than ordinary attribution: no mixed/batched context.
+          // Publication remains single-source; ordinary ingress can renew without a public audience.
           const publication = batch.length === 1 ? batch[0]?.childSessionPublication : undefined;
-          if (publication?.audience === "public" && binding.inboundEventKind === "user_request") {
+          if (publication) {
             const gateway = owner.resolveGatewayContext?.();
             const ownerIsCurrent = () =>
               owner.isLive() && Boolean(gateway) && owner.resolveGatewayContext?.() === gateway;
@@ -124,6 +121,7 @@ export function createHostChannelInboundEventContextBuilder<
                     };
                   }
                 : undefined,
+              publication.audience === "public" && binding.inboundEventKind === "user_request",
             );
           }
           const principal = batch.at(-1)?.verifiedPrincipal;
@@ -175,25 +173,19 @@ export function createHostChannelInboundEventContextBuilder<
               }
             }
             const prepared = batch.at(-1)?.operatorAuthority;
-            const operatorIsCurrent = () =>
+            // The operator decision is fixed here, when the message is admitted.
+            if (
+              prepared &&
               owner.isLive() &&
               owner.resolveGatewayContext?.() === gateway &&
               batch.every((input) =>
                 input?.operatorAuthority?.isCurrent(gateway.getRuntimeConfig()),
-              );
-            if (prepared && operatorIsCurrent()) {
+              )
+            ) {
               operatorAuthority = captureChannelOperatorRunAuthority({
                 ...prepared.operatorProfile,
                 recoveryReference: prepared.recoveryReference,
                 getRuntimeConfig: () => gateway.getRuntimeConfig(),
-                signal: prepared.signal,
-                assertCurrent: () => {
-                  if (!operatorIsCurrent()) {
-                    throw new CommandOwnerRevokedError(
-                      "Channel operator authority changed; send a new request.",
-                    );
-                  }
-                },
               });
             }
             bindRequesterProfile(built, {
@@ -222,12 +214,11 @@ export function createHostChannelInboundEventContextBuilder<
             return;
           }
           bindCommandOwnerAuthority(built, {
+            channelPrincipal: ownerPrincipal,
             recoveryReference: authority.recoveryReference,
             operatorAuthority,
-            isCurrent: () =>
-              owner.isLive() &&
-              owner.resolveGatewayContext?.() === gateway &&
-              authority.isCurrent(gateway.getRuntimeConfig()),
+            // The owner decision above is fixed at admission; only the ingress lifetime ends it.
+            isCurrent: () => owner.isLive() && owner.resolveGatewayContext?.() === gateway,
           });
         };
         bindParticipants();

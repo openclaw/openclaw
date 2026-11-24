@@ -322,6 +322,7 @@ async function settleLocalWorkspace<T>(
             await quiescence?.retire();
           }
           const current = state.current();
+          quiescence?.markPhase("operation.callback");
           return await operation(
             current.baseline_ref
               ? {
@@ -330,13 +331,16 @@ async function settleLocalWorkspace<T>(
                   projectionRevision: current.revision,
                   prepareArchive: state.prepareArchive,
                   canonicalPaths: state.canonicalPaths,
+                  resume: quiescence?.resume,
                   synchronizeProjection: () => state.synchronize("projection"),
+                  markPhase: quiescence?.markPhase,
                   assertCurrent: state.current,
                   workerAuthority: state.workerAuthority,
                 }
               : {
                   worktreeId: worktree.id,
                   projectionRevision: current.revision,
+                  markPhase: quiescence?.markPhase,
                   assertCurrent: store.assertCurrent,
                   workerAuthority: store.workerAuthority,
                 },
@@ -421,50 +425,20 @@ async function probeUnchangedLocalWorkspace(
   targets: readonly ("canonical" | "projection")[],
   markProbe?: (target: "canonical" | "projection") => void,
 ) {
-  let row = store.get();
+  const row = store.get();
   if (
-    !row?.baseline_ref ||
-    !row.tree_root_digest ||
+    !row ||
     row.session_id !== owner.sessionId ||
-    row.lifecycle_revision !== owner.lifecycleRevision ||
-    row.pending_ref ||
-    row.journal_json ||
-    row.paused_runtimes_json
+    row.lifecycle_revision !== owner.lifecycleRevision
   ) {
     return undefined;
   }
-  // Bind the row before observation; acceptance retains the same lease and live authority.
-  projectionOperations(owner, store, row, await localWorkspaceProjectionPath(owner)).current();
-  for (const target of targets) {
-    markProbe?.(target);
-    const selected = row;
-    const snapshot = await timeWorktreePreparationPhase(
-      target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
-      async () => {
-        try {
-          return await store.manifest(selected, {
-            kind: "probe",
-            target,
-            canonicalRoot: owner.worktree.path,
-          });
-        } catch {
-          // Live writers can interrupt discovery; retry under the existing pause owner.
-          store.signal.throwIfAborted();
-          store.assertCurrent();
-          return undefined;
-        }
-      },
-    );
-    store.assertCurrent();
-    if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {
-      return undefined;
-    }
-    // Acceptance failures must propagate, never retry an uncertain write.
-    if (snapshot.observation) {
-      row = await store.accept(snapshot.observation, owner.workerAuthority);
-    }
-  }
-  return row.projection_path;
+  return await projectionOperations(
+    owner,
+    store,
+    row,
+    await localWorkspaceProjectionPath(owner),
+  ).probeUnchanged(targets, markProbe);
 }
 
 /** Every operation owns the same renewable, cross-process reconciliation lease. */
@@ -542,6 +516,9 @@ export async function resolveLocalWorkspaceOwner(params: {
   assertCurrent?: () => void;
   stateOwnerPath?: SandboxStateOwnerPath;
 }): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.owner.session",
+  );
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
   const scope = {
@@ -566,7 +543,7 @@ export async function resolveLocalWorkspaceOwner(params: {
   const assertActive = () => {
     params.assertCurrent?.();
     if (lifetime.disposed) {
-      throw new Error("Local sandbox workspace authority changed");
+      throw new Error("Local sandbox workspace was released. Start a new turn.");
     }
   };
   const metadata = captureSessionEntryMetadataRead(scope, assertActive);
@@ -611,6 +588,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       release();
       return undefined;
     }
+    phases.mark("attempt.setup.sandbox.workspace_selection.owner.registry");
     const selection = { id: entry.worktree.id, ownerKind: "session" } as const;
     const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", selection);
     const worktree = await readRegistryWorktree(context, entry.worktree.id);
@@ -630,7 +608,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       if (!metadata) {
         assertActive();
         if (!retained?.isCurrent()) {
-          throw new Error("Local sandbox workspace authority changed");
+          throw new Error("Local sandbox workspace changed. Start a new turn.");
         }
         return;
       }
@@ -641,7 +619,7 @@ export async function resolveLocalWorkspaceOwner(params: {
         now?.archivedAt !== undefined ||
         now?.worktree?.id !== worktree.id
       ) {
-        throw new Error("Local sandbox workspace authority changed");
+        throw new Error("Local sandbox workspace changed. Start a new turn.");
       }
     };
     const assertCurrent = () => {
@@ -665,6 +643,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       [Symbol.dispose]: release,
     };
     if (entry.localWorkspaceHandoff) {
+      phases.mark("attempt.setup.sandbox.workspace_selection.owner.handoff");
       const handoff = entry.localWorkspaceHandoff;
       await finishLocalWorkspaceHandoff(owner, handoff);
       await patchSessionEntryCore(scope, (current) => {

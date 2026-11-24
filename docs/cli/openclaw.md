@@ -227,9 +227,10 @@ messaging channel without enabling `/plugins` or opening a terminal. Non-ClawHub
 sources require explicit source acknowledgement in the requesting chat. If the
 plugin needs capability consent, OpenClaw presents the declared capabilities
 as a separate exact approval before installing and applying the runtime. Source
-approval does not accept capabilities or grant conversation access. Conversation
-access remains a separate `plugins.entries.<id>.hooks.allowConversationAccess`
-config change. Local files and marketplace sources are not accepted by
+approval does not accept capabilities. Approving capabilities grants conversation
+access only when the plugin declares `contracts.conversationAccess`; otherwise it
+remains a separate `plugins.entries.<id>.hooks.allowConversationAccess` config
+change. Local files and marketplace sources are not accepted by
 `plugin_install`; task-authored archives use `plugin_activate_artifact`.
 
 Plugin uninstall refuses a
@@ -242,10 +243,19 @@ command—approval is given in your own words: unambiguous replies ("yes", "sure
 ### Change history
 
 The Ask OpenClaw page can show recent applied system-agent operations, Doctor
-migrations, Settings and CLI config writes, and manual edits to
-`openclaw.json`. The config journal detects external edits while the Gateway
-is watching, during an OpenClaw-owned write, or at the next startup after an
-offline edit.
+migrations, Settings and CLI config writes, manual edits to `openclaw.json`,
+and role assignments. The config journal detects external edits while the
+Gateway is watching, during an OpenClaw-owned write, or at the next startup
+after an offline edit.
+
+A committed `users.setRole` change is listed as an operation with source
+`config-rpc` (shown as "settings"). Its summary names the target profile, the
+previous and new role (or that the role was cleared), and the requester's
+profile, or its device when it has no profile. Refused requests and requests
+that leave the role unchanged are not recorded. Recording is best effort: if
+the history write fails after the role committed, the role change still
+succeeds and the Gateway logs a warning, so a missing entry does not prove the
+role is unchanged. Check `users.list` for the current role.
 
 History is stored in the `diagnostic_events` table of the shared
 `~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
@@ -316,20 +326,23 @@ history migration for a newly named agent, the next Gateway startup retries it;
 use `openclaw doctor --fix` on the same state/config to finish it sooner.
 
 If inference is missing or its live check fails, leave OpenClaw and run
-`openclaw onboard`. The terminal's guided flow detects available connections,
-waits for a provider/connection choice, and verifies that choice with a real
-reply before activating it. A failed or cancelled attempt does not
-automatically try a different provider. Reuse a saved sign-in when retrying.
+`openclaw onboard`. The terminal's guided flow can look for existing connections,
+waits for your choice, and verifies it with a real reply before activation. A
+failed or cancelled attempt does not automatically try another provider. Reuse
+a saved sign-in when it is offered.
 See [CLI onboarding](/start/wizard#guided-default).
 
 Native macOS [automatic first run](/start/onboarding#automatic-first-run) is a
-different entry point: it can try detected AI access with real completions.
-Do not describe automatic setup as request-free discovery or promise the
-terminal picker's selection boundary on every surface. Use **Set up manually**
-when the user wants to choose the connection themselves; existing configured
-connections retain their own startup path. The
-[onboarding overview](/start/onboarding-overview#macos-app-onboarding) describes
-the automatic selection order and its failure behavior.
+different entry point: it can test detected AI access with real completions. A
+Gateway with a configured model follows the existing-agent startup path. Choose
+**Set up manually** to select the connection yourself; the
+[onboarding overview](/start/onboarding-overview#macos-app-onboarding) explains
+automatic selection and what happens when verification fails.
+
+The app and Control UI can offer sign-in and key/token options while local
+detection is still running. `openclaw.setup.options` reads those choices from
+config and plugin manifests. Later discovery results can add options without
+moving focus, changing your selection, or interrupting a sign-in or test.
 
 Codex supervision and other optional plugin features stay outside this
 inference activation transaction. Configure them only after inference is
@@ -398,8 +411,8 @@ contract.
 
 Gemini CLI remains available as an explicitly configured runtime for normal
 agents, but Gemini CLI and Antigravity are not inference-gate setup routes.
-Use AI Studio API-key or Vertex AI for the inference gate. The optional Gemini
-CLI runtime specifically requires an AI Studio API-key profile.
+Use a Gemini API key or Vertex AI for the inference gate. The optional Gemini
+CLI runtime specifically requires a Gemini API key profile.
 
 ## Switching to an agent
 

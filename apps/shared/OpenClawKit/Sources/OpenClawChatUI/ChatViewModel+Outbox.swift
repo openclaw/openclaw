@@ -949,7 +949,8 @@ extension OpenClawChatViewModel {
     /// exactly on the unhealthy -> healthy transition.
     func applyTransportHealth(_ ok: Bool, refreshSessionsOnReconnect: Bool = true) {
         let wasHealthy = self.healthOK
-        self.healthOK = ok
+        // Every poll lands here; an equal write would still notify the views that read health.
+        if ok != wasHealthy { self.healthOK = ok }
         if !ok {
             // A later page comes from another connection.
             if wasHealthy { self.outboxRestoreEvidence.connectionHistoryFloor = self.lastIssuedHistoryRequestID }
