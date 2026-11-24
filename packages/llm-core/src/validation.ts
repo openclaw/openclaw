@@ -378,6 +378,20 @@ function describeStringForContainer(args: unknown, error: TLocalizedValidationEr
   }
 }
 
+/** Lists each tool argument validation error as "  - path: message", one per line. */
+export function formatToolArgumentErrors(
+  errors: Iterable<TLocalizedValidationError>,
+  args: unknown,
+): string {
+  return (
+    Array.from(
+      errors,
+      (error) =>
+        `  - ${formatValidationPath(error)}: ${error.message}${describeStringForContainer(args, error)}`,
+    ).join("\n") || "Unknown validation error"
+  );
+}
+
 function introducesNullValue(previous: unknown, converted: unknown): boolean {
   if (converted === null) {
     return previous !== null;
@@ -422,14 +436,7 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
     return converted;
   }
 
-  const errors =
-    validator
-      .Errors(args)
-      .map(
-        (error) =>
-          `  - ${formatValidationPath(error)}: ${error.message}${describeStringForContainer(args, error)}`,
-      )
-      .join("\n") || "Unknown validation error";
+  const errors = formatToolArgumentErrors(validator.Errors(args), args);
 
   throw new Error(
     `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,

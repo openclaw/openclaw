@@ -13,6 +13,8 @@ export {
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
   SessionsCatalogHostEventSchema,
+  SessionsCatalogRouteParamsSchema,
+  SessionsCatalogRouteResultSchema,
   SessionsCatalogReadParamsSchema,
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,

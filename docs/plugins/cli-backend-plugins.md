@@ -327,7 +327,10 @@ than losing it; the host records a started input in the session transcript, so a
 runtime must not also write it there. `options.promptOrigin` and
 `options.promptContext` belong to that queued input, with the same contracts as the
 initial prompt: deliver its context through the native private context mechanism,
-and never inherit the running turn's origin. The registration lives as long as the run.
+and never inherit the running turn's origin. Set `acceptsImages: true` on the sink
+when the runtime can deliver `options.images` (base64 data and MIME type, in
+order) to the model; otherwise, input with images waits for the next turn. The
+registration lives as long as the run.
 
 A runtime that can end its current turn without closing the session can offer
 `ctx.registerTurnInterrupt({ interrupt })`; `interrupt(reason)` requests a graceful

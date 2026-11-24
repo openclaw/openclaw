@@ -1,4 +1,9 @@
 export type {
+  CatalogExportItem,
+  PluginServiceExportCatalog,
+  PluginServiceCatalogExports,
+} from "../plugins/service-catalog-exports.js";
+export type {
   SessionCatalogArchiveProviderParams,
   SessionCatalogContinueProviderParams,
   SessionCatalogContinueProviderResult,
@@ -32,6 +37,7 @@ export type {
   SessionCatalogDescriptor,
   SessionCatalogHost,
   SessionCatalogLocator,
+  SessionCatalogRouteMethods,
   SessionCatalogPullRequestSummary,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -44,6 +50,8 @@ export type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
   SessionsCatalogResolveResult,
+  SessionsCatalogRouteParams,
+  SessionsCatalogRouteResult,
   SessionsCatalogStartTerminalParams,
   SessionsCatalogStartTerminalResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";

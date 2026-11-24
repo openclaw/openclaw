@@ -86,6 +86,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   };
   referencePaths?: Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
   remoteWorkspace?: boolean;
+  /** Session tools are the worker-placed variants. */
+  workerPlacement?: boolean;
   toolSchemaDirectoryPrompt?: () => string | undefined;
   /** Pre-rendered run-granted listing for callers whose catalog is gone after projection. */
   runGrantedToolDirectory?: () => string | undefined;
@@ -461,6 +463,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         surface: promptSurface,
       }),
       toolSchemaDirectoryPrompt,
+      workerPlacement: params.workerPlacement,
       deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
       sandboxInfo,
       // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.

@@ -28,6 +28,7 @@ import {
   UPDATE_RUN_REPAIRED_STEP,
   type UpdateRunRecord,
 } from "./update-run-record.js";
+import { prependUpdateRunCause } from "./update-run-report-cause.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -597,10 +598,7 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
-  // The terminal record owner stamps the cause; the Control UI loads this renderer.
-  if (run.status !== "succeeded" && run.origin.cause && run.origin.cause !== "unknown") {
-    lines.unshift(`Cause: ${run.origin.cause}`);
-  }
+  prependUpdateRunCause(run, lines);
   const repairedDetail = run.steps.find((step) => step.step === UPDATE_RUN_REPAIRED_STEP)?.detail;
   const repaired = repairedDetail ? [`Repaired update: ${repairedDetail}`] : [];
   const repairedLead = repaired.map((line) => bounded(line, 300));

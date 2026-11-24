@@ -160,7 +160,7 @@ export function renderChatPaneComposerControls(params: {
   contextWindowAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
-  onModelSetup: () => void;
+  onModelSetup: (provider?: string) => void;
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
@@ -342,6 +342,7 @@ export function renderChatPaneComposerControls(params: {
             }),
         sessionKey: state.sessionKey,
         selectedSession,
+        sessionRowCurrent: !cachedSessionStatePending && !snapshot,
         sessionsResult: state.sessionsResult,
         get stream() {
           return state.chatStream;

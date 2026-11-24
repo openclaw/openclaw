@@ -1300,8 +1300,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - &child_reuse_checkout
-        name: Checkout child reuse tooling
-        if: env.CHILD_EVIDENCE_REUSE == 'true'
+        name: Checkout child waiver and reuse tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -1314,8 +1313,7 @@ jobs:
       - *qualification_evidence_verifier_checkout
 
       - &child_reuse_runtime
-        name: Setup child reuse runtime
-        if: env.CHILD_EVIDENCE_REUSE == 'true'
+        name: Setup child waiver and reuse runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
@@ -1418,11 +1416,25 @@ jobs:
             shift 2
             local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id run_json child_head_sha child_run_attempt url encoded_workflow_ref current_workflow_sha expected_workflow_id
 
-            if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
-              local reuse_script=workflow/scripts/find-reusable-release-child.mjs
-              if [[ "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}" == true ]]; then
-                reuse_script=qualification-verifier/scripts/find-reusable-release-child.mjs
+            local reuse_script=workflow/scripts/find-reusable-release-child.mjs
+            if [[ "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}" == true ]]; then
+              reuse_script=qualification-verifier/scripts/find-reusable-release-child.mjs
+            fi
+            if [[ "$CHILD_WORKFLOW_KIND" =~ ^(ci|plugin-prerelease|release-checks|npm-telegram|performance)$ ]]; then
+              if TARGET_VERSION="${{ needs.resolve_target.outputs.target_version }}" \
+                OPENCLAW_RELEASE_WAIVERS_PATH="$GITHUB_WORKSPACE/workflow/scripts/lib/release-validation-waivers.json" \
+                node "$reuse_script" "$workflow" --waiver-only; then
+                return 0
+              else
+                dispatch_status=$?
+                if [[ "$dispatch_status" != 3 ]]; then
+                  echo "::error::Could not evaluate child waiver policy; refusing dispatch." >&2
+                  return "$dispatch_status"
+                fi
               fi
+            fi
+
+            if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
               if TARGET_VERSION="${{ needs.resolve_target.outputs.target_version }}" \
                 CHILD_WORKFLOW_DIRECTORY="$GITHUB_WORKSPACE/workflow/.github/workflows" \
                 node "$reuse_script" "$workflow" "$@"; then
@@ -2915,6 +2927,9 @@ jobs:
 
       - name: Validate release validation manifest
         env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}

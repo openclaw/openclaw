@@ -346,6 +346,8 @@ it.each(["event", "list"] as const)(
         expect(selectedChatSessionRow(state)).toMatchObject(successor);
         expect(state.currentSessionId).toBe(previous.sessionId);
         expect(state.chatMessages).toBe(displayed);
+        // Hold an issued pre-event read, not hydration still awaiting subscription admission.
+        await historyRequested.promise;
       }
 
       emitGatewayEvent("session.message", {

@@ -24,6 +24,7 @@ export type UpdateTarget =
       version: string;
       engines?: { node?: string };
       schemaVersions?: OpenClawSchemaVersions;
+      archivePath?: string;
     };
 
 /** The check command and launcher readiness sender were introduced together. */
@@ -47,6 +48,8 @@ export async function resolveTarget(params: {
   tag?: string;
   sha?: string;
   timeoutMs?: number;
+  /** Owned for the whole preparation, so local source metadata and code use one archive. */
+  archiveWorkspace?: string;
 }): Promise<UpdateTarget> {
   const timeoutMs = params.timeoutMs ?? 120_000;
   if (params.kind === "package") {
@@ -62,7 +65,7 @@ export async function resolveTarget(params: {
       } else if (spec.startsWith(".") || path.isAbsolute(spec)) {
         spec = path.resolve(spec);
       }
-      return await withInstallWorkspace("openclaw-update-target-", async (cwd) => {
+      const readTarget = async (cwd: string): Promise<UpdateTarget> => {
         const packed = await packNpmSpecToArchive({
           spec,
           cwd,
@@ -86,11 +89,15 @@ export async function resolveTarget(params: {
         return {
           kind: "package",
           spec,
+          ...(params.archiveWorkspace ? { archivePath: packed.archivePath } : {}),
           version: manifest.version,
           engines: manifest.engines ?? {},
           schemaVersions: parsePackageOpenClawSchemaVersions(manifest),
         };
-      });
+      };
+      return params.archiveWorkspace
+        ? await readTarget(params.archiveWorkspace)
+        : await withInstallWorkspace("openclaw-update-target-", readTarget);
     }
     const selected = params.tag
       ? await fetchNpmTagVersion({ tag: params.tag, timeoutMs })
