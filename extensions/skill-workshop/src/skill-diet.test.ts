@@ -329,3 +329,17 @@ it("diets only oversized, settled skills and rotates rejected candidates by day"
   }
   expect(await listWorkshopChanges("main", { limit: 10 })).toEqual([]);
 });
+
+it("skips oversized skills with root-level support markdown files instead of aborting", async () => {
+  await seed();
+  const rootNote = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy", "notes.md");
+  await fs.writeFile(rootNote, "# Stray root note\n");
+  const old = new Date(NOW_MS - 2 * DAY_MS);
+  await fs.utimes(rootNote, old, old);
+
+  const { complete, calls } = scripted({ audits: [clean] });
+  expect(await diet(complete)).toBeUndefined();
+  expect(calls).toEqual([]);
+  expect((await live()).content).toBe(LIVE);
+  expect(await listWorkshopChanges("main", { limit: 10 })).toEqual([]);
+});
