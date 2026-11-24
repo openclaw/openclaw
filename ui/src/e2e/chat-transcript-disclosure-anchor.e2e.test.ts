@@ -606,6 +606,8 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          provider: "openai",
+          model: "gpt-4.1",
           content: [
             {
               type: "toolCall",

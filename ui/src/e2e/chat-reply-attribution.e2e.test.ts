@@ -85,6 +85,8 @@ suite.define(() => {
       },
       {
         role: "assistant",
+        provider: "openai",
+        model: "gpt-4.1",
         content:
           "The release checklist is ready. I checked the notes and test results; the controls are consistent across desktop and mobile.",
         phase: "final_answer",
