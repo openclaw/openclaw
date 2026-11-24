@@ -85,27 +85,6 @@ function updateRoute(
 ) {
   view.update({ routeData: sectionRoute(pageId, search, hash) });
 }
-
-function animationFrames() {
-  const frames = new Map<number, FrameRequestCallback>();
-  let id = 0;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    frames.set(++id, callback);
-    return id;
-  });
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frame) => frames.delete(frame));
-  return {
-    frames,
-    run(this: void) {
-      const pending = [...frames.values()];
-      frames.clear();
-      for (const frame of pending) {
-        frame(0);
-      }
-    },
-  };
-}
-
 describe("ConfigPage navigation", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
@@ -332,78 +311,6 @@ describe("ConfigPage navigation", () => {
       view.dispose();
       router.stop();
     }
-  });
-
-  describe("ConfigPage pending section navigation", () => {
-    it.each([
-      ["appearance", "__appearance__", "settings-appearance-typography"],
-      ["ai-agents", "session", "settings-session-storage"],
-      ["communications", "transcripts", "settings-communications-meeting-capture"],
-    ] as const)(
-      "scrolls on %s (%s) to the Settings %s anchor after rendering",
-      (pageId, section, targetId) => {
-        const frames = animationFrames();
-        const context = routeContext();
-        context.runtimeConfig.state.configSchema = objectSchema({
-          session: booleanSection(),
-          transcripts: booleanSection(),
-        });
-        const view = mountRoute(context, pageId, `?section=${section}`, `#${targetId}`);
-        const target = element(view.page, `#${targetId}`);
-        const scroll = vi.fn();
-        target.scrollIntoView = scroll;
-        frames.run();
-        expect(scroll).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ block: "start" }));
-      },
-    );
-
-    it("does not scroll to a matching ID outside the Settings host", () => {
-      const outside = document.createElement("div");
-      outside.id = "external-setting-target";
-      const scroll = vi.fn();
-      outside.scrollIntoView = scroll;
-      document.body.append(outside);
-      const frames = animationFrames();
-      mountRoute(routeContext(), "communications", "", "#external-setting-target");
-      frames.run();
-      expect(scroll).not.toHaveBeenCalled();
-    });
-
-    it.each(["replacement", "retirement", "disconnect"] as const)(
-      "does not scroll to a stale target after %s",
-      async (transition) => {
-        const view = mountRoute(routeContext(), "communications");
-        const { page } = view;
-        const { frames, run } = animationFrames();
-        const previousTarget = element(page, "#config-section-messages");
-        const previousScroll = vi.fn();
-        previousTarget.scrollIntoView = previousScroll;
-        updateRoute(view, "communications", "", "#config-section-messages");
-        expect(previousScroll).not.toHaveBeenCalled();
-        expect(frames.size).toBe(1);
-
-        if (transition === "disconnect") {
-          view.dispose();
-        } else {
-          updateRoute(
-            view,
-            "communications",
-            transition === "replacement" ? "?section=tts" : "",
-            transition === "replacement" ? "#config-section-tts" : "",
-          );
-        }
-        const nextScroll = vi.fn();
-        if (transition === "replacement") {
-          element(page, "#config-section-tts").scrollIntoView = nextScroll;
-          expect(frames.size).toBe(1);
-        } else {
-          expect(frames.size).toBe(0);
-        }
-        run();
-        expect(previousScroll).not.toHaveBeenCalled();
-        expect(nextScroll).toHaveBeenCalledTimes(transition === "replacement" ? 1 : 0);
-      },
-    );
   });
 });
 

@@ -58,7 +58,7 @@ const GUIDANCE =
 
 export function isSettingsSource(file: string) {
   return (
-    /\.tsx$/u.test(file) &&
+    file.endsWith(".tsx") &&
     !isTest(file) &&
     !(file in NOT_SETTINGS_SOURCES) &&
     SETTINGS_SOURCES.some((source) =>
@@ -158,13 +158,26 @@ export function checkSettingIds(
     const where = (node: ts.Node) =>
       `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
     const refer = (id: string, node: ts.Node) => {
-      const list = references.get(id) ?? [];
-      list.push({ file, at: where(node) });
-      references.set(id, list);
+      const places = references.get(id) ?? [];
+      places.push({ file, at: where(node) });
+      references.set(id, places);
     };
+    // A row component imported under another name is still that row.
+    const imported = new Map<string, string>();
+    for (const statement of tree.statements) {
+      const bindings = ts.isImportDeclaration(statement)
+        ? statement.importClause?.namedBindings
+        : undefined;
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const binding of bindings.elements) {
+          imported.set(binding.name.text, (binding.propertyName ?? binding.name).text);
+        }
+      }
+    }
     const visit = (node: ts.Node): void => {
       if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-        const tag = node.tagName.getText(tree);
+        const local = node.tagName.getText(tree);
+        const tag = imported.get(local) ?? local;
         const attributes = new Map<string, ts.JsxAttribute>();
         for (const attribute of node.attributes.properties) {
           if (ts.isJsxAttribute(attribute)) {
@@ -188,9 +201,9 @@ export function checkSettingIds(
             ? true
             : attributes.has("setting") || attributes.has("info");
         if (scoped && (raw || ROW_COMPONENTS.has(tag)) && !identified) {
-          const list = unnamed.get(file) ?? [];
-          list.push(`${where(node)}: <${tag}> has no setting ID`);
-          unnamed.set(file, list);
+          const problems = unnamed.get(file) ?? [];
+          problems.push(`${where(node)}: <${tag}> has no setting ID`);
+          unnamed.set(file, problems);
         }
       }
       node.forEachChild(visit);

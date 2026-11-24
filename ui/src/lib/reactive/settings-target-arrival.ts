@@ -3,28 +3,34 @@ import {
   findControlUiSetting,
   type ControlUiSettingId,
 } from "../../../../src/shared/control-ui-settings/index.ts";
+import type { ApplicationContext } from "../../app/context-types.ts";
 import { createPendingSettingsTarget } from "../settings-target-arrival.ts";
-import { useApplication, useOptionalApplication } from "./context.ts";
+import { useOptionalApplication } from "./context.ts";
 import { projectOwner } from "./projection.ts";
 
 /** How long a page may take to render the linked setting before the link is dropped. */
 const TARGET_WAIT_MS = 10_000;
 
 /**
- * Brings the setting named by the route's `#<setting-id>` into view inside `host`, once it
- * has rendered. For pages whose own state does not already follow the route hash.
+ * Brings the setting named by the route's `#<setting-id>` into view inside `host` once the
+ * page has rendered it. The Settings shell mounts one for every Settings page.
  */
-export function createSettingsTargetArrival(host: () => HTMLElement): void {
-  const context = useApplication();
+export function SettingsTargetArrival(props: {
+  router: ApplicationContext["router"];
+  host: () => HTMLElement | undefined;
+}): null {
   onSettled(() => {
-    const root = host();
+    const root = props.host();
+    if (!root) {
+      return;
+    }
     const pending = createPendingSettingsTarget(() => root);
     // Rows that depend on Gateway reads render after the route does.
     const observer = new MutationObserver(() => pending.commit());
     let timer: ReturnType<typeof setTimeout> | undefined;
     let hash: string | undefined;
     const follow = () => {
-      const next = context.router.getState().location.hash;
+      const next = props.router.getState().location.hash;
       // The router publishes for every loader step; only a different fragment is a new arrival.
       if (next === hash) {
         return;
@@ -46,7 +52,7 @@ export function createSettingsTargetArrival(host: () => HTMLElement): void {
       }
     };
     follow();
-    const stopRoute = context.router.subscribe(follow);
+    const stopRoute = props.router.subscribe(follow);
     return () => {
       stopRoute();
       observer.disconnect();
@@ -54,6 +60,7 @@ export function createSettingsTargetArrival(host: () => HTMLElement): void {
       pending.dispose();
     };
   });
+  return null;
 }
 
 /**

@@ -296,15 +296,13 @@ function ConfigBody(props: {
 type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData | null };
 
 function ConfigPage(props: ConfigPageProps) {
-  let host!: HTMLElement;
   const context = useApplication();
-  const state = createConfigPage(
-    context,
-    () => ({ pageId: props.pageId, routeData: props.routeData }),
-    () => host,
-  );
+  const state = createConfigPage(context, () => ({
+    pageId: props.pageId,
+    routeData: props.routeData,
+  }));
   return (
-    <openclaw-config-page ref={(element) => (host = element)}>
+    <openclaw-config-page>
       <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
           title={titleForRoute(props.pageId, t)}

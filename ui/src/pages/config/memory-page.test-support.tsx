@@ -336,11 +336,10 @@ export function createMemoryPage(params: {
     () =>
       mountSolid(
         () => {
-          const state = createConfigPage(
-            completeConfigContext(context),
-            () => ({ pageId: "memory", routeData: (revision(), input.routeData) }),
-            () => element,
-          );
+          const state = createConfigPage(completeConfigContext(context), () => ({
+            pageId: "memory",
+            routeData: (revision(), input.routeData),
+          }));
           return (
             <MemorySettingsPage
               configObject={(revision(), input.configObject)}

@@ -36,7 +36,6 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
-import { createPendingSettingsTarget } from "../../lib/settings-target-arrival.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import { createConfigPagePreferences } from "./config-page-preferences.ts";
@@ -77,7 +76,6 @@ const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 export function createConfigPage(
   context: ApplicationContext,
   route: () => { pageId: ConfigPageId; routeData: ConfigRouteData | null },
-  host: () => HTMLElement,
 ) {
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
@@ -102,7 +100,6 @@ export function createConfigPage(
   const schema = createMemo(() => visibleConfigSchema(rawSchema(), openclawIdEnabled()));
   const invalidate = () => {
     publish((value) => value + 1);
-    onSettled(afterCommit);
   };
   const [presentation, setPresentation] = createStore<{
     formModes: Partial<Record<ConfigPageId, View.ConfigFormMode>>;
@@ -170,7 +167,6 @@ export function createConfigPage(
   const countdown = useVisiblePoll(1_000, invalidate);
   let routeInitialized = false;
   let normalizedMemoryLocation = "";
-  const pendingTarget = createPendingSettingsTarget(host);
 
   function nowMs() {
     revision();
@@ -252,7 +248,6 @@ export function createConfigPage(
     });
     const targetBlockId =
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
-    pendingTarget.request(targetBlockId);
     appearanceDataRequested ||= pageId === "appearance" && isAppearanceDataTarget(targetBlockId);
     synchronize();
     invalidate();
@@ -337,12 +332,6 @@ export function createConfigPage(
     appearanceImportRequested = true;
     synchronize();
     invalidate();
-  }
-
-  function afterCommit() {
-    if (connected) {
-      pendingTarget.commit();
-    }
   }
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -692,7 +681,6 @@ export function createConfigPage(
       mediaDeviceOwner.retire();
       countdown.stop();
       abortRequests();
-      pendingTarget.dispose();
       runtimeConfigSource = null;
       resetConfigViewState();
     };

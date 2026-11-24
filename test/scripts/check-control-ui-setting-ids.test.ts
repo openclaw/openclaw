@@ -57,6 +57,16 @@ describe("check-control-ui-setting-ids", () => {
     ]);
   });
 
+  it("sees a row component imported under another name", () => {
+    const aliased = `import { SettingsRow as Row } from "../../components/solid/settings-ui.tsx";\n${NAMED.replace(
+      `<SettingsRow info title="Status" />`,
+      `<Row title="Status" />`,
+    )}`;
+    expect(checkSettingIds(fixture(aliased), { list })).toEqual([
+      expect.stringContaining("<SettingsRow> has no setting ID"),
+    ]);
+  });
+
   it("rejects unlisted, repeated and undrawn IDs", () => {
     const failures = checkSettingIds(
       fixture(

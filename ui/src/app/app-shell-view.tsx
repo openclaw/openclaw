@@ -22,6 +22,7 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { SettingsTargetArrival } from "../lib/reactive/settings-target-arrival.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
@@ -512,6 +513,12 @@ export function ApplicationShell(props: {
               onNotFound={() => props.host.shellNavigation.recoverNotFoundRoute()}
               notFoundRecoveryReady={view().gatewayConnected}
             />
+            <Show when={view().settingsTakeover}>
+              <SettingsTargetArrival
+                router={view().runtime.router}
+                host={() => props.host.routeOutlet}
+              />
+            </Show>
           </ShellLayoutProvider>
         </main>
         <Show when={view().settingsTakeover}>
