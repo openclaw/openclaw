@@ -36,7 +36,11 @@ export type PluginServiceExportCatalog = {
   processHomeFallbackAllowed: boolean;
   /** Revalidate the selected row immediately before a protected effect. */
   assertCurrent(locator: Omit<SessionCatalogLocator, "catalogId">): void;
-  list(params: { agentId?: string; limitPerHost?: number }): Promise<CatalogExportHost[]>;
+  list(params: {
+    agentId?: string;
+    limitPerHost?: number;
+    threadId?: string;
+  }): Promise<CatalogExportHost[]>;
   read(
     params: Omit<SessionCatalogLocator, "catalogId"> & { limit: number; cursor?: string },
   ): Promise<{ hostId: string; threadId: string; items: CatalogExportItem[]; nextCursor?: string }>;
@@ -155,7 +159,13 @@ export function createPluginServiceCatalogExports(params: {
               if (!hosts.size) {
                 return [];
               }
+              if (
+                request.threadId !== undefined &&
+                (!request.threadId || request.threadId.length > 500)
+              )
+                throw new Error("Invalid catalog thread ID");
               const listed = await provider.list({
+                ...(request.threadId !== undefined ? { search: request.threadId } : {}),
                 agentId,
                 allowProcessHomeFallback,
                 hostIds: [...hosts],
@@ -186,6 +196,7 @@ export function createPluginServiceCatalogExports(params: {
                 }
                 const sessions = host.sessions.flatMap((row): CatalogExportSession[] => {
                   if (
+                    (request.threadId !== undefined && request.threadId !== row.threadId) ||
                     collisions.has(row.threadId) ||
                     row.exportPolicy?.origin !== "native-local" ||
                     !row.exportPolicy.automatic
