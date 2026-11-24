@@ -936,6 +936,8 @@ src/infra/fs-safe-env.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
 src/infra/gc-observer.ts
+src/infra/gateway-boot-lifecycle.kernel.ts
+src/infra/gateway-boot-lifecycle.worker.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
@@ -1047,6 +1049,7 @@ src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
+src/infra/restart-lifecycle.worker.ts
 src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
@@ -1815,6 +1818,7 @@ src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-authority.ts
 src/state/openclaw-agent-execution-cleanup.ts
+src/state/openclaw-agent-execution-cleanup.worker.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-native.ts
 src/state/openclaw-agent-execution-owner.ts

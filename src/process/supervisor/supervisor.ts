@@ -56,7 +56,8 @@ type StartingScope = {
 
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
-const loadSupervisorLogRuntime = createLazyRuntimeModule(
+// Shutdown can join a pending spawn that still needs to report a failure.
+export const loadSupervisorLogRuntime = createLazyRuntimeModule(
   () => import("./supervisor-log.runtime.js"),
 );
 

@@ -1,3 +1,4 @@
+import { gatewayBootOperations } from "../infra/gateway-boot-lifecycle.worker.js";
 import type {
   WorkerOperationsFromLoaders,
   WorkerWriteOperationContext,
@@ -13,8 +14,8 @@ const loaders = {
   agentDeletion: () => import("./agent-deletion.worker.js").then((m) => m.agentDeletionOperations),
   agentRecovery: () =>
     import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryOperations),
-  gatewayBoot: () =>
-    import("../infra/gateway-boot-lifecycle.worker.js").then((m) => m.gatewayBootOperations),
+  // The first clean-stop receipt can run after an update removed the old chunks.
+  gatewayBoot: async () => gatewayBootOperations,
   localWorkspace: () =>
     import("../gateway/worker-environments/local-workspace-store.worker.js").then(
       (m) => m.localWorkspaceOperations,

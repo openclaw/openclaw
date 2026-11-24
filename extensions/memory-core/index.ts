@@ -32,6 +32,7 @@ import {
 } from "./src/memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import { hasMemoryIndexingBeenLive, prepareMemoryManagerReload } from "./src/memory/lifecycle.js";
+import { closeAllMemorySearchManagers } from "./src/memory/manager-runtime-loader.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
@@ -199,10 +200,7 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       return await classifyWorkspaceMemoryPaths(params);
     },
     resolveMemoryBackendConfig,
-    async closeAllMemorySearchManagers() {
-      const { createMemoryRuntime } = await loadRuntimeProviderModule();
-      await createMemoryRuntime(host).closeAllMemorySearchManagers();
-    },
+    closeAllMemorySearchManagers,
     async closeMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       await createMemoryRuntime(host).closeMemorySearchManager(params);

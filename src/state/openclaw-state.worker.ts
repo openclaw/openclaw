@@ -3,6 +3,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { restartLifecycleOperations } from "../infra/restart-lifecycle.worker.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
@@ -26,6 +27,7 @@ import {
   isPluginStateWorkerCommand,
   pluginStateWorkerOperations,
 } from "../plugin-state/plugin-state-worker-contract.js";
+import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -67,10 +69,8 @@ const commandRegistry = createWorkerOperationRegistry<
 >({
   deviceAuth: async () =>
     (await import("../infra/device-auth-store.worker.js")).deviceAuthWorkerOperations,
-  restartLifecycle: () =>
-    import("../infra/restart-lifecycle.worker.js").then(
-      (loaded) => loaded.restartLifecycleOperations,
-    ),
+  // SIGTERM can consume restart intent after an in-place update replaced the chunks.
+  restartLifecycle: async () => restartLifecycleOperations,
   worktrees: async () => {
     const [templates, reserveCapacity, recoverPending] = await Promise.all([
       import("../agents/worktrees/template-registry.worker.js").then(
@@ -91,7 +91,6 @@ const commandRegistry = createWorkerOperationRegistry<
   },
 });
 
-let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
 let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
@@ -332,14 +331,6 @@ function createSharedStateWorkerBackend(
           capture = loaded;
         });
       }
-      if (commandType === "agentDatabases.releaseExitedLease") {
-        if (agentCleanup) {
-          return undefined;
-        }
-        return import("./openclaw-agent-execution-cleanup.worker.js").then((loaded) => {
-          agentCleanup = loaded;
-        });
-      }
       if (Object.hasOwn(pluginStateWorkerOperations, commandType)) {
         if (pluginState) {
           return undefined;
@@ -349,6 +340,7 @@ function createSharedStateWorkerBackend(
         });
       }
       if (
+        commandType === "agentDatabases.releaseExitedLease" ||
         commandType === "database.inspectIdle" ||
         commandType === "database.walMaintenance" ||
         commandType === "database.publishSchema" ||
@@ -414,10 +406,8 @@ function createSharedStateWorkerBackend(
         }
       }
       if (command.type === "agentDatabases.releaseExitedLease") {
-        if (!agentCleanup) {
-          throw new Error("Agent database cleanup runtime is not prepared");
-        }
-        return agentCleanup.executeAgentDatabaseCleanupCommand(
+        // A lease can be released during shutdown after its original chunk is gone.
+        return executeAgentDatabaseCleanupCommand(
           command,
           open(),
           getSqliteWorkerStateContext().environment,

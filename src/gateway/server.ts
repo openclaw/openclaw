@@ -86,8 +86,9 @@ async function startGatewayServerWithRuntime(
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   const startupStartedAt = opts.startupStartedAt ?? Date.now();
   let stopDatabaseAdmission: (() => Promise<void>) | undefined;
+  const { createSqliteReadOnlyWorkerScope, closeSqliteReadOnlyWorkersForBroker } =
+    await import("../infra/sqlite-readonly-worker.js");
   const start = async () => {
-    const { createSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
     const readOnlyWorkers = createSqliteReadOnlyWorkerScope();
     const { withAgentDatabaseStartupAdmission } =
       await import("../state/agent-database-startup.js");
@@ -125,8 +126,12 @@ async function startGatewayServerWithRuntime(
   if (process.platform !== "linux" || !supportsSpawnBrokerCommandTransport()) {
     return await start();
   }
-  const { startGatewaySpawnBroker, runWithSpawnBroker } =
-    await import("../process/spawn-broker/context.js");
+  // An update can replace chunks before the broker's shutdown callbacks run.
+  const [{ startGatewaySpawnBroker, runWithSpawnBroker }, { shutdownProcessSupervisor }] =
+    await Promise.all([
+      import("../process/spawn-broker/context.js"),
+      import("../process/supervisor/index.js"),
+    ]);
   let logger: { info: (message: string) => void } | undefined;
   const broker = await startGatewaySpawnBroker({
     onReady(pid, restarted) {
@@ -145,13 +150,10 @@ async function startGatewayServerWithRuntime(
   const closeBroker = async () => {
     // Required core cleanup can reject before singleton retirement. Keep command
     // outcomes and final output reachable until the existing supervisor joins.
-    const { shutdownProcessSupervisor } = await import("../process/supervisor/index.js");
     await shutdownProcessSupervisor();
     // A failed required core join can stop before the admission sidecar runs.
     await stopDatabaseAdmission?.();
     try {
-      const { closeSqliteReadOnlyWorkersForBroker } =
-        await import("../infra/sqlite-readonly-worker.js");
       await closeSqliteReadOnlyWorkersForBroker(broker);
     } finally {
       // Readers that did not close remain attached children for broker termination.

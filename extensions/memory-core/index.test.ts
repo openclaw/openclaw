@@ -29,7 +29,6 @@ const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits)
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
     authorizeSearchHits: authorizeSearchHitsMock,
-    closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: getMemorySearchManagerMock,
   })),
@@ -38,6 +37,10 @@ const createMemoryRuntimeMock = vi.hoisted(() =>
 // mock-isolation: Keep the lazy manager engine outside registration tests.
 vi.mock("./src/runtime-provider.js", () => ({
   createMemoryRuntime: createMemoryRuntimeMock,
+}));
+// mock-isolation: Observe the close owner without loading a real memory index.
+vi.mock("./src/memory/manager-runtime-loader.js", () => ({
+  closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 
 import plugin from "./index.js";
@@ -470,9 +473,13 @@ describe("memory-core plugin runtime registration", () => {
     expect(backgroundTasks).toEqual([]);
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
 
+    // A cold Gateway can stop after its provider chunk was replaced.
+    await service.stop?.(context);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledOnce();
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
+
     // A watched manager opened by a search or turn makes later restarts restore it.
     markMemoryIndexingLive();
-    await service.stop?.(context);
     await service.start(context);
     await Promise.all(backgroundTasks);
     expect(getMemorySearchManagerMock.mock.calls).toEqual([

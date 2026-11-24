@@ -38,10 +38,14 @@ const loadJobMutations = createLazyRuntimeModule(() => import("./job-mutations.w
 let jobMutations: typeof import("./job-mutations.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  // A claimed run can first finalize during shutdown, after an update replaced its chunks.
   if (String(type).startsWith("cron.scheduler") && !schedulerActor) {
-    return loadSchedulerActor().then((loaded) => {
-      schedulerActor = loaded;
-    });
+    return Promise.all([loadSchedulerActor(), loadFinalization()]).then(
+      ([loaded, loadedFinalization]) => {
+        schedulerActor = loaded;
+        finalization = loadedFinalization;
+      },
+    );
   }
   if (type === "cron.prepareJobMutation" && !jobMutations) {
     return loadJobMutations().then((loaded) => {
@@ -52,8 +56,9 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     ["cron.requestRuns", "cron.drainQueue", "cron.cancelRequests"].includes(String(type)) &&
     !queue
   ) {
-    return loadQueue().then((loaded) => {
+    return Promise.all([loadQueue(), loadFinalization()]).then(([loaded, loadedFinalization]) => {
       queue = loaded;
+      finalization = loadedFinalization;
     });
   }
   if (type === "cron.finalizeRuns" && !finalization) {

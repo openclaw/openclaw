@@ -9,6 +9,8 @@ const state = vi.hoisted(() => ({
   drainSessionPublications: vi.fn(),
   stopPlugins: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
+  prepareSqliteWorkerBrokerClose: vi.fn(async () => undefined),
+  prepareSupervisorLog: vi.fn(async () => undefined),
   artifactsAvailable: true,
   waitForPluginCacheRetirement: vi.fn(async () => undefined),
 }));
@@ -97,6 +99,13 @@ vi.mock("../agents/subagents/registry/subagent-session-cleanup.js", () => ({
   loadSubagentSessionCleanupRuntime: async () => undefined,
 }));
 
+vi.mock("../infra/sqlite-worker-store.js", () => ({
+  prepareSqliteWorkerBrokerClose: state.prepareSqliteWorkerBrokerClose,
+}));
+vi.mock("../process/supervisor/supervisor.js", () => ({
+  loadSupervisorLogRuntime: state.prepareSupervisorLog,
+}));
+
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 
 describe("gateway shutdown runtime", () => {
@@ -127,6 +136,8 @@ describe("gateway shutdown runtime", () => {
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
+    expect(state.prepareSqliteWorkerBrokerClose).toHaveBeenCalledOnce();
+    expect(state.prepareSupervisorLog).toHaveBeenCalledOnce();
     expect(state.waitForPluginCacheRetirement).not.toHaveBeenCalled();
     expect(state.drainSessionPublications).not.toHaveBeenCalled();
     state.artifactsAvailable = false;

@@ -233,6 +233,22 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
+    // A built shutdown probe observes first resolutions by the old running process.
+    testFile: "test/scripts/gateway-shutdown-late-imports.built-cli.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/server{,-close,-close.runtime,-kernel,-lifecycle,-shutdown,-shutdown.runtime}.ts",
+      "src/cli/gateway-cli/run-loop*.ts",
+      "src/infra/{gateway-boot-lifecycle.worker,restart-lifecycle.worker,sqlite-worker-store,sqlite-readonly-worker}.ts",
+      "src/state/{openclaw-state,openclaw-agent-execution-cleanup}.worker.ts",
+      "src/state/openclaw-state-worker-registry.ts",
+      "src/process/supervisor/{index,supervisor,supervisor-log.runtime}.ts",
+      "extensions/memory-core/{index,src/memory/manager-runtime-loader,src/memory/search-manager}.ts",
+      "src/cron/store/dispatch.worker.ts",
+      "test/helpers/gateway-late-import-probe.mjs",
+    ],
+    sourceOnly: true,
+  },
+  {
     testFile: "extensions/file-transfer/src/workspace-service.test.ts",
     watchGlobs: ["src/worker/memory-worker-entry.ts", "src/worker/skills-worker-entry.ts"],
   },
