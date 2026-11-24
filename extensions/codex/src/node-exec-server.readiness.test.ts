@@ -11,6 +11,7 @@ import type { CodexStdioChild } from "./app-server/stdio-worker.js";
 import * as transport from "./app-server/transport-stdio.js";
 import * as transportLifecycle from "./app-server/transport.js";
 import { createCodexNodeExecServerCommand } from "./node-exec-server.js";
+import { createCodexNodeResourceReadiness } from "./node-resource-readiness.js";
 
 // Pinned Codex 0.154.0 transport.rs emits this line before entering its stdio loop.
 const READY = " INFO codex_exec_server::server::transport: codex-exec-server listening on stdio\n";
@@ -30,11 +31,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function startFixture(readyBeforeRegistrationReturns = false) {
+async function startFixture(
+  readyBeforeRegistrationReturns = false,
+  resourcePreparationRequired = false,
+) {
   const controller = new AbortController();
   const receiver = vi.fn((_receive: (message: Uint8Array) => void | Promise<void>) => () => {});
   const send = vi.fn(async (_message: Uint8Array) => {});
   const assertExecAuthorized = vi.fn();
+  const { readiness: repositoryReadiness } = createCodexNodeResourceReadiness({
+    required: resourcePreparationRequired,
+    signal: controller.signal,
+    assertCurrent: assertExecAuthorized,
+  });
   const released = Promise.withResolvers<void>();
   const release = vi.fn(() => released.resolve());
   const command = createCodexNodeExecServerCommand();
@@ -85,7 +94,11 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     {
       sessionKey: placement.sessionKey,
       sendNodeEvent: async () => {},
-      acquireManagedWorkspaceAsync: async () => ({ workspaceDir: placement.cwd, release }),
+      acquireManagedWorkspaceAsync: async () => ({
+        workspaceDir: placement.cwd,
+        release,
+        repositoryReadiness,
+      }),
       prepareExecAuthorization: () => assertExecAuthorized,
     },
   );
@@ -237,6 +250,35 @@ describe("Codex node native readiness", () => {
         id: 1,
         result: { sessionId: "fixture" },
       });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it("refuses native instruction discovery without waiting for private resources", async () => {
+    const harness = await startFixture(true, true);
+    try {
+      await vi.waitFor(() => expect(harness.receiver).toHaveBeenCalledOnce());
+      const [receive] = harness.receiver.mock.calls[0]!;
+      const requests = ["fs/getMetadata", "fs/getMetadataBatch", "fs/canonicalize"].map(
+        (method, id) => receive(Buffer.from(JSON.stringify({ id, method }))),
+      );
+      const delivered = Promise.allSettled(requests);
+      await vi.waitFor(() => expect(harness.send).toHaveBeenCalledTimes(3));
+      expect(
+        harness.send.mock.calls.map(([reply]) => JSON.parse(Buffer.from(reply).toString())),
+      ).toEqual(
+        [0, 1, 2].map((id) => ({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32001, message: expect.any(String) },
+        })),
+      );
+      expect((await delivered).map(({ status }) => status)).toEqual([
+        "fulfilled",
+        "fulfilled",
+        "fulfilled",
+      ]);
     } finally {
       await harness.cleanup();
     }
