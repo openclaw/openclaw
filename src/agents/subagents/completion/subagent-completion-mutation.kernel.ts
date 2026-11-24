@@ -41,7 +41,10 @@ import {
   readSubagentRunRow,
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { sameRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
+import {
+  hasSameRequesterWakeCohort,
+  sameRequesterSettleRunIdentity,
+} from "../registry/subagent-requester-settle-identity.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import type {
   BlockSubagentCompletionRequest,
@@ -316,11 +319,7 @@ function prepareRequesterBatch(
       : []) {
       if (!ids.has(id) && !checkedOmittedIds.has(id)) {
         const member = readSubagentRun(database, id);
-        if (
-          member?.requesterSettleWake &&
-          member.requesterSettleWake.rearmGeneration ===
-            subagent.requesterSettleWake?.rearmGeneration
-        ) {
+        if (hasSameRequesterWakeCohort(member, subagent.requesterSettleWake)) {
           throw changedOwner();
         }
         // Planning performs no writes, so this check holds for the remaining same-wave rows.

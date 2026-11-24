@@ -33,6 +33,34 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("dispatches overlapping same-generation yielded cohorts with only their surviving members", async () => {
+    const [first, second] = [
+      { runId: "run-a", batchRunIds: ["retired", "run-a", "run-b"] },
+      { runId: "run-b", batchRunIds: ["run-b"] },
+    ].map(({ runId, batchRunIds }) =>
+      makeSettledChild({
+        runId,
+        requesterSettleWake: {
+          status: "dispatching",
+          attemptCount: 1,
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+          batchRunIds,
+        },
+      }),
+    );
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([first!, second!]);
+    for (const [index, settledEntry] of [first!, second!].entries()) {
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry })),
+      ).resolves.toBe(true);
+      expect(deliverSpy.mock.calls[index]?.[0].directIdempotencyKey).toBe(
+        requesterSettleKey(settledEntry.runId + ":yield-1"),
+      );
+    }
+    expect(completeBatchSpy.mock.calls.map(([runIds]) => runIds)).toEqual([["run-a"], ["run-b"]]);
+  });
+
   it.each(["undelivered", "transport"] as const)(
     "retries a spent descendant wait after restore without another deferral cycle (%s)",
     async (failure) => {

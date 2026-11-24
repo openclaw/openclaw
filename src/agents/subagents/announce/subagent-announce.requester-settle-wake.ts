@@ -29,6 +29,7 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
+  hasSameRequesterWakeCohort,
   resolveCurrentRequesterSettleWakeBatch,
 } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -141,7 +142,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       }),
     );
   };
-  const admittedRearmGeneration = initialState.rearmGeneration;
   if (isCronSessionKey(requesterSessionKey)) {
     await completeBatch([params.settledEntry], initialState);
     return false;
@@ -158,16 +158,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     !currentSettledEntry ||
     !isSameSubagentRunOwner(currentSettledEntry, params.settledEntry) ||
     !currentState ||
-    currentState.rearmGeneration !== admittedRearmGeneration
+    (pause
+      ? currentState.rearmGeneration !== initialState.rearmGeneration
+      : !hasSameRequesterWakeCohort(currentSettledEntry, initialState))
   ) {
     return false;
   }
   const frozenBatchRunIds = currentState.batchRunIds;
   const frozen = Boolean(frozenBatchRunIds?.length);
-  const currentRearmGeneration = currentState.rearmGeneration;
   const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
-    Boolean(entry?.requesterSettleWake) &&
-    entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration;
+    hasSameRequesterWakeCohort(entry, currentState);
   const hasSettled = (entry: SubagentRunRecord) =>
     entry.execution.status !== "running" &&
     entry.pauseReason !== "sessions_yield" &&
@@ -236,7 +236,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     resolveCurrentRequesterSettleWakeBatch({
       observed: settledBatch,
       currentRuns: currentCompletionRows(readRequesterRuns()),
-      rearmGeneration: currentRearmGeneration,
+      rearmGeneration: currentState.rearmGeneration,
       pause,
       requireUnchangedProgress,
     });
@@ -277,7 +277,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // Retain all possible shipped sources only for exact accepted-input matching.
     const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
     // Keep the batch members themselves in the settle check, including paused work.
-    const rootRunIds = frozen ? new Set(frozenBatchRunIds) : undefined;
+    const rootRunIds = frozen ? new Set(batchRunIds) : undefined;
     const readRequesterDescendants = createRequesterDescendantReader({
       requesterSessionKey,
       requesterAgentId,
@@ -297,7 +297,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
 
-    const retainedBatchRunIds = pauseNotice ? frozenBatchRunIds : batchRunIds;
+    const retainedBatchRunIds =
+      pauseNotice || (currentState.requesterYieldBatch && frozen) ? frozenBatchRunIds : batchRunIds;
     const isStoreCurrent = () =>
       settledBatch.every((entry) =>
         isSystemEventStoreCurrent(requesterSessionKey, entry.requesterStorePath, requesterAgentId),

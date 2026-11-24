@@ -32,6 +32,7 @@ import type {
 import type { SubagentRunRecord, SubagentSessionEffects } from "./subagent-registry.types.js";
 import {
   hasRequesterCompletionCohort,
+  hasSameRequesterWakeCohort,
   isRequesterCompletionCohortCurrent,
   isRequesterSettleWakeForRun,
   sameRequesterSettleRunIdentity,
@@ -78,16 +79,11 @@ function findRequesterSettleWakeRecoveryBatch(
     ) {
       continue;
     }
-    const batchRunIds =
-      child.pauseReason === "sessions_yield" && wake.pauseNotice
-        ? [child.runId]
-        : (wake.batchRunIds ?? []);
+    const pauseNotice = child.pauseReason === "sessions_yield" && wake.pauseNotice;
+    const batchRunIds = pauseNotice ? [child.runId] : (wake.batchRunIds ?? []);
     const batch = batchRunIds.flatMap((id) => {
       const member = children.get(id);
-      return member?.requesterSettleWake !== undefined &&
-        member.requesterSettleWake.rearmGeneration === wake.rearmGeneration
-        ? [member]
-        : [];
+      return hasSameRequesterWakeCohort(member, wake) ? [member] : [];
     });
     if (
       batch.length > 0 &&
@@ -117,7 +113,6 @@ function findRequesterSettleWakeRecoveryBatch(
           !member.killReconciliation?.suppressTaskDelivery &&
           (member.requesterSettleWake?.status === "dispatching" ||
             (allowPending && member.requesterSettleWake?.status === "pending")) &&
-          member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
           member.requesterSettleWake.attemptCount === wake.attemptCount &&
           (!requireGatewayCurrent ||
             getGatewayContextResolver(member)?.()?.recoveryRuntime === params.gatewayRuntime),

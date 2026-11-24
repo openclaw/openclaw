@@ -68,6 +68,50 @@ describe("persisted subagent requester wakes", () => {
     seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
 
   registerRequesterWakeOwnershipTests({ database: () => database, persistOwner });
+
+  it.each(["worker outcome", "scheduler fallback"])(
+    "settles surviving yielded members without consuming a same-generation foreign row (%s)",
+    async (path) => {
+      const first = records();
+      const foreign = records();
+      foreign.subagent.runId = "foreign-run";
+      foreign.subagent.childSessionKey = "agent:main:subagent:foreign";
+      armRequesterWake(first, [first.subagent.runId, foreign.subagent.runId, "retired-run"]);
+      armRequesterWake(foreign);
+      // The other cohort is independently waiting for its deadline.
+      foreign.subagent.requesterSettleWake!.nextAttemptAt = Date.now() + 600_000;
+      for (const input of [first, foreign]) {
+        input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+        persistOwner(input);
+      }
+      if (path === "scheduler fallback") {
+        const driver = requesterWakeDriver([first, foreign]);
+        try {
+          await driver.run();
+        } finally {
+          driver.controller.clearScheduledResumeTimers();
+        }
+      } else {
+        await expect(
+          mutateRequesterCompletionBatch({
+            entries: [first.subagent],
+            operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+            context: captureOpenClawStateWorkerContext(),
+            assertCurrent() {},
+          }),
+        ).resolves.toEqual({ applied: true, publication: "published" });
+      }
+      const persisted = loadSubagentRegistryFromSqlite();
+      expect(persisted.get(first.subagent.runId)?.requesterSettleWake).toBeUndefined();
+      expect(persisted.get(first.subagent.runId)?.delivery?.status).toBe(
+        path === "scheduler fallback" ? "failed" : "delivered",
+      );
+      expect(persisted.get(foreign.subagent.runId)?.requesterSettleWake).toEqual(
+        foreign.subagent.requesterSettleWake,
+      );
+    },
+  );
+
   it("reconciles an acknowledged retirement without even a no-op data write", async () => {
     const input = armRequesterWake(records());
     input.subagent.expectsCompletionMessage = false;

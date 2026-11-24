@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   isSameSubagentRun,
@@ -55,21 +55,21 @@ export function isRequesterSettleWakeForRun(params: {
   const pauseNotice = entry.pauseReason === "sessions_yield" && wake.pauseNotice;
   // Dispatch selects the surviving members of its frozen generation. Retired
   // rows no longer contribute to the admitted wake's identity.
-  const batchRunIds = pauseNotice
-    ? [entry.runId]
-    : wake.batchRunIds?.filter((id) => {
-        const member = params.runsById.get(id);
-        return (
-          member?.requesterSettleWake !== undefined &&
+  const batch = (pauseNotice ? [entry.runId] : (wake.batchRunIds ?? []))
+    .map((id) => params.runsById.get(id))
+    .filter((member): member is SubagentRunRecord =>
+      pauseNotice
+        ? member?.requesterSettleWake !== undefined &&
           member.requesterSettleWake.rearmGeneration === wake.rearmGeneration
-        );
-      });
+        : hasSameRequesterWakeCohort(member, wake),
+    );
+  const batchRunIds = batch.map((member) => member.runId);
   if (
     entry.requesterSessionKey !== requesterSessionKey ||
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
     wake.attemptCount < 1 ||
     !isSameSubagentRun(params.runsById.get(entry.runId), entry) ||
-    !batchRunIds?.includes(entry.runId)
+    !batchRunIds.includes(entry.runId)
   ) {
     return false;
   }
@@ -77,16 +77,12 @@ export function isRequesterSettleWakeForRun(params: {
   // admitted as deliverable retries under fresh keys like any public batch.
   const sharedAttemptKey =
     wake.yieldedFinalDeliverable !== true &&
-    batchRunIds.some((runId) => {
-      const member = params.runsById.get(runId);
-      return (
-        member?.requesterSessionKey === requesterSessionKey &&
+    batch.some(
+      (member) =>
+        member.requesterSessionKey === requesterSessionKey &&
         (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
-        member.requesterSettleWake !== undefined &&
-        member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
-        member.completionTarget === "parent"
-      );
-    });
+        member.completionTarget === "parent",
+    );
   // Pending backoff still belongs to the last admitted attempt, not its next retry.
   return (
     params.runId ===
@@ -278,6 +274,9 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
         (observed.requesterSettleWake?.yieldedFinalDeliverable === true) ||
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||
+      (!params.pause &&
+        observed.requesterSettleWake &&
+        !hasSameRequesterWakeCohort(entry, observed.requesterSettleWake)) ||
       (params.pause
         ? entry.pauseReason !== "sessions_yield" || !wake.pauseNotice
         : entry.pauseReason === "sessions_yield") ||
@@ -306,5 +305,23 @@ export function isRequesterYieldCohortMember(
     wake.rearmGeneration === rearmGeneration &&
     wake.batchRunIds?.length === batchRunIds.length &&
     wake.batchRunIds.every((runId, index) => runId === batchRunIds[index])
+  );
+}
+
+/** Generations are local to the selected rows, not unique among requester wakes. */
+export function hasSameRequesterWakeCohort(
+  entry: SubagentRunRecord | null | undefined,
+  wake: RequesterSettleWakeState,
+): entry is SubagentRunRecord {
+  if (!entry?.requesterSettleWake) {
+    return false;
+  }
+  if (wake.requesterYieldBatch && wake.batchRunIds?.length) {
+    return isRequesterYieldCohortMember(entry, wake.batchRunIds, wake.rearmGeneration);
+  }
+  const current = entry.requesterSettleWake;
+  return (
+    current.rearmGeneration === wake.rearmGeneration &&
+    Boolean(current.requesterYieldBatch) === Boolean(wake.requesterYieldBatch)
   );
 }

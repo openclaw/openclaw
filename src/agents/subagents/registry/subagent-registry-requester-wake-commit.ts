@@ -13,6 +13,7 @@ import {
 } from "./subagent-registry-persistence.js";
 import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasSameRequesterWakeCohort } from "./subagent-requester-settle-identity.js";
 import {
   copySubagentRunRuntimeOwner,
   currentSubagentRunOrObserved,
@@ -298,6 +299,7 @@ export function commitRequesterWake(
     });
   }
   const entries = observedEntries;
+  const admittedWake = entries[0]?.requesterSettleWake;
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
     generation,
@@ -318,7 +320,8 @@ export function commitRequesterWake(
       const current = context.options.runs.get(entry.runId);
       return current
         ? isSameSubagentRunOwner(current, entry) &&
-            (current.requesterSettleWake?.rearmGeneration === generation ||
+            ((current.requesterSettleWake?.rearmGeneration === generation &&
+              (!admittedWake || hasSameRequesterWakeCohort(current, admittedWake))) ||
               (pending.committedWake !== undefined && current.requesterSettleWake === undefined))
         : pending.ownsRetirement(entry);
     },

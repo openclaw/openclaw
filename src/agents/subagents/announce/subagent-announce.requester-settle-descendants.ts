@@ -3,6 +3,7 @@ import { buildScopedSubagentRunReadIndexFromRuns } from "../registry/subagent-re
 import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
 import { withSubagentRunReadSnapshot } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { hasSameRequesterWakeCohort } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { collectSubagentSessionReadKeys } from "../registry/subagent-session-read-scope.js";
 
@@ -16,7 +17,7 @@ export function createRequesterDescendantReader(params: {
   signal?: AbortSignal;
   isSourceCurrent: () => boolean;
 }) {
-  const rearmGeneration = params.settledEntry.requesterSettleWake?.rearmGeneration;
+  const wake = params.settledEntry.requesterSettleWake;
   const isCurrent = () => {
     if (params.signal?.aborted || !params.isSourceCurrent()) {
       return false;
@@ -25,10 +26,7 @@ export function createRequesterDescendantReader(params: {
       requesterAgentId: params.requesterAgentId,
       requesterStorePath: params.requesterStorePath,
     }).find((entry) => isSameSubagentRunOwner(entry, params.settledEntry));
-    return (
-      current?.requesterSettleWake !== undefined &&
-      current.requesterSettleWake.rearmGeneration === rearmGeneration
-    );
+    return wake !== undefined && hasSameRequesterWakeCohort(current, wake);
   };
   return async () => {
     if (!isCurrent()) {

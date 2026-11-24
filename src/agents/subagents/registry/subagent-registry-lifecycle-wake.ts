@@ -1,8 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/sessions/session-entry-current-check.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-owner.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { captureSystemEventStoreCurrentCheck } from "../../../infra/system-event-ownership.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import { AgentDatabaseAdmissionError } from "../../../state/agent-database-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -40,17 +43,96 @@ import {
   shouldReportRequesterSettleWakeFailure,
 } from "./subagent-registry-requester-wake-commit.js";
 import {
+  assertRequesterWakeCommitCurrent,
   commitRequesterSettleWakeMutation,
   isCurrentRequesterSettleWakeBatch,
 } from "./subagent-registry-requester-wake-mutation.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { captureRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
+import {
+  buildRequesterSettleWakeIdentity,
+  captureRequesterSettleRunIdentity,
+  hasSameRequesterWakeCohort,
+} from "./subagent-requester-settle-identity.js";
 import {
   currentSubagentRunOrObserved,
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+
+async function prepareParentDeliveryFailureReport(
+  context: SubagentLifecycleWakeContext,
+  entries: readonly SubagentRunRecord[],
+  stateContext: OpenClawStateWorkerContext,
+  pending: PendingRequesterSettleWakeCommit,
+  outcome: SubagentAnnounceDeliveryResult,
+) {
+  const requester = entries.find((entry) => entry.completionTarget === "parent");
+  const wake = requester?.requesterSettleWake;
+  if (
+    !requester ||
+    !wake ||
+    wake.pauseNotice ||
+    requester.pauseReason === "sessions_yield" ||
+    requester.suppressCompletionDelivery ||
+    requester.killReconciliation?.suppressTaskDelivery ||
+    !requester.completionRequesterSessionId ||
+    !requester.requesterStorePath
+  ) {
+    return undefined;
+  }
+  const agentId = resolveSubagentRequesterAgentId(context.options.getRuntimeConfig(), requester);
+  if (!agentId) {
+    return undefined;
+  }
+  const sessionKey = requester.requesterSessionKey;
+  const storePath = requester.requesterStorePath;
+  const sessionId = requester.completionRequesterSessionId;
+  const lifecycleRevision = requester.completionRequesterLifecycleRevision;
+  const isStoreCurrent = captureSystemEventStoreCurrentCheck(sessionKey, agentId);
+  const assertCurrent = () => {
+    assertRequesterWakeCommitCurrent(context, entries, stateContext, pending);
+    if (!isStoreCurrent(storePath)) {
+      throw new Error("Requester failure report lost its session store");
+    }
+  };
+  assertCurrent();
+  const target = { agentId, storePath, sessionKey, sessionId };
+  const prepared = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...target,
+    fields: ["activeWriterRunId", "archivedAt"],
+  });
+  if (
+    prepared.entry?.sessionId !== sessionId ||
+    prepared.entry.lifecycleRevision !== lifecycleRevision ||
+    prepared.entry.activeWriterRunId !== undefined ||
+    prepared.entry.archivedAt !== undefined
+  ) {
+    prepared.release();
+    return undefined;
+  }
+  const { runId } = buildRequesterSettleWakeIdentity({
+    requesterSessionKey: sessionKey,
+    requesterAgentId: agentId,
+    batchRunIds: wake.batchRunIds ?? entries.map((entry) => entry.runId),
+    rearmGeneration: wake.rearmGeneration,
+  });
+  return {
+    release: prepared.release,
+    write: () =>
+      recordGatewaySessionRunFailure({
+        target: { ...target, expectedLifecycleRevision: lifecycleRevision },
+        // This is a transcript report identity, not a current session writer claim.
+        runId: runId + ":parent-delivery-failure",
+        error: outcome.error ?? "Child completion could not reach this session.",
+        assertCommitAllowed: () => {
+          assertCurrent();
+          prepared.source();
+        },
+        sessionEntryCurrent: prepared.entryCurrent,
+      }),
+  };
+}
 
 const completeRequesterSettleWakeBatch = async (
   context: SubagentLifecycleWakeContext,
@@ -61,16 +143,43 @@ const completeRequesterSettleWakeBatch = async (
   outcome?: SubagentAnnounceDeliveryResult,
 ): Promise<boolean> => {
   const params = context.options;
-  if (
-    !(await commitRequesterSettleWakeMutation(
+  const warnReportFailure = (error: unknown) => {
+    params.warn("requester settle wake failure report could not be recorded", {
+      error: buildSafeLifecycleErrorMeta(error),
+    });
+  };
+  const report =
+    outcome?.delivered === false &&
+    outcome.disposition === "permanent_failure" &&
+    !outcome.storeReplaced
+      ? await prepareParentDeliveryFailureReport(
+          context,
+          entries,
+          stateContext,
+          pending,
+          outcome,
+        ).catch((error: unknown) => {
+          warnReportFailure(error);
+          return undefined;
+        })
+      : undefined;
+  try {
+    const committed = await commitRequesterSettleWakeMutation(
       context,
       entries,
       outcome ? { kind: "settle", outcome } : { kind: "complete" },
       stateContext,
       pending,
-    ))
-  ) {
-    return false;
+    );
+    if (!committed) {
+      return false;
+    }
+    // A failed transcript append must not replay transport or the durable child outcome.
+    if (report) {
+      await report.write().catch(warnReportFailure);
+    }
+  } finally {
+    report?.release();
   }
   assertSubagentRegistryWriteSourceCurrent(stateContext);
   // The durable receipt survives caller retirement; release only its remaining owned rows.
@@ -373,7 +482,9 @@ export function scheduleRequesterSettleWake(
       : (admittedWake?.batchRunIds ?? [runId])
   ).flatMap((id) => {
     const member = params.runs.get(id);
-    return member ? [member] : [];
+    return member && (!admittedWake || hasSameRequesterWakeCohort(member, admittedWake))
+      ? [member]
+      : [];
   });
   context.scheduledRequesterSettleWakeRuns.add(runtimeKey);
   runWithoutOwnedSessionTranscriptWrites(() => {
@@ -528,7 +639,7 @@ export function scheduleRequesterSettleWake(
               !currentWake ||
               !admittedWake ||
               !isSameSubagentRunOwner(current, entry) ||
-              currentWake.rearmGeneration !== admittedWake.rearmGeneration ||
+              !hasSameRequesterWakeCohort(current, admittedWake) ||
               !isSourceCurrent()
             ) {
               return;

@@ -56,25 +56,43 @@ describe("requester settle wake identity", () => {
     ).toBe(true);
   });
 
-  it("recognizes an admitted frozen wake after an earlier member retires", () => {
-    const entry = makeSettledChild({
-      runId: "run-b",
-      requesterAgentId: "main",
-      requesterSettleWake: {
-        status: "dispatching",
-        batchRunIds: ["retired-run", "run-b"],
-        rearmGeneration: 1,
-        attemptCount: 1,
-      },
-    });
-    expect(
-      isRequesterSettleWakeForRun({
-        entry,
-        runId: "announce:requester-settle:main:agent:main:main:run-b:yield-1",
-        requesterSessionKey: REQUESTER,
+  it.each([false, true])(
+    "recognizes an admitted frozen wake after retirement (overlapping cohort: %s)",
+    (overlap) => {
+      const entry = makeSettledChild({
+        runId: "run-b",
         requesterAgentId: "main",
-        runsById: new Map([[entry.runId, entry]]),
-      }),
-    ).toBe(true);
-  });
+        requesterSettleWake: {
+          status: "dispatching",
+          batchRunIds: overlap ? ["retired-run", "run-a", "run-b"] : ["retired-run", "run-b"],
+          rearmGeneration: 1,
+          attemptCount: 1,
+          requesterYieldBatch: overlap ? true : undefined,
+        },
+      });
+      const foreign = makeSettledChild({
+        runId: "run-a",
+        requesterSettleWake: {
+          status: "dispatching",
+          batchRunIds: ["run-a"],
+          rearmGeneration: 1,
+          attemptCount: 1,
+          requesterYieldBatch: true,
+        },
+      });
+      const runsById = new Map([[entry.runId, entry]]);
+      if (overlap) {
+        runsById.set(foreign.runId, foreign);
+      }
+      expect(
+        isRequesterSettleWakeForRun({
+          entry,
+          runId: "announce:requester-settle:main:agent:main:main:run-b:yield-1",
+          requesterSessionKey: REQUESTER,
+          requesterAgentId: "main",
+          runsById,
+        }),
+      ).toBe(true);
+    },
+  );
 });
