@@ -1,0 +1,1 @@
+process.reallyExit(1);

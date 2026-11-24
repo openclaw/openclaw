@@ -83,6 +83,8 @@ export function writeStorage(root: string, scope: string, value: string | null):
 export function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
   const prefs = asRecord(safeParseJson(raw ?? "null"));
   if (prefs) {
+    // Never replay a retired section edit as a generic config preference.
+    delete prefs.personalSessionGroups;
     for (const [key, storageKey] of Object.entries(navigationStorageKeys)) {
       delete prefs[key];
       if (Object.hasOwn(prefs, storageKey)) {

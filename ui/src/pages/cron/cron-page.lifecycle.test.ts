@@ -160,6 +160,7 @@ it("keeps a saved model and reasoning level the catalog does not list", async ()
   });
   const { page } = mountCronPage(request);
   page.routeSearch = "?job=" + job.id;
+  await page.settle();
   (await waitForElement(page, testId("cron-edit"))).click();
   await expectModels(page, ["alpha/current"]);
   // The catalog cannot say which levels an unlisted model takes, so only the model shows.

@@ -9,6 +9,12 @@ import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgre
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import {
+  claimsSharedHostSlot,
+  createHostedWorker,
+  isHostedWorkerEndpoint,
+} from "./shared-worker-host.js";
+import { sharedHostSqliteKeys } from "./shared-worker-host.types.js";
+import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
   trackSqliteDatabaseAdmissionWorker,
@@ -33,6 +39,13 @@ import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contr
 import type { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+
+/** Native carriers and hosted endpoints deliver the same carrier events. */
+type SqliteWorkerEvents = {
+  on(event: "message", listener: (reply: SqliteWorkerReply) => void): unknown;
+  on(event: "error" | "messageerror", listener: (error: Error) => void): unknown;
+  once(event: "exit", listener: (code: number) => void): unknown;
+};
 
 function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
   return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -209,24 +222,43 @@ export function createSqliteWorkerLifecycle({
     // The Worker constructor inherits this exact synchronous snapshot.
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const postgresPool = createPostgresPoolEndpoints();
+    // Lean: one carrier per class is a logical endpoint; external databases stay isolated.
+    // A broker that captured unqualified native close retires carriers by worker exit.
+    const hostedKey =
+      options.carrierClass !== "external"
+        ? sharedHostSqliteKeys[options.carrierClass ?? "agent"]
+        : "";
+    const hosted =
+      hostedKey !== "" &&
+      explicitSqliteCloseReleasesNativeResources &&
+      claimsSharedHostSlot(carrierUrl, hostedKey);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
-      worker: createCpuTrackedWorker(
-        carrierUrl,
-        {
-          // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
-          resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
-          env: resolveNodeCompileCacheEnv(),
-          execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
-          workerData: { postgresPool },
-          transferList: postgresPoolTransferList(postgresPool),
-        },
-        () => slot.current?.observation.requestClass,
-      ),
+      worker: hosted
+        ? createHostedWorker(
+            carrierUrl,
+            { workerData: { postgresPool }, transferList: postgresPoolTransferList(postgresPool) },
+            { key: hostedKey, ready: false },
+          )
+        : createCpuTrackedWorker(
+            carrierUrl,
+            {
+              // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
+              resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
+              env: resolveNodeCompileCacheEnv(),
+              execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
+              workerData: { postgresPool },
+              transferList: postgresPoolTransferList(postgresPool),
+            },
+            () => slot.current?.observation.requestClass,
+          ),
       exited: createDeferredCore(),
     }));
-    // Node forwards worker stderr without passing through the host logger.
-    worker.stderr.prependListener("data", clearActiveProgressLine);
-    trackSqliteDatabaseAdmissionWorker(worker);
+    if (!isHostedWorkerEndpoint(worker)) {
+      // Node forwards worker stderr without passing through the host logger.
+      worker.stderr.prependListener("data", clearActiveProgressLine);
+      // A hosted carrier publishes admission facts under the physical host's thread.
+      trackSqliteDatabaseAdmissionWorker(worker);
+    }
     const slot: Slot = {
       carrierClass: options.carrierClass,
       postgresPoolSent: postgresPool !== undefined,
@@ -244,14 +276,15 @@ export function createSqliteWorkerLifecycle({
     };
     const replyOwner = createReplyOwner(slot);
     slots.add(slot);
-    worker.on("message", (reply: SqliteWorkerReply) => {
+    const events: SqliteWorkerEvents = worker;
+    events.on("message", (reply: SqliteWorkerReply) => {
       if (!receiveWorkerMemoryPort(worker, reply)) {
         slot.receiveReply(reply);
       }
     });
-    worker.on("error", (error) => fail(slot, error));
-    worker.on("messageerror", (error) => fail(slot, error));
-    worker.once("exit", (code) => {
+    events.on("error", (error) => fail(slot, error));
+    events.on("messageerror", (error) => fail(slot, error));
+    events.once("exit", (code) => {
       slot.exited = true;
       fail(slot, new Error(`SQLite worker exited with code ${code}`));
       for (const actor of slot.actors) {
@@ -498,6 +531,16 @@ export function createSqliteWorkerLifecycle({
     slot.retiring ??= (async () => {
       const errors: unknown[] = [];
       if (!slot.exited) {
+        if (
+          isHostedWorkerEndpoint(slot.worker) &&
+          explicitSqliteCloseReleasesNativeResources &&
+          !slot.failed &&
+          !slot.pendingOpens &&
+          [...slot.actors].every((actor) => actor.backendClosed)
+        ) {
+          // Every actor's native close is proven; anything else replaces the shared host.
+          slot.worker.retiring("closed");
+        }
         try {
           await slot.worker.terminate();
         } catch (error) {

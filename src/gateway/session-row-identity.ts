@@ -32,6 +32,57 @@ function sameRowField(left: unknown, right: unknown): boolean {
   );
 }
 
+/** Construct optional facts without deleting properties from the published row's V8 shape. */
+export function definedSessionRowFields<T extends Partial<GatewaySessionRow>>(fields: T): T {
+  const row = {};
+  const descriptor: PropertyDescriptor = {
+    value: undefined,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  };
+  // Define properties to retain fast layouts without allocating an entry pair per field.
+  for (const field of Object.keys(fields)) {
+    const value = Reflect.get(fields, field);
+    if (value !== undefined) {
+      descriptor.value = value;
+      Object.defineProperty(row, field, descriptor);
+    }
+  }
+  // SAFETY: Omitting undefined optional facts preserves every retained field's type.
+  return row as T;
+}
+
+export function definedSessionRowField<K extends keyof GatewaySessionRow>(
+  field: K,
+  value: GatewaySessionRow[K],
+) {
+  return value === undefined ? undefined : { [field]: value };
+}
+
+/** Clearing a retained fact requires a new layout; ordinary patches reuse its property order. */
+export function freezeSessionRowPatch(
+  previous: Readonly<GatewaySessionRow>,
+  patch: Partial<GatewaySessionRow>,
+): Readonly<GatewaySessionRow> {
+  let row: GatewaySessionRow | undefined;
+  let cleared = false;
+  for (const field of Object.keys(patch)) {
+    const value: unknown = Reflect.get(patch, field);
+    if (
+      value === undefined
+        ? !Object.hasOwn(previous, field)
+        : sameRowField(value, Reflect.get(previous, field))
+    ) {
+      continue;
+    }
+    row ??= { ...previous };
+    Reflect.set(row, field, freezeTrustedJsonSnapshot(value));
+    cleared ||= value === undefined;
+  }
+  return row ? Object.freeze(cleared ? definedSessionRowFields(row) : row) : previous;
+}
+
 /** Previous rows are deeply frozen publications; only new facts need freezing. */
 export function freezeSessionRow(
   row: GatewaySessionRow,
@@ -40,9 +91,7 @@ export function freezeSessionRow(
 ): Readonly<GatewaySessionRow> {
   for (const field of fields) {
     const current = Reflect.get(row, field);
-    if (current === undefined) {
-      Reflect.deleteProperty(row, field);
-    } else if (current && typeof current === "object") {
+    if (current && typeof current === "object") {
       const retained = previous && Reflect.get(previous, field);
       Reflect.set(
         row,

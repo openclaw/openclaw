@@ -24,6 +24,7 @@ import {
   createDynamicSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
   registerUserTurnTranscriptAdmissionOwner,
@@ -34,6 +35,7 @@ import { persistUserTurnInput, stageUserTurnPendingInput } from "./user-turn-tra
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {
   capturePersistedModelPromptProjection,
+  createAudioApiKeyFailureCapture,
   confirmPersistedSteerTargetRunId,
   preparePersistedModelPromptProjection,
 } from "./user-turn-transcript-updates.js";
@@ -57,7 +59,6 @@ import {
 } from "./user-turn-transcript.persistence.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
-  PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnOriginalInputCommit,
   UserTurnTranscriptPersistResult,
@@ -66,11 +67,7 @@ import type {
   UserTurnTranscriptUpdateMode,
 } from "./user-turn-transcript.types.js";
 
-export type {
-  PersistedUserTurnMessage,
-  UserTurnInput,
-  UserTurnTranscriptRecorder,
-} from "./user-turn-transcript.types.js";
+export type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 export {
   buildLateMediaAttachedProjection,
@@ -276,7 +273,7 @@ export function createUserTurnTranscriptRecorder(
       "logicalTurnId" in receipt ? receipt : { ...receipt, logicalTurnId, role: "user" };
     admissionReceipt = admission;
     admittedMessage = persistedMessage;
-    const run = async () => admissionHandler?.(admission);
+    const run = async () => audioKeyFailures.afterAdmission(admissionHandler?.(admission));
     // Runtime writes must queue behind the transcript writer instead of reentering it.
     admissionWrite = detached ? runInDetachedAsyncContext(run) : run();
     // The turn owner awaits this write; an early rejection must not be unobserved.
@@ -295,6 +292,13 @@ export function createUserTurnTranscriptRecorder(
       persistedResult = { ...persistedResult, admission, message: persistedMessage };
     }
   };
+
+  const audioKeyFailures = createAudioApiKeyFailureCapture({
+    admission: () => (blocked ? undefined : admissionReceipt),
+    admitting: () => admissionWrite,
+    onCommitted: refreshAdmission,
+    onError: handlePersistenceError,
+  });
 
   // Steering resolves its message at enqueue; the target run is stamped on the committed row.
   const stampPersistedSteerTargetRunId = async (targetRunId: string) =>
@@ -426,7 +430,8 @@ export function createUserTurnTranscriptRecorder(
             ...resolvedTarget,
             logicalTurnId,
             message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
-            sessionTurnMutation: params.sessionTurnMutation,
+            // Rejection records an audit message, not an admitted Goal.
+            sessionTurnMutation: blocked ? undefined : params.sessionTurnMutation,
             expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
             sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
@@ -539,6 +544,7 @@ export function createUserTurnTranscriptRecorder(
     get message() {
       return message;
     },
+    recordAudioApiKeyFailures: audioKeyFailures.record,
     // Runtime replay consumes the committed hook decision; persistence still resolves late media.
     resolveMessage: async () =>
       recorder.getPersistedMessage?.() ?? (await resolveMessageForPersistence()),

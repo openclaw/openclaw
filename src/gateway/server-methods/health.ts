@@ -18,6 +18,7 @@ import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import type { GatewayShutdownStatus } from "../server-public.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../server/health-refresh-admission.js";
 import { readGatewayProcessVitals, readGatewayWorkerPoolFacts } from "../server/process-vitals.js";
+import { readGatewayResourceDiagnostics } from "../server/resource-diagnostics.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -184,6 +185,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         modelRuntime: getPreparedModelRuntimeStartupStatus(),
         ...readGatewayProcessVitals(context.getEventLoopHealth),
         workerPools,
+        resources: readGatewayResourceDiagnostics(),
         pid: process.pid,
         shutdownBudget: shutdownStatus,
         childRuntime: formatPublishedChildRuntime(

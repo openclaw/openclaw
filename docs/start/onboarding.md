@@ -52,9 +52,11 @@ app. Click **Open** to continue.
 </Step>
 <Step title="Approve find local networks">
 macOS may ask whether **OpenClaw** or **bun** may find devices on your local
-network. Bun is the runtime included with OpenClaw.app's bundled Gateway. Choose
-**Allow** when you want LAN discovery and access to a Gateway on another machine.
-**Don't Allow** can prevent discovery and local-network connections.
+network. Connecting to a Gateway on this Mac does not require Local Network
+access. macOS may ask when you choose **Nearby** or connect directly to a
+Gateway on your local network. It may also ask separately for **bun**, the
+runtime included with OpenClaw.app's bundled Gateway. Choose **Allow** if you
+want to find or connect to a Gateway on your local network.
 
 A separate firewall prompt may ask whether **bun** can accept incoming network
 connections. **Allow** permits incoming connections subject to your Gateway's
@@ -138,8 +140,8 @@ A newly verified model opens guided setup for your workspace, Gateway,
 channels, and optional features, then agent chat. An already configured model
 opens the normal dashboard.
 
-- **Import memory (optional):** choose files during guided setup or later in
-  **Settings → Import Memory**. Local Gateways can import Claude Code, Codex,
+- **Import memory (optional):** setup never asks. When you want it, open
+  **Settings → Memory → Import memory**. Local Gateways can import Claude Code, Codex,
   and Hermes memories into `memory/imports/`; previously imported files are skipped.
 - **Grant macOS access as needed:** open **Settings → This Mac → Permissions** for features
   such as screen recording, microphone access, and automation. See
@@ -190,8 +192,9 @@ uses **Reuse**. Without an existing login,
 the offered ChatGPT sign-in uses a separate home. To switch, choose **Sign in separately** on the setup card, or sign in with ChatGPT or an OpenAI API key
 in **Models**. Completing that sign-in selects the isolated home.
 
-Choosing a Claude or Codex model does not automatically show native
-conversations in the sidebar. Enable conversation discovery separately if you want to browse them.
+Connecting AI never asks about native Claude Code or Codex conversations and
+does not show them in the sidebar. To browse them in place, turn them on in
+**Settings → Appearance → Session sources**; an existing choice there is kept.
 For shared-home settings and authentication details, see
 [Native Codex state](/plugins/codex-harness/native-features#share-threads-with-codex-desktop-and-cli).
 

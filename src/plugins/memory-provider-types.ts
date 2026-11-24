@@ -28,11 +28,26 @@ export type MemoryCallerContext = {
   signal?: AbortSignal;
 };
 
+/** A passive memory backend the selected slot owner can open. */
+type MemoryBackendInfo = { id: string; name?: string };
+
+/**
+ * Host capability passed only to the selected slot owner's `providerRuntime.open()`.
+ * Each open reuses that call's caller authority, agent, and purpose. The capability and
+ * every backend lease it opened end when the owner's lease closes.
+ */
+export type MemoryBackendAccess = {
+  list(): MemoryBackendInfo[];
+  open(backendId: string): Promise<ActiveMemoryProviderResult>;
+};
+
 export type MemoryProviderOpenParams = {
   cfg: OpenClawConfig;
   agentId: string;
   context: MemoryCallerContext;
   purpose?: "default" | "status" | "cli";
+  /** Present only when the host opens the selected slot owner and memory backends are configured. */
+  backends?: MemoryBackendAccess;
 };
 export type MemoryProviderOpenResult = {
   provider: MemoryProviderHandle | null;

@@ -79,10 +79,10 @@ if [[ "$boat_requested" == "true" ]]; then
     node_runner_backend=boat
     effective_runner_backend=boat
     if [[ "$ci_qualification" == "false" ]]; then
-      # Ordinary CI shares a start allowance; only its longest Node
-      # rows use Boat. Other work retains the hybrid overflow route.
-      node_runner_backend=hybrid
-      effective_runner_backend=hybrid
+      # Start from the hosted plan; only budgeted Node rows project to Boat.
+      runner_profile=github
+      node_runner_backend=github
+      effective_runner_backend=github
       boat_node_job_limit="$(node --input-type=module <<'JS'
 const key = process.env.BOAT_API_KEY;
 const org = process.env.BOAT_ORG;
@@ -104,11 +104,6 @@ try {
 console.log(budget);
 JS
       )"
-      if [[ "$boat_node_job_limit" == "0" ]]; then
-        runner_profile=github
-        node_runner_backend=github
-        effective_runner_backend=github
-      fi
       echo "Boat admission: up to $boat_node_job_limit Node jobs; remaining jobs use $runner_profile CI."
     fi
   else

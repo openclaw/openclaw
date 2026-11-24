@@ -32,7 +32,7 @@ export type PreparedCompactionMessageSource =
 export type PreparedCompactionMessageFact = {
   source: PreparedCompactionMessageSource;
   role: AgentMessage["role"];
-  runtime: boolean;
+  unsummarized: boolean;
   real: RealConversationMessageFact;
   context: Pick<CompactionContextMessageFact, "role" | "pairing">;
   floor: CompactionFloorMessageFact;

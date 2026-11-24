@@ -1,11 +1,8 @@
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatMissingCostEntries } from "../../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.types.js";
-import {
-  formatCostUsageCachePrefix,
-  formatTokenCount,
-  formatUsd,
-} from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
+import { formatCostUsageCachePrefix, formatUsd } from "../../utils/usage-format.js";
 
 export function renderGatewayCostUsageSummary(
   summary: CostUsageSummary,

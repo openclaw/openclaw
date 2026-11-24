@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { waitForChatScrollIdle, chatMessage } from "./chat-flow.test-support.ts";
+import { waitForChatScrollIdle, chatMessage, openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 declare global {
@@ -67,6 +67,7 @@ suite.define(() => {
           const inspect = (id: string) => [
             {
               role: "assistant",
+              ...openAiAuthor,
               stopReason: "toolUse",
               content: [
                 { type: "toolCall", id, name: "view_image", arguments: { path: id + ".png" } },
@@ -81,7 +82,12 @@ suite.define(() => {
           ];
           const messages = [
             { role: "user", content: "Check the preview and show the final image." },
-            { role: "assistant", phase: "commentary", content: "I will inspect both screenshots." },
+            {
+              role: "assistant",
+              ...openAiAuthor,
+              phase: "commentary",
+              content: "I will inspect both screenshots.",
+            },
             ...inspect("before"),
             {
               role: "assistant",
@@ -93,6 +99,7 @@ suite.define(() => {
             ...inspect("after"),
             {
               role: "assistant",
+              ...openAiAuthor,
               phase: "final_answer",
               stopReason: "stop",
               content: [{ type: "text", text: "The preview is ready." }, image],
@@ -225,6 +232,7 @@ suite.define(() => {
             return [
               {
                 role: "assistant",
+                ...openAiAuthor,
                 content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
                 timestamp,
               },
@@ -261,6 +269,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
               timestamp: browserFirst ? 4_000 : 3_000,
             },
@@ -291,6 +300,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: "The widget and release reference are ready.",
               timestamp: 6_000,
             },
@@ -408,6 +418,7 @@ suite.define(() => {
           { role: "user", content: "Check it.", timestamp: 1_000 },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [
               { type: "text", text: "Here is the visualization." },
               {
@@ -441,7 +452,7 @@ suite.define(() => {
             content: "ok",
             timestamp: 3_000,
           },
-          chatMessage("assistant", "Done.", { timestamp: 4_000 }),
+          chatMessage("assistant", "Done.", { ...openAiAuthor, timestamp: 4_000 }),
         ],
       });
 

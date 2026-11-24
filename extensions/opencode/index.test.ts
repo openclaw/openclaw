@@ -148,17 +148,21 @@ describe("opencode provider plugin", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers only the Zen auth choice from its own provider manifest", async () => {
+  it("registers the Zen API key and Console browser sign-in from its own provider manifest", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.id).toBe("opencode");
     expect(provider.envVars).toEqual(["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]);
-    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual(["opencode-zen"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual([
+      "opencode-zen",
+      "opencode-console",
+    ]);
     expect(provider.auth[0]?.wizard).toMatchObject({
       choiceLabel: "OpenCode Zen catalog",
       groupId: "opencode",
-      groupHint: "Shared API key infrastructure for Zen + Go",
+      groupHint: "Browser sign-in or shared Zen + Go API key",
     });
+    expect(provider.auth[1]).toMatchObject({ id: "oauth", kind: "device_code" });
   });
 
   it("classifies client-restricted free models without cooling down valid credentials", async () => {
@@ -314,6 +318,7 @@ describe("opencode provider plugin", () => {
     const ownScope = await catalog({
       providerIds: ["opencode"],
       resolveProviderApiKey,
+      resolveProviderAuth: noAuth,
     });
     expect(ownScope).toMatchObject({ provider: { apiKey: NON_ENV_SECRETREF_MARKER } });
     expect(resolveProviderApiKey).toHaveBeenCalledOnce();
@@ -397,6 +402,37 @@ describe("opencode provider plugin", () => {
     expect(resolveProviderApiKey.mock.calls).toEqual(
       fixture.authProvider === "opencode" ? [["opencode"]] : [["opencode"], ["opencode-go"]],
     );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers the signed-in workspace's models for a browser sign-in", async () => {
+    const { catalog } = await registerFixture();
+    const fetchMock = blockFetch();
+    const liveCatalog = vi
+      .spyOn(await import("./provider-catalog.js"), "buildOpencodeZenLiveProviderConfig")
+      .mockImplementation(async (params = {}) => ({
+        baseUrl: "https://opencode.ai/zen/v1",
+        apiKey: params.apiKey,
+        models: [],
+      }));
+    const resolveProviderApiKey = vi.fn(() => ({ apiKey: undefined }));
+    const resolveProviderAuth = vi.fn((_provider?: string, options?: { oauthMarker?: string }) => ({
+      apiKey: options?.oauthMarker,
+      discoveryApiKey: "console-access",
+      mode: "oauth" as const,
+      source: "profile" as const,
+      profileId: "opencode:default",
+    }));
+
+    await catalog({ resolveProviderApiKey, resolveProviderAuth });
+
+    const marker = resolveProviderAuth.mock.results[0]?.value.apiKey;
+    expect(marker).toEqual(expect.stringContaining("opencode"));
+    expect(liveCatalog).toHaveBeenCalledExactlyOnceWith({
+      apiKey: marker,
+      discoveryApiKey: "console-access",
+    });
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

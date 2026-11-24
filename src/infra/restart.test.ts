@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   isGatewayWorkAdmissionClosed,
@@ -7,6 +8,23 @@ import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
+
+const launchdArgs = ["/usr/bin/node", "/state/git-install/openclaw-launcher.mjs", "gateway"];
+function launchdPrint(args = launchdArgs) {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+  return {
+    status: 0,
+    stdout: [
+      `gui/${uid}/ai.openclaw.gateway = {`,
+      `\tprogram = ${args[0]}`,
+      "\targuments = {",
+      ...args.map((arg) => `\t\t${arg}`),
+      "\t}",
+      "}",
+    ].join("\n"),
+  };
+}
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -14,6 +32,7 @@ vi.mock("node:child_process", async () => {
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
       spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+      spawn: (...args: unknown[]) => spawnMock(...args),
     } as Partial<typeof import("node:child_process")>,
   );
 });
@@ -39,6 +58,9 @@ const envSnapshot = captureFullEnv();
 
 beforeEach(() => {
   spawnSyncMock.mockReset();
+  spawnMock
+    .mockReset()
+    .mockImplementation(() => Object.assign(new EventEmitter(), { pid: 12345, unref: vi.fn() }));
 });
 
 afterEach(() => {
@@ -56,6 +78,12 @@ it.each([0, 37])("handles launchctl bootstrap status %s", (bootstrapStatus) => {
     () => {
       const failure = { status: 1, stdout: "" };
       spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+        if (command === "/usr/bin/plutil") {
+          return { status: 0, stdout: JSON.stringify({ ProgramArguments: launchdArgs }) };
+        }
+        if (command === "launchctl" && args[0] === "print") {
+          return launchdPrint();
+        }
         if (command === "launchctl") {
           if (args[0] === "bootstrap") {
             return { status: bootstrapStatus };
@@ -70,7 +98,7 @@ it.each([0, 37])("handles launchctl bootstrap status %s", (bootstrapStatus) => {
       expect(triggerOpenClawRestart()).toEqual({ ok: true, method: "launchctl" });
       expect(
         spawnSyncMock.mock.calls
-          .filter(([command]) => command === "launchctl")
+          .filter(([command, args]) => command === "launchctl" && args[0] !== "print")
           .map(([command, args]) => `${command} ${args.join(" ")}`),
       ).toEqual([
         `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
@@ -80,6 +108,51 @@ it.each([0, 37])("handles launchctl bootstrap status %s", (bootstrapStatus) => {
     },
   );
 });
+
+it.each(["matching", "staged"] as const)(
+  "uses the %s launchd definition for a Gateway's own restart",
+  (definition) => {
+    mockProcessPlatform("darwin");
+    withEnv(
+      { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      () => {
+        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "/usr/bin/plutil") {
+            return { status: 0, stdout: JSON.stringify({ ProgramArguments: launchdArgs }) };
+          }
+          if (command === "launchctl" && args[0] === "print") {
+            return launchdPrint(
+              definition === "staged"
+                ? ["/usr/bin/node", "/checkout/dist/index.js", "gateway"]
+                : launchdArgs,
+            );
+          }
+          return { status: 0, stdout: "" };
+        });
+
+        expect(triggerOpenClawRestart()).toEqual({ ok: true, method: "launchctl" });
+
+        const kickstarts = spawnSyncMock.mock.calls.filter(
+          ([command, args]) => command === "launchctl" && args[0] === "kickstart",
+        );
+        if (definition === "staged") {
+          expect(kickstarts).toEqual([]);
+          expect(spawnMock).toHaveBeenCalledWith(
+            "/bin/sh",
+            expect.arrayContaining([
+              expect.stringContaining('launchctl bootout "$service_target"'),
+              "openclaw-launchd-restart-handoff",
+            ]),
+            expect.objectContaining({ detached: true, stdio: "ignore" }),
+          );
+        } else {
+          expect(kickstarts).toHaveLength(1);
+          expect(spawnMock).not.toHaveBeenCalled();
+        }
+      },
+    );
+  },
+);
 
 it("rejects restart without signaling an embedded host that has no restart handler", () => {
   mockProcessPlatform("linux");

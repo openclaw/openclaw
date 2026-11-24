@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -41,15 +40,6 @@ export function expectFreshStatePreserved(fixture: { root: string; databasePath:
   expect(fs.existsSync(fixture.databasePath)).toBe(false);
   expectNoFreshCalls(packageUpdate.stagePackageInstallUpdate);
   expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
-}
-
-export function denyFreshLeaseRelease(message: string) {
-  using db = new DatabaseSync(
-    path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
-  );
-  db.exec(
-    `CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, '${message}'); END`,
-  );
 }
 
 export function installFreshUpdateFixture() {

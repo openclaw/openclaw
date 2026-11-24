@@ -1013,6 +1013,50 @@ describe("prepared Docker publication", () => {
     expect(prepare.jobs.seal.needs).toContain("build");
   });
 
+  it("installs the complete trusted tooling before authenticating prepared Docker evidence", () => {
+    const steps = readWorkflow("docker-release").jobs.publish.steps as {
+      name?: string;
+      uses?: string;
+      if?: string;
+      run?: string;
+      "working-directory"?: string;
+      with?: Record<string, unknown>;
+    }[];
+    const checkout = steps.find((step) => step.name === "Checkout trusted Docker tooling");
+    expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout?.with?.["sparse-checkout"]).toBeUndefined();
+    const setup = steps.find(
+      (step) => step.name === "Setup trusted Docker tooling package manager",
+    );
+    expect(setup?.uses).toBe("./workflow-source/.github/actions/setup-pnpm-store-cache");
+    expect(setup?.with).toMatchObject({
+      "cache-mode": "off",
+      "package-manager-file": "workflow-source/package.json",
+      "lockfile-path": "workflow-source/pnpm-lock.yaml",
+    });
+    const install = steps.find(
+      (step) => step.name === "Install trusted Docker tooling dependencies",
+    );
+    expect(install?.if).toBeUndefined();
+    expect(install?.["working-directory"]).toBe("workflow-source");
+    expect(install?.run).toBe("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
+    const index = (name: string) => steps.findIndex((step) => step.name === name);
+    expect(index("Setup trusted Docker tooling package manager")).toBeGreaterThan(
+      index("Setup supported Node runtime"),
+    );
+    expect(index("Install trusted Docker tooling dependencies")).toBeGreaterThan(
+      index("Setup trusted Docker tooling package manager"),
+    );
+    for (const consumer of [
+      "Verify focused release evidence after Docker approval",
+      "Acquire authenticated publication manifest",
+      "Verify exact prepared producer and payload identities",
+      "Copy exact OCI digests, verify attestations, and promote aliases",
+    ]) {
+      expect(index(consumer)).toBeGreaterThan(index("Install trusted Docker tooling dependencies"));
+    }
+  });
+
   it("keeps preparation unable to publish and serializes the single approved writer", () => {
     const prepare = readWorkflow("docker-release-prepare");
     const publish = readWorkflow("docker-release");

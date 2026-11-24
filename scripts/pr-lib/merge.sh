@@ -615,7 +615,7 @@ verify_merge_recovery_artifacts() (
   fi
   [ "$LAST_VERIFIED_HEAD_SHA" = "$LOCAL_PREP_HEAD_SHA" ] || return 1
   case "$GATES_MODE" in
-    full|docs_only|reused_docs_only|remote_testbox|remote_crabbox_aws|hosted_exact_or_recent_parent) ;;
+    full|docs_only|reused_docs_only|remote_boat|remote_testbox|remote_crabbox_aws|hosted_exact_or_recent_parent) ;;
     *) return 1 ;;
   esac
 )

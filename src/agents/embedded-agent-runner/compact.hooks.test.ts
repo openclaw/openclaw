@@ -40,6 +40,7 @@ import { createResourceLoader } from "../sessions/agent-session-loop-resource-lo
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import {
+  expectCall,
   expectRecordFields,
   findMockCall,
   mockCallArg,
@@ -206,10 +207,6 @@ async function nativeCompactionArgs(
     agentHarnessId: overrides.agentHarnessId,
   });
   return params;
-}
-
-function expectCall(mock: Mock, fields: Record<string, unknown>, ...rest: unknown[]) {
-  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields), ...rest);
 }
 
 const abortedCompaction = { ok: false, compacted: false, reason: "compaction aborted" };
@@ -960,8 +957,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       entry: "middle",
       middle: "final",
     });
-    const { normalizeStaticProviderModelId } =
-      await vi.importActual<typeof import("../model-ref-shared.js")>("../model-ref-shared.js");
+    const { normalizeStaticProviderModelId } = await vi.importActual<
+      typeof import("../model-selection-normalize.js")
+    >("../model-selection-normalize.js");
     const { shouldPreferProviderRuntimeResolvedModel } =
       await import("../../plugins/provider-runtime.js");
     const acquire = expectDefined(

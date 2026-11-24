@@ -223,13 +223,6 @@ export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqli
     throw new Error("SQLite worker database path must identify a regular file");
   }
   options.assertCurrent?.();
-  if (
-    options.expectedIdentity &&
-    (identity.key !== options.expectedIdentity ||
-      (options.expectedBirthtime !== undefined && identity.birthtime !== options.expectedBirthtime))
-  ) {
-    throw new Error("SQLite Worker path no longer matches its borrowed native owner");
-  }
   return { databasePath, inputHash, identity, key: identity.key };
 }
 

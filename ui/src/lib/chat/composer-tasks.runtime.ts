@@ -39,6 +39,8 @@ export function createComposerTasks(pane: {
   readonly taskPresenters: number;
   readonly composerComposing: boolean;
   readonly composerTextarea: HTMLTextAreaElement | null;
+  /** The mounted composer's send, as Enter; null without a built-in composer. */
+  readonly sendDraft: (() => boolean) | null;
 }) {
   const presented = () => pane.taskPresenters > 0;
   const [state, setState] = createStore<{
@@ -66,6 +68,7 @@ export function createComposerTasks(pane: {
 
   function start(options: {
     title: string;
+    startedAt?: number;
     signal: AbortSignal;
     actionKey?: string;
     retry?: () => void;
@@ -86,7 +89,7 @@ export function createComposerTasks(pane: {
       draft.card = {
         kind: "working",
         title: options.title,
-        startedAt: Date.now(),
+        startedAt: options.startedAt ?? Date.now(),
         steps: [],
         summary: null,
         actionKey: options.actionKey ?? null,
@@ -115,7 +118,7 @@ export function createComposerTasks(pane: {
       },
       propose(
         text: string,
-        proposal: { title: string; insert?: boolean },
+        proposal: { title: string; insert?: boolean; send?: boolean },
       ): Promise<ComposerProposalOutcome> {
         if (!live()) {
           return Promise.resolve("dismissed");
@@ -124,10 +127,16 @@ export function createComposerTasks(pane: {
         current!.resolve = resolve;
         current!.phase = "proposal";
         // Mid-composition the proposal waits for Use, like a locked editor.
-        const target = proposal.insert && !pane.composerComposing ? pane.composerTextarea : null;
+        const target =
+          (proposal.insert || proposal.send) && !pane.composerComposing
+            ? pane.composerTextarea
+            : null;
         // A locked or composing editor keeps the proposal, so Use writes it once writable.
         if (target && writable(target)) {
           apply(target, text, proposal.title);
+          if (proposal.send) {
+            pane.sendDraft?.();
+          }
         } else {
           setState((draft) => {
             draft.card = { kind: "proposal", title: proposal.title, text };
@@ -220,7 +229,11 @@ export function createComposerTasks(pane: {
     },
     start,
     /** A proposal without a working phase. */
-    offer(text: string, proposal: { title: string; insert?: boolean }, signal: AbortSignal) {
+    offer(
+      text: string,
+      proposal: { title: string; insert?: boolean; send?: boolean },
+      signal: AbortSignal,
+    ) {
       return start({ title: proposal.title, signal }).propose(text, proposal);
     },
     accept,

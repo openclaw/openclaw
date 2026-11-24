@@ -24,9 +24,10 @@ The OpenAI provider's ChatGPT subscription list is separate. It sends the same
 OpenClaw version used by Responses requests as `client_version`. If that version
 is unavailable or is not a calendar version with a four-digit year of 2026 or
 later, it sends `99.0.0` instead.
-Versioned prereleases and build suffixes are preserved; bare labels such as
-`dev`, `beta`, and `unknown`, and `0.0.0`, use the fallback. Listing does not
-query npm or depend on the bundled or installed Codex version.
+Only the numeric release is sent: `2026.11.5-beta.1` lists as `2026.11.5`. Labels
+such as `dev`, `beta`, and `unknown`, and `0.0.0`, use the fallback. Listing does
+not query npm or depend on the bundled or installed Codex version. An empty list
+from ChatGPT counts as a failed listing, so the last listed models stay.
 
 New OpenAI models can require a newer Codex version than the binary your
 Codex harness runs. For example, GPT-6.2 requires Codex `0.166.0`. A Codex-harness

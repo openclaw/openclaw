@@ -1,6 +1,15 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
 import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
+import type {
+  SessionEventOptions,
+  SessionEventOutcome,
+} from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
+import {
+  readSessionEventTargetCommandOwner,
+  readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetRequesterOwner,
+} from "../auto-reply/reply/session-event-target.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -11,9 +20,13 @@ import {
   SystemEventQueueFullError,
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { chatRef } from "../sessions/chat-ref.js";
+import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
+  listFinishedSessions,
   listRunningSessions,
   processSessionInstanceId,
   recordNotifyOnExitRemoval,
@@ -26,26 +39,6 @@ import {
   renderExecOutputFile,
 } from "./bash-tools.exec-output.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
-
-function enqueueExecExitNotification(
-  text: string,
-  target: NonNullable<ProcessSession["notifySessionTarget"]>,
-  id: string,
-  options: Omit<
-    Parameters<typeof enqueueSessionEvent>[1],
-    "agentId" | "sessionKey" | "source"
-  > = {},
-) {
-  return enqueueSessionEvent(text, {
-    ...options,
-    agentId: target.agentId!,
-    sessionKey: target.sessionKey!,
-    source: "exec",
-    contextKey: options.contextKey ?? `exec:${id}`,
-    sourceTurnId: `exec:${id}`,
-    expectedTarget: target,
-  });
-}
 
 /** Capture the original session before spawning work that may outlive its turn. */
 export function prepareExecExitNotification(
@@ -122,6 +115,17 @@ export function listYieldAwaitableExecs(chat: ExecChat | undefined): ProcessSess
   }
   return listChatRunningSessions(chat).filter(
     (session) => !session.cancellationRequested && hasExitWake(session),
+  );
+}
+
+/** The notification owner keeps a wake alive through finalization; the owed row covers the rest. */
+export function hasExecYieldWake(chat: ExecChat): boolean {
+  if (listYieldAwaitableExecs(chat).length > 0) {
+    return true;
+  }
+  const key = execChatKey(chat);
+  return listFinishedSessions().some(
+    (session) => session.finalizing && session.resumesYieldedRun && processChat(session) === key,
   );
 }
 
@@ -242,6 +246,73 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
+/**
+ * The one exec wake: it delivers a stored exec result through session-event admission. A live
+ * wake passes the producer's captured target; restart recovery passes none, so admission
+ * captures the chat's current target. Its settlement reads the stored row; `retries` stored
+ * wakes follow a failed one.
+ */
+export function wakeOwedExec(
+  owed: Owed,
+  options: Omit<SessionEventOptions, "agentId" | "sessionKey" | "source"> = {},
+  onWake?: (cancel: () => boolean) => void,
+  retries = 0,
+): void {
+  const wakeAgain =
+    retries > 0 ? (stored: Owed) => wakeOwedExec(stored, options, onWake, retries - 1) : undefined;
+  let receipt: ReturnType<typeof enqueueSessionEvent>;
+  try {
+    receipt = enqueueSessionEvent(owed.text, {
+      ...options,
+      agentId: owed.to.agentId,
+      sessionKey: owed.to.sessionKey,
+      source: "exec",
+      contextKey: owed.id,
+      sourceTurnId: owed.id,
+    });
+  } catch (error) {
+    // A refused enqueue (for example a full wake pool) settles like a wake that never started.
+    const failed = { status: "failed", executionStarted: false, delivered: false } as const;
+    void settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
+    return;
+  }
+  onWake?.(receipt.cancel);
+  void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
+}
+
+/**
+ * Settles a wake by the stored row, not by its outcome; a row its turn appended or a fold
+ * consumed needs nothing. A completed wake that left the row pending answered it inside a shared
+ * turn's input (its fold failed); the row is hidden. A failed wake with a retry left wakes the
+ * chat again from the stored row, whose text a fold may have joined. A stop, or a failure with
+ * no retry left, withholds the result with that cause. Restart drains leave the row owed for
+ * restart recovery.
+ */
+async function settleOwedExecWake(
+  owed: Owed,
+  outcome: SessionEventOutcome,
+  wakeAgain?: (stored: Owed) => void,
+) {
+  if (outcome.status === "failed") {
+    logWarn(`exec: completion delivery failed (${outcome.error}); inspect the process result.`);
+  }
+  try {
+    const stored = isGatewayRestartDraining() ? undefined : await readPendingOwed(owed);
+    if (!stored) {
+      return;
+    }
+    if (outcome.status === "completed") {
+      await withhold(owed, "failed", "interrupted");
+    } else if (outcome.status === "failed" && wakeAgain) {
+      wakeAgain(stored);
+    } else {
+      await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
+    }
+  } catch (error) {
+    logWarn(`exec: completion ${owed.id} stays owed (${formatErrorMessage(error)}).`);
+  }
+}
+
 async function notifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
@@ -266,28 +337,37 @@ async function notifyOnExit(
   // A yielded hidden subagent resumes through an ordinary wake turn; otherwise it gets a passive notice.
   if (session.resumesYieldedRun || (!subagentSession && !isSubagentSessionKey(sessionKey))) {
     const agentId = session.agentId ?? parseAgentSessionKey(eventSessionKey)?.agentId;
-    if (!agentId || !session.notifySessionTarget) {
+    const target = session.notifySessionTarget;
+    if (!agentId || !target?.storePath) {
       logWarn(
         `exec: completion ${session.id} has no admitted session destination; inspect its process result.`,
       );
       return;
     }
     try {
-      // Admission resolves the chat by key: a deleted chat refuses the wake.
-      const receipt = enqueueExecExitNotification(
-        eventText,
-        session.notifySessionTarget,
-        processSessionInstanceId(session),
-        { ...eventOptions, sourceRunId: session.startedByRunId },
+      const commandOwner = readSessionEventTargetCommandOwner(target)?.requester;
+      const operatorProfileId = readSessionEventTargetOperatorAuthority(target)?.profileId;
+      // The result is stored before any delivery: a Goal check or restart sees it from here on.
+      const owed: Owed = {
+        id: `exec:${processSessionInstanceId(session)}`,
+        to: chatRef({ agentId, storePath: target.storePath, sessionKey: eventSessionKey }),
+        kind: "exec",
+        text: eventText,
+        originFacts: {
+          requester: readSessionEventTargetRequesterOwner(target)?.requester,
+          ...(commandOwner ? { commandOwner } : {}),
+          ...(operatorProfileId ? { operatorProfileId } : {}),
+        },
+      };
+      await owe(owed);
+      // Admission resolves the chat by key: a deleted chat refuses the wake. The captured target
+      // and request owners carry the requester's authority into the one retry as well.
+      wakeOwedExec(
+        owed,
+        { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
+        (cancel) => recordNotifyOnExitRemoval(session, cancel),
+        1,
       );
-      recordNotifyOnExitRemoval(session, receipt.cancel);
-      void receipt.settled.then(async (outcome) => {
-        if (outcome.status === "failed") {
-          logWarn(
-            `exec: completion delivery failed (${outcome.error}); inspect the process result.`,
-          );
-        }
-      });
     } catch (error) {
       logWarn(
         `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,

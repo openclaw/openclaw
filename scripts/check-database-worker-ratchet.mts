@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { inventory, loadInventorySources } from "./database-worker-inventory.mjs";
+import { type inventory, loadInventorySources } from "./database-worker-inventory.mjs";
 import { baseInventory } from "./lib/database-worker-inventory-cache.mts";
+import {
+  InventoryProcessError,
+  inventoryInSubprocess,
+} from "./lib/database-worker-inventory-process.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   reportNativeTypeScriptPhase,
@@ -13,7 +17,7 @@ import {
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-export function main(
+export async function main(
   root = process.cwd(),
   argv = process.argv.slice(2),
   observer?: NativeTypeScriptObserver,
@@ -53,10 +57,14 @@ export function main(
       new Map(rows.filter((row) => row.tier === tier).map((row) => [row.file, row.calls.length]));
     const sources = loadInventorySources(root, "", args.staged);
     reportNativeTypeScriptPhase(trace, "head.sources", { files: sources.size });
-    const head = inventory(root, "", args.staged, sources, {
-      observer: trace && ((phase, facts) => trace(`head.${phase}`, facts)),
-    });
-    const baseline = baseInventory(root, base, { sources, rows: head }, trace);
+    const head = await inventoryInSubprocess(
+      root,
+      "",
+      args.staged,
+      sources,
+      trace && ((phase, facts) => trace(`head.${phase}`, facts)),
+    );
+    const baseline = await baseInventory(root, base, { sources, rows: head }, trace);
     const before = counts(baseline);
     const after = counts(head);
     const total = (files: ReadonlyMap<string, number>) =>
@@ -95,14 +103,14 @@ export function main(
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    return 1;
+    return error instanceof InventoryProcessError ? error.exitCode : 1;
   } finally {
     reportNativeTypeScriptPhase(trace, "ratchet.terminal", { outcome });
   }
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  process.exitCode = main(process.cwd(), process.argv.slice(2), (phase, facts) => {
+  process.exitCode = await main(process.cwd(), process.argv.slice(2), (phase, facts) => {
     console.log("[database-worker-phase] " + JSON.stringify({ phase, ...facts }));
   });
 }

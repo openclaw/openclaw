@@ -439,6 +439,7 @@ describe("commands registry args", () => {
     });
     const menu = argMenu({
       command,
+      cfg: { agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } } },
       agentRuntime: "codex",
     });
     expect(menu.arg.name).toBe("level");

@@ -21,9 +21,10 @@ import {
 import { hasSameTranscriptCaptureIntent } from "./config-reload.js";
 import { resolveTranscriptsConfig, type ResolvedTranscriptsAutoStartConfig } from "./config.js";
 import { beginConfiguredTranscriptStarts } from "./configured-start-status.js";
-import type { TranscriptOccupancyWatchHandle, TranscriptSourceLocator } from "./provider-types.js";
+import type { TranscriptOccupancyWatchHandle } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator, sourceFromParams } from "./source-locator.js";
 import { transcriptSessionSelector } from "./store.js";
+import type { TranscriptSourceLocator } from "./types.js";
 
 const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;

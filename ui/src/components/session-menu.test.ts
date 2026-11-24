@@ -5,13 +5,7 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createShellOwner } from "../app/app-host-solid.test-support.ts";
 import { i18n } from "../i18n/index.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
-import {
-  createContext,
-  createGatewayHarness,
-  createSessionsHarness,
-} from "../test-helpers/app-sidebar.ts";
 import type { ApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import {
   containers,
   mountMenu,
@@ -269,77 +263,19 @@ describe("session menu", () => {
   });
 
   it.each([false, true])(
-    "adds sessions to sections through the unchanged native menu (compact=%s)",
+    "keeps pinning and shared grouping on the session menu (compact=%s)",
     async (compact) => {
-      const key = compact ? "agent:main:research" : "main";
-      const agentId = compact ? "main" : "research";
-      const gateway = createGatewayHarness(
-        createTestGatewayClient(
-          vi.fn(async (method, params) =>
-            method === "sessions.describe"
-              ? {
-                  session:
-                    params &&
-                    typeof params === "object" &&
-                    "agentId" in params &&
-                    params.agentId === agentId
-                      ? {
-                          key,
-                          agentId,
-                          sessionId: "session-123",
-                          kind: "direct",
-                          label: "Research",
-                          updatedAt: 1,
-                        }
-                      : null,
-                }
-              : sessionOwnerProfiles(),
-          ),
-        ),
-      );
-      const sessions = createSessionsHarness("main", [key]);
-      const context = createContext(gateway.gateway, sessions.sessions);
-      context.navigation.update({
-        personalSessionGroups: [{ id: "focus", label: "Focus", sessionKeys: [] }],
-      });
-      const { menu, onAction } = await actionMenu({
+      const { menu } = await actionMenu({
         compact,
-        context,
-        session: { target: { key, agentId }, pinnable: true, category: "Engineering" },
-        actionDisabledReasons: { "move-to-group": "This action requires operator.write access." },
+        session: {
+          target: { key: "agent:main:research" },
+          pinnable: true,
+          category: "Engineering",
+        },
       });
-      expect(menuItemLabels(menu)).toEqual([
-        "Pin session",
-        "Rename…",
-        "Mark as unread",
-        "Copy link",
-        "Open in",
-        "Move to group",
-        "Add to section",
-        "Archive session",
-        "Advanced",
-      ]);
-      expect(menuItem(menu, "Move to group").disabled).toBe(true);
-      if (compact) {
-        await selectMenuValue(menu, "compact:open-collections");
-        expect(menuItemLabels(menu)).toEqual(["Back", "Focus", "New section"]);
-        expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
-        await selectMenuValue(menu, "compact:back");
-        expect(menuItemLabels(menu)).toContain("Move to group");
-        await selectMenuValue(menu, "compact:open-collections");
-      } else {
-        await openSubmenu(menu, "Add to section");
-      }
-      await selectMenuValue(menu, "personal-collection:focus");
-      await waitForFast(() =>
-        expect(context.navigation.snapshot.personalSessionGroups).toEqual([
-          { id: "focus", label: "Focus", sessionKeys: [key] },
-        ]),
-      );
-      expect(menu.session.category).toBe("Engineering");
-      expect(onAction).not.toHaveBeenCalled();
-      expect(sessions.patch).not.toHaveBeenCalled();
-      expect(sessions.groupsPut).not.toHaveBeenCalled();
+      expect(menuItemLabels(menu)).toContain("Pin session");
+      expect(menuItemLabels(menu)).toContain("Move to group");
+      expect(menuItemLabels(menu)).not.toContain("Add to section");
     },
   );
 

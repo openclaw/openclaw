@@ -52,7 +52,7 @@ defineDiscordVoiceTests((h) => {
     const client = h.createClientWithMember("333", "Guest", "4321");
     const manager = new h.managerModule.DiscordVoiceManager({
       scheduler: createTestPluginServiceScheduler(),
-      cfg,
+      readConfig: () => cfg,
       discordConfig,
       client: client as never,
       accountId: "default",

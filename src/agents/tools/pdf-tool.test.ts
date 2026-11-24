@@ -525,7 +525,6 @@ it("uses the committed runtime generation for native PDF model selection", async
 it.each([
   { source: "admitted", scenario: "denied override" },
   { source: "direct", scenario: "permitted fallback" },
-  { source: "admitted", scenario: "retired after extraction" },
 ] as const)(
   "preserves $source requester model policy for $scenario",
   async ({ source, scenario }) => {
@@ -535,7 +534,7 @@ it.each([
       input: ["text"],
     });
     let sourceHolds = 0;
-    const { cfg, setActive, runWithRequester } = createMediaModelPolicyFixture(
+    const { cfg, runWithRequester } = createMediaModelPolicyFixture(
       "pdf",
       "pdf-reader",
       source,
@@ -543,9 +542,9 @@ it.each([
         sourceHolds += delta;
       },
     );
-    vi.spyOn(pdfExtract, "extractPdfContent").mockImplementation(async () => {
-      setActive(scenario !== "retired after extraction");
-      return { text: "Synthetic document text", images: [] };
+    vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({
+      text: "Synthetic document text",
+      images: [],
     });
     completeMock.mockResolvedValue(summary("Allowed PDF answer."));
     const pdfTool = tool({ config: cfg });

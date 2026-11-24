@@ -1,7 +1,8 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi, type TestContext } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
@@ -32,6 +33,7 @@ import { makeContextParams, makeGatewayClient } from "./server-request-context.t
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();

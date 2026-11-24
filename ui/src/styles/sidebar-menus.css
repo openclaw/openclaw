@@ -285,7 +285,7 @@
   opacity: 0.5;
 }
 
-.session-actions-page__row > span:not(.session-menu__icon) {
+.session-actions-page__row > span:not(.session-menu__icon, .session-menu__avatar) {
   flex: 1;
 }
 
@@ -1381,7 +1381,8 @@
   flex: 0 0 calc(var(--space-6) * 4);
 }
 
-.sidebar-session-menu-segmented {
+/* Compound selectors outrank the shared .settings-segmented rules in any stylesheet load order. */
+.settings-segmented.sidebar-session-menu-segmented {
   display: flex;
   flex: 1 1 auto;
   flex-wrap: nowrap;
@@ -1390,7 +1391,7 @@
   height: var(--settings-control-height);
 }
 
-.sidebar-session-menu-segmented > .settings-segmented__btn {
+.settings-segmented.sidebar-session-menu-segmented > .settings-segmented__btn {
   flex: 1 1 auto;
   justify-content: center;
   min-height: calc(var(--settings-control-height) - var(--space-1) * 1.5);

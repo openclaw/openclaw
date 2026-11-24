@@ -19,6 +19,7 @@
   "runtime-doctor-migrations",
   "runtime-env",
   "runtime-profile",
+  "resource-profile",
   "proxy-capture",
   "setup",
   "setup-runtime",

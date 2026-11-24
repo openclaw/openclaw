@@ -25,20 +25,48 @@ describe("provider OAuth runtime", () => {
     expect(nextState).not.toBe(state);
   });
 
-  it("parses authorization code input from redirect URLs, query strings, and raw codes", () => {
-    expect(
-      parseOAuthAuthorizationInput("http://localhost/callback?code=oauth-code&state=oauth-state"),
-    ).toEqual({ code: "oauth-code", state: "oauth-state" });
-    expect(parseOAuthAuthorizationInput("code=oauth-code&state=oauth-state")).toEqual({
-      code: "oauth-code",
-      state: "oauth-state",
+  it("parses a pasted redirect URL, query string, code#state or bare code", () => {
+    const expected = { state: "oauth-state" };
+    for (const input of [
+      "http://localhost/callback?code=oauth-code&state=oauth-state",
+      "code=oauth-code&state=oauth-state",
+      "oauth-code#oauth-state",
+    ]) {
+      expect(parseOAuthAuthorizationInput(input, expected)).toEqual({
+        code: "oauth-code",
+        state: "oauth-state",
+      });
+    }
+    // A bare code or a state-less address carries no state; PKCE binds it to the attempt.
+    expect(parseOAuthAuthorizationInput(" oauth-code ", expected)).toEqual({ code: "oauth-code" });
+    expect(parseOAuthAuthorizationInput("http://localhost/cb?code=c", expected)).toEqual({
+      code: "c",
     });
+  });
+
+  it("keeps the shipped one-argument call permissive so existing callers can reprompt", () => {
+    expect(parseOAuthAuthorizationInput("  ")).toEqual({});
+    expect(parseOAuthAuthorizationInput("?error=access_denied")).toEqual({});
     expect(parseOAuthAuthorizationInput("oauth-code#oauth-state")).toEqual({
       code: "oauth-code",
       state: "oauth-state",
     });
-    expect(parseOAuthAuthorizationInput(" oauth-code ")).toEqual({ code: "oauth-code" });
-    expect(parseOAuthAuthorizationInput("   ")).toEqual({});
+  });
+
+  it.each([
+    ["http://localhost/cb?code=c&state=other", "paste_wrong_attempt"],
+    ["?error=access_denied", "consent_denied"],
+    ["http://localhost/cb?error=admin_policy_enforced&state=oauth-state", "admin_blocked"],
+    ["https://auth.example/authorize?client_id=x&state=oauth-state", "paste_sign_in_page"],
+    ["http://localhost/cb?state=oauth-state", "paste_no_code"],
+    ["   ", "paste_no_code"],
+  ])("rejects %s as %s", (input, reason) => {
+    expect(() =>
+      parseOAuthAuthorizationInput(input, {
+        state: "oauth-state",
+        signInUrl: "https://auth.example/authorize?client_id=x&state=oauth-state",
+      }),
+    ).toThrow(expect.objectContaining({ name: "ProviderAuthFailure", reason }));
   });
 
   it("escapes HTML-sensitive OAuth page content", () => {

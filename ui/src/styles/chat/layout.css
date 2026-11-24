@@ -34,16 +34,20 @@ openclaw-pending-session-create {
   grid-column: 1 / -1;
 }
 
-.chat-error .app-toast__content > :not(.app-toast__body) {
-  grid-row: 1;
+.chat-error .chat-error__actions {
+  grid-template-rows: subgrid;
+  grid-row: 1 / span 2;
+  gap: 2px;
   grid-column: 2;
   margin-block-start: -4px;
 }
 
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
+  .chat-error__actions:has(> .chat-error__discard) {
+    grid-template-rows: none;
     grid-row: auto;
+    gap: 12px;
     grid-column: 1 / -1;
     justify-self: start;
     margin-block-start: 6px;
@@ -279,21 +283,21 @@ openclaw-pending-session-create {
 
 .chat-composer-neighbor-card,
 .session-suggestion {
+  display: grid;
+  align-items: center;
+  gap: 10px;
   padding: 10px 12px;
+  background: var(--chat-composer-surface, var(--popover));
+  color: var(--text);
 }
 
 .chat-composer-neighbor-card {
-  display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
   width: calc(100% - 36px);
   max-width: var(--chat-thread-max-width, 48rem);
   min-height: 52px;
   margin: 8px auto 0;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: var(--chat-composer-surface, var(--popover));
-  color: var(--text);
   box-shadow: none;
 }
 
@@ -592,6 +596,16 @@ openclaw-pending-session-create {
   width: 100%;
   contain: content;
 
+  /* WebKit paints the row's trailing margin when a native range crosses turns.
+     Keep the range intact; only its content should paint the selection. */
+  &::selection {
+    background-color: transparent;
+  }
+
+  > *::selection {
+    background-color: var(--selection-bg);
+  }
+
   /* WebKit restyles hidden parked subtrees that retain layout boxes.
      Chromium needs those boxes for timely forecast paint. */
   @supports (-webkit-nbsp-mode: space) {
@@ -636,10 +650,9 @@ openclaw-pending-session-create {
   justify-content: center;
 }
 
-.chat-virtual-sizer > .chat-history-sentinel {
+.chat-thread-inner--virtual > .chat-history-sentinel {
   position: absolute;
   z-index: 1;
-  top: 0;
   right: 0;
   left: 0;
   min-height: 1px;
@@ -1617,52 +1630,66 @@ openclaw-chat-video-player {
 }
 
 .session-suggestions {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 6px;
 }
 
 .session-suggestion {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: fit-content(30%) minmax(0, 1fr) auto;
   min-height: 38px;
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-strong) 74%, transparent);
-}
-
-.session-suggestion__author,
-.session-suggestion__state {
-  border-radius: 999px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.session-suggestion__author {
-  color: var(--text-strong);
-  background: var(--panel-hover);
-}
-
-.session-suggestion__state {
-  color: var(--muted);
-}
-
-.session-suggestion__text {
-  max-height: 12rem;
-  overflow: auto;
-  overflow-wrap: anywhere;
-  color: var(--text);
   font-size: 13px;
-  white-space: pre-wrap;
-}
 
-.session-suggestion__actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+  > b,
+  > small {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  > b {
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-weight: 600;
+    color: var(--chat-text-link, var(--link));
+    background: var(--person-reference-bg);
+  }
+  > small {
+    color: var(--muted);
+  }
+  > div {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  &.preview > :is(b, span) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  &:not(.preview) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    background: color-mix(in srgb, var(--panel-strong) 74%, transparent);
+    > b {
+      background: var(--panel-hover);
+      color: var(--text-strong);
+    }
+    > small {
+      padding: 3px 8px;
+      font-weight: 600;
+    }
+    > span {
+      max-height: 12rem;
+      overflow: auto;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    @media (max-width: 640px) {
+      grid-template-columns: auto minmax(0, 1fr);
+      > :is(div, small) {
+        grid-column: 1 / -1;
+        justify-self: end;
+      }
+    }
+  }
 }
 
 .task-suggestion__header-action svg,
@@ -1671,18 +1698,6 @@ openclaw-chat-video-player {
 .chat-ci__status svg {
   width: 15px;
   height: 15px;
-}
-
-@media (max-width: 640px) {
-  .session-suggestion {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .session-suggestion__actions,
-  .session-suggestion__state {
-    grid-column: 1 / -1;
-    justify-self: end;
-  }
 }
 
 .task-suggestion {
@@ -2719,6 +2734,18 @@ openclaw-chat-ci-details {
   margin: 0;
 }
 
+/* Callouts near the composer keep its surface like the other neighbors; tone
+   stays in their text or icon, never in the fill. */
+.agent-chat__composer-notices .callout:is(.agent-chat__composer-alert, .agent-chat__talk-status),
+.agent-chat__disabled-banner.callout:not(.agent-chat__disabled-banner--replacement) {
+  border-color: var(--chat-composer-hairline);
+  background: var(--composer-attached-surface);
+}
+
+.agent-chat__disabled-banner.callout.info {
+  color: var(--text);
+}
+
 @media (max-width: 640px) {
   .chat-topbar-notices {
     max-width: calc(100% - 84px);
@@ -2764,6 +2791,10 @@ openclaw-chat-ci-details {
 
 .agent-chat__disabled-banner--neutral {
   color: inherit;
+}
+
+.agent-chat__workspace-restore-error {
+  color: var(--warn);
 }
 
 .agent-chat__disabled-banner-icon {

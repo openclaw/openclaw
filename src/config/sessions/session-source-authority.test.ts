@@ -14,6 +14,36 @@ import {
 
 const sourceWith = (methods: Partial<SessionSourceAssertion>) => Object.assign(() => {}, methods);
 
+it("preserves database custody through adapters without replaying admitted policy", async () => {
+  const policy = vi.fn(() => {
+    throw new Error("tool policy changed after admission");
+  });
+  const storage = revocable("database retired");
+  const release = vi.fn();
+  const captured = captureExternalSessionCommitGuard(
+    Object.assign(policy, {
+      prepareSessionSourceStorageEffect: async () => ({ ...storage, release }),
+    }),
+  );
+  const selected = composeSessionSourceAssertion([captured, () => policy()], policy);
+  const dynamic = createDynamicSessionSourceAssertion(
+    () => selected,
+    () => {
+      throw new Error("source changed");
+    },
+  );
+  const effect = await composeSessionSourceAssertion([dynamic]).prepareSessionSourceStorageEffect();
+  try {
+    effect.assertCurrent();
+    expect(policy).not.toHaveBeenCalled();
+    storage.revoke();
+    expect(effect.assertCurrent).toThrow("database retired");
+  } finally {
+    await effect.release?.();
+  }
+  expect(release).toHaveBeenCalledOnce();
+});
+
 it("shares issued bindings only inside one synchronous consuming step", async () => {
   const first = revocable("first binding revoked");
   const second = revocable("second binding revoked");

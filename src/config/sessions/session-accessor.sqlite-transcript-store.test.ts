@@ -372,7 +372,7 @@ it("keeps oversized metadata current but hides changed text until the real worke
     expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
       { messageId: "user" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
   });
 });
 

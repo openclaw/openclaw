@@ -66,9 +66,9 @@ export function describeToolGroup(
   const summary = summarizeAgentActivity(all, options);
   const groups = new Map<string, AgentActivityItem[]>(
     [
-      "commands",
       "reads",
       "changes",
+      "commands",
       "searches",
       "fetches",
       "memory",
@@ -108,8 +108,33 @@ export function describeToolGroup(
     (item.status !== "blocked" &&
       item.status !== "skipped" &&
       options.executedCommands?.has(item.toolCallId ?? item.itemId));
+  const phaseOf = (actions: AgentActivityItem[]) =>
+    actions.some(isRunning) ? "Running" : actions.some(isCompleted) ? "Summary" : "Pending";
+  const fileReads = groups.get("reads")!;
+  const fileChanges = groups.get("changes")!;
+  const hasFileWork = fileReads.length > 0 || fileChanges.length > 0;
+  // Combine the same kind of work only when both verbs describe the recorded state.
+  const combineFiles =
+    fileReads.length > 0 && fileChanges.length > 0 && phaseOf(fileReads) === phaseOf(fileChanges);
+  const meaningfulWork = [...groups].some(([kind, actions]) => kind !== "other" && actions.length);
   const label = [...groups]
-    .filter(([, actions]) => actions.length > 0)
+    .filter(([kind, actions]) => actions.length > 0 && !(combineFiles && kind === "changes"))
+    .filter(([kind, actions]) => {
+      // Completed discovery supports file work; active, uncertain and write operations
+      // retain their own labels. Every operation remains in the expanded group.
+      if (!actions.every((item) => isCompleted(item) && !isRunning(item))) {
+        return true;
+      }
+      if (kind === "other") {
+        return !meaningfulWork;
+      }
+      return (
+        !hasFileWork ||
+        (kind !== "searches" &&
+          (kind !== "memory" ||
+            actions.some((item) => MEMORY_UPDATE_TOOLS.has(item.name?.trim().toLowerCase() ?? ""))))
+      );
+    })
     .map(([kind, actions], index) => {
       const continuation = index > 0 ? "Continuation" : "";
       if (kind === "interrupted") {
@@ -146,12 +171,13 @@ export function describeToolGroup(
         return t(`chat.toolCards.activity.${key}${continuation}`);
       }
       const phase =
-        kind !== "subagents" && actions.some(isRunning)
-          ? "Running"
-          : actions.some(isCompleted)
+        kind === "subagents"
+          ? actions.some(isCompleted)
             ? "Summary"
-            : "Pending";
-      return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);
+            : "Pending"
+          : phaseOf(actions);
+      const labelKind = combineFiles && kind === "reads" ? "readChanges" : kind;
+      return t(`chat.toolCards.activity.${labelKind}${phase}${continuation}`);
     })
     .join(", ");
   // Attempt outcomes remain on their rows. They do not establish the result

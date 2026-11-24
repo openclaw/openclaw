@@ -57,25 +57,42 @@ without mutating the host auth store:
 
   Git checkout release migration is an explicit, model-free scenario:
   `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=git-release bash scripts/e2e/upgrade-survivor-docker.sh`.
-  The baseline is main commit `7db69bedeab6` (reports `2026.11.5`), a build with
-  the `node_modules` release layout; the `v2026.11.5` tag predates that layout.
-  The lane shares local Git objects read-only, builds that commit with its pinned
-  pnpm inside Linux behind a local upstream, and installs a service through the
-  systemctl fixture. The first update converts the checkout to the old release
-  layout but leaves the checkout's service untouched, so the lane reinstalls the
-  service from the release link to start the release launcher. With DuckDuckGo
-  configured as the web search provider, that Gateway fails at startup with the
-  web-search contract type-stripping error, and `tools.invoke` for `web_search`
-  fails. The lane then moves upstream `main` to the checkout's committed HEAD. It
-  records that the baseline updater fails when run from the release (its own
-  `.mts` scripts are under `node_modules`), updates from the checkout with the
-  baseline updater, then updates again with the candidate updater. The second
-  update must move the release outside `node_modules`,
-  remove the old link, start the Gateway, and allow the same `tools.invoke`
-  request. Phase timings, update output, request
+  The candidate is the worktree's `HEAD`. The lane shares local Git objects
+  read-only, builds inside Linux behind a local upstream, and installs the
+  service through the systemctl fixture, with DuckDuckGo configured as the web
+  search provider. Each update moves upstream `main` to a new commit with a
+  changed tree (a commit with the running tree is already current).
+
+  `OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA` selects the checkout's starting
+  point: `7db69bedeab6` (default; main reporting `2026.11.5` with the
+  `lib/node_modules` release layout), `v2026.11.5` (in-place updater), or
+  `main` (`origin/main`). A baseline off the candidate's history is checked out
+  detached with local `main` at the shared base. The baseline's own updater
+  takes the install to the candidate; for `7db69bedeab6` the lane first
+  reproduces the web-search type-stripping failure. Baseline-driven steps are
+  recorded, not asserted. The candidate then runs every remaining update: a
+  first update, one run by the release itself
+  (`<state>/git-install/openclaw/openclaw.mjs update`), one through the
+  Gateway's `update.run`, and one to a crash release whose Gateway exits before
+  it listens (the launcher must switch back after two failed starts). After
+  each, the link must resolve to a release outside `node_modules`, that release
+  must hold a live Gateway lease, the checkout's HEAD, branch, status, and
+  `dist` must be unchanged, and `tools.invoke` `web_search` must succeed with no
+  type-stripping error. `OPENCLAW_UPGRADE_SURVIVOR_GIT_KILL_POINTS` (default
+  `stage build publish link-switch launcher-restore`) kills the updater or the
+  launcher with SIGKILL at each point, then requires a serving release, a
+  successful request, and a successful rerun update.
+
+  `OPENCLAW_UPGRADE_SURVIVOR_GIT_ROUTE=no-service` updates a candidate checkout
+  with no service and starts the launcher by hand.
+  `OPENCLAW_UPGRADE_SURVIVOR_GIT_ROUTE=package-to-git` installs
+  `OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC` (default `openclaw@latest`) with
+  a service, lets the published updater switch to a candidate clone through
+  `OPENCLAW_GIT_DIR`, then updates once more from `openclaw` on PATH, which
+  must report the release's commit. Phase timings, update output, request
   results, and per-request Gateway logs are retained in the lane artifact
-  directory. This scenario is excluded from aggregate `all` runs and requires no
-  provider keys.
+  directory. This scenario is excluded from aggregate `all` runs and requires
+  no provider keys.
 
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence, Doctor repair of affected duplicated prompt-rewrite branches, and automatic transcript cold storage through a real Gateway running the installed package. Small, dated synthetic histories exercise the maintenance worker, changes to `session.maintenance.coldStorage.afterDays` without a Gateway restart, exact transcript restoration, explicit errors for missing archive files, Activity listing without rehydration, and history preservation across restart and portable backup recovery.
 - Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.

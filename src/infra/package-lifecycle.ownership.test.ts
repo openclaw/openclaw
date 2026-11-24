@@ -76,7 +76,10 @@ const settle = (work: Promise<void>) =>
 function onLockOpen(action: (flags: Parameters<typeof fs.open>[1]) => Promise<void>) {
   const open = fs.open;
   vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-    if (file === lock) {
+    if (
+      file === lock ||
+      (path.dirname(String(file)) === path.dirname(lock) && isExclusiveCreate(flags))
+    ) {
       await action(flags);
     }
     return open(file, flags, mode);
@@ -349,6 +352,13 @@ it.each(["not-directory", "inaccessible", "removed-on-create"])(
         }
         return lstatSync(file, options);
       });
+      const lstat = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (file, options) => {
+        if (observed && state === "inaccessible" && file === canonicalRoot) {
+          throw denial;
+        }
+        return lstat(file, options);
+      });
       onPendingAccess(async () => {
         observed = true;
         if (state === "not-directory") {
@@ -493,10 +503,9 @@ it.each(["publication", "create", "read", "dispose"] as const)(
     const open = fs.open;
     vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
       const targeted =
-        file === lock &&
-        (phase === "read"
-          ? typeof flags === "number" && !isExclusiveCreate(flags)
-          : isExclusiveCreate(flags));
+        phase === "read"
+          ? file === lock && typeof flags === "number" && !isExclusiveCreate(flags)
+          : path.dirname(String(file)) === path.dirname(lock) && isExclusiveCreate(flags);
       if (targeted && phase !== "publication") {
         throw failure;
       }

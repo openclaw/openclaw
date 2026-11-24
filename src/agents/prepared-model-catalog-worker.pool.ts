@@ -1,10 +1,12 @@
 /** Builds model-catalog worker pools that report their first close to the pool owner. */
+import type { MessagePort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/state-dir.js";
 import {
   getDatabaseEngineSelection,
   type DatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
+import { createDirectoryWatchChannel } from "../infra/directory-watch-host.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
@@ -16,6 +18,7 @@ import type { PluginCaptureResourceRoot } from "../plugins/plugin-capture-native
 
 export type PreparedModelCatalogWorkerData = {
   databaseEngineSelection?: DatabaseEngineSelection;
+  directoryWatchPort?: MessagePort;
   sourceCaptureDirectory: string;
   sourceCaptureManagedRoot?: string;
 };
@@ -52,14 +55,21 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
       prepareWorker: () => {
         assertCurrent?.();
         const capture = this.sourceCapture;
+        const watch = createDirectoryWatchChannel();
         return {
-          releaseResources: () => this.releaseRoot(),
+          releaseResources: () => {
+            // Bun does not always notify the peer port when the worker is terminated.
+            watch.close();
+            return this.releaseRoot();
+          },
           options: {
             workerData: {
               databaseEngineSelection: getDatabaseEngineSelection(),
+              directoryWatchPort: watch.port,
               sourceCaptureDirectory: capture.directory,
               sourceCaptureManagedRoot: capture.managedRoot,
             } satisfies PreparedModelCatalogWorkerData,
+            transferList: [watch.port],
             // Establish state/config before imported modules observe process.env.
             env,
           },

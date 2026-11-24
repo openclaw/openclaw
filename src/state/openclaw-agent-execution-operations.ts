@@ -39,6 +39,7 @@ async function loadAgentReplacementOperations() {
     nativeBindings,
     transfers,
     predicates,
+    { importPendingInputMemberRoleSources },
   ] = await Promise.all([
     import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
     import("../config/sessions/session-accessor.sqlite-replacement-publication.js"),
@@ -46,6 +47,7 @@ async function loadAgentReplacementOperations() {
     import("../config/sessions/session-native-binding.worker.js"),
     import("../config/sessions/session-entry-patch.worker.js"),
     import("../config/sessions/session-source-predicate.worker.js"),
+    import("../config/sessions/session-pending-input-member-role-import.worker.js"),
   ]);
   return {
     "session.entries.replace": (
@@ -77,6 +79,15 @@ async function loadAgentReplacementOperations() {
           undefined,
           postimages,
         );
+        if (input.memberSourceRoleImport) {
+          for (const [sessionKey, entry] of result.current) {
+            importPendingInputMemberRoleSources(
+              current,
+              { sessionKey, sessionId: entry.sessionId },
+              input.memberSourceRoleImport,
+            );
+          }
+        }
         const publication = publications.prepareSessionEntryReplacementPublication(
           result,
           current,

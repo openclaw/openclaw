@@ -16,3 +16,6 @@ export const loadDiscordGatewayCaptureFixture = () =>
   import("./src/voice/voice-gateway-capture.test-support.js");
 
 export const loadDiscordReadinessFixture = () => import("./src/monitor/readiness.test-support.js");
+
+export const loadDiscordQueuedAdmissionFixture = () =>
+  import("./src/monitor/message-handler.admission.test-support.js");

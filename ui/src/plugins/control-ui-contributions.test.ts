@@ -419,6 +419,7 @@ describe("native plugin session actions", () => {
       taskPresenters: 1,
       composerComposing: false,
       composerTextarea: null,
+      sendDraft: null,
     });
     element.composer = {
       draft: "stale render",

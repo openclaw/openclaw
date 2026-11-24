@@ -54,10 +54,7 @@ import { refreshChatCommands } from "./chat-session-commands.ts";
 import { readChatModelCatalogState } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import {
-  openSessionWorkspaceFile,
-  openSessionWorkspaceManagedArtifact,
-} from "./components/chat-session-workspace.ts";
+import { sessionWorkspaceFileLinkProps } from "./components/chat-session-workspace.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
@@ -145,6 +142,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       modelCatalogState: readChatModelCatalogState(state),
       modelAuthStatusResult: state.modelAuthStatusResult,
       onSetup: () => this.context.navigate("model-setup"),
+      onOpenModels: (provider) =>
+        provider
+          ? navigateToModelProvider(this.context, currentAgentId ?? null, provider)
+          : this.context.navigate("model-providers"),
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const pendingReason = chatSendPendingReason(state, state.sessionKey, placementStartup !== null);
@@ -343,7 +344,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       disabledReasonBusy: placementComposer.busyMessage !== null,
       disabledBanner:
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
-      ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation),
+      ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation, selectedSession),
     };
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
     const conversationAttention = this.projectConversationAttention(
@@ -410,6 +411,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       readProviderReview,
+      hideComposerSessionCards: this.inputRegion === "dock" && !this.onBackToSubagents,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
       progressCardLifetime: progressPresentation?.lifetime,
@@ -575,9 +577,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
-      onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
+      ...sessionWorkspaceFileLinkProps(state, selectedSession, composerControls?.permissionPicker),
       onFindWorkspaceFile: state.connected && !catalog ? onFindWorkspaceFile : undefined,
-      onOpenManagedArtifact: (href) => openSessionWorkspaceManagedArtifact(state, href),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,

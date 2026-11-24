@@ -2,7 +2,6 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
 import type {
@@ -15,7 +14,6 @@ import type {
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
 } from "../../sessions/session-controller.contracts.js";
-import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { cliBackendLog } from "./log.js";
 import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
@@ -25,7 +23,6 @@ import type { PreparedCliRunContext } from "./types.js";
 export function createSteeredCliMessageInjection(params: {
   getInjection: () => CliBackendMessageInjection | undefined;
   signal: AbortSignal;
-  assertCurrent: SessionSourceAssertion;
   /** Owning run: its working directory and before_model_request gate. */
   context: {
     params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir">;
@@ -77,15 +74,12 @@ export function createSteeredCliMessageInjection(params: {
         async (submit) => {
           let submitted = false;
           try {
-            await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-              await withMessageInjectionAdmission(prepareCurrent, () => {
-                // The same worker-backed admission owns source checks and native stdin.
-                assertInjectionCurrent();
-                params.assertCurrent();
-                submit();
-                submitted = true;
-                params.onInputSubmitted?.();
-              });
+            await withMessageInjectionAdmission(prepareCurrent, () => {
+              // The same worker-backed admission owns source checks and native stdin.
+              assertInjectionCurrent();
+              submit();
+              submitted = true;
+              params.onInputSubmitted?.();
             });
           } catch (cause) {
             // Outer source cleanup can fail after native owns input, just like admission cleanup.

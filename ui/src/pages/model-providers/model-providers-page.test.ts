@@ -99,6 +99,8 @@ describe("ModelProvidersPage agent scope", () => {
     const { context } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
+    publishRouteData(page, createApiKeyProviderData());
+    await page.updateComplete;
 
     [...page.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent === "View usage")
@@ -172,9 +174,8 @@ describe("ModelProvidersPage agent scope", () => {
     page.view.props.onAddProviderKeyChange("synthetic-added-key");
     page.view.props.onOpenKeyEditor("openai");
     page.view.props.onKeyDraftChange("synthetic-unsaved-key");
-    await page.view.scope.onConnect();
     await page.updateComplete;
-    const search = page.querySelector<HTMLInputElement>("[data-models-login-search]")!;
+    const search = page.querySelector<HTMLInputElement>("[data-models-catalog-search]")!;
     search.value = "Draft provider search";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     const release = deferNextAuthStatus();
@@ -186,15 +187,14 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyDraft).toBe("synthetic-unsaved-key");
     expect(page.view.props.addProviderKey).toBe("synthetic-added-key");
     expect(page.view.props.defaultModels.primary).toBe("openai/draft-model");
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.value).toBe(
+    expect(page.querySelector<HTMLInputElement>("[data-models-catalog-search]")?.value).toBe(
       "Draft provider search",
     );
-    expect(search.disabled).toBe(false);
     search.value = "anthropic";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await page.updateComplete;
     const provider = page.querySelector<HTMLButtonElement>(
-      '[data-models-login-provider="anthropic"]',
+      '[data-models-catalog-provider="anthropic"] button',
     )!;
     expect(provider.disabled).toBe(true);
     const reads = request.mock.calls.length;
@@ -210,11 +210,8 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBe("openai");
     expect(page.view.props.addProviderOpen).toBe(true);
     expect(page.view.props.defaultModels.primary).toBe("openai/draft-model");
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.value).toBe(
+    expect(page.querySelector<HTMLInputElement>("[data-models-catalog-search]")?.value).toBe(
       "anthropic",
-    );
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.disabled).toBe(
-      false,
     );
     await waitForSolid(() =>
       expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual({
@@ -398,6 +395,11 @@ describe("ModelProvidersPage agent scope", () => {
       });
       const page = appendPage(context);
       await waitForProviders(page);
+      const moreSettings = page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!;
+      if (moreSettings.getAttribute("aria-expanded") !== "true") {
+        moreSettings.click();
+        await page.updateComplete;
+      }
       runtimeConfig.patch.mockClear();
 
       await updatePickers(page.renderRoot);
@@ -983,7 +985,6 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
     expect(selection.state.selectedId).toBeNull();
     expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
     expect(page.renderRoot.textContent).toContain("No agents");
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
 
     const groups = page.querySelectorAll(
       '.model-providers__defaults .settings-segmented[role="radiogroup"]',
@@ -1026,7 +1027,8 @@ it("applies provider navigation without replacing an edited search during revali
   const page = appendPage(context);
   const routeData = { ...createEmptyModelProvidersRouteData(context), provider: "openai" };
   page.routeData = routeData;
-  const search = () => page.querySelector<HTMLInputElement>(".model-providers__search input")!;
+  // Nothing is connected, so a provider link lands on the catalog search.
+  const search = () => page.querySelector<HTMLInputElement>("[data-models-catalog-search]")!;
   await waitForSolid(() => expect(search()?.value).toBe("openai"));
 
   search().value = "anthropic";
@@ -1043,6 +1045,6 @@ it("applies provider navigation without replacing an edited search during revali
   page.routeData = { ...routeData, provider: "minimax-portal" };
   await waitForSolid(() => expect(search()?.value).toBe("minimax"));
   page.routeData = { ...routeData, provider: "" };
-  // Setup with nothing connected and nothing typed has no list to filter.
+  // A cleared link clears the search, too.
   await waitForSolid(() => expect(search()?.value ?? "").toBe(""));
 });

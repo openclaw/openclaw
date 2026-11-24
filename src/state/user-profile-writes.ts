@@ -233,8 +233,8 @@ export async function setCanonicalUserProfileRole(
   const onCommitted = options.onCommitted;
   return unwrap(
     await write("userProfiles.setRole", { profileId, role }, options, (publication) => {
-      // The validated receipt names the canonical profile even when the caller used an alias.
-      for (const [id] of publication.after) {
+      // The transaction receipt names only changed authority, using canonical profile IDs.
+      for (const id of publication.changes.profiles) {
         onCommitted?.(id);
       }
       const before = new Map(publication.before);

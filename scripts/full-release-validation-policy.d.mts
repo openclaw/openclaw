@@ -1,5 +1,11 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
-export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseRecord[];
+export function validateReleaseManifestAdvisoryJobs(
+  manifest: unknown,
+  options?: {
+    deferWaiverPolicy?: boolean;
+    waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[];
+  },
+): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
@@ -50,6 +56,7 @@ export interface ReleaseExecutionPlan extends ReleaseRecord {
   candidateRequest?: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateRequest;
   qualificationCoverage?: import("./release-qualification-admission.mjs").QualificationCoverage;
   qualificationInputs?: import("./release-qualification-admission.mjs").QualificationInputs;
+  publicationArtifactSource?: import("./full-release-publication-contract.mjs").PublicationSourceFact;
   sourceAdmissionContract?: "1";
   sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
   publicationAdmissionContract?: "1";
@@ -127,11 +134,17 @@ export function validateReleaseExecutionPlanArtifact(
 export function releaseExecutionPlanSha256(plan: ReleaseRecord): string;
 export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
+export function resolveReleaseAttemptJobs<T extends ReleaseRecord>(
+  jobs: T[],
+  runAttempt: number,
+  options?: { allowRunning?: boolean },
+): T[];
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
   expected: {
     effectiveRunAttempt: number;
     effectiveRunStatus?: string;
+    recordedJobs?: ReleaseRecord[];
     plannedRunAttempt: number;
   },
 ): {
@@ -141,6 +154,7 @@ export function composeReleaseAttemptJobs(
   sha256: string;
 };
 export function composeReleaseChildAttemptEvidence(input: {
+  recordedJobs?: ReleaseRecord[];
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>;
   expected: ReleaseRecord;
   run: ReleaseRecord;
@@ -151,6 +165,7 @@ export function terminalPolicyPass(
   child: ReleaseRecord,
   targetVersion?: string,
   targetSha?: string,
+  waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[],
 ): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;

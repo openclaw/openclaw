@@ -39,7 +39,7 @@ export async function prepareSessionFileWorkspace(
       preparedSessionEntry: current,
     }),
     sandbox: resolveSandboxConfigForAgent(config, agentId),
-    librarySelections: current.skillsSnapshot?.librarySelections,
+    librarySelections: current.skillsSnapshot?.librarySelections ?? [],
     worktreeId: current.worktree?.id,
   });
   const selection = (value: ReturnType<typeof policy>) => ({

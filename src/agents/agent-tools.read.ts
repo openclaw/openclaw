@@ -9,10 +9,6 @@ import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-s
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
 import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
-import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
@@ -34,7 +30,11 @@ import {
   withWorkspaceRecoveryHint,
 } from "./apply-patch-containment-hint.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { writeHostFile } from "./host-file-write.js";
+import {
+  prepareHostFileMutation,
+  writeHostFile,
+  type HostFileMutationPreparer,
+} from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
   type MemoryWriteProvenanceObserver,
@@ -688,6 +688,7 @@ type HostWorkspaceMutationOptions = {
   workspaceOnly?: boolean;
   abortSignal?: AbortSignal;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  prepareHostFileMutation?: HostFileMutationPreparer;
 };
 
 function createHostWorkspaceMutationTool(
@@ -913,30 +914,15 @@ async function statHostFile(absolutePath: string) {
   }
 }
 
-function createHostMutationOperations(
-  root: string,
-  options?: {
-    workspaceOnly?: boolean;
-    abortSignal?: AbortSignal;
-    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  },
-) {
+function createHostMutationOperations(root: string, options?: HostWorkspaceMutationOptions) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
     return withMemoryWriteProvenance(
       {
-        mkdir: async (dir: string) => {
-          const resolved = resolveHostPath(dir);
-          const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            await fs.mkdir(resolved, { recursive: true });
-          });
-        },
         writeFile: (filePath: string, content: string) =>
-          writeHostFile(filePath, content, options?.abortSignal),
+          writeHostFile(filePath, content, options?.abortSignal, options?.prepareHostFileMutation),
         readFile: async (absolutePath: string) => fs.readFile(resolveHostPath(absolutePath)),
         statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
         access: async (absolutePath: string) => {
@@ -963,7 +949,6 @@ function createHostMutationOperations(
   return withMemoryWriteProvenance(
     {
       mkdir: async (dir: string) => {
-        const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
         const selectedRoot = await resolveHostRootAsync(root, dir);
         const relative = toRelativeWorkspacePath(selectedRoot, dir, { allowRoot: true });
         // mkdir receives the file's parent, including directory links to the root itself.
@@ -973,13 +958,15 @@ function createHostMutationOperations(
           boundaryLabel: "workspace root",
         });
         const ancestor = await findExistingAncestor(resolved.rootCanonicalPath);
+        await using effect = await prepareHostFileMutation(
+          options?.prepareHostFileMutation,
+          options?.abortSignal,
+        );
         if (ancestor && ancestor !== resolved.rootCanonicalPath) {
           const ancestorRoot = await fsRoot(ancestor);
           // mkdir requires a relative path; the prefix preserves literal tilde names.
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`, {
-              assertBeforeMutation: assertCurrent,
-            });
+          await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`, {
+            assertBeforeMutation: effect.assertCurrent,
           });
         }
         const rootHandle = await getRoot(selectedRoot);
@@ -991,20 +978,25 @@ function createHostMutationOperations(
         const mutationOptions = {
           mutationSymlinks: "reject" as const,
           assertBeforeMutation: () => {
-            assertCurrent();
+            effect.assertCurrent();
             toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, dir), dir, { allowRoot: true });
           },
         };
-        await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          if (canonicalRelative) {
-            await rootHandle.mkdir(`./${canonicalRelative}`, mutationOptions);
-          } else {
-            await rootHandle.ensureRoot(mutationOptions);
-          }
-        });
+        if (canonicalRelative) {
+          await rootHandle.mkdir(`./${canonicalRelative}`, mutationOptions);
+        } else {
+          await rootHandle.ensureRoot(mutationOptions);
+        }
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeHostWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
+        writeHostWorkspaceFile(
+          root,
+          getRoot,
+          absolutePath,
+          content,
+          options?.abortSignal,
+          options?.prepareHostFileMutation,
+        ),
       readFile: async (absolutePath: string) => {
         // Reads retain the workspace contract of following only symlink parents.
         const selectedRoot = await resolveHostRootAsync(root, absolutePath);
