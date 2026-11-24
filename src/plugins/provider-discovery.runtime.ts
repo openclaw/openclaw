@@ -15,7 +15,11 @@ import {
   prefersBuiltPluginArtifacts,
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
-import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
+import {
+  getPluginSetupModuleLoader,
+  PluginSetupPreparationRequiredError,
+  withPreparedPluginSetupRead,
+} from "./plugin-setup-module.js";
 import { pluginProviderAuthUnavailable } from "./provider-auth-scope.js";
 import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
 import type {
@@ -228,6 +232,7 @@ function prepareManifestCatalogDiscovery(
 
 function resolveProviderDiscoveryEntryPlugins(
   params: Omit<ResolveRuntimePluginDiscoveryProvidersParams, "includeSyntheticAuthProviders">,
+  preparedRead = false,
 ): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
     params.pluginMetadataSnapshot ??
@@ -292,7 +297,11 @@ function resolveProviderDiscoveryEntryPlugins(
           loadProviderDiscoveryProviders(manifest),
         ),
       );
-    } catch {
+    } catch (error) {
+      // The preparation owner must satisfy a deferred read before retrying this plan.
+      if (preparedRead && error instanceof PluginSetupPreparationRequiredError) {
+        throw error;
+      }
       // Entry loading is all-or-nothing: discarded results no longer cover their owners.
       // Keep static manifest coverage for the scope-aware full-loader fallback.
       return { ...result, complete: false, entryPluginIds: manifestEntryPluginIds };
@@ -343,7 +352,14 @@ export function planPluginDiscoveryRuntime(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): ProviderDiscoveryPlan {
   const env = params.env ?? process.env;
-  const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
+  return buildDiscoveryPlan(params, env, resolveProviderDiscoveryEntryPlugins({ ...params, env }));
+}
+
+function buildDiscoveryPlan(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+  env: NodeJS.ProcessEnv,
+  entryResult: ProviderDiscoveryEntryResult,
+): ProviderDiscoveryPlan {
   const entryProviders = entryResult.providers.filter(
     (provider) =>
       hasProviderCatalogHook(provider) ||
@@ -412,10 +428,57 @@ export function planPluginDiscoveryRuntime(
   };
 }
 
+/** The async entrypoints retain the snapshot's setup inventory across preparation. */
+async function prepareDiscoveryPlan(params: ResolveRuntimePluginDiscoveryProvidersParams) {
+  params.signal?.throwIfAborted();
+  const env = params.env ?? process.env;
+  const snapshot =
+    params.pluginMetadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: params.config ?? {},
+      env,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+  const cache = getPluginMetadataSnapshotCache(snapshot);
+  const metadata = cache.metadata;
+  const scopedParams = { ...params, env, pluginMetadataSnapshot: snapshot };
+  const entries = await withPluginCache(cache, () =>
+    withPreparedPluginSetupRead(() => resolveProviderDiscoveryEntryPlugins(scopedParams, true), {
+      signal: params.signal,
+    }),
+  );
+  params.signal?.throwIfAborted();
+  // Custody cleanup may await after the inner setup scope releases its retention.
+  if (cache.retirement || cache.metadata !== metadata) {
+    throw new Error("Plugin discovery inventory has retired");
+  }
+  return { params: scopedParams, plan: buildDiscoveryPlan(scopedParams, env, entries) };
+}
+
+export async function planPluginDiscoveryRuntimeAsync(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderDiscoveryPlan> {
+  return (await prepareDiscoveryPlan(params)).plan;
+}
+
+export async function resolvePluginDiscoveryProvidersRuntimeAsync(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
+  const prepared = await prepareDiscoveryPlan(params);
+  // Full-runtime fallback still belongs to the caller's runtime generation.
+  return resolvePluginDiscoveryProvidersFromPlan(prepared.params, prepared.plan);
+}
+
 export function resolvePluginDiscoveryProvidersRuntime(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): ProviderPlugin[] {
-  const plan = planPluginDiscoveryRuntime(params);
+  return resolvePluginDiscoveryProvidersFromPlan(params, planPluginDiscoveryRuntime(params));
+}
+
+function resolvePluginDiscoveryProvidersFromPlan(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+  plan: ProviderDiscoveryPlan,
+): ProviderPlugin[] {
   if (plan.kind === "entries" && params.discoveryEntriesOnly === true) {
     return plan.providers;
   }

@@ -18,8 +18,10 @@ import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-supp
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
+// mock-isolation: Supply fixture discovery without loading real plugin sources.
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
+  resolvePluginDiscoveryProvidersRuntimeAsync: async () => discovery.providers,
 }));
 
 const modelDefaults = { reasoning: false, contextWindow: 8192, maxTokens: 2048 };

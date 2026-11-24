@@ -64,6 +64,28 @@ it("resolves host SDK imports in a packaged discovery hook after leaving its inv
   expect(result.stderr).toBe("");
 });
 
+it("yields before evaluating an external entry in async discovery and auth preparation", async () => {
+  const root = temp.make("async-provider-discovery-");
+  const result = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+      packagedDiscoveryProbePath,
+      root,
+      "async-discovery",
+    ],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+      },
+    },
+  );
+  expect(result.stderr).toBe("");
+});
+
 it.each([true, false])(
   "keeps discovery with its exact source owner (selected runtime: %s)",
   async (selected) => {

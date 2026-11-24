@@ -3,8 +3,10 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadProviderScopedThinkingCatalog } from "./prepared-model-catalog.js";
 
 const discovery = vi.hoisted(() => vi.fn(() => []));
+// mock-isolation: Supply fixture discovery without loading real plugin sources.
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: discovery,
+  resolvePluginDiscoveryProvidersRuntimeAsync: async () => discovery(),
 }));
 
 it.each([

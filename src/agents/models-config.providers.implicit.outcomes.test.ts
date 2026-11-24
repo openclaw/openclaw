@@ -15,8 +15,10 @@ import {
 } from "./models-config.providers.implicit.js";
 
 const fixture = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
+// mock-isolation: Supply fixture discovery without loading real plugin sources.
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => fixture.providers,
+  resolvePluginDiscoveryProvidersRuntimeAsync: async () => fixture.providers,
 }));
 
 const catalog = (name: string, id = "shared") => ({
