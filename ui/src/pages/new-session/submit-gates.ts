@@ -4,6 +4,7 @@
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -219,7 +220,11 @@ export function resolveNewSessionSubmitBlock(
   ) {
     return { gate: "cloud", reason: t("newSession.requiredWorkerUnavailable") };
   }
-  if (kind === "session" && draft.requiresModelSetup()) {
+  if (
+    kind === "session" &&
+    !isModelIndependentChatCommand(draft.message) &&
+    draft.requiresModelSetup()
+  ) {
     return { gate: "model-setup", reason: t("modelSetup.required.title") };
   }
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {

@@ -5,6 +5,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import {
+  buildFallbackSlashCommands,
+  buildSlashCommandsFromEntries,
+  replaceSlashCommands,
+} from "../../lib/chat/commands.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
@@ -92,6 +97,7 @@ function unavailableModel(reason: "missing-auth" | "auth-failed" | "cooldown") {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  replaceSlashCommands(buildFallbackSlashCommands());
   sessionStorage.clear();
   localStorage.clear();
 });
@@ -280,6 +286,24 @@ describe("DraftSubmissionFlow submit gates", () => {
       expectGate(flow, message ? "model-unavailable" : undefined, message);
     },
   );
+
+  it("allows a model-independent sign-in command before model setup", () => {
+    replaceSlashCommands(
+      buildSlashCommandsFromEntries([
+        {
+          key: "login",
+          name: "login",
+          description: "Connect a model provider.",
+          modelIndependent: "always",
+        } as never,
+      ]),
+    );
+    const { flow } = withMessage({}, (fixture) => {
+      vi.spyOn(fixture.flow, "requiresModelSetup").mockReturnValue(true);
+      fixture.flow.setMessage("/login audit-provider");
+    });
+    expectGate(flow);
+  });
 
   it.each(["creating", "dispatching"] as const)(
     "retries a retained personal-account $0 without consulting the neutral draft model",
