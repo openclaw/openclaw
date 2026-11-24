@@ -98,6 +98,7 @@ type QuestionEntry = {
 export type QuestionObservation = {
   readonly record: QuestionRecord;
   readonly ordinary: boolean;
+  readonly requesterRun?: OperationalRunInstanceRef;
   readonly sessionAccess?: QuestionSessionAccess;
   readonly authorizeClient?: QuestionClientAuthorization;
   isCurrent: () => boolean;
@@ -260,6 +261,7 @@ export class QuestionManager {
         return entry.record;
       },
       ordinary: entry.ordinary,
+      requesterRun: entry.requesterRun,
       sessionAccess: entry.sessionAccess,
       authorizeClient: entry.authorizeClient,
       isCurrent: () => this.entries.get(entry.record.id) === entry,
@@ -629,13 +631,16 @@ export class QuestionManager {
       try {
         // Enter the original continuation before these callbacks can release its last parked root.
         settle();
-        const { id, status, answers } = entry.record;
+        const { id, status, answers, resolvedBy } = entry.record;
         if (status !== "pending" && this.entries.get(id) === entry) {
           const event: QuestionResolvedEvent =
             status === "answered"
               ? { id, status, answers: answers ?? { answers: {} } }
               : { id, status };
-          await entry.onResolved?.(event, this.observeEntry(entry));
+          await entry.onResolved?.(
+            { ...event, ...(resolvedBy ? { resolvedBy } : {}) },
+            this.observeEntry(entry),
+          );
         }
       } finally {
         continuation?.release();

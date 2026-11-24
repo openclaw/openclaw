@@ -52,10 +52,12 @@ and live-authority gates.
 
 Normally publish beta, validate, then promote stable. Core and every published
 official npm plugin must have `beta` at least as new as `latest`; preserve a newer
-beta. Prereleases precede their same-base final. Final versions require stable
+beta. Prereleases precede their same-base final. Final versions normally require stable
 validation even when first published to beta.
 
 ## Release validation
+
+Normal releases follow these validation requirements.
 
 - Stable/final publication requires stable or full validation, longer soak,
   and blocking performance checks; beta-profile evidence is insufficient.
@@ -75,8 +77,7 @@ validation even when first published to beta.
   job waiver does not require a run; omit `jobName` to waive the entire child
   role and all descendants without a run or receipt. Optional `step` limits a
   job waiver to the first incomplete or failed step. Unwaived gaps block, and
-  waived is not passed. **FRV must
-  conclude success; publishers cannot waive it.**
+  waived is not passed. **FRV must conclude success.**
 - Coverage spans source CI, packages, plugins, Gateway installs/upgrades, and
   selected app, UI, Telegram, QA, and live-provider checks. Inspect recorded
   profile/OS coverage; skipped or deferred is not passed.
@@ -122,8 +123,8 @@ caller-specific approval reads.
 ### Resume activation while ClawHub recovery is independent
 
 For already-published core, recovery accepts `defer_clawhub=true`,
-`openclaw_npm_resume_run_id=<original-successful-run>`, and
-`wait_for_clawhub=false` only with direct `publish_openclaw_npm=true` and no
+`openclaw_npm_resume_run_id=<original-successful-run>` only with direct
+`publish_openclaw_npm=true` and no
 `prepared_plugins`. It authenticates original registry bytes/provenance, retains
 npm/source/artifact/approval/finalization gates, and neither republishes core
 nor plans/dispatches ClawHub work.

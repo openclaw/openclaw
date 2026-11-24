@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
@@ -36,6 +37,7 @@ import {
   composeReleaseChildAttemptEvidence,
   matchesReleaseChildAttemptEvidence,
   composeReleaseAttemptJobs,
+  resolveReleaseAttemptJobs,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   isReleaseGhServerError,
@@ -2167,13 +2169,14 @@ function validateCompletedParentRun(
   repository,
   runId,
   expectedWorkflowPath,
+  allowIncomplete = false,
 ) {
   validateParentRunBinding(parentView, parentRest, runId, expectedWorkflowPath);
   if (
     parentView.status !== "completed" ||
-    parentView.conclusion !== "success" ||
+    (!allowIncomplete && parentView.conclusion !== "success") ||
     parentRest.status !== "completed" ||
-    parentRest.conclusion !== "success" ||
+    (!allowIncomplete && parentRest.conclusion !== "success") ||
     parentRest.repository?.full_name !== repository
   ) {
     throw new Error(`full release parent run is not completed/success: ${runId}`);
@@ -2817,6 +2820,7 @@ async function loadRecoveryEvidence({ verifier, trustedIdentity, ...options }) {
 async function loadValidatedParentEvidence({
   client,
   preloadedRun,
+  allowIncomplete = false,
   expectedRunAttempts,
   manifestPath,
   repository,
@@ -2837,6 +2841,7 @@ async function loadValidatedParentEvidence({
     repository,
     runId,
     recovery ? ".github/workflows/full-release-receipt-recovery.yml" : undefined,
+    allowIncomplete,
   );
 
   const manifestEvidence = client.loadManifest(runId, parentRunAttempt, manifestPath);
@@ -3192,6 +3197,8 @@ function qualificationReusePolicyIdentity(admission) {
 /**
  * @param {{
  *   manifestPath?: string,
+ *   fastTrackApproval?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   qualificationReuse?: { candidateSha: string, qualificationSha: string, workflowRef: string, descriptor: object, inputs: Record<string, string> },
  *   repository?: string,
  *   reuseRequest?: { releaseProfile: string, runReleaseSoak: string, targetSha: string, validationInputs: Record<string, unknown> },
@@ -3213,6 +3220,8 @@ function qualificationReusePolicyIdentity(admission) {
 export async function validateReleaseRunEvidence(
   {
     manifestPath,
+    fastTrackApproval,
+    fastTrackPublication,
     qualificationReuse,
     repository = DEFAULT_REPO,
     reuseRequest,
@@ -3301,7 +3310,15 @@ export async function validateReleaseRunEvidence(
       verifier,
       expectedRunAttempts: remainingExpectedRunAttempts,
     });
-    return { ...evidence, qualification: qualificationFacts(evidence) };
+    return { ...evidence, fastTrack: undefined, qualification: qualificationFacts(evidence) };
+  }
+  if (
+    fastTrackApproval &&
+    workflowPath(selectedRun) !== ".github/workflows/full-release-validation.yml"
+  ) {
+    throw new Error(
+      "Fast-track requires the original admitted FRV, not a replacement recovery aggregate.",
+    );
   }
   const recovery = workflowPath(selectedRun) === ".github/workflows/openclaw-release-prepare.yml";
   const currentEvidence = recovery
@@ -3319,6 +3336,7 @@ export async function validateReleaseRunEvidence(
     : await loadValidatedParentEvidence({
         client: evidenceClient,
         preloadedRun: selectedRun,
+        allowIncomplete: Boolean(fastTrackApproval),
         expectedRunAttempts: remainingExpectedRunAttempts,
         manifestPath,
         repository: normalizedRepository,
@@ -3713,6 +3731,201 @@ export async function validateReleaseRunEvidence(
       throw new Error("Reused publication artifacts differ from their authenticated root");
     }
   }
+  if (fastTrackApproval) {
+    if (reuse || qualificationReuse || reuseRequest) {
+      throw new Error("Fast-track binds the original direct FRV, not reused qualification.");
+    }
+    const { authenticateFastTrackPolicy, parseFastTrackApproval } =
+      await import("./lib/release-fast-track-publication.mts");
+    const executionPlan = sourcePlans.get(currentEvidence.manifest.runId);
+    const jobs = [];
+    const collect = async (run, selectedId, attempt, firstAttempt) => {
+      if (String(run.id) !== String(selectedId) || Number(run.run_attempt) !== Number(attempt)) {
+        throw new Error("Fast-track job attempt changed.");
+      }
+      const attempts = [];
+      for (let current = firstAttempt; current <= attempt; current++) {
+        attempts.push({
+          runAttempt: current,
+          jobs: await evidenceClient.getRunAttemptJobs(selectedId, current, {
+            requireComplete: true,
+          }),
+        });
+      }
+      const composite = composeReleaseAttemptJobs(attempts, {
+        plannedRunAttempt: firstAttempt,
+        effectiveRunAttempt: attempt,
+        effectiveRunStatus: run.status,
+      });
+      const observed = new Map();
+      for (const accepted of composite.jobs) {
+        const original = attempts.find((entry) => entry.runAttempt === accepted.acceptedRunAttempt);
+        const job = resolveReleaseAttemptJobs(original.jobs, original.runAttempt, {
+          allowRunning: true,
+        }).find((entry) => entry.name === accepted.name);
+        observed.set(job.name, { ...job, acceptedRunAttempt: original.runAttempt });
+      }
+      // Composition carries earlier executions over skipped rerun projections.
+      // Still enumerate checks that never executed in any bound attempt.
+      for (const entry of attempts) {
+        for (const job of entry.jobs) {
+          if (!observed.has(job.name)) {
+            observed.set(job.name, { ...job, acceptedRunAttempt: entry.runAttempt });
+          }
+        }
+      }
+      for (const job of observed.values()) {
+        const status =
+          job.status !== "completed"
+            ? "unfinished"
+            : job.conclusion === "success" || job.conclusion === "neutral"
+              ? "passed"
+              : job.conclusion === "skipped"
+                ? "skipped"
+                : job.conclusion === "cancelled"
+                  ? "cancelled"
+                  : "failed";
+        jobs.push({
+          name: job.name,
+          jobId: String(job.id),
+          runId: String(selectedId),
+          runAttempt: String(job.acceptedRunAttempt),
+          status,
+        });
+      }
+    };
+    await collect(
+      selectedRun,
+      normalizedRunId,
+      selectedRun.run_attempt,
+      executionPlan.parentRunAttempt,
+    );
+    for (const child of executionPlan.children.filter((entry) => entry.selected && !entry.runId)) {
+      const { parentJobName } = releaseChildSpec(child.key);
+      if (!jobs.some((job) => job.name === parentJobName && job.status !== "passed")) {
+        throw new Error(
+          "Fast-track is missing the original unsuccessful dispatch job for " + child.key,
+        );
+      }
+    }
+    validateReleaseCoveragePolicyBinding(executionPlan, currentEvidence.manifest.validationInputs);
+    if (!isDeepStrictEqual(executionPlan.candidate, currentEvidence.manifest.candidateBinding)) {
+      throw new Error("Fast-track candidate differs from the original admitted artifact plan.");
+    }
+    for (const child of executionPlan.children.filter((entry) => entry.selected && entry.runId)) {
+      const boundAttempt =
+        currentEvidence.manifest.childEvidence?.[child.key]?.effectiveRunAttempt ??
+        child.runAttempt;
+      const run = await evidenceClient.getRunAttempt(child.runId, boundAttempt);
+      validateReleaseChildRunProvenance(run, {
+        ...child,
+        plannedRunAttempt: child.runAttempt,
+        repository: normalizedRepository,
+      });
+      await collect(run, child.runId, boundAttempt, child.runAttempt);
+    }
+    const packet = parseFastTrackApproval(fastTrackApproval);
+    const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+    if (packet.request.policy === "approved-fast-track-v1") {
+      if (
+        execFileSync("git", ["-C", repositoryRoot, "rev-parse", "--is-shallow-repository"], {
+          encoding: "utf8",
+        }).trim() === "true"
+      ) {
+        execFileSync("git", ["-C", repositoryRoot, "fetch", "--unshallow", "--no-tags", "origin"], {
+          stdio: "pipe",
+        });
+      }
+      for (const commit of [packet.request.candidateSha, packet.request.reference.targetSha]) {
+        try {
+          execFileSync("git", ["-C", repositoryRoot, "cat-file", "-e", commit + "^{commit}"], {
+            stdio: "ignore",
+          });
+        } catch {
+          execFileSync("git", ["-C", repositoryRoot, "fetch", "--no-tags", "origin", commit], {
+            stdio: "pipe",
+          });
+        }
+      }
+    }
+    const fastTrack = await authenticateFastTrackPolicy({
+      packet: fastTrackApproval,
+      publication: fastTrackPublication,
+      manifest: currentEvidence.manifestJson,
+      jobs,
+      repositoryRoot,
+      loadReference: async (referenceId, attempt) => {
+        const reference = await validateReleaseRunEvidence(
+          {
+            repository: normalizedRepository,
+            runId: referenceId,
+            expectedRunAttempts: { [referenceId]: Number(attempt) },
+            trustedWorkflowFullRef,
+            trustedWorkflowRef,
+            trustedWorkflowSha,
+            verifierSourceContent,
+            verifierSourceSha,
+          },
+          evidenceClient,
+        );
+        const { evaluateReleasePublishGates } = await import("./lib/release-publish-gates.mts");
+        const gates = evaluateReleasePublishGates({
+          manifest: reference.current.manifest,
+          consumer: "publisher",
+          releaseTag: packet.request.reference.releaseTag,
+          npmDistTag: reference.current.manifest.sourceAdmission.publicationSelection.npmDistTag,
+          expectedSha: packet.request.reference.targetSha,
+          readWorkflowSource: (sha, path) => evidenceClient.getWorkflowSource(sha, path),
+        });
+        const failed = gates.find((gate) => gate.status === "FAIL");
+        if (failed) {
+          throw new Error("Fast-track reference was not fully validated: " + failed.message);
+        }
+        return reference;
+      },
+      readPublishedRelease: (tag) => {
+        const release = evidenceClient.readWorkloadIdentity(
+          "releases/tags/" + encodeURIComponent(tag),
+        );
+        const ref = evidenceClient.getRef("refs/tags/" + tag);
+        const target =
+          ref.object.type === "tag"
+            ? evidenceClient.readWorkloadIdentity("git/tags/" + ref.object.sha).object
+            : ref.object;
+        return {
+          ...release,
+          targetSha: target.type === "commit" ? target.sha : undefined,
+          fastTracked: release.assets?.some((asset) =>
+            asset.name.endsWith("-fast-track-approval.json"),
+          ),
+        };
+      },
+    });
+    const current = normalizedParentTuple(
+      currentEvidence,
+      producerIdentities.get(currentEvidence.manifest.runId),
+    );
+    const evidence = {
+      current,
+      root: current,
+      manifest: currentEvidence.manifestJson,
+      repository: normalizedRepository,
+      qualificationAdmission: currentQualification,
+      fastTrack,
+      executionPlan: {
+        parentRunAttempt: executionPlan.parentRunAttempt,
+        sha256: executionPlan.sha256,
+      },
+      children: [],
+      waivers: [],
+      valid: true,
+      verifier,
+      directRoot: true,
+      trustedWorkflowFullRef: trustedIdentity.fullRef,
+      trustedWorkflowRef: normalizedTrustedWorkflowRef,
+    };
+    return { ...evidence, qualification: qualificationFacts(evidence) };
+  }
   const selectedKeys = new Set(qualification.coverage.children.map((child) => child.key));
   const executionPlan = sourcePlans.get(rootEvidence.manifest.runId);
   validateReleaseCoveragePolicyBinding(executionPlan, rootEvidence.manifest.validationInputs);
@@ -3952,7 +4165,7 @@ export async function validateReleaseRunEvidence(
     validationInputs: rootEvidence.manifest.validationInputs ?? null,
     verifier,
   });
-  return { ...evidence, qualification: qualificationFacts(evidence) };
+  return { ...evidence, fastTrack: undefined, qualification: qualificationFacts(evidence) };
 }
 
 // Normalize only after the owner has authenticated the complete evidence graph.
@@ -4393,6 +4606,7 @@ export async function acquirePublicationManifest(
   const evidence = await loadValidatedParentEvidence({
     client: evidenceClient,
     preloadedRun: selectedRun,
+    allowIncomplete: Boolean(process.env.FAST_TRACK_APPROVAL_JSON),
     repository,
     runId,
     expectedRunAttempts: attempts,

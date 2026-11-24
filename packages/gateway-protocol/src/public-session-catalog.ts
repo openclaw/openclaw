@@ -22,6 +22,7 @@ export type {
   SessionsCatalogHostEvent,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
+  SessionsCatalogResolveResult,
   SessionsCatalogStartTerminalParams,
   SessionsCatalogStartTerminalResult,
 } from "./schema/sessions-catalog.js";

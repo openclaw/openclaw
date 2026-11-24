@@ -1603,7 +1603,7 @@ function readStateCandidates(root, prefix, runId, maxParentRunAttempt, filename)
   return candidates;
 }
 
-async function validateManifestMode() {
+async function validateManifestMode({ preserveValidationOutcome = false } = {}) {
   const expected = stateArtifactExpected();
   const manifestPath = requiredString(
     process.env.RELEASE_VALIDATION_MANIFEST_PATH,
@@ -1616,23 +1616,46 @@ async function validateManifestMode() {
   const executionPlan = validateReleaseExecutionPlanArtifact(executionPlanPayload, expected);
   const verified =
     executionPlan.attemptEvidenceVersion !== undefined
-      ? verifyReleaseStateArtifacts(
-          executionPlanPayload,
-          readArtifact(
+      ? (() => {
+          const decision = readArtifact(
             requiredString(process.env.RELEASE_DECISION_PATH, "release decision path"),
             "release decision",
-          ),
-          readArtifact(
+          );
+          const drain = readArtifact(
             requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain path"),
             "diagnostic drain",
-          ),
-          { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
-        )
+          );
+          const stateExpected = {
+            ...expected,
+            effectiveGates: effectiveReleasePlanGates(executionPlan.gates),
+          };
+          // Retain failed validation honestly, without weakening state identity,
+          // plan binding, or monotonic decision-to-drain evidence checks.
+          return preserveValidationOutcome
+            ? selectReleaseStateArtifacts(
+                executionPlanPayload,
+                [
+                  {
+                    name: `full-release-decision-${executionPlan.parentRunId}-${decision.parentRunAttempt}`,
+                    payload: decision,
+                  },
+                ],
+                [
+                  {
+                    name: `full-release-diagnostics-${executionPlan.parentRunId}-${drain.parentRunAttempt}`,
+                    payload: drain,
+                  },
+                ],
+                stateExpected,
+              )
+            : verifyReleaseStateArtifacts(executionPlanPayload, decision, drain, stateExpected);
+        })()
       : undefined;
   const drain = verified?.drain;
   const rawManifest = readArtifact(manifestPath, "release validation manifest");
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const manifest = validateParentManifest(rawManifest, {
+    deferWaiverPolicy: preserveValidationOutcome,
     sourceAdmissionContract: expected.sourceAdmissionContract,
     candidateBinding: executionPlan.candidate ?? null,
     repository: expected.repository,
@@ -1770,6 +1793,8 @@ function main() {
       return selectMode();
     case "validate-manifest":
       return validateManifestMode();
+    case "validate-manifest-evidence":
+      return validateManifestMode({ preserveValidationOutcome: true });
     case "decision":
     case "drain":
       return collectMode(mode);
