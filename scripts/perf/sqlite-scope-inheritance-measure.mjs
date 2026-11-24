@@ -55,7 +55,13 @@ if (!sampleOwner) {
       ];
     }),
   );
-  console.log(JSON.stringify({ node: process.version, load: loadavg(), pairs, summary, rows }));
+  // Flush the complete report before explicit exit; pipe writes can be asynchronous.
+  await new Promise((resolve, reject) => {
+    process.stdout.write(
+      JSON.stringify({ node: process.version, load: loadavg(), pairs, summary, rows }) + "\n",
+      (error) => (error ? reject(error) : resolve()),
+    );
+  });
   process.exit(0);
 }
 
@@ -65,24 +71,35 @@ const stripImports = (source) => source.replace(/^import[\s\S]*?from "[^"]+";\n/
 try {
   const recordSource = read("src/infra/sqlite-database-admission-record.ts");
   const receiptsSource = readFileSync(sampleOwner, "utf8");
+  const dependencies = {
+    record: recordSource,
+    singleton: read("src/shared/global-singleton.ts"),
+    key: read("src/infra/sqlite-database-admission-key.ts"),
+    delta: read("src/infra/sqlite-database-admission-delta.ts"),
+    custody: read("src/infra/sqlite-descriptor-custody.ts"),
+    registry: read("src/infra/sqlite-database-admission-registry.ts"),
+  };
   const identity = read("src/infra/sqlite-worker-identity.ts");
   const normalize = identity.slice(
     identity.indexOf("export function normalizeDatabasePath("),
     identity.indexOf("export function readDatabaseFileIdentity("),
   );
   assert(normalize.startsWith("export function normalizeDatabasePath("));
+  dependencies.normalize = normalize;
   const capsule = [
     'import { randomUUID } from "node:crypto";',
     'import fs from "node:fs";',
     'import path from "node:path";',
     'import { toUSVString } from "node:util";',
     'import { setEnvironmentData, threadId } from "node:worker_threads";',
-    read("src/shared/global-singleton.ts"),
-    read("src/infra/sqlite-database-admission-key.ts"),
-    read("src/infra/sqlite-database-admission-delta.ts"),
+    dependencies.singleton,
+    dependencies.key,
+    dependencies.delta,
     "const changedWriteScopes = changedAdmissionWriteScopes;",
+    stripImports(dependencies.custody),
     normalize,
     `function unsupported() { throw new Error("operation outside admission inheritance proof"); }
+     const assertDatabaseFileIdentity = unsupported;
      const isSoleDatabaseFileDescriptor = unsupported;
      const readDatabaseIdentityBirthtime = unsupported;
      const normalizeWindowsPathPreservingCase = unsupported;
@@ -94,14 +111,17 @@ try {
      const hasSqlitePostCommitScope = unsupported;
      const stageSqliteTransactionState = unsupported;`,
     stripImports(recordSource),
+    stripImports(dependencies.registry),
     "const isRetired = isSqliteDatabaseAdmissionRetired;",
     stripImports(receiptsSource),
   ].join("\n");
   const moduleFile = path.join(scratch, "owners.mjs");
   writeFileSync(moduleFile, stripTypeScriptTypes(capsule));
-  const { SqliteDatabaseAdmissionRegistry, createSqliteDatabaseWriteReceipts } = await import(
-    pathToFileURL(moduleFile)
-  );
+  const {
+    SqliteDatabaseAdmissionRegistry,
+    createSqliteDatabaseWriteReceipts,
+    createSqliteDescriptorCustody,
+  } = await import(pathToFileURL(moduleFile));
   const registry = new SqliteDatabaseAdmissionRegistry();
   const databaseCount = 40;
   const scopeCount = 1000;
@@ -115,6 +135,7 @@ try {
       location: `/synthetic/database-${index}.sqlite`,
       descriptor: -1,
       descriptorOwner: 0,
+      descriptorCustody: createSqliteDescriptorCustody(-1),
       generationId: `generation-${index}`,
       generation: new SharedArrayBuffer(36),
       writerDiagnostic: new Int32Array(new SharedArrayBuffer(500)),
@@ -183,6 +204,12 @@ try {
     console.log(
       JSON.stringify({
         sourceHash: createHash("sha256").update(receiptsSource).digest("hex"),
+        dependenciesSha256: Object.fromEntries(
+          Object.entries(dependencies).map(([name, value]) => [
+            name,
+            createHash("sha256").update(value).digest("hex"),
+          ]),
+        ),
         databaseCount,
         scopeCount,
         workerCount: workers.length,
