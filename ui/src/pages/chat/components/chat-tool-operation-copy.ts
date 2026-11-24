@@ -1,5 +1,9 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import type { IconName } from "../../../components/icon-data.ts";
 import { registerChatToolOperationsEnglish } from "../../../i18n/locales/en-chat-tool-operations.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -184,16 +188,68 @@ export function catalogToolLabel(
         : name === "local_image" && args?.task === "ocr"
           ? "task_ocr"
           : action?.replaceAll(".", "_");
-  const operation = key && Object.hasOwn(labels, key) ? key : "default";
+  let operation = key && Object.hasOwn(labels, key) ? key : "default";
+  if (name === "knowledge_attach" && args?.final === true) {
+    operation = "final";
+  } else if (
+    (name === "knowledge_relink" || name === "knowledge_reconcile_evidence") &&
+    args?.dryRun === true
+  ) {
+    operation = "preview";
+  } else if (name === "knowledge_supersede" && args?.undo === true) {
+    operation = "restore";
+  }
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
   }
-  const phase =
+  let phase =
     outcome === "running"
       ? "running"
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
+  if (
+    phase === "done" &&
+    (name === "knowledge_relink" ||
+      name === "knowledge_verify" ||
+      name === "knowledge_supersede" ||
+      name === "knowledge_reconcile_evidence")
+  ) {
+    const result = {
+      ...asNullableRecord(card.details),
+      ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+    };
+    if (name === "knowledge_relink") {
+      if (result.dryRun === true) {
+        operation = "preview";
+      } else if (
+        operation !== "preview" &&
+        typeof result.linked === "number" &&
+        result.linked > 0
+      ) {
+        phase = "linked";
+      }
+    } else if (name === "knowledge_verify") {
+      phase =
+        result.failed === 0 && typeof result.passed === "number" && result.passed > 0
+          ? "done"
+          : "checked";
+    } else if (
+      name === "knowledge_reconcile_evidence" &&
+      (operation === "preview" || result.state === "preview")
+    ) {
+      operation = "preview";
+    } else {
+      // Knowledge omits state from lean published receipts, not from pending or rejected writes.
+      const published =
+        result.state === "published" ||
+        (result.state === undefined &&
+          typeof result.id === "string" &&
+          typeof result.revision === "number" &&
+          typeof result.hash === "string");
+      phase = published ? "done" : "requested";
+    }
+  }
   const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
   const actionLabel = addressed?.name
     ? t("chat.toolCards.namedOperation", { action: label, name: addressed.name })

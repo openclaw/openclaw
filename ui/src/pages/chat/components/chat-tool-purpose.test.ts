@@ -36,7 +36,6 @@ it.each([
   ["mcp__openclaw__tool_search", { query: "session tools" }, "Searched tools"],
   ["mcp__openclaw__sessions_list", { limit: 200 }, "Listed chats"],
   ["sessions_list", { search: "00000000-0000-4000-8000-000000007ef3" }, "Listed chats"],
-  ["knowledge_verify", { records: [{ id: "launch-decision" }] }, "Verified knowledge publication"],
 ] as const)(
   "keeps %s factual while retaining its input for inspection",
   async (name, args, label) => {
@@ -58,6 +57,97 @@ it.each([
         }
       }
     }
+  },
+);
+
+it.each([
+  [
+    "knowledge_attach",
+    { final: false },
+    { state: "uploading", receivedBytes: 3 },
+    "Uploaded knowledge source data",
+  ],
+  [
+    "knowledge_attach",
+    { final: true },
+    { state: "complete", receivedBytes: 3 },
+    "Finished uploading knowledge source file",
+  ],
+  [
+    "knowledge_relink",
+    { dryRun: true },
+    { dryRun: true, linked: 2 },
+    "Previewed links for remembered claims",
+  ],
+  [
+    "knowledge_relink",
+    {},
+    { dryRun: false, scanned: 0, linked: 0 },
+    "Checked remembered claims for missing links",
+  ],
+  ["knowledge_relink", {}, { dryRun: false, linked: 2 }, "Relinked remembered claims"],
+  ["knowledge_relink", {}, { dryRun: true, linked: 2 }, "Previewed links for remembered claims"],
+  [
+    "knowledge_reconcile_evidence",
+    { dryRun: true },
+    { state: "preview" },
+    "Previewed knowledge evidence changes",
+  ],
+  [
+    "knowledge_reconcile_evidence",
+    { dryRun: false },
+    { state: "accepted" },
+    "Requested knowledge evidence changes",
+  ],
+  [
+    "knowledge_reconcile_evidence",
+    { dryRun: false },
+    { state: "published" },
+    "Reconciled knowledge evidence",
+  ],
+  [
+    "knowledge_supersede",
+    { undo: true },
+    { id: "decision", revision: 2, hash: "a".repeat(64) },
+    "Restored superseded claims",
+  ],
+  [
+    "knowledge_supersede",
+    { undo: true },
+    { state: "conflict" },
+    "Requested restoration of superseded claims",
+  ],
+  ["knowledge_supersede", {}, { state: "published" }, "Superseded claims"],
+  [
+    "knowledge_verify",
+    { records: [{ id: "decision" }] },
+    { checked: 1, passed: 1, failed: 0 },
+    "Verified knowledge publication",
+  ],
+  [
+    "knowledge_verify",
+    { records: [{ id: "missing" }] },
+    { checked: 1, passed: 0, failed: 1 },
+    "Checked knowledge publication",
+  ],
+  ["knowledge_verify", { records: [{ id: "decision" }] }, {}, "Checked knowledge publication"],
+] as const)(
+  "reports the recorded Knowledge operation: %s %j",
+  async (name, args, result, label) => {
+    const container = await mountCard(
+      {
+        id: "knowledge",
+        name: "tool_call",
+        args: { id: `openclaw:knowledge:${name}`, args },
+        completed: true,
+        outputText: JSON.stringify({
+          tool: { name },
+          result: { content: [{ type: "text", text: JSON.stringify(result) }] },
+        }),
+      },
+      { expanded: false },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
   },
 );
 

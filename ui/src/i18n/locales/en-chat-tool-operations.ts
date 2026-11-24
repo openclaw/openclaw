@@ -49,9 +49,14 @@ const enChatToolOperations = {
         },
         knowledge_attach: {
           default: {
-            action: "Attach knowledge source file",
-            running: "Attaching knowledge source file",
-            done: "Attached knowledge source file",
+            action: "Upload knowledge source data",
+            running: "Uploading knowledge source data",
+            done: "Uploaded knowledge source data",
+          },
+          final: {
+            action: "Finish uploading knowledge source file",
+            running: "Finishing knowledge source file upload",
+            done: "Finished uploading knowledge source file",
           },
         },
         knowledge_attach_file: {
@@ -206,6 +211,12 @@ const enChatToolOperations = {
             action: "Reconcile knowledge evidence",
             running: "Reconciling knowledge evidence",
             done: "Reconciled knowledge evidence",
+            requested: "Requested knowledge evidence changes",
+          },
+          preview: {
+            action: "Preview knowledge evidence changes",
+            running: "Previewing knowledge evidence changes",
+            done: "Previewed knowledge evidence changes",
           },
         },
         knowledge_record: {
@@ -226,7 +237,13 @@ const enChatToolOperations = {
           default: {
             action: "Relink remembered claims",
             running: "Relinking remembered claims",
-            done: "Relinked remembered claims",
+            done: "Checked remembered claims for missing links",
+            linked: "Relinked remembered claims",
+          },
+          preview: {
+            action: "Preview links for remembered claims",
+            running: "Previewing links for remembered claims",
+            done: "Previewed links for remembered claims",
           },
         },
         knowledge_remember: {
@@ -276,6 +293,13 @@ const enChatToolOperations = {
             action: "Supersede claims",
             running: "Superseding claims",
             done: "Superseded claims",
+            requested: "Requested claim supersession",
+          },
+          restore: {
+            action: "Restore superseded claims",
+            running: "Restoring superseded claims",
+            done: "Restored superseded claims",
+            requested: "Requested restoration of superseded claims",
           },
         },
         knowledge_timeline: {
@@ -297,6 +321,7 @@ const enChatToolOperations = {
             action: "Verify knowledge publication",
             running: "Verifying knowledge publication",
             done: "Verified knowledge publication",
+            checked: "Checked knowledge publication",
           },
         },
         knowledge_withdraw: {
