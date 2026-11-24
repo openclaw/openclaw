@@ -106,10 +106,23 @@ suite.define(() => {
         });
         const row = page.locator(".chat-tool-msg-summary", { hasText: "Ran a script" });
         await row.waitFor();
+        // History can replace a row between two Playwright reads. Compare the first frame
+        // with both rows painted; a reversed order must fail rather than be retried.
+        const order = await page.waitForFunction((openingText) => {
+          const rect = (selector: string, text: string) =>
+            Array.from(document.querySelectorAll(selector))
+              .find((element) => element.textContent?.includes(text))
+              ?.getClientRects()[0];
+          const opening = rect(".chat-group.user", openingText);
+          const tool = rect(".chat-tool-msg-summary", "Ran a script");
+          if (opening?.height && tool?.height) {
+            return opening.top < tool.top ? "opening-first" : "tool-first";
+          }
+        }, prompt);
         if (captureUiProof) {
           await capture(page, createControlUiE2eArtifactDir("resumed-tool-order"), "transcript");
         }
-        expect((await user.boundingBox())!.y).toBeLessThan((await row.boundingBox())!.y);
+        expect(await order.jsonValue()).toBe("opening-first");
       },
     );
   });
