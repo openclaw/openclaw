@@ -200,11 +200,11 @@ export const finalizeSubagentCleanup = async (
       ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
       : ANNOUNCE_EXPIRY_MS;
   const expired = Date.now() >= resolveAnnounceDeliveryDeadline(entry, Date.now(), expiryMs);
-  // A suspended descendant has settled its own delivery, so it cannot hold this completion.
+  // Settled descendant delivery cannot hold completion for unfinished cleanup.
   const activeDescendantRuns = expired
     ? 0
     : await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent, {
-        excludeSuspendedDelivery: true,
+        excludeSettledDelivery: true,
       });
   assertCurrent();
   const now = Date.now();

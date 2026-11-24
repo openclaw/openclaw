@@ -3,7 +3,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
 } from "./subagent-child-owner-match.js";
-import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { isDeliveryTerminalForRequesterSettle } from "./subagent-delivery-state.js";
 import {
   buildSubagentRunReadTopology,
   resolveControllerSessionKey,
@@ -16,15 +16,6 @@ import {
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
-
-function isDeliveryTerminalForRequesterSettle(entry: Pick<SubagentRunRecord, "delivery">): boolean {
-  return (
-    isDeliverySuspended(entry) ||
-    entry.delivery?.disposition === "delivered" ||
-    entry.delivery?.disposition === "intentional_non_delivery" ||
-    entry.delivery?.disposition === "permanent_failure"
-  );
-}
 
 export function matchesSubagentRequesterSession(
   entry: Pick<
@@ -175,7 +166,7 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   countActiveDescendantRuns(rootSessionKey: string): number;
   countPendingDescendantRuns(
     rootSessionKey: string,
-    options?: { excludeSuspendedDelivery?: boolean },
+    options?: { excludeSettledDelivery?: boolean },
   ): number;
   hasDescendantRunAwaitingSettle(
     rootSessionKey: string,
@@ -284,8 +275,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       options?: {
         excludeRunId?: string;
         settledBefore?: number;
-        excludeSuspendedDelivery?: boolean;
-        treatSuspendedDeliveryAsSettled?: boolean;
+        excludeSettledDelivery?: boolean;
         stopAtFirst?: boolean;
         activeOnly?: boolean;
       },
@@ -308,9 +298,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
         const runPending = hasSubagentRunEnded(entry)
           ? !options?.activeOnly &&
             typeof entry.cleanupCompletedAt !== "number" &&
-            !(options?.excludeSuspendedDelivery === true && isDeliverySuspended(entry)) &&
             !(
-              options?.treatSuspendedDeliveryAsSettled === true &&
+              options?.excludeSettledDelivery === true &&
               isDeliveryTerminalForRequesterSettle(entry)
             )
           : isRetainedReadRun(entry, clock);
@@ -327,7 +316,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     const cachedDescendantCount = (
       rootSessionKey: string,
       counts: Map<string, number>,
-      options?: { activeOnly?: boolean; excludeSuspendedDelivery?: boolean },
+      options?: { activeOnly?: boolean; excludeSettledDelivery?: boolean },
     ): number => {
       const root = rootSessionKey.trim();
       if (!getDescendantRuns(root).length) {
@@ -347,12 +336,12 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       });
     const countPendingDescendantRuns = (
       rootSessionKey: string,
-      options?: { excludeSuspendedDelivery?: boolean },
+      options?: { excludeSettledDelivery?: boolean },
     ) =>
-      // Admission can settle suspended delivery while cleanup still retains the result.
+      // Admission follows delivery settlement while cleanup still retains the result.
       cachedDescendantCount(
         rootSessionKey,
-        options?.excludeSuspendedDelivery
+        options?.excludeSettledDelivery
           ? admissionPendingDescendantCountBySessionKey
           : pendingDescendantCountBySessionKey,
         options,
@@ -366,7 +355,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       countDescendantRuns(rootSessionKey, {
         excludeRunId,
         settledBefore,
-        treatSuspendedDeliveryAsSettled: true,
+        excludeSettledDelivery: true,
         stopAtFirst: true,
       }) > 0;
 
@@ -539,7 +528,7 @@ export function countActiveRunsForSessionFromRuns<T extends SubagentRunReadRecor
     readIndex ??= buildSubagentRunReadIndexFromRuns({ runs, now });
     if (
       readIndex.countPendingDescendantRuns(entry.childSessionKey, {
-        excludeSuspendedDelivery: true,
+        excludeSettledDelivery: true,
       }) > 0
     ) {
       count += 1;
@@ -592,7 +581,7 @@ export function countActiveDescendantRunsFromRuns(
 export function countPendingDescendantRunsFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
-  options?: { excludeSuspendedDelivery?: boolean },
+  options?: { excludeSettledDelivery?: boolean },
 ): number {
   return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(
     rootSessionKey,

@@ -51,7 +51,7 @@ export function captureSubagentListReadContext(
     runs.map((entry) => [
       entry.childSessionKey,
       readIndex.countPendingDescendantRuns(entry.childSessionKey, {
-        excludeSuspendedDelivery: true,
+        excludeSettledDelivery: true,
       }),
     ]),
   );

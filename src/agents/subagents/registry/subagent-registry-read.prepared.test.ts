@@ -91,7 +91,7 @@ describe("prepared subagent publication ownership", () => {
     expect(subagentRuns.size).toBe(0);
     expect(await countPendingDescendantRuns(root, assertCurrent)).toBe(1);
     expect(
-      await countPendingDescendantRuns(root, assertCurrent, { excludeSuspendedDelivery: true }),
+      await countPendingDescendantRuns(root, assertCurrent, { excludeSettledDelivery: true }),
     ).toBe(0);
     persistRegistryFixture(
       new Map<string, SubagentRunRecord>([
@@ -100,7 +100,7 @@ describe("prepared subagent publication ownership", () => {
       ]),
     );
     expect(
-      await countPendingDescendantRuns(root, assertCurrent, { excludeSuspendedDelivery: true }),
+      await countPendingDescendantRuns(root, assertCurrent, { excludeSettledDelivery: true }),
     ).toBe(1);
     expect(await countPendingDescendantRuns(root, assertCurrent)).toBe(2);
     expect(loadSubagentRegistryFromSqlite().get(suspended.runId)).toMatchObject({

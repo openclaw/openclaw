@@ -123,7 +123,7 @@ describe("suspended descendant accounting", () => {
       expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
       expect(
         index.countPendingDescendantRuns(parent.childSessionKey, {
-          excludeSuspendedDelivery: true,
+          excludeSettledDelivery: true,
         }),
       ).toBe(0);
       expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
@@ -159,10 +159,34 @@ describe("suspended descendant accounting", () => {
       expect(countActiveRunsForSessionFromRuns(runs, parent.requesterSessionKey)).toBe(1);
       expect(
         index.countPendingDescendantRuns(parent.childSessionKey, {
-          excludeSuspendedDelivery: true,
+          excludeSettledDelivery: true,
         }),
       ).toBe(1);
       expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(2);
     },
   );
+});
+
+it("does not block completion admission on a delivered descendant's unfinished cleanup", () => {
+  const parent = makeRun({
+    runId: "parent",
+    childSessionKey: "agent:main:subagent:parent",
+    endedAt: Date.now(),
+  });
+  const child = makeRun({
+    runId: "delivered-child",
+    requesterSessionKey: parent.childSessionKey,
+    childSessionKey: "agent:main:subagent:delivered-child",
+    endedAt: Date.now() - 1_000,
+    delivery: { status: "delivered" },
+    cleanupHandled: false,
+    cleanupCompletedAt: undefined,
+  });
+  const runs = toRunMap([parent, child]);
+  const index = buildSubagentRunReadIndexFromRuns({ runs });
+  // Session deletion still waits for cleanup; completion admission does not.
+  expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
+  expect(
+    index.countPendingDescendantRuns(parent.childSessionKey, { excludeSettledDelivery: true }),
+  ).toBe(0);
 });

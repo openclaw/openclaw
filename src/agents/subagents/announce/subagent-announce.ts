@@ -306,7 +306,7 @@ async function runSubagentAnnounceFlowBound(
         const unsettledDescendantRuns = await countPendingDescendantRuns(
           params.childSessionKey,
           assertChildSessionCurrent,
-          { excludeSuspendedDelivery: true },
+          { excludeSettledDelivery: true },
         );
         if (unsettledDescendantRuns > 0) {
           return "retryable";

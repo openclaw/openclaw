@@ -181,6 +181,8 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   before the current batch's earliest child was created cannot block its
   continuation. Active descendants and delivery settlement overlapping that
   batch still hold the wake; historical failure records remain available.
+  Settled descendant delivery does not delay a completion while cleanup is pending.
+  Session deletion still waits for that cleanup.
   A private handoff's observation timeout does not
   cancel the underlying Gateway turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure
