@@ -99,6 +99,7 @@ describe("private node policy transport", () => {
       let approvalCurrent = true;
       const { context, invoke } = createContext({
         nodeSession: node,
+        validateAgentRuntimeApprovalAuthority: () => true,
       });
       const privateTransport = createPrivateTransport();
       setDangerousDemoCommandRegistry([
