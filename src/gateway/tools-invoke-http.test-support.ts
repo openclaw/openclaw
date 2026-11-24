@@ -96,10 +96,13 @@ export function registerToolsInvokeSpawnWorkspaceTests(params: {
       expect.objectContaining({
         agentSessionKey: sessionKey,
         inheritedToolPolicySource: scenario.restricted ? "sender" : undefined,
-        workspaceDir: scenario.restricted ? storedWorkspace : configuredWorkspace,
-        sessionPermissionPolicy: scenario.restricted
-          ? { mode: "guarded", root: scenario.explicitRoot ? explicitRoot : storedWorkspace }
-          : undefined,
+        // The session's prepared workspace and permission mode also own this
+        // boundary when the inherited tools are not sender restricted.
+        workspaceDir: storedWorkspace,
+        sessionPermissionPolicy: {
+          mode: "guarded",
+          root: scenario.explicitRoot ? explicitRoot : storedWorkspace,
+        },
       }),
     );
   });
