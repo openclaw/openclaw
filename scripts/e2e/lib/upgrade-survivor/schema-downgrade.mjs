@@ -21,6 +21,16 @@ const fileSha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).
 // The controller and its receipt consumer use the same classification of observed facts.
 // ReaderFloor capability comes from candidate source provenance, not column presence:
 // strict writers legitimately omit a floor, meaning their current version is required.
+/**
+ * @param {{
+ *   before: ReturnType<typeof snapshotFixtureStores>,
+ *   after: ReturnType<typeof inspectFixtureStores>,
+ *   schemaVersions: { state: number, agent: number },
+ *   readerFloorSupported?: boolean,
+ *   smoke?: Partial<Awaited<ReturnType<typeof smokeReaderFixture>>> | null,
+ *   projection?: ReturnType<typeof restoreRaisedFloorStores> | null,
+ * }} params
+ */
 export function classifySchemaDowngrade({
   before,
   after,
@@ -96,11 +106,13 @@ export function classifySchemaDowngrade({
     fail(null, "Default rollback projection left raised-floor stores unrestored");
   }
   if (smoke?.failureKind === "setup" || smoke?.gateway?.error) {
-    fail(null, smoke.failure ?? smoke.gateway.error);
+    fail(null, smoke.failure?.message ?? smoke.gateway?.error ?? "T reader setup failed");
   } else if (smoke && smoke.status !== "passed") {
     // All raised stores are restored by the default projection. Even an authentic
     // T schema refusal is a failure here: it cannot excuse an unraised store.
-    compatibilityFailures.push({ message: smoke.failure ?? "T reader smoke did not pass" });
+    compatibilityFailures.push({
+      message: smoke.failure?.message ?? "T reader smoke did not pass",
+    });
   }
   const failed =
     structuralFailures.length > 0 || (readerFloorSupported && compatibilityFailures.length > 0);

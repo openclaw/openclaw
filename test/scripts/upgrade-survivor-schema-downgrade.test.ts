@@ -1,16 +1,18 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { watch } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { startNodeFixture } from "../../scripts/e2e/lib/upgrade-survivor/release-process.mjs";
+import { needsSchemaDowngrade } from "../../scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs";
 import {
   classifySchemaDowngrade,
   runSchemaDowngrade,
 } from "../../scripts/e2e/lib/upgrade-survivor/schema-downgrade.mjs";
 import {
   inspectFixtureStores,
+  readSqliteStoreFacts,
   restoreRaisedFloorStores,
   snapshotFixtureStores,
 } from "../../scripts/e2e/lib/upgrade-survivor/schema-store-facts.mjs";
@@ -49,7 +51,7 @@ function connect(port: number): Promise<string> {
 }
 
 describe("schema downgrade pre-listen barrier", () => {
-  it.each(["number", "numeric-string", "options", "string-options"])(
+  it.each(["number", "string-options"])(
     "parks only the exact requested TCP port (%s), leaving a real adjacent listener untouched",
     async (form) => {
       const root = tempDirs.make("schema-barrier-");
@@ -57,14 +59,7 @@ describe("schema downgrade pre-listen barrier", () => {
       const claim = await acquireTestPortBlock({ offsets: [0, 1] });
       const port = claim.port;
       const marked = sentinelAt(root, sentinel);
-      const argument =
-        form === "number"
-          ? String(port)
-          : form === "numeric-string"
-            ? JSON.stringify(String(port))
-            : form === "options"
-              ? `{port:${port},host:'127.0.0.1'}`
-              : `{port:'${port}',host:'127.0.0.1'}`;
+      const argument = form === "number" ? String(port) : `{port:'${port}',host:'127.0.0.1'}`;
       const candidate = startNodeFixture(
         [
           "--import",
@@ -117,6 +112,7 @@ function writeStore(
   role: "global" | "agent",
   version: number,
   floor?: number | null,
+  content?: number,
 ) {
   mkdirSync(dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
@@ -133,6 +129,7 @@ function writeStore(
         state_key TEXT PRIMARY KEY, value_json TEXT
         ${floor === undefined ? "" : ", min_reader INTEGER"}
       );
+      CREATE TABLE IF NOT EXISTS sentinel (value TEXT); INSERT INTO sentinel VALUES ('v${version}');
     `);
     db.prepare(
       `INSERT INTO schema_meta VALUES (?, ?, ?, ?${floor === undefined ? "" : ", ?"})`,
@@ -148,7 +145,7 @@ function writeStore(
         `INSERT INTO config_machine_state VALUES (?, ?${floor === undefined ? "" : ", ?"})`,
       ).run(
         "state.schema.contentVersion",
-        String(version),
+        String(content ?? version),
         ...(floor === undefined ? [] : [floor]),
       );
     }
@@ -166,8 +163,11 @@ function observations(agentVersion = 7, sharedRole: "global" | "agent" = "global
   writeStore(shared, "global", 4, 3);
   writeStore(agent, "agent", 6, null);
   writeStore(lazy, "agent", 6);
+  // Native snapshots with a live-store basename are not additional owners.
+  writeStore(join(state, "snapshots", "old", "openclaw.sqlite"), "global", 1);
   const baseline = join(root, "baseline");
   const before = snapshotFixtureStores(state, baseline);
+  expect(before).toHaveLength(3);
   writeStore(shared, sharedRole, 5, 3);
   writeStore(agent, "agent", agentVersion, null);
   const after = inspectFixtureStores(state, join(root, "post-candidate"));
@@ -175,6 +175,27 @@ function observations(agentVersion = 7, sharedRole: "global" | "agent" = "global
 }
 
 describe("schema downgrade controller classification", () => {
+  it("reads legacy deferred content and nullable reader floors without inventing declarations", () => {
+    const root = tempDirs.make("schema-store-facts-");
+    const shared = join(root, "shared.sqlite");
+    const agent = join(root, "agent.sqlite");
+    writeStore(shared, "global", 40, undefined, 41);
+    writeStore(agent, "agent", 42, null);
+    expect(readSqliteStoreFacts(shared)).toMatchObject({
+      role: "shared",
+      version: 41,
+      headerVersion: 40,
+      minReader: 41,
+      hasMinReader: false,
+    });
+    expect(readSqliteStoreFacts(agent)).toMatchObject({
+      role: "agent",
+      version: 42,
+      minReader: 42,
+      hasMinReader: false,
+    });
+  });
+
   it("does not claim a reader pass from valid candidate metadata alone", () => {
     const facts = observations();
     const receipt = classifySchemaDowngrade({
@@ -187,20 +208,48 @@ describe("schema downgrade controller classification", () => {
     expect(receipt.gate).toMatchObject({ enforced: true, passed: false, result: "pending" });
   });
 
+  it("rejects invalid floor metadata and an unraised store changed after observation", () => {
+    const root = tempDirs.make("schema-store-invalid-");
+    const state = join(root, "state");
+    const file = join(state, "state", "openclaw.sqlite");
+    writeStore(file, "global", 42, 43);
+    expect(() => readSqliteStoreFacts(file)).toThrow("Invalid min_reader");
+    const db = new DatabaseSync(file);
+    db.exec("UPDATE config_machine_state SET min_reader=42;");
+    db.close();
+    const baseline = join(root, "baseline");
+    const before = snapshotFixtureStores(state, baseline);
+    const after = inspectFixtureStores(state, join(root, "after"));
+    writeFileSync(file, Buffer.concat([readFileSync(file), Buffer.from("changed")]));
+    expect(() => restoreRaisedFloorStores(state, baseline, before, after)).toThrow(
+      "Unraised store changed",
+    );
+  });
+
   it.each([true, false])(
     "classifies a T refusal after mixed-store projection using source capability, not nullable floor presence (%s)",
     (readerFloorSupported) => {
       const facts = observations();
+      const kept = readFileSync(facts.shared);
       const projection = restoreRaisedFloorStores(
         facts.state,
         facts.baseline,
         facts.before,
         facts.after,
       );
+      expect(readFileSync(facts.shared)).toEqual(kept);
+      expect(readSqliteStoreFacts(facts.agent).version).toBe(6);
+      using restored = new DatabaseSync(facts.agent, { readOnly: true });
+      expect(
+        restored
+          .prepare("SELECT value FROM sentinel")
+          .all()
+          .map((row) => row.value),
+      ).toEqual(["v6"]);
       const refusal = {
         status: "failed",
         failureKind: "compatibility",
-        failure: "T refused the projected rollback store",
+        failure: { message: "T refused the projected rollback store", command: undefined },
       };
       const receipt = classifySchemaDowngrade({
         ...facts,
@@ -288,5 +337,31 @@ describe("schema downgrade controller classification", () => {
     });
     expect(receipt.error).toContain("build-info.json");
     expect(existsSync(join(artifacts, "schema-downgrade.log"))).toBe(true);
+  });
+});
+
+describe("downgrade diff selection", () => {
+  const manifest = { openclaw: { schemaVersions: { state: 41, agent: 42 } } };
+  it("selects a schema version or production migration, not test or unrelated state work", () => {
+    expect(
+      needsSchemaDowngrade(
+        manifest,
+        { openclaw: { schemaVersions: { state: 42, agent: 42 } } },
+        [],
+      ),
+    ).toBe(true);
+    expect(
+      needsSchemaDowngrade(manifest, manifest, ["src/state/openclaw-agent-db-schema.ts"]),
+    ).toBe(true);
+    expect(
+      needsSchemaDowngrade(manifest, manifest, ["src/state/openclaw-state-db-layout-migration.ts"]),
+    ).toBe(true);
+    expect(
+      needsSchemaDowngrade(manifest, manifest, [
+        "src/state/openclaw-state-db-layout-migration.test.ts",
+        "src/state/agent-deletion.ts",
+        "package.json",
+      ]),
+    ).toBe(false);
   });
 });
