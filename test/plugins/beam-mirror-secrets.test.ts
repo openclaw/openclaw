@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import beamPlugin from "../../extensions/beam/index.js";
+import { getRuntimeConfig } from "../../src/config/io.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   createGatewaySchedulerClock,
@@ -14,11 +15,50 @@ import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { createRuntimeTestRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../../src/plugins/runtime.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { createPluginServiceCatalogExports } from "../../src/plugins/service-catalog-exports.js";
 import type { SessionCatalogProvider } from "../../src/plugins/session-catalog.js";
 import { activateSecretsRuntimeSnapshot } from "../../src/secrets/runtime.js";
 import { setupSecretsRuntimeSnapshotTestHooks } from "../../src/secrets/runtime.test-support.js";
 import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+// A source checkout does not contain release binaries. Install one pinned
+// process fixture so this credential test takes the production registration,
+// executable verification and child-process path.
+const cleaner = vi.hoisted(
+  () =>
+    "#!" +
+    process.execPath +
+    "\n" +
+    `
+let input = "";
+process.stdin.setEncoding("utf8").on("data", (chunk) => input += chunk);
+process.stdin.on("end", () => {
+  const { source, title, updatedAt, completed, items } = JSON.parse(input);
+  process.stdout.write(JSON.stringify({ version: 2, beamId: "a".repeat(32), source, title, updatedAt, completed, items }));
+});
+`,
+);
+vi.mock("../../extensions/beam/package.json", async (importOriginal) => {
+  const current = await importOriginal<{ default: Record<string, unknown> }>();
+  const { createHash } = await import("node:crypto");
+  return {
+    ...current,
+    default: {
+      ...current.default,
+      beamNativeRelease: {
+        version: "fixture",
+        protocol: 1,
+        platforms: {
+          [process.platform + "-" + process.arch]: {
+            executableBytes: Buffer.byteLength(cleaner),
+            executableSha256: createHash("sha256").update(cleaner).digest("hex"),
+          },
+        },
+      },
+    },
+  };
+});
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -49,8 +89,13 @@ function prepare(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
 async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvider) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const builder = createRuntimeTestRegistry(createPluginRuntime());
+  const rootDir = tempDirs.make("beam-credential-plugin-");
+  const platform = path.join(rootDir, "native", process.platform + "-" + process.arch);
+  await fs.mkdir(platform, { recursive: true });
+  await fs.writeFile(path.join(platform, "beam-clean"), cleaner, { mode: 0o700 });
   const record = createPluginRecord({
     id: "beam",
+    rootDir,
     source: fileURLToPath(new URL("../../extensions/beam/index.ts", import.meta.url)),
     origin: "bundled",
     enabled: true,
@@ -59,14 +104,30 @@ async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvi
   const api = builder.createApi(record, { config });
   beamPlugin.register(api);
   if (catalog) {
-    api.registerSessionCatalog(catalog);
+    const producer = createPluginRecord({
+      id: "native-catalog-fixture",
+      source: "fixture",
+      configSchema: true,
+      origin: "bundled",
+      enabled: true,
+    });
+    builder.createApi(producer, { config }).registerSessionCatalog(catalog);
   }
   setActivePluginRegistry(builder.registry);
   const service = builder.registry.services.find(({ id }) => id === "beam-mirror")?.service;
   assert(service?.apiVersion === 2, "Beam did not register its mirror service");
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
-  await service.start({ config, stateDir: "/unused", scheduler, logger });
+  assert(service.catalogExports, "Beam did not request catalog export access");
+  const catalogExports = createPluginServiceCatalogExports({
+    pluginId: record.id,
+    configPath: service.catalogExports.allowlistPath,
+    registry: builder.registry,
+    signal: scheduler.signal,
+    assertActive: () => scheduler.signal.throwIfAborted(),
+    getConfig: getRuntimeConfig,
+  });
+  await service.start({ config, stateDir: "/unused", scheduler, logger, catalogExports });
   return { clock, scheduler, logger };
 }
 
@@ -129,6 +190,7 @@ it.skipIf(process.platform === "win32")(
       id: "claude",
       label: "Synthetic catalog",
       supportsProcessHomeIsolation: true,
+      automaticExportHosts: () => ["gateway:local"],
       async list() {
         const session = {
           threadId: "t1",
