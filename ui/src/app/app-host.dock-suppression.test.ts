@@ -91,7 +91,11 @@ it("applies route ownership to shell panels without session-gating desktop", asy
       setScope: vi.fn(),
       subscribe: () => () => undefined,
     },
-    plugins: { selectedReplacement: () => null },
+    plugins: {
+      selectedReplacement: () => null,
+      registrations: () => [],
+      subscribe: () => () => undefined,
+    },
     config: {
       current: { terminalEnabled: true, serverVersion: null, devGitBranch: null },
     },

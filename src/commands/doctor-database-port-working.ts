@@ -58,7 +58,11 @@ async function privateMigrate(
   if (recorded) {
     return;
   }
-  await runDatabasePortTask({ operation: "migrate", sourcePath: localPath, config }, ctx);
+  // PostgreSQL sources already match the descriptor version, and staging compares this copy
+  // with the recorded PostgreSQL rows, so a migration could only restamp schema metadata.
+  if (current.direction.from !== "postgres") {
+    await runDatabasePortTask({ operation: "migrate", sourcePath: localPath, config }, ctx);
+  }
   await runDatabasePortTask({ operation: "checkpoint", sourcePath: localPath }, ctx);
   syncDatabasePortPath(localPath);
   const qualified = await captureDatabaseArtifact(localPath);

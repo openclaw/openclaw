@@ -75,7 +75,7 @@
 .lr-tab-header .tabstrip {
   flex: 1;
 }
-.tabstrip-tab__label {
+.lr-tab-header .tabstrip-tab__label {
   max-width: 150px;
 }
 .lr-address {
@@ -484,11 +484,6 @@ a {
 }
 .lr-refresh[aria-busy="true"] svg {
   animation: btn-spinner-spin 1s linear infinite;
-}
-@keyframes lr-loading-pulse {
-  50% {
-    opacity: 0.5;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .lr-skeleton,

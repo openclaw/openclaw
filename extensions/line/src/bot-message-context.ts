@@ -27,6 +27,7 @@ import {
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   parseAgentSessionKey,
@@ -587,8 +588,8 @@ export async function buildLinePostbackContext(params: {
   if (!rawBody) {
     return null;
   }
-  let agentBody = rawBody;
-  if (rawBody.includes("line.action=")) {
+  let agentBody = agentControlText(rawBody) ?? rawBody;
+  if (agentBody === rawBody && rawBody.includes("line.action=")) {
     const searchParams = new URLSearchParams(rawBody);
     const action = searchParams.get("line.action") ?? "";
     const device = searchParams.get("line.device");

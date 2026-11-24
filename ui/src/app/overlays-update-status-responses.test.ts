@@ -138,6 +138,37 @@ describe("application update status response ownership", () => {
     expect(overlays.snapshot.updateSchedule).toEqual(AUTO_UPDATE_SCHEDULE);
   });
 
+  it("releases a status check started by an earlier Gateway reconnect subscriber", async () => {
+    const discovery = pendingReply({});
+    let status: updateHelpers.UpdateRestartStatusResponse = {};
+    const { harness, overlays } = gatewayTest(
+      updateStatusRequest((checkout) => (checkout ? discovery.promise : status)),
+    );
+    await flushMicrotasks();
+    harness.update({ phase: "reconnecting" });
+    // Settings observes runtimeConfig's synchronous publication before the
+    // overlay receives the same connected snapshot.
+    harness.replaceSnapshotWithoutPublishing({ phase: "connected", hello: updateHello() });
+    const refresh = overlays.refreshUpdateStatus();
+    expect(overlays.snapshot.updateStatusRefreshing).toBe(true);
+    status = {
+      lastRun: updateRunFixture({
+        status: "succeeded",
+        phase: "finished",
+        finishedAtMs: 6_000,
+      }),
+      updateAvailable: null,
+    };
+    harness.update({});
+    discovery.resolve(status);
+    await expect(refresh).resolves.toBe(false);
+    await flushMicrotasks();
+    expect(overlays.snapshot.updateRun?.status).toBe("succeeded");
+    expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
+    expect(overlays.snapshot.updateRunning).toBe(false);
+    expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+  });
+
   it("keeps progress polling while checkout discovery exceeds the progress deadline", async () => {
     vi.useFakeTimers();
     const discovery = pendingReply({});

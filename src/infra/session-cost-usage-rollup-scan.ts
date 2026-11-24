@@ -81,6 +81,9 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
               ...emptyTotals(),
               ...computeUsageTokenTotals(entry.usage),
             };
+            if (entry.usage.cacheTelemetry?.state === "unavailable") {
+              usageTotals.cacheUnmeasuredInput = usageTotals.input;
+            }
             const cost = entry.costBreakdown;
             if (cost?.total !== undefined) {
               usageTotals.totalCost += cost.total;

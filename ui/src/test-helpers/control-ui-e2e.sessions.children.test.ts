@@ -92,7 +92,14 @@ it.for(["empty", "materialized", "scoped"])(
     if (scoped) {
       expect(result).toEqual({
         ...page,
-        sessions: [{ ...child, workspaceReadDisabledReason: null, snapshotAt: expect.any(Number) }],
+        sessions: [
+          {
+            ...child,
+            hasMessages: false,
+            workspaceReadDisabledReason: null,
+            snapshotAt: expect.any(Number),
+          },
+        ],
       });
     } else {
       expect(result).toMatchObject({

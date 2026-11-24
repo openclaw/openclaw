@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { CronJob } from "../../api/types.ts";
 import {
   createContext,
   createGateway,
@@ -35,35 +36,37 @@ it("lets a human owner edit their job but not another person's job", async () =>
   });
   const page = createPage(createContext(gateway), { render: true });
   mounted.push(page);
-  await waitForCronPage(() => {
-    expect(page.cron.cronJobs).toHaveLength(2);
-    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).not.toBeNull();
-    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).not.toBeNull();
-  });
+  // An automation offers Run now only to someone who may change it.
+  const canRun = async (job: CronJob) => {
+    page.selectJob(job);
+    await page.settle();
+    return page.querySelector('[data-test-id="cron-run-now"]') !== null;
+  };
+  await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(2));
+  expect([await canRun(own), await canRun(other)]).toEqual([true, true]);
   gateway.emitSnapshot({ hello: operatorHello(["operator.read", "operator.write"]) });
-  await waitForCronPage(() => {
-    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).not.toBeNull();
-    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).toBeNull();
-  });
+  await page.settle();
+  expect([await canRun(own), await canRun(other)]).toEqual([true, false]);
   const identity = gateway.snapshot.selfUser!.identity!;
   identity.id = "bob";
   page.refreshView();
-  await waitForCronPage(() => {
-    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).toBeNull();
-    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).not.toBeNull();
-  });
+  expect([await canRun(own), await canRun(other)]).toEqual([false, true]);
   identity.id = "alice";
   page.refreshView();
-  await waitForCronPage(() =>
-    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).not.toBeNull(),
-  );
+  expect(await canRun(own)).toBe(true);
   page.selectJob(own);
+  await page.settle();
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
   await page.settle();
   await waitForCronPage(() =>
     expect(page.querySelector<HTMLInputElement>("#cron-name")?.matches(":disabled")).toBe(false),
   );
   const owner = page.querySelector<HTMLButtonElement>("#cron-owner-profile-id");
   expect(owner).not.toBeNull();
+  // The model and reasoning pickers are native details, which a disabled fieldset does not reach.
+  expect(page.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled")).toBe(
+    "false",
+  );
   expect(owner?.matches(":disabled")).toBe(false);
   page.patchForm({ name: "Edited by owner", ownerProfileId: "bob" });
   await page.settle();
@@ -71,14 +74,18 @@ it("lets a human owner edit their job but not another person's job", async () =>
   expect(page.cron.cronForm.ownerProfileId).toBe("bob");
   page.selectJob(other);
   await page.settle();
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
+  await page.settle();
   await waitForCronPage(() =>
     expect(page.querySelector<HTMLInputElement>("#cron-name")?.matches(":disabled")).toBe(true),
+  );
+  expect(page.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled")).toBe(
+    "true",
   );
   page.patchForm({ name: "Unauthorized" });
   expect(page.cron.cronForm.name).toBe(other.name);
   page.closePanel();
   gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
-  await waitForCronPage(() =>
-    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).not.toBeNull(),
-  );
+  await page.settle();
+  expect(await canRun(other)).toBe(true);
 });

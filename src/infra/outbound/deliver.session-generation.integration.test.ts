@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -25,13 +26,7 @@ function fixture() {
   const sessionKey = "agent:main:result-generation";
   const entry = { sessionId: "result-generation", lifecycleRevision: "original", updatedAt: 1 };
   writeSessionEntry(database, sessionKey, entry);
-  const generation = {
-    agentId: "main",
-    storePath: database.path,
-    sessionKey,
-    sessionId: entry.sessionId,
-    lifecycleRevision: entry.lifecycleRevision,
-  };
+  const generation = chatRef({ agentId: "main", storePath: database.path, sessionKey });
   const update = (revision: string) =>
     replaceSessionEntrySync(
       { agentId: "main", storePath: database.path, sessionKey },
@@ -99,7 +94,7 @@ it("retains a completed result through temporary lifecycle unavailability", asyn
     const mutation = runSessionMutation({
       kind: "reset",
       scope: generation.storePath,
-      identities: [generation.sessionKey, generation.sessionId],
+      identities: [generation.sessionKey, "result-generation"],
       prepare: gate.hold,
       run: () => Promise.resolve(update("original")),
     });

@@ -13,20 +13,39 @@ import {
 } from "../../daemon/windows-task-supervisor-contract.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getProcessSupervisor, type ManagedRun } from "../../process/supervisor/index.js";
+import type { ManagedRun } from "../../process/supervisor/index.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import {
+  isGatewayRunInvocationArgv,
+  resolveGatewayRunPreBootstrapOptions,
+} from "../gateway-run-argv.js";
 
-const log = createSubsystemLogger("gateway/task-supervisor");
 const STDERR_TAIL_CHARS = 8192;
+
+export async function tryRunWindowsGatewayTaskSupervisor(argv: string[]): Promise<boolean> {
+  if (
+    resolveCliArgvInvocation(argv).hasHelpOrVersion ||
+    !isGatewayRunInvocationArgv(argv) ||
+    !resolveGatewayRunPreBootstrapOptions(argv)?.taskSupervisor
+  ) {
+    return false;
+  }
+  await runWindowsGatewayTaskSupervisor();
+  return true;
+}
 
 /**
  * Runs the real Gateway inside the Windows Job Object owned by ProcessSupervisor.
  * The task launcher owns an outer Job containing this supervisor. The
  * command anchor owns the inner Job used for cancellation and extinction joins.
  */
-export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
+async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   if (process.platform !== "win32") {
     throw new Error("--task-supervisor is only available to the Windows Gateway service");
   }
+  // Native process supervision belongs only to the Windows task path, not ordinary CLI startup.
+  const { getProcessSupervisor } = await import("../../process/supervisor/index.js");
+  const log = createSubsystemLogger("gateway/task-supervisor");
   let stderr = "";
   let managed: ManagedRun | null = null;
   let cancelled = false;
@@ -65,8 +84,15 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       if (childArgs.length === 0) {
         throw new Error("Windows task supervisor could not resolve the Gateway command");
       }
+      // A Git release install starts each child through its launcher, which counts trial
+      // starts and matches the installed task command.
+      const releaseLauncher: unknown = Reflect.get(
+        globalThis,
+        Symbol.for("openclaw.gitReleaseLauncher"),
+      );
       const invocation = resolveOpenClawCliInvocation({
         args: [...childArgs, formatWindowsTaskSupervisorChildArgument(restartExitCode)],
+        entryPath: typeof releaseLauncher === "string" ? releaseLauncher : undefined,
       });
       const command = [invocation.command, ...invocation.args]
         .map((argument) => quoteCmdScriptArg(argument))

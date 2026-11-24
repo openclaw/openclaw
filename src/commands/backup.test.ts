@@ -34,7 +34,7 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 // The fixture helper imports backup commands; install the tar mock before loading it.
 const { isolatedBackupCase } = await import("../infra/backup-create.test-support.js");
 const { backupCreateCommand } = await import("./backup.js");
-const actualTar = await vi.importActual<typeof import("tar")>("tar");
+const actualTar = await vi.importActual<typeof import("tar/raw")>("tar/raw");
 const { walkBackupTar } = await vi.importActual<typeof import("../infra/backup-tar-walk.js")>(
   "../infra/backup-tar-walk.js",
 );

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { escapeXml } from "../shared/xml.js";
+import { scheduledTaskXmlPolicy } from "./schtasks-xml-enabled.js";
 import {
   assertUnattendedLeastPrivilegeTask,
-  normalizeScheduledTaskXmlEnabledForFixture,
   TASK_LOGON_S4U,
   TASK_RUNLEVEL_LEAST_PRIVILEGE,
 } from "./schtasks.integration-observation.test-support.js";
@@ -23,8 +23,8 @@ function exportedTaskXml(settings: string[] = [], newline = "\r\n") {
   ].join(newline);
 }
 
-describe("installed Scheduled Task XML fixtures", () => {
-  it.each(["\r\r\n"])(
+describe("Scheduled Task enable policy canonicalization", () => {
+  it.each(["\r\r\n", "\r\n"])(
     "compares enabled exports with %j line endings without ignoring other settings",
     (newline) => {
       const enabled = exportedTaskXml(["<AllowStartOnDemand>false</AllowStartOnDemand>"], newline);
@@ -32,18 +32,14 @@ describe("installed Scheduled Task XML fixtures", () => {
         ["<AllowStartOnDemand>false</AllowStartOnDemand>", "<Enabled>false</Enabled>"],
         newline,
       );
-      expect(normalizeScheduledTaskXmlEnabledForFixture(enabled)).toBe(
-        normalizeScheduledTaskXmlEnabledForFixture(disabled),
-      );
+      expect(scheduledTaskXmlPolicy(enabled)).toBe(scheduledTaskXmlPolicy(disabled));
       for (const changed of [
         enabled.replace("gateway.cmd", "other.cmd"),
         enabled.replace("</MultipleInstancesPolicy>", "</MultipleInstancesPolicy>\r"),
         enabled.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
         enabled.replace("<AllowStartOnDemand>false", "<AllowStartOnDemand>true"),
       ]) {
-        expect(normalizeScheduledTaskXmlEnabledForFixture(changed)).not.toBe(
-          normalizeScheduledTaskXmlEnabledForFixture(disabled),
-        );
+        expect(scheduledTaskXmlPolicy(changed)).not.toBe(scheduledTaskXmlPolicy(disabled));
       }
     },
   );

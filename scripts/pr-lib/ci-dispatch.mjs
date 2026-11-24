@@ -306,6 +306,11 @@ function buildCiDispatchArgs(record, backend) {
     "release_gate=true",
     "-f",
     `pull_request_number=${record.pr}`,
+    // Qualification keeps PR coverage instead of ordinary dispatch's release validation.
+    "-f",
+    "runner_backend=hybrid",
+    "-f",
+    "ci_shape=default",
   ];
 }
 

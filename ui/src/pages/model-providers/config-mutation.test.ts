@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -70,6 +71,63 @@ describe("model provider config patches", () => {
       agents: { defaults: { utilityModel } },
     });
   });
+
+  it.each(["primary", "fallback"] as const)(
+    "round-trips the %s model's harness and retains the way back",
+    async (field) => {
+      const model = field === "primary" ? "openai/first" : "openai/second";
+      const chain = { primary: "openai/first", fallbacks: ["openai/second", "fixture/last"] };
+      const original = {
+        model: chain,
+        models: {
+          [model]: {
+            alias: "Favorite",
+            agentRuntime: { id: "openclaw" },
+            pickerRuntimes: ["codex"],
+          },
+          "fixture/last": { streaming: false },
+        },
+      };
+      let config: Record<string, unknown> = { agents: { defaults: original } };
+      for (const [id, base] of [
+        ["codex", "openclaw"],
+        ["openclaw", "codex"],
+      ] as const) {
+        let draft: DefaultsDraft = {
+          ...readModelProviderConfig(config).defaults,
+          ...readModelBehaviorConfig({}),
+        };
+        const actions = modelDefaultsActions(
+          () => draft,
+          (patch) => {
+            draft = { ...draft, ...patch };
+          },
+        );
+        if (field === "primary") {
+          actions.onPrimaryChange(model, { id, base });
+        } else {
+          actions.onFallbackChange(model, { id, base });
+        }
+        const next = applyMergePatch(config, await submitDefaults(draft));
+        if (!isRecord(next)) {
+          throw new Error("Expected a merged configuration object");
+        }
+        config = next;
+        expect(config).toEqual({
+          agents: {
+            defaults: {
+              ...original,
+              models: {
+                ...original.models,
+                [model]: { alias: "Favorite", agentRuntime: { id }, pickerRuntimes: [base] },
+              },
+            },
+          },
+        });
+        expect(readModelProviderConfig(config).defaults.runtimes?.[model]?.id).toBe(id);
+      }
+    },
+  );
 
   it("edits utility defaults without changing the regular model chain", () => {
     let defaults = readModelProviderConfig({

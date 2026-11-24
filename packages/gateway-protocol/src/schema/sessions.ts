@@ -1,6 +1,9 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
+import {
+  SESSION_COMPANION_MAX_EXCHANGE_BYTES,
+  SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS,
+} from "../session-companion-contract.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./error-shape.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -122,14 +125,19 @@ export const SessionsObserverVisibilityResultSchema = closedObject({
 });
 
 /** One bounded question/answer exchange in the ephemeral session companion. */
+const SessionCompanionAnswerSchema = Type.String({
+  minLength: 1,
+  maxLength: SESSION_COMPANION_MAX_EXCHANGE_BYTES,
+});
 export const SessionCompanionExchangeSchema = closedObject({
   question: Type.String({ minLength: 1, maxLength: 400 }),
-  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  answer: SessionCompanionAnswerSchema,
   ts: Type.Integer({ minimum: 0 }),
 });
 
 /** Asks the read-only companion about one session and its workspace. */
 export const SessionsCompanionAskParamsSchema = closedObject({
+  askId: Type.Optional(NonEmptyString),
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
@@ -149,7 +157,7 @@ export const SessionsCompanionAskParamsSchema = closedObject({
 
 /** Companion answer returned only to the requesting operator. */
 export const SessionsCompanionAskResultSchema = closedObject({
-  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  answer: SessionCompanionAnswerSchema,
   ts: Type.Integer({ minimum: 0 }),
 });
 
@@ -165,10 +173,11 @@ export const SessionsCompanionStateResultSchema = closedObject({
   defaultModel: Type.Optional(NonEmptyString),
 });
 
-/** Selects the in-memory companion thread to clear. */
-export const SessionsCompanionResetParamsSchema = closedObject(
-  SessionsCompanionStateParamsSchema.properties,
-);
+/** Without cancelAskId clear the thread; with it stop only that question. */
+export const SessionsCompanionResetParamsSchema = closedObject({
+  ...SessionsCompanionStateParamsSchema.properties,
+  cancelAskId: Type.Optional(NonEmptyString),
+});
 
 export const SessionsCompanionResetResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -304,6 +313,42 @@ export const SessionsCreateResultSchema = Type.Object(
   },
   { additionalProperties: true },
 );
+
+/** Discover one steerable physical backend under the same write policy as active steering. */
+export const SessionsSteerTargetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+export const SessionsSteerTargetResultSchema = closedObject({
+  target: Type.Union([
+    closedObject({ sessionId: NonEmptyString, runId: NonEmptyString }),
+    Type.Null(),
+  ]),
+});
+export type SessionsSteerTargetParams = Static<typeof SessionsSteerTargetParamsSchema>;
+export type SessionsSteerTargetResult = Static<typeof SessionsSteerTargetResultSchema>;
+
+/** Literal human input for one exact running backend; never starts a turn. */
+export const SessionsSteerActiveParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: NonEmptyString,
+  message: Type.String({ minLength: 1 }),
+  idempotencyKey: NonEmptyString,
+});
+
+export const SessionsSteerActiveResultSchema = closedObject({
+  runId: NonEmptyString,
+  inputId: NonEmptyString,
+  status: stringLiteralUnion(["accepted", "rejected", "indeterminate", "in_flight"]),
+  reason: Type.Optional(Type.String()),
+  messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
+  receiptPersisted: Type.Boolean(),
+});
+
+export type SessionsSteerActiveParams = Static<typeof SessionsSteerActiveParamsSchema>;
+export type SessionsSteerActiveResult = Static<typeof SessionsSteerActiveResultSchema>;
 
 export const SessionsSendParamsSchema = closedObject({
   key: NonEmptyString,

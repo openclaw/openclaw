@@ -17,10 +17,7 @@ import {
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
 import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
-import {
-  SAFETY_MARGIN,
-  createFixedRequestTokenEstimator,
-} from "../../sessions/context-token-pressure.js";
+import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -46,13 +43,13 @@ import {
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
-import {
-  createChatGPTV2CompactionBoundary,
-  isChatGPTV2CompactionEligible,
-} from "./chatgpt-v2-compaction.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
+import {
+  createRequestBoundaryCompaction,
+  resolveRequestBoundaryCompaction,
+} from "./request-boundary-compaction.js";
 
 type PromptPreflightState = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"];
 
@@ -109,21 +106,24 @@ export async function runEmbeddedAttemptPromptPhase(
   } = sessionRuntime;
   const { effectiveFsWorkspaceOnly, effectiveWorkspace, sandbox, sessionAgentId } = input.setup;
   const {
-    history: { contextEnginePromptAuthority, unwindowedContextEngineMessagesForPrecheck },
+    history: {
+      contextEnginePromptAuthority,
+      unwindowedContextEngineMessagesForPrecheck,
+      estimateFixedRequest,
+    },
     promptActiveSession,
     stream: { stopAcceptingSteerMessages },
   } = preparedStreamRuntime;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
-  const estimateFixedRequest = createFixedRequestTokenEstimator();
   const { diagnosticTrace, runTrace } = input.diagnostics;
   const { systemPromptReport, runtimeInfo } = prepared.systemPrompt;
   let systemPromptText = sessionRuntimeState.systemPromptText;
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
   let providerBoundaryPrecheck: MidTurnPrecheckRequest | undefined;
-  const providerCompactionAtRequestBoundary = isChatGPTV2CompactionEligible({
+  const requestBoundaryCompaction = resolveRequestBoundaryCompaction({
     config: attempt.config,
     model: attempt.model,
     extraParams: effectiveExtraParams,
@@ -131,7 +131,9 @@ export async function runEmbeddedAttemptPromptPhase(
     compactionReplayEnabled,
     contextEngineOwnsCompaction: activeContextEngine?.info.ownsCompaction,
     operation: attempt.operation,
+    trigger: attempt.trigger,
   });
+  const providerCompactionAtRequestBoundary = requestBoundaryCompaction !== undefined;
   const previousThresholdDeferral = activeSession[agentSessionDeferThresholdCompaction];
   // Provider-owned thresholds defer client maintenance, never the hard window guard.
   if (
@@ -223,6 +225,7 @@ export async function runEmbeddedAttemptPromptPhase(
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
       systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
+      mcpDiagnostics: prepared.bundleTools.bundleMcpRuntime?.diagnostics,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,
@@ -455,13 +458,16 @@ export async function runEmbeddedAttemptPromptPhase(
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
         compactionRequestBudget,
-        ...(providerCompactionAtRequestBoundary
+        ...(requestBoundaryCompaction
           ? {
-              compactBeforeRequest: createChatGPTV2CompactionBoundary({
+              compactBeforeRequest: createRequestBoundaryCompaction({
+                variant: requestBoundaryCompaction,
                 session: activeSession,
                 config: attempt.config,
                 contextTokenBudget: promptContext.contextTokenBudget,
                 reserveTokens,
+                runId: attempt.runId,
+                isToolBoundarySafe: () => preparedStreamRuntime.isToolBoundarySafe?.() ?? false,
                 timeoutMs: input.sessionLock.compactionTimeoutMs,
                 authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
                 ...(attempt.sessionKey
@@ -504,7 +510,7 @@ export async function runEmbeddedAttemptPromptPhase(
                   promptAssembly.assertHostActive?.();
                 },
                 withTranscriptWrite,
-                onFallback: (request) => {
+                onPrecheck: (request) => {
                   providerBoundaryPrecheck = request;
                 },
               }),

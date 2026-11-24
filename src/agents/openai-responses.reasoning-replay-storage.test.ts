@@ -7,7 +7,7 @@ import { streamOpenAIResponses } from "../../packages/ai/src/providers/openai-re
 import { createOpenAIResponsesTransportStreamFn } from "../../packages/ai/src/transports/openai-responses-client.js";
 import type { Context } from "../../packages/ai/src/types.js";
 import { prepareTranscriptMessageAppendForWorker } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
-import { parseSessionEntries } from "./sessions/session-manager-codec.js";
+import { parseSessionEntries } from "./sessions/session-manager-jsonl.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const originalHost = getAiTransportHost();

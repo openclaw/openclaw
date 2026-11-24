@@ -99,7 +99,6 @@ import type {
 } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
-  DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
   formatMs,
@@ -296,16 +295,16 @@ async function runModelsStatusCommand(
         cfg,
         agentId,
         defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
         ...DISPLAY_MODEL_PARSE_OPTIONS,
       });
 
       const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
       const rawModel = agentModelPrimary ?? rawDefaultsModel;
-      const resolvedLabel = modelKey(resolved.provider, resolved.model);
+      const resolvedLabel = resolved && modelKey(resolved.provider, resolved.model);
       const defaultLabel = rawModel || resolvedLabel;
       const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
       const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
+      const textModelRefs = [...(defaultLabel ? [defaultLabel] : []), ...fallbacks];
       const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
       const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
       const {
@@ -347,7 +346,7 @@ async function runModelsStatusCommand(
           ...DISPLAY_MODEL_PARSE_OPTIONS,
         })?.ref;
       };
-      const textUsesOpenAI = [defaultLabel, ...fallbacks].some(
+      const textUsesOpenAI = textModelRefs.some(
         (raw) =>
           normalizeProviderId(resolveStatusModelRef(raw)?.provider ?? "") === OPENAI_PROVIDER_ID,
       );
@@ -376,7 +375,7 @@ async function runModelsStatusCommand(
       const modelCandidates: string[] = [];
       const providerUseRefs: StatusProviderUseRef[] = [];
       for (const [refs, routeScope, allowCodexRuntimeFallback] of [
-        [[defaultLabel, ...fallbacks], "text", true],
+        [textModelRefs, "text", true],
         [[imageModel, ...imageFallbacks], "image", false],
         // Utility completions use their own text route without the primary's runtime fallback.
         [[utilityModelRef, ...utilityFallbacks], "text", false],
@@ -481,8 +480,8 @@ async function runModelsStatusCommand(
       const visibilityPolicy = createModelVisibilityPolicy({
         cfg,
         catalog: catalog.entries,
-        defaultProvider: resolved.provider,
-        defaultModel: resolved,
+        defaultProvider: resolved?.provider ?? DEFAULT_PROVIDER,
+        ...(resolved ? { defaultModel: resolved } : {}),
         agentId: workspaceAgentId,
         ...DISPLAY_MODEL_PARSE_OPTIONS,
       });
@@ -1070,8 +1069,8 @@ async function runModelsStatusCommand(
           configPath,
           ...(agentId ? { agentId } : {}),
           agentDir,
-          defaultModel: defaultLabel,
-          resolvedDefault: resolvedLabel,
+          defaultModel: defaultLabel || null,
+          resolvedDefault: resolvedLabel ?? null,
           fallbacks,
           imageModel: imageModel || null,
           imageFallbacks,
@@ -1112,7 +1111,7 @@ async function runModelsStatusCommand(
       }
 
       if (opts.plain) {
-        writeRuntimeStdout(runtime, terminalText`${resolvedLabel}`);
+        writeRuntimeStdout(runtime, terminalText`${resolvedLabel ?? ""}`);
         finishModelsStatusOutput(runtime, opts.check, checkStatus);
         return;
       }
@@ -1147,8 +1146,9 @@ async function runModelsStatusCommand(
         runtime.log("");
         runtime.log(colorize(rich, theme.heading, heading));
       };
-      const displayDefault =
-        rawModel && rawModel !== resolvedLabel
+      const displayDefault = !resolvedLabel
+        ? "not configured"
+        : rawModel && rawModel !== resolvedLabel
           ? `${resolvedLabel} (from ${rawModel})`
           : resolvedLabel;
 

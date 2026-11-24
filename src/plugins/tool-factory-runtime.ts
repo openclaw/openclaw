@@ -1,6 +1,5 @@
 /** Invokes current-context plugin tool factories and reports one assembly's timings. */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { runWithPluginToolInvocationSource } from "../agents/agent-tool-source-execution-guard.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -92,8 +91,7 @@ export function bindPluginToolCallbacks(
     return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
   };
   const callbacks = {
-    execute: (...args: Parameters<AnyAgentTool["execute"]>) =>
-      runWithPluginToolInvocationSource(() => executeBound(...args)),
+    execute: executeBound,
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
       : {}),

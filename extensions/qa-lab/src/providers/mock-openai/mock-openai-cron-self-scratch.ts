@@ -1,6 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
-import { extractToolOutput } from "./mock-openai-input.js";
+import { countCurrentToolOutputs, extractToolOutput } from "./mock-openai-input.js";
 
 const QA_CRON_SELF_SCRATCH_PROMPT_RE =
   /Automation self scratch QA check: content=(\S+) marker=(\S+)/;
@@ -19,7 +19,7 @@ export function planCronSelfScratchTurn(params: {
     return null;
   }
   const [, content, marker] = match;
-  const completed = params.input.filter((item) => item.type === "function_call_output").length;
+  const completed = countCurrentToolOutputs(params.input);
   if (completed === 0) {
     return params.buildToolCall("automations", { action: "scratch_get" });
   }

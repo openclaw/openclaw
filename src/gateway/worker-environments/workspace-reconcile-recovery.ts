@@ -173,6 +173,7 @@ export async function createWorkspacePatch(params: {
   stagingRoot: string;
   baseEntries: WorkerWorkspaceManifestEntry[];
   appliedEntries: WorkerWorkspaceManifestEntry[];
+  publicationCopy?: boolean;
 }): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.patch"]> {
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-patch-"),
@@ -222,6 +223,8 @@ export async function createWorkspacePatch(params: {
     const snapshot = {
       baseTree,
       basePack: ownedWorkerBytes(packed.stdout),
+      // Publication consumes this copy; rollback retains the original pack through acceptance.
+      publicationPack: params.publicationCopy ? new Uint8Array(packed.stdout) : undefined,
       basePackSha256: createHash("sha256").update(packed.stdout).digest("hex"),
     };
     // Directory-only and fully conflicted reconciliations share the empty tree.

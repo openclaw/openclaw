@@ -282,11 +282,14 @@ private struct ChatInlineWidgetResolution: Equatable {
 @MainActor
 struct ChatInlineWidgetView: View {
     @Environment(\.openClawEmbeddedBrowserUnavailableReason) private var browserUnavailableReason
+    /// Read here rather than passed in, so a health flip restarts this widget's load without
+    /// changing the row that holds it.
+    @Environment(\.openClawChatGateway) private var gateway
     let preview: OpenClawChatCanvasPreview
-    let resolverReady: Bool
-    let resolveResource: @MainActor @Sendable (
-        String,
-        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+
+    private var resolverReady: Bool {
+        self.gateway?.isResolverReady() == true
+    }
 
     @State private var resolution: ChatInlineWidgetResolution?
     @State private var recoveryAttempts = 0
@@ -530,7 +533,7 @@ struct ChatInlineWidgetView: View {
               self.activePath == path, self.loadGeneration == generation
         else { return }
         self.resolutionInFlight = true
-        let candidate = await resolveResource(path, failedResource)
+        let candidate = await self.gateway?.resolveWidgetResource(path, failedResource)
         guard self.activePath == path,
               self.loadGeneration == generation
         else { return }

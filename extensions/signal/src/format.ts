@@ -54,6 +54,18 @@ const SIGNAL_FORMAT_PROFILE = FormatCapabilityProfile.define({
   chunk: { limit: 4_000, unit: "chars" },
 });
 
+// Parsers percent-encode non-ASCII destinations, while labels keep the authored characters.
+function decodeLinkHref(href: string): string {
+  try {
+    // "%25" stays encoded: "%2541" (a literal "%41") and "%41" ("A") are different targets.
+    const decoded = decodeURI(href.replace(/%25/gi, "%2525"));
+    // A decoded space or control would no longer read as one URL, so keep the suffix.
+    return /[\s\p{Cc}]/u.test(decoded) ? href : decoded;
+  } catch {
+    return href;
+  }
+}
+
 function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const normalize = (value: string, preserveSuffixCase: boolean) => {
     const normalized = value
@@ -73,9 +85,11 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
         const label = ir.text.slice(link.start, link.end);
         const href = link.href.trim();
         const preserveSuffixCase = /^https?:\/\//i.test(href);
+        const comparableHref = href.replace(/^mailto:/, "");
+        const normalizedLabel = normalize(label, preserveSuffixCase);
         return (
-          normalize(label, preserveSuffixCase) !==
-          normalize(href.replace(/^mailto:/, ""), preserveSuffixCase)
+          normalize(comparableHref, preserveSuffixCase) !== normalizedLabel &&
+          normalize(decodeLinkHref(comparableHref), preserveSuffixCase) !== normalizedLabel
         );
       }),
     },

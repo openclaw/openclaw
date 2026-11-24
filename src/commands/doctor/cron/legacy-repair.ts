@@ -30,6 +30,7 @@ import { importRetiredStateSource } from "../../../infra/state-migrations.retire
 import { listRetiredCronStateFiles } from "../../../infra/state-migrations.retired-cron-files.js";
 import { listExistingRetiredStateFiles } from "../../../infra/state-migrations.retired-files.js";
 import { backupLegacyStateSource } from "../../../infra/state-migrations.source-backup.js";
+import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateReadContext } from "../../../state/openclaw-state-worker-context.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -200,6 +201,7 @@ export async function applyLegacyCronStoreRepair(params: {
   recoverQuarantinedScheduleJobs?: boolean;
 }): Promise<LegacyCronRepairResult> {
   await assertCronStateSchemaSupportedAsync();
+  await prepareProviderModelPolicySurfaces();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];

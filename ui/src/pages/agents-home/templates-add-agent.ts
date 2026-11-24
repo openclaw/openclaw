@@ -130,6 +130,7 @@ export async function addTemplateAgent(
     () => {},
     () => clearChat(),
   );
+  composer.assistantName = name;
   const clearChat = context.chatSubmissions.beginCreate({
     creation,
     composer,

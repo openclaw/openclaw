@@ -13,4 +13,3 @@ ui/src/pages/chat/session-snapshot-database.ts	1
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/shared.ts	1
 ui/src/pages/chat/talk/voice-selection.ts	1
-ui/src/pages/plugins/plugins-consent.ts	1

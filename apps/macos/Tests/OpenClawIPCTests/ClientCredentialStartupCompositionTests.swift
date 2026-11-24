@@ -9,12 +9,58 @@ import Testing
 @testable import OpenClawMacCLI
 
 /// Runs the real app only inside the disposable, staged app-host CI lane.
-@Suite(.testWaitLimit)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct ClientCredentialStartupCompositionTests {
     private nonisolated static var isAppHost: Bool {
         Bundle.main.bundleIdentifier == "ai.openclaw.mac.recovery-fixture" &&
             BundledRuntime.isBundledApp && AppProfile.current.isActive
+    }
+
+    @Test(.enabled(if: Self.isAppHost))
+    func `failed credential startup exits and permits the same profile to reopen`() async throws {
+        let profileName = "credential-failure-" + UUID().uuidString.lowercased()
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": profileName])
+        let root = profile.stateDirectoryURL()
+        let suite = try #require(profile.defaultsSuiteName)
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        var canRemoveFixture = true
+        defer {
+            if canRemoveFixture {
+                defaults.removePersistentDomain(forName: suite)
+                try? FileManager.default.removeItem(at: profile.instanceLockURL())
+                try? FileManager.default.removeItem(at: root)
+            }
+        }
+        defaults.set(true, forKey: pauseDefaultsKey)
+        defaults.set(true, forKey: onboardingSeenKey)
+        defaults.synchronize()
+        let material = DeviceIdentityStore.generateMaterial()
+        try Self.seedNativeSource(root: root, material: material)
+        let configURL = root.appendingPathComponent("openclaw.json")
+        try Data("{".utf8).write(to: configURL)
+        let app = Bundle.main.bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("OpenClawStartupFixture.app")
+        var environment = ProcessInfo.processInfo.environment
+        environment["OPENCLAW_PROFILE"] = profileName
+        environment["OPENCLAW_STATE_DIR"] = root.path
+        environment["OPENCLAW_CONFIG_PATH"] = configURL.path
+        let result = await ShellExecutor.runDetailed(
+            command: [
+                app.appendingPathComponent("Contents/MacOS/OpenClaw").path,
+                "--no-activate", "--background-only", "--attach-only",
+            ],
+            cwd: root.path,
+            env: environment,
+            timeout: 15)
+        try #require(!result.timedOut, "Credential failure must exit without forced termination")
+        try #require(result.success, Comment(rawValue: result.stderr))
+        #expect(result.stderr.contains("OpenClaw client credentials need recovery."))
+
+        try Data("{}".utf8).write(to: configURL)
+        try await Self.assertAppCredentials(
+            app: app, root: root, profileName: profileName, material: material,
+            retainFixture: { canRemoveFixture = false })
     }
 
     @Test(.enabled(if: Self.isAppHost))

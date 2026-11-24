@@ -407,7 +407,7 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toContain("review_subagents: Review worker");
   });
 
-  it("shows finished ancestors as done while suspended child results remain available", async () => {
+  it("shows finished ancestors as done once child delivery is settled", async () => {
     const now = Date.now();
     const parent = {
       runId: "finished-parent",
@@ -421,10 +421,10 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     const child = {
       ...parent,
-      runId: "suspended-child",
-      childSessionKey: "agent:main:subagent:suspended-child",
+      runId: "delivered-child",
+      childSessionKey: "agent:main:subagent:delivered-child",
       requesterSessionKey: parent.childSessionKey,
-      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+      delivery: { status: "delivered" },
     } satisfies SubagentRunRecord;
     await addSubagentRunForTests(parent);
     await addSubagentRunForTests(child);
@@ -434,7 +434,7 @@ describe("buildSubagentList", () => {
     expect(finished.active).toEqual([]);
     expect(finished.recent).toMatchObject([
       { runId: parent.runId, status: "done", pendingDescendants: 0 },
-      { runId: child.runId, status: "done", deliveryStatus: "suspended" },
+      { runId: child.runId, status: "done", deliveryStatus: "delivered" },
     ]);
     expect(finished.text).not.toContain("waiting on");
 

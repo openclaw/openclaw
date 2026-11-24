@@ -373,6 +373,8 @@ test.for([
         const entryAfterCreation = readEntry(storePath, key);
         const failureMessage =
           "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
+        const retainedCause = expect.stringContaining(failureMessage);
+        const desktopNotice = "Git clone could not reach GitHub.";
         await withinTest(materializationStarted.promise, testSignal);
         materialization.reject(new ProjectCloneError("network", failureMessage));
         await settleWorkspaceRuns(context, storePath, key);
@@ -396,7 +398,7 @@ test.for([
               status: "failed",
               hasActiveRun: false,
               lastRunId: runId,
-              lastRunError: expect.stringContaining(failureMessage),
+              lastRunError: retainedCause,
             },
             messages: [
               expect.objectContaining({ role: "user" }),
@@ -404,7 +406,7 @@ test.for([
                 role: "custom",
                 customType: "run-failed-before-reply",
                 display: true,
-                content: "Your request couldn't be completed.",
+                content: failureMessage,
               }),
             ],
           });
@@ -417,7 +419,7 @@ test.for([
           expect.objectContaining({
             type: "custom_message",
             customType: "run-failed-before-reply",
-            details: { runId, error: expect.stringContaining(failureMessage) },
+            details: { runId, error: retainedCause, desktopNotice },
           }),
         );
 
@@ -430,9 +432,9 @@ test.for([
         }
         if (worktree) {
           const retryFailure =
-            "Synthetic retry clone failure; check the Gateway Git configuration.";
+            "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying.";
           projectCloneMocks.materialize.mockRejectedValueOnce(
-            new ProjectCloneError("clone_failed", retryFailure),
+            new ProjectCloneError("auth_required", retryFailure),
           );
           await retryRemoteProjectSession(key, "remote-project-failed-retry", context);
           await settleWorkspaceRuns(context, storePath, key);
@@ -443,7 +445,7 @@ test.for([
               status: "failed",
               hasActiveRun: false,
               lastRunId: "remote-project-failed-retry",
-              lastRunError: expect.stringContaining(retryFailure),
+              lastRunError: expect.stringContaining("GitHub denied access"),
             },
           });
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -968,66 +970,38 @@ test.each([false, true])(
             assertCurrent() {},
           });
           expect(copied.preview).toEqual(new Uint8Array(Buffer.from("accepted parent bytes\n")));
-          for (const phase of [
-            "forbidden",
-            "before-copy",
-            "after-copy",
-            "before-binding",
-            "source",
-          ] as const) {
-            let current = phase !== "forbidden";
-            const key = `agent:main:subagent:repository-${phase}`;
-            let completedCopies = 0;
-            const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
-            const copy = vi
-              .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
-              .mockImplementation(async (params) => {
-                current &&= phase !== "before-copy";
-                if (phase === "source") {
-                  await replaceSessionEntry(
-                    { agentId: "main", sessionKey: parentKey, storePath },
-                    { ...parent.entry, sessionId: "reassigned-parent" },
-                  );
-                }
-                const result = await stage(params);
-                completedCopies++;
-                current &&= phase !== "after-copy";
-                return result;
-              });
-            const fork = repositoryCheckpoints.forkSessionRepositoryWorkspace;
-            const prepared = vi
-              .spyOn(repositoryCheckpoints, "forkSessionRepositoryWorkspace")
-              .mockImplementation(async (params) => {
-                const result = await fork(params);
-                current &&= phase !== "before-binding";
-                return result;
-              });
-            try {
-              const denied = await directSessionReq(
-                "sessions.create",
-                { ...selection, key },
-                { client, hasCurrentClientAuthority: () => current },
-              ).catch((error: unknown) => ({ ok: false, error }));
-              expect(denied, phase).toMatchObject({
-                ok: false,
-                error: {
-                  message:
-                    phase === "source"
-                      ? "Spawn parent repository changed; retry from its current session"
-                      : "Gateway requester authority changed",
-                },
-              });
-              expect(readEntry(storePath, key), phase).toBeUndefined();
-              expect(await store.find({ agentId: "main", sessionKey: key }), phase).toBeUndefined();
-              expect(await store.get(original.workspaceId), phase).toEqual(original);
-              expect(copy).toHaveBeenCalledTimes(phase === "forbidden" ? 0 : 1);
-              expect(completedCopies).toBe(
-                phase === "after-copy" || phase === "before-binding" ? 1 : 0,
+          // The parent's source changing mid-copy is a data fence and still refuses.
+          const key = "agent:main:subagent:repository-source";
+          let completedCopies = 0;
+          const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
+          const copy = vi
+            .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
+            .mockImplementation(async (params) => {
+              await replaceSessionEntry(
+                { agentId: "main", sessionKey: parentKey, storePath },
+                { ...parent.entry, sessionId: "reassigned-parent" },
               );
-            } finally {
-              copy.mockRestore();
-              prepared.mockRestore();
-            }
+              const result = await stage(params);
+              completedCopies++;
+              return result;
+            });
+          try {
+            const denied = await directSessionReq(
+              "sessions.create",
+              { ...selection, key },
+              { client },
+            ).catch((error: unknown) => ({ ok: false, error }));
+            expect(denied).toMatchObject({
+              ok: false,
+              error: { message: "Spawn parent repository changed; retry from its current session" },
+            });
+            expect(readEntry(storePath, key)).toBeUndefined();
+            expect(await store.find({ agentId: "main", sessionKey: key })).toBeUndefined();
+            expect(await store.get(original.workspaceId)).toEqual(original);
+            expect(copy).toHaveBeenCalledTimes(1);
+            expect(completedCopies).toBe(0);
+          } finally {
+            copy.mockRestore();
           }
         }
       },

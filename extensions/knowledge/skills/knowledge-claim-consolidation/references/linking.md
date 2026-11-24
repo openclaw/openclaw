@@ -55,10 +55,27 @@ pages.
   the page's own aliases. If it stays uncertain, leave the claim where it is and
   report it.
 
-Link with `knowledge_annotate` `entities`, passing the complete list (it
-replaces the existing one) and the claim's current revision and hash. Assertion
-text, evidence and lifecycle stay unchanged. Link a claim before you supersede
-it: superseded claims cannot be relinked.
+To link a claim, call `knowledge_annotate` with the complete list of subject
+page IDs in **top-level `entities`**. For a link-only change, pass an empty
+`annotations` object alongside it:
+
+```json
+{
+  "requestId": "<fresh lowercase UUID>",
+  "expectedVaultId": "<vault UUID from knowledge_status>",
+  "id": "<claim ID>",
+  "expectedRevision": 1,
+  "expectedHash": "<current claim hash or 16-character prefix>",
+  "reason": "File the claim on its verified subject page.",
+  "annotations": {},
+  "entities": ["<subject page ID>"]
+}
+```
+
+Use the claim's current revision in place of the example's `1`. The list
+replaces all existing subjects; assertion text, evidence and lifecycle stay
+unchanged. Link a claim before superseding it: superseded claims cannot be
+relinked.
 
 Before dropping a page from a claim's `entities`, check whether that page's
 body cites the claim (`knowledge_connections` `direction: "links"` on the

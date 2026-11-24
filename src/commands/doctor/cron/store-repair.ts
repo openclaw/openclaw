@@ -197,12 +197,16 @@ function definitionEvidence(jobs: readonly PluginDoctorCronJob[]) {
   }));
 }
 
-/** Only adds an inference restriction; retains authored fields, runtime state and approval terms. */
+/** Adopt a legacy binding or restore its verified path only; retain runtime state and approval terms. */
 export async function repairCronInferenceBindingsForDoctor(
   scope: DoctorCronScope,
   authority: PluginDoctorRepairAuthority,
   inventory: PluginDoctorCronInventory,
-  changes: readonly { job: PluginDoctorCronJob; binding: CronInferenceBinding }[],
+  changes: readonly {
+    job: PluginDoctorCronJob;
+    binding: CronInferenceBinding;
+    previousAuthorizationId?: string;
+  }[],
 ): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
   authority.assertCurrent();
   if (changes.length === 0) {
@@ -210,13 +214,18 @@ export async function repairCronInferenceBindingsForDoctor(
   }
   const expected = definitionEvidence(inventory.jobs);
   const selected = new Set<string>();
-  for (const { job } of changes) {
+  for (const { job, binding, previousAuthorizationId } of changes) {
     const key = JSON.stringify([job.storeKey, job.id]);
     if (
       selected.has(key) ||
       !inventory.jobs.some((row) => isDeepStrictEqual(row, job)) ||
       !job.definition ||
-      job.definition.inferenceBinding !== undefined
+      !isDeepStrictEqual(
+        job.definition.inferenceBinding,
+        previousAuthorizationId === undefined
+          ? undefined
+          : { ...binding, authorizationId: previousAuthorizationId },
+      )
     ) {
       throw new Error("Inference migration requires distinct inspected legacy cron definitions.");
     }
@@ -232,7 +241,7 @@ export async function repairCronInferenceBindingsForDoctor(
       }
     },
     write(db) {
-      for (const { job, binding } of changes) {
+      for (const { job, binding, previousAuthorizationId } of changes) {
         const row = loadCronRows(db, job.storeKey, new Set([job.id]), {
           includeGrantDefinitionProjection: true,
         })[0];
@@ -263,6 +272,7 @@ export async function repairCronInferenceBindingsForDoctor(
             previous,
             next,
             row.grant_definition_generation,
+            previousAuthorizationId,
           );
         }
         executeSqliteQuerySync(

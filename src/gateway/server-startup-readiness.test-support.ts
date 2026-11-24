@@ -59,11 +59,12 @@ export function registerGatewayStartupReadinessTests(params: {
       const release = createDeferred();
       const stat = fs.stat;
       const heldStat = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const result = await stat(...args);
         if (args[0] === process.execPath) {
           entered.resolve();
           await release.promise;
         }
-        return stat(...args);
+        return result;
       });
       let closing = false;
       const log = { info: vi.fn() };

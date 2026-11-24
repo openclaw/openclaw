@@ -55,7 +55,7 @@ openclaw-file-preview-modal {
     grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
   }
   .tree .item {
-    grid-template-columns: 16px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
   .folder > summary {
     display: flex;
@@ -193,7 +193,7 @@ openclaw-file-preview-modal {
 
   .item {
     display: grid;
-    grid-template-columns: 16px 1fr auto;
+    grid-template-columns: 1fr auto;
     gap: 12px;
     align-items: center;
     padding: 12px 14px;
@@ -222,22 +222,6 @@ openclaw-file-preview-modal {
     color: var(--text-strong);
   }
 
-  .item-icon {
-    width: 16px;
-    height: 16px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--muted);
-    opacity: 0.85;
-  }
-
-  .item.is-active .item-icon {
-    color: var(--accent);
-    opacity: 1;
-  }
-
-  .item-icon svg,
   .chat-copy-btn svg {
     width: 16px;
     height: 16px;

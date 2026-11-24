@@ -1,4 +1,5 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
@@ -97,6 +98,32 @@ export function isHistoryCursor(
   result: ChatHistoryResponse,
 ): result is ChatHistoryDeltaResult | ChatHistoryResetResult {
   return "kind" in result;
+}
+
+export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
+  if (isHistoryCursor(result) && result.kind === "reset") {
+    return result;
+  }
+  if (!result.activity || !result.messages) {
+    return result;
+  }
+  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
+  const withActivity = (message: unknown) => {
+    const record = asOptionalRecord(message);
+    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
+    const activity = typeof id === "string" ? byId.get(id) : undefined;
+    return record && activity ? { ...record, activity } : message;
+  };
+  return {
+    ...result,
+    messages: result.messages.map((entry) => {
+      if (!isHistoryCursor(result)) {
+        return withActivity(entry);
+      }
+      const envelope = asOptionalRecord(entry);
+      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
+    }),
+  };
 }
 
 export function resolveChatHistoryPagination(

@@ -178,6 +178,41 @@ Legacy keys:
 - top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
 - Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the current keys.
 
+### Reasoning cards
+
+With `agents.defaults.reasoningDefault: "stream"` (or a per-agent `reasoningDefault`), native Slack progress cards show reasoning as short 🧠 task rows instead of truncated narration. Completed rows stay available when you expand the card; the newest row remains in progress until the reasoning phase ends.
+
+- Detailed cards (`progress.toolProgress: true`) interleave reasoning and tool rows. Thinking after a tool call starts below that tool's row.
+- Quiet cards (`progress.toolProgress: false`) show reasoning below their summary row, without tool rows. With reasoning off, quiet cards are unchanged.
+- Finished detailed cards use `Thought for <n>s, <k> tool calls` unless `progress.label` sets an explicit title. Commentary still streams as text.
+
+Set `progress.maxLines` to cap the task rows in each native message, including reasoning, tool, plan, summary and attention rows. The cap is clamped to 2–50; overflow continues in another message rather than dropping older rows. When unset, native messages hold up to Slack's [50-row limit](https://docs.slack.dev/reference/block-kit/blocks/plan-block/), not the draft card's default window of eight lines.
+
+#### Continuation messages
+
+Native progress turns, with or without reasoning, continue in a new message in the same thread when they approach Slack's size or row limits, or on the first update after the stream is eight minutes old. Slack closes native streams after about ten minutes, even when updates are still arriving.
+
+The old card closes as `Thinking, continued below` and the next opens as `Thinking, continued`. In-progress rows on the closed card are marked complete; this does not finish any tools still running. Their work continues on later messages, and plan steps are shown again when their status or title changes.
+
+The answer appears under the last card when it fits, otherwise in its own message. If Slack still rejects an update as too large, OpenClaw retries on a new message. An answer rejected again falls back to normal reply delivery. Short turns that fit stay in one message, with reasoning using the row presentation described above.
+
+Slack may display new continuation cards in bursts. A thread's working status can also hide streamed cards until that status clears.
+
+With streamed reasoning enabled, use native progress mode:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: { toolProgress: true },
+      },
+    },
+  },
+}
+```
+
 ## Typing reaction fallback
 
 `typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use Slack's `processing` session status.

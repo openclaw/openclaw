@@ -13,6 +13,28 @@ const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
+// Matrix rich replies: clients strip the legacy reply fallback (leading `> ` quote lines in body,
+// leading <mx-reply> in formatted_body); the quoted event is fetched separately as reply context.
+export function resolveMatrixCurrentContent(
+  content: RoomMessageEventContent,
+): RoomMessageEventContent {
+  if (!content["m.relates_to"]?.["m.in_reply_to"]?.event_id) {
+    return content;
+  }
+  const { body, formatted_body: html } = content;
+  const plain =
+    typeof body === "string" && /^> (?:\* )?<@[^>\n]+>/.test(body)
+      ? body.replace(/^(?:> .*(?:\n|$))+\n?/, "")
+      : body;
+  const formatted =
+    content.format === "org.matrix.custom.html"
+      ? html?.replace(/^<mx-reply>[\s\S]*?<\/mx-reply>/i, "")
+      : html;
+  return plain === body && formatted === html
+    ? content
+    : { ...content, body: plain, formatted_body: formatted };
+}
+
 export function resolveMatrixMentionPrecheckText(params: {
   eventType: string;
   content: RoomMessageEventContent;

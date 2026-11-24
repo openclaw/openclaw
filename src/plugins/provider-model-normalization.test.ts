@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { completionModelDefinition } from "../agents/simple-completion.test-support.js";
 import { PROVIDER_RUNTIME_TEST_MODEL as MODEL } from "./provider-runtime.test-support.js";
 import type {
   ProviderNormalizeResolvedModelContext,
@@ -46,6 +47,8 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
     }),
   };
 });
+const { normalizeConfiguredProviderModel } =
+  await import("../agents/embedded-agent-runner/model.registry-resolution.js");
 const { createProviderModelNormalizer } = await import("./provider-model-normalization.js");
 const resolvePluginProvidersMock = fixture.select;
 function createDemoProvider(overrides: Partial<ProviderPlugin> = {}): ProviderPlugin {
@@ -172,4 +175,41 @@ describe("catalog model normalization", () => {
       }),
     );
   });
+});
+
+it("shares one provider selection across configured model and transport normalization", () => {
+  mockProvider({ normalizeResolvedModel: ({ model }) => ({ ...model, name: "normalized" }) });
+  const config = {
+    models: {
+      providers: {
+        demo: {
+          api: "openai-completions" as const,
+          baseUrl: "https://example.test/v1",
+          models: [
+            completionModelDefinition({
+              id: "configured",
+              api: "openai-responses",
+              baseUrl: "https://api.example.com/v1",
+            }),
+          ],
+        },
+      },
+    },
+  };
+  const resolve = () =>
+    normalizeConfiguredProviderModel({
+      provider: "demo",
+      modelId: "configured",
+      cfg: config,
+      manifestAlias: { provider: "demo" },
+    });
+  expect(resolve()).toMatchObject({
+    id: "configured",
+    name: "normalized",
+    baseUrl: "https://api.example.com/v1",
+  });
+  expect(fixture.select).toHaveBeenCalledTimes(1);
+  mockProvider({ normalizeResolvedModel: ({ model }) => ({ ...model, name: "reloaded" }) });
+  expect(resolve()).toMatchObject({ name: "reloaded" });
+  expect(fixture.select).toHaveBeenCalledTimes(2);
 });

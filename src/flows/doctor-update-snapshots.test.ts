@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   createDoctorHealthFlowContext,
@@ -64,8 +65,8 @@ it("reports dotted and retired dashed snapshots with sizes and quoted commands, 
   for (const directory of [first, second]) {
     const command =
       process.platform === "win32"
-        ? `Remove-Item -LiteralPath '${directory.replaceAll("'", "''")}' -Recurse -Force`
-        : `rm -rf -- '${directory.replaceAll("'", "'\\''")}'`;
+        ? `Remove-Item -LiteralPath '\\\\?\\${directory.replaceAll("'", "''")}' -Recurse -Force`
+        : `rm -rf -- ${quoteCliArg(directory)}`;
     expect(message).toContain(command);
     expect((await fs.stat(directory)).isDirectory()).toBe(true);
   }

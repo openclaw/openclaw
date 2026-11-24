@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -105,11 +105,10 @@ it.each([false, true])(
   "cross-profile answers respect backend capability (%s)",
   async (supportsCrossProfileSteering) => {
     const authority = (profileId: string) =>
-      createAdmittedRunOperatorAuthority({
+      createTestOperatorAuthority({
         profileId,
         scopes: ["operator.read", "operator.write"],
         gatewayAccessGrant: null,
-        assertCurrent() {},
       });
     const owner = authority("alice");
     const other = authority("bob");

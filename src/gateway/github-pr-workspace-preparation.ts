@@ -30,6 +30,7 @@ import {
 } from "./github-publication-requester.js";
 import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+import { projectRequesterForProfile } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { resolvePullRequestProjectSource } from "./session-project-source.js";
 import { isSessionOwnRequester } from "./session-sharing-policy.js";
@@ -98,6 +99,12 @@ export async function performSessionGitHubPreparation(
   const authority = captureGitHubPublicationActionAuthority(admitted.requester);
   // Guests prepare their own conversation; a current full-write maintainer may assist.
   const { actor } = admitted.requester.snapshot;
+  const projectRequester = projectRequesterForProfile(
+    context.getRuntimeConfig(),
+    authority.operatorWrite ? ["operator.write"] : [],
+    actor.kind === "operator" ? actor.profileId : undefined,
+    admitted.requester.snapshot.openclawIdPrincipal,
+  );
   if (
     !authority.operatorWrite &&
     !isSessionOwnRequester(
@@ -173,10 +180,7 @@ export async function performSessionGitHubPreparation(
         projectSource: {
           host: eligibility.inspected.result.host,
           repository: eligibility.inspected.result.base.repository,
-          requester: {
-            kind: "operator",
-            scopes: authority.operatorWrite ? ["operator.write"] : [],
-          },
+          requester: projectRequester,
         },
         assertCurrent: eligibility.assertCurrent,
         verifyBeforeBinding: async () => {
@@ -229,7 +233,6 @@ export async function performSessionGitHubPreparation(
     const baseCommit =
       params.action === "prepare_pr" ? params.expectedHeadCommit : params.baseCommit;
     const assertEntry = (entry: SessionEntry) => {
-      assertCurrent();
       if (
         entry.sessionId !== owner.sessionId ||
         (entry.lifecycleRevision ?? null) !== owner.lifecycleRevision ||
@@ -261,7 +264,7 @@ export async function performSessionGitHubPreparation(
       const project = await resolvePullRequestProjectSource(context.getRuntimeConfig(), {
         host: pullRequest.host,
         repository: pullRequest.base.repository,
-        requester: { kind: "operator", scopes: authority.operatorWrite ? ["operator.write"] : [] },
+        requester: projectRequester,
       });
       assertCurrent();
       if (project) {
@@ -451,7 +454,6 @@ export async function performSessionGitHubPreparation(
     using sourceResources = new DisposableStack();
     let reserved: Awaited<ReturnType<typeof prepareGitHubPublicationSession>> | undefined;
     const assertReserved = () => {
-      assertCurrent();
       const entry = (reserved ?? initial).readCurrent().entry;
       if (
         !entry ||
@@ -546,6 +548,7 @@ export async function performSessionGitHubPreparation(
       await patchSessionEntryCore(
         scope,
         (entry) => {
+          assertCurrent();
           const worktree = assertEntry(entry);
           if (!isDeepStrictEqual(worktree.githubPullRequest, binding)) {
             throw new Error("The accepted PR source changed before preparation completed.");

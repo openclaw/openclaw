@@ -6,13 +6,10 @@ import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import {
-  withWorktreeAllocationLease,
-  withWorktreeMutationLease,
-  type WorktreeAllocationGuard,
-} from "./allocation.js";
+import { withWorktreeMutationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
+import { WorktreePreservationError } from "./errors.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
 import { hydrateCommitObjects, missingCommitObjects } from "./object-hydration.js";
 import { collectOrphanWorktreeBranches } from "./orphan-branches.js";
@@ -85,26 +82,19 @@ export async function captureManagedWorktreeSnapshot(params: {
       const missing = await missingCommitObjects(record.path, "HEAD", options);
       if (missing.length > 0) {
         try {
-          // Retirement must distinguish promised contents from lost local data.
-          // Git scans every promisor pack for this proof; creation does not need it.
-          await requireGit(
-            record.path,
-            [
-              "rev-list",
-              "--objects",
-              "--quiet",
-              "--missing=allow-promisor",
-              "--max-count=1",
-              "HEAD",
-            ],
-            { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
-          );
           await hydrateCommitObjects(record.path, "HEAD", missing, options);
+          // Prove local custody, not promisor membership (which scans every promisor pack).
+          // A successful fetch alone cannot prove a clean snapshot is offline-restorable.
+          const remaining = await missingCommitObjects(record.path, "HEAD", options);
+          if (remaining.length > 0) {
+            throw new Error(`Worktree snapshot has missing blob ${remaining[0]}`);
+          }
         } catch (cause) {
           params.signal?.throwIfAborted();
           params.assertCurrent?.();
           // Keep the cleanup owner's shared-repository backoff on failed hydration.
-          throw new Error(
+          throw new WorktreePreservationError(
+            "repository-corrupt",
             `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
             { cause },
           );
@@ -212,7 +202,7 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
   );
 }
 
-/** Explicit retirement shares the same allocation owner as removal and GC. */
+/** Explicit retirement owns the same checkout as removal and restore. */
 export async function retireManagedWorktreeSnapshotById(
   input: RetireManagedWorktreeSnapshotParams,
   environment: NodeJS.ProcessEnv = process.env,
@@ -220,7 +210,7 @@ export async function retireManagedWorktreeSnapshotById(
   const context = captureWorktreeRunEndContext(environment);
   const env = { ...environment, ...context.environment };
   const params = { ...input };
-  return await withWorktreeAllocationLease({ ...params, env }, async (guard) => {
+  return await withWorktreeMutationLease({ ...params, env }, async (guard) => {
     const record = await readRegistryWorktree(context, params.id);
     guard.commitGuard();
     if (

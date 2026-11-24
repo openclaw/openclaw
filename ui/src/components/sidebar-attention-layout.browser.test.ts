@@ -1,5 +1,5 @@
 import { render as renderSolid } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -13,6 +13,7 @@ import {
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
+import { readOpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -121,18 +122,17 @@ function panelParams(entries: readonly SidebarInboxEntry[]): PanelFixtureParams 
       dispose: () => undefined,
     },
     entries,
-    onApprovalDecision: () => {},
     onClose: () => {},
     onDismiss: vi.fn(),
-    onKeydown: () => {},
     onNavigate: () => {},
     onOpen: () => {},
-    onSelectTab: () => {},
-    overflowAbove: false,
-    overflowBelow: false,
     panelPosition: { left: 0, anchor: "top", top: 0 },
-    selectedTab: "all",
   };
+}
+
+function selectInboxTab(shell: HTMLElement, tab: string) {
+  query(shell, `#sidebar-issues-tab-${tab}`).click();
+  flush();
 }
 
 afterEach(() => {
@@ -171,22 +171,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
     for (const mobile of [false, true]) {
       const shell = shellFor(mobile);
-      const [selectedTab, setSelectedTab] = createSignal<"all" | "approvals">("all");
-      mountPanel(
-        {
-          ...params,
-          get selectedTab() {
-            return selectedTab();
-          },
-        },
-        shell,
-      );
+      mountPanel(params, shell);
       await waitForSolid(() => expect(part(shell, "tabs")).not.toBeNull());
       const headerHeight = bounds(part(shell, "header")).height;
       const tabsTop = bounds(part(shell, "tabs")).top;
 
-      setSelectedTab("approvals");
-      flush();
+      selectInboxTab(shell, "approvals");
       expect(shell.querySelector('[data-value="dismiss-shown"]')).toBeNull();
       expect(shell.querySelector('[data-value="notifications"]')).not.toBeNull();
       expect(bounds(part(shell, "header")).height).toBe(headerHeight);
@@ -212,7 +202,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       );
       const params = panelParams(entries);
       params.mentions.snapshot.dismissing = ["mention-b"];
-      const shell = mountPanel({ ...params, selectedTab });
+      const shell = mountPanel(params);
+      selectInboxTab(shell, selectedTab);
 
       expect(
         Array.from(shell.querySelectorAll("[data-mention-id]"), (row) =>
@@ -236,7 +227,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const params = panelParams(inboxEntries([authWarning], []));
     params.mentions.snapshot.phase = "loading";
     const all = mountPanel(params, shellFor());
-    const mentions = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    const mentions = mountPanel(params, shellFor());
+    selectInboxTab(mentions, "mentions");
     expect([part(mentions, "loading"), part(mentions, "empty")]).toEqual([null, null]);
     await waitForSolid(() =>
       expect(part(mentions, "loading")?.textContent).toBe("Loading mentions…"),
@@ -247,7 +239,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       null,
     ]);
     params.mentions.snapshot.phase = "ready";
-    const loaded = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    const loaded = mountPanel(params, shellFor());
+    selectInboxTab(loaded, "mentions");
     expect([part(loaded, "loading"), part(loaded, "empty")?.tagName]).toEqual([null, "DIV"]);
   });
 
@@ -256,7 +249,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const params = panelParams(entries);
     params.mentions.snapshot.phase = "error";
     params.mentions.snapshot.error = "Connection interrupted";
-    const shell = mountPanel({ ...params, selectedTab: "mentions" });
+    const shell = mountPanel(params);
+    selectInboxTab(shell, "mentions");
 
     expect(query(shell, '[data-mention-id="mention-a"]')).not.toBeNull();
     expect(part(shell, "empty")).toBeNull();
@@ -469,3 +463,64 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(style(list).backgroundColor).toBe(style(sheet).backgroundColor);
   });
 });
+
+it.each([
+  ["light", 390],
+  ["dark", 390],
+  ["light", 1440],
+  ["dark", 1440],
+] as const)(
+  "shows a claimed member browser request in the owner Inbox (%s %s)",
+  async (theme, width) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, 900);
+    document.documentElement.dataset.theme = theme;
+    const now = Math.floor(Date.now() / 1000);
+    const request = {
+      requestId: "member-browser-request",
+      accountId: "private-account-id",
+      displayName: "Alice Example",
+      email: "alice@example.test",
+      label: "Safari on iOS",
+      location: "Example City",
+      requestedAt: now - 60,
+      expiresAt: now + 1740,
+    };
+    const gateway = client(
+      vi.fn(async (method: string) =>
+        method === "openclawId.status"
+          ? {
+              channel: "tunnel",
+              owner: true,
+              status: { state: "online" },
+              link: { linked: true, clawId: "test-claw" },
+            }
+          : { link: { browserRequests: [request] } },
+      ),
+    );
+    const attention = await readOpenClawIdAttention(gateway, () => true);
+    const params = panelParams(attention!.items(Date.now()));
+    const opened = vi.fn();
+    params.onOpen = opened;
+    const shell = mountPanel(params, shellFor(width === 390));
+    await waitForSolid(() =>
+      expect(shell.textContent).toContain("Browser request from Alice Example"),
+    );
+    expect(shell.textContent).toContain("Safari on iOS");
+    expect(shell.textContent).toContain("Unverified request");
+    const title = shell.querySelector<HTMLElement>(
+      '[data-attention-kind="openClawIdBrowserRequest"] .sidebar-issues-panel__entity',
+    )!;
+    expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth);
+    expect(shell.textContent).toContain("Location reported by OpenClaw ID: Example City");
+    expect(shell.textContent).not.toContain("private-account-id");
+    await page.getByText("Browser request from Alice Example", { exact: true }).click();
+    await page.screenshot({ path: `./.vitest/ocf551/member-browser-inbox-${theme}-${width}.png` });
+    await page.getByRole("button", { name: "Approve a new device", exact: true }).click();
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: expect.objectContaining({ kind: "openClawIdBrowserApproval", remote: true }),
+      }),
+    );
+  },
+);

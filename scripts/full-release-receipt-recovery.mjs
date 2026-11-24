@@ -16,6 +16,8 @@ import {
 } from "./full-release-publication-contract.mjs";
 import {
   releaseChildSpec,
+  qualificationChildDispatchInputs,
+  resolveAdmittedQualificationScope,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
 } from "./full-release-validation-policy.mjs";
@@ -24,11 +26,7 @@ import {
   validateArtifactMetadata,
   verifyExactActionsArtifactDigest,
 } from "./lib/actions-artifact-archive.mjs";
-import {
-  candidateArtifactJsonFromBinding,
-  verifySealedFullReleaseCandidate,
-} from "./lib/full-release-candidate-reuse.mjs";
-import { releaseChildDispatchInputs } from "./lib/full-release-child-request.mjs";
+import { verifySealedFullReleaseCandidate } from "./lib/full-release-candidate-reuse.mjs";
 import { manifestContextFromEnvironment } from "./lib/full-release-manifest.mjs";
 import { validateQualificationBaselinePolicy } from "./lib/qualification-admission-baselines.mjs";
 import {
@@ -36,25 +34,28 @@ import {
   verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
 import {
+  RELEASE_VALIDATION_WAIVERS_PATH,
   evaluateReleaseChildPolicy,
+  readReleaseValidationWaiversAsync,
   releaseChildAdvisories,
+  releaseWaiverEvidenceMatches,
 } from "./lib/release-validation-waivers.mjs";
 import {
   PREPARED_NPM_MANIFEST,
   validatePreparedNpmRelease,
 } from "./plugin-npm-prepared-release.mjs";
-import { createReleaseEvidenceClient } from "./release-ci-summary.mjs";
-import { revalidateQualificationAdmissionAuthority } from "./release-qualification-admission.mjs";
+import {
+  createReleaseEvidenceClient,
+  restoreOriginalPublicationAdmission,
+  validatePerformanceArtifactOnlyJobs,
+} from "./release-ci-summary.mjs";
+import {
+  buildQualificationAdmissionRequest,
+  revalidateQualificationAdmissionAuthority,
+} from "./release-qualification-admission.mjs";
 import { validateQualificationJobs } from "./release-qualification-coverage.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 export const RECEIPT_RECOVERY_SCHEMA = "openclaw.full-release-receipt-recovery/v1";
-const ROLES = [
-  "normalCi",
-  "pluginPrereleaseIndependent",
-  "releaseChecksIndependent",
-  "releaseChecksCandidate",
-  "pluginPrereleaseCandidate",
-];
 const JOB = "Recover original qualification receipts";
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function requireValue(condition, message) {
@@ -84,6 +85,8 @@ export function validateReceiptRecoveryRequest(request) {
       "candidateBinding",
       "children",
       "publicationArtifacts",
+      ...(request?.workflowSha === undefined ? [] : ["workflowSha"]),
+      ...(request?.policyQualification === undefined ? [] : ["policyQualification"]),
     ].toSorted(),
     "unexpected request fields",
   );
@@ -99,18 +102,47 @@ export function validateReceiptRecoveryRequest(request) {
   );
   same(
     Object.keys(request.originalParent ?? {}).toSorted(),
-    ["runAttempt", "runId"],
+    [
+      "runAttempt",
+      "runId",
+      ...(request.originalParent?.currentRunAttempt === undefined ? [] : ["currentRunAttempt"]),
+    ].toSorted(),
     "invalid original parent tuple",
   );
   requireValue(
     /^[1-9][0-9]*$/u.test(request.originalParent.runId) && request.originalParent.runAttempt === 1,
     "original parent must identify its first attempt",
   );
-  same(
-    Object.keys(request.children ?? {}).toSorted(),
-    ROLES.toSorted(),
-    "recovery requires exactly the five complete beta roles",
+  requireValue(
+    request.originalParent.currentRunAttempt === undefined ||
+      (Number.isSafeInteger(request.originalParent.currentRunAttempt) &&
+        request.originalParent.currentRunAttempt >= request.originalParent.runAttempt),
+    "invalid current parent attempt",
   );
+  requireValue(
+    request.children &&
+      typeof request.children === "object" &&
+      !Array.isArray(request.children) &&
+      Object.keys(request.children).length > 0 &&
+      Object.keys(request.children).length <= 32,
+    "recovery requires original child receipts",
+  );
+  if (request.workflowSha !== undefined) {
+    requireValue(/^[a-f0-9]{40}$/u.test(request.workflowSha), "invalid pinned recovery P");
+  }
+  if (request.policyQualification !== undefined) {
+    same(
+      Object.keys(request.policyQualification ?? {}).toSorted(),
+      ["admission", "sha"],
+      "invalid policy qualification",
+    );
+    requireValue(
+      request.workflowSha &&
+        /^[a-f0-9]{40}$/u.test(request.policyQualification.sha) &&
+        request.policyQualification.admission,
+      "policy qualification requires a pinned SHA, admission and recovery P",
+    );
+  }
   requireValue(
     Buffer.byteLength(JSON.stringify(request)) <= 128 * 1024,
     "request exceeds byte limit",
@@ -118,75 +150,114 @@ export function validateReceiptRecoveryRequest(request) {
   return request;
 }
 
-// Derive operands from the independently admitted request, not caller-supplied
-// receipt.inputs. The immutable Q workflow supplies all unsupplied defaults.
-export function receiptRecoveryChildInputs(role, admission, binding, workflowSource) {
-  const input = admission.request.inputs;
-  const lane = JSON.parse(input.trusted_workflow_json).laneInputs ?? {};
-  const target = admission.request.candidateSha;
-  const context = input.target_context_ref || "";
-  const args = [];
-  const add = (key, value) => args.push("-f", key + "=" + String(value));
-  const optional = (key, value) => {
-    if (value) {
-      add(key, value);
-    }
+export async function verifyWaiverPolicyCommit(client, originalSha, policySha) {
+  const commit = await client.getCommit(policySha);
+  requireValue(
+    commit?.sha === policySha &&
+      commit.parents?.length === 1 &&
+      commit.parents[0]?.sha === originalSha &&
+      commit.commit?.verification?.verified === true &&
+      commit.files?.length === 1 &&
+      commit.files[0]?.status === "modified" &&
+      commit.files[0]?.filename === RELEASE_VALIDATION_WAIVERS_PATH,
+    "policy Q must be a verified signed direct child of original Q modifying only the waiver ledger",
+  );
+}
+
+export function receiptRecoveryPolicyRequest(original, policySha, requestId) {
+  const { repository, candidateSha, qualificationSha, inputs } = original.request;
+  const transportRef = original.request.transportRef.replace(
+    "release-ci/" + qualificationSha.slice(0, 12) + "-",
+    "release-ci/" + policySha.slice(0, 12) + "-",
+  );
+  const envelope = JSON.parse(inputs.trusted_workflow_json);
+  envelope.trustedWorkflow = {
+    ref: transportRef,
+    fullRef: "refs/heads/" + transportRef,
+    sha: policySha,
   };
-  if (role === "normalCi") {
-    add("target_ref", target);
-    add("release_scope", "npm-beta");
-    add("include_android", false);
-    const ref = (context || input.ref).replace(/^refs\/(?:heads|tags)\//u, "");
-    if (/^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+)?$/u.test(ref)) {
-      add("historical_target_tag", ref);
-    } else if (/^release\/[0-9]{4}\.[0-9]+\.[0-9]+$/u.test(ref)) {
-      add("target_context_ref", ref);
-    }
-  } else {
-    const phase = role.endsWith("Independent") ? "independent" : "candidate";
-    if (role.startsWith("pluginPrerelease")) {
-      add("target_ref", target);
-      add("expected_sha", target);
-      add("full_release_validation", true);
-      add("phase", phase);
-      add("node_test_exclude_patterns_json", input.plugin_prerelease_node_exclude_patterns_json);
-      add(
-        "extension_test_exclude_patterns_json",
-        lane.extension_test_exclude_patterns_json ?? "[]",
-      );
-    } else {
-      add("ref", target);
-      add("expected_sha", target);
-      add("provider", input.provider);
-      add("mode", input.mode);
-      add("release_profile", "beta");
-      add("run_release_soak", false);
-      add("fail_fast", input.fail_fast);
-      add("phase", phase);
-      add("allow_unreleased_changelog", input.allow_unreleased_changelog);
-      add("skip_package_telegram_e2e", true);
-      add("rerun_group", "all");
-      for (const key of [
-        "live_suite_filter",
-        "cross_os_suite_filter",
-        "release_package_spec",
-        "package_acceptance_package_spec",
-        "codex_plugin_spec",
-      ]) {
-        optional(key, input[key]);
-      }
-    }
-    optional("target_context_ref", context);
-    if (phase === "candidate") {
-      add("candidate_artifact_json", candidateArtifactJsonFromBinding(binding));
-    }
+  return buildQualificationAdmissionRequest({
+    repository,
+    candidateSha,
+    qualificationSha: policySha,
+    requestId,
+    transportRef,
+    reviewed: true,
+    inputs: { ...inputs, trusted_workflow_json: JSON.stringify(envelope) },
+  });
+}
+
+export async function verifyReceiptRecoveryPolicy(request, original, client) {
+  const policy = request.policyQualification;
+  if (!policy) {
+    return undefined;
   }
-  optional("qualification_baselines_json", lane.qualification_baselines_json);
-  return releaseChildDispatchInputs(workflowSource, args);
+  const { candidateSha, qualificationSha, repository } = original.request;
+  await verifyWaiverPolicyCommit(client, qualificationSha, policy.sha);
+  const workflowRef = receiptRecoveryPolicyRequest(
+    original,
+    policy.sha,
+    request.requestId,
+  ).transportRef;
+  const admission = await client.verifyQualificationAdmission({
+    descriptor: policy.admission,
+    repository,
+    candidateSha,
+    qualificationSha: policy.sha,
+    workflowRef,
+  });
+  requireValue(
+    ![original.request.requestId, request.requestId].includes(admission.request.requestId),
+    "waiver policy requires a separate admission request",
+  );
+  same(
+    admission.request,
+    receiptRecoveryPolicyRequest(original, policy.sha, admission.request.requestId),
+    "waiver policy admission changed original qualification inputs",
+  );
+  for (const key of ["coverage", "baselinePolicy", "workflowSourceDigest", "policySourceDigest"]) {
+    same(admission[key], original[key], "waiver policy admission changed original " + key);
+  }
+  const read = (policySourceSha) =>
+    readReleaseValidationWaiversAsync((path) => client.getWorkflowSource(policySourceSha, path));
+  const oldLedger = await read(qualificationSha);
+  const waiverPolicy = await read(policy.sha);
+  const additions = waiverPolicy.slice(oldLedger.length);
+  same(waiverPolicy.slice(0, oldLedger.length), oldLedger, "waiver policy changed existing grants");
+  requireValue(
+    additions.length > 0 &&
+      additions.every((grant) => {
+        const child = request.children[grant.childRole];
+        return (
+          grant.targetSha === candidateSha &&
+          grant.targetVersion === original.baselinePolicy.candidateVersion &&
+          original.coverage.children.some(({ key }) => key === grant.childRole) &&
+          releaseWaiverEvidenceMatches(grant.evidence, child?.runId, child?.runAttempt) &&
+          grant.qualificationExemption === undefined
+        );
+      }),
+    "waiver policy must append grants scoped to original C, version and selected receipt attempts",
+  );
+  await revalidateReceiptRecoveryPolicy(request, admission, client);
+  return { admission, waiverPolicy };
+}
+
+async function revalidateReceiptRecoveryPolicy(request, admission, client) {
+  const descriptor = request.policyQualification.admission;
+  const run = await client.getRun(String(descriptor.runId));
+  requireValue(
+    run.id === descriptor.runId &&
+      run.run_attempt === descriptor.runAttempt &&
+      run.status === "completed" &&
+      run.conclusion === "success",
+    "waiver policy admission attempt changed",
+  );
+  client.revalidateQualificationAdmissionAuthority({ descriptor, admission });
 }
 
 export function receiptRecoverySourceRequest(admission, producer) {
   const original = admission.request;
+  const scope = resolveAdmittedQualificationScope(admission);
   const request = publicationSourceRequest({
     PUBLICATION_INPUTS_JSON: JSON.stringify(original.inputs),
     PUBLICATION_TOOLING_JSON: JSON.stringify({
@@ -197,8 +268,8 @@ export function receiptRecoverySourceRequest(admission, producer) {
     GITHUB_REPOSITORY: original.repository,
     PUBLICATION_TARGET_SHA: original.candidateSha,
     PUBLICATION_TARGET_CONTEXT: original.inputs.target_context_ref || original.inputs.ref,
-    PUBLICATION_SKIP_TELEGRAM: "true",
-    PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
+    PUBLICATION_SKIP_TELEGRAM: String(scope.skipPackageTelegramE2e),
+    PUBLICATION_COVERAGE_POLICY: scope.coveragePolicy ?? "",
     GITHUB_REF: "refs/heads/" + original.transportRef,
     GITHUB_SHA: original.qualificationSha,
     GITHUB_RUN_ID: producer.runId,
@@ -279,19 +350,20 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     "recovery must not reuse the qualification request identity",
   );
   requireValue(
-    admission.request.inputs.release_profile === "beta" &&
+    ["beta", "stable", "full"].includes(admission.request.inputs.release_profile) &&
       admission.request.inputs.rerun_group === "all" &&
       admission.request.inputs.mode === "both",
-    "only full beta qualification can be recovered",
+    "only complete admitted qualification can be recovered",
   );
+  const scope = resolveAdmittedQualificationScope(admission);
   const baselines = validateQualificationBaselinePolicy(
     admission.request,
     admission.baselinePolicy,
   );
   requireValue(
     binding.package.version === admission.baselinePolicy.candidateVersion &&
-      binding.request.releaseProfile === "beta" &&
-      binding.request.releaseSoak === false,
+      binding.request.releaseProfile === scope.releaseProfile &&
+      binding.request.releaseSoak === scope.runReleaseSoak,
     "candidate profile or version differs from original admission",
   );
   same(
@@ -307,12 +379,15 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     );
   }
   same(
+    Object.keys(request.children).toSorted(),
     admission.coverage.children.map((child) => child.key).toSorted(),
-    ROLES.toSorted(),
-    "original admission must cover every beta role",
+    "recovery must include exactly the admitted child roles",
   );
   requireValue(
-    parent.head_sha === qualificationSha &&
+    parent.status === "completed" &&
+      ["success", "failure"].includes(parent.conclusion) &&
+      Number(parent.run_attempt) === request.originalParent.runAttempt &&
+      parent.head_sha === qualificationSha &&
       parent.head_branch === admission.request.transportRef &&
       parent.event === "workflow_dispatch" &&
       String(parent.path).split("@")[0] === ".github/workflows/full-release-validation.yml" &&
@@ -328,6 +403,50 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     admission.coverage.requiredParentJobs,
     "Original qualification parent",
   );
+  // Missing-plan recovery remains supported. If a plan exists, it is
+  // evidence, not an optional hint: use the original admission's sealing owner.
+  const artifacts = await client.getRunArtifacts(request.originalParent.runId);
+  if (
+    artifacts.some(
+      (entry) => entry.name === "full-release-execution-plan-" + request.originalParent.runId,
+    )
+  ) {
+    const source = receiptRecoverySourceRequest(admission, {
+      runId: request.originalParent.runId,
+      runAttempt: 1,
+      fullRef: "refs/heads/" + admission.request.transportRef,
+      sha: qualificationSha,
+    });
+    const { plan } = await restoreOriginalPublicationAdmission({ request: source, client });
+    same(
+      plan.qualificationCoverage,
+      admission.coverage,
+      "original plan coverage differs from admission",
+    );
+    same(plan.candidateRequest, binding.request, "original plan candidate request changed");
+    if (plan.candidate) {
+      same(plan.candidate, binding, "original plan candidate binding changed");
+    }
+    same(
+      plan.children
+        .filter((child) => child.selected)
+        .map((child) => child.key)
+        .toSorted(),
+      Object.keys(request.children).toSorted(),
+      "original plan selected child inventory changed",
+    );
+    for (const child of plan.children.filter((entry) => entry.selected)) {
+      const selected = request.children[child.key];
+      same(child.runId, selected.runId, "original plan child selection changed: " + child.key);
+      if (plan.childReuse?.[child.key]) {
+        same(
+          plan.childReuse[child.key],
+          selected,
+          "original adopted receipt changed: " + child.key,
+        );
+      }
+    }
+  }
   await verifySealedFullReleaseCandidate({
     binding,
     downloadArchive: (options) => client.downloadArtifactArchive(options),
@@ -341,8 +460,14 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     },
     token: deps.token,
   });
+  const policyQualification = await verifyReceiptRecoveryPolicy(request, admission, client);
+  const waiverPolicy =
+    policyQualification?.waiverPolicy ??
+    (await readReleaseValidationWaiversAsync((path) =>
+      client.getWorkflowSource(qualificationSha, path),
+    ));
   const children = [];
-  for (const role of ROLES) {
+  for (const { key: role } of admission.coverage.children) {
     const selection = request.children[role];
     const fresh = selection.sourceParentRunId === request.originalParent.runId;
     if (fresh) {
@@ -354,7 +479,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     }
     const spec = releaseChildSpec(role);
     const source = client.getWorkflowSource(qualificationSha, ".github/workflows/" + spec.workflow);
-    const inputs = receiptRecoveryChildInputs(role, admission, binding, source);
+    const inputs = qualificationChildDispatchInputs(role, admission, binding, source);
     const verified = await client.validateChildReuse(
       selection,
       {
@@ -366,7 +491,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
         policyTargetVersion: binding.package.version,
       },
       // Recovery must enumerate every historical attempt, including long rerun chains.
-      { deadlineMs: Date.now() + 10 * 60_000 },
+      { deadlineMs: Date.now() + 10 * 60_000, waiverPolicy },
     );
     const coverage = admission.coverage.children.find((child) => child.key === role);
     const child = {
@@ -378,16 +503,27 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       jobs: verified.receipt.jobs,
     };
     requireValue(
-      terminalPolicyPass(child, binding.package.version),
+      terminalPolicyPass(child, binding.package.version, target, waiverPolicy),
       "original child failed release policy",
     );
-    const policy = evaluateReleaseChildPolicy({ child, targetVersion: binding.package.version });
+    const policy = evaluateReleaseChildPolicy({
+      child,
+      targetVersion: binding.package.version,
+      targetSha: target,
+      waiverPolicy,
+    });
+    // Reuse the admitted workload inventory and authenticated composite; recovery
+    // does not reconstruct a second matrix policy from historical source files.
     validateQualificationJobs(
       verified.receipt.jobs,
       coverage.requiredJobs,
       "Original " + role,
       policy.waivedJobNames,
     );
+
+    if (role === "productPerformance") {
+      validatePerformanceArtifactOnlyJobs(verified.receipt.jobs);
+    }
     const dispatchJobs = parentJobs.filter((job) => job.name === coverage.parentJobName);
     requireValue(
       dispatchJobs.length === 1 &&
@@ -399,7 +535,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       child: { key: role, runId: selection.runId },
       childReuse: fresh ? undefined : selection,
       log: await client.getJobLog(dispatchJobs[0].id),
-      coveragePolicy: "npm-beta-v1",
+      coveragePolicy: scope.coveragePolicy,
       plannedRunAttempt: 1,
       repository: request.repository,
       targetSha: target,
@@ -427,6 +563,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     targetSha: target,
     publicationArtifacts: request.publicationArtifacts,
   };
+  const selection = JSON.parse(admission.request.inputs.trusted_workflow_json).publicationSelection;
   const publication = await client.verifyRetainedPublicationArtifacts(
     originalRoot,
     {
@@ -434,7 +571,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       TARGET_SHA: target,
       PARENT_WORKFLOW_SHA: qualificationSha,
       RELEASE_TAG: "v" + binding.package.version,
-      PLUGIN_NPM_REQUIRED: "true",
+      PLUGIN_NPM_REQUIRED: String(selection.pluginPublishScope !== "none"),
     },
     {
       verifyPayloads: true,
@@ -448,56 +585,57 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     },
   );
   const plugin = request.publicationArtifacts.pluginNpm;
-  const pluginArtifact = {
-    id: plugin.artifactId,
-    name: plugin.artifactName,
-    runId: plugin.runId,
-    digest: plugin.artifactDigest,
-  };
-  const pluginFiles = inspectActionsArtifactZip(
-    await readPayload(request.repository, pluginArtifact, qualificationSha, deps),
-    [PREPARED_NPM_MANIFEST],
-  );
-  const selection = JSON.parse(admission.request.inputs.trusted_workflow_json).publicationSelection;
-  const preparedPlugins = validatePreparedNpmRelease(
-    JSON.parse(pluginFiles.get(PREPARED_NPM_MANIFEST).toString("utf8")),
-    {
-      repository: request.repository,
-      sourceSha: target,
-      workflowSha: qualificationSha,
-      npmDistTag: "default",
-      selectionMode: selection.pluginPublishScope,
-      plugins: selection.plugins.join(","),
-      publisherPolicySha256: sha(client.getWorkflowSource(qualificationSha, plugin.workflowPath)),
-    },
-  );
-  // One fresh bounded inventory replaces an N-request metadata fanout; it is
-  // local to this authentication and never persisted in immutable replay.
-  const pluginArtifacts = authenticatedPayloads
-    ? new Map((await client.getRunArtifacts(plugin.runId)).map((entry) => [entry.id, entry]))
-    : undefined;
-  for (const entry of preparedPlugins.packages) {
-    const metadata = pluginArtifacts?.get(entry.artifact.artifactId);
-    requireValue(!pluginArtifacts || metadata, "retained plugin payload is unavailable");
-    const bytes = await readPayload(
-      request.repository,
-      {
-        id: entry.artifact.artifactId,
-        name: entry.artifact.artifactName,
-        runId: entry.artifact.runId,
-        digest: entry.artifact.artifactDigest,
-        sizeBytes: entry.artifact.artifactSizeBytes,
-      },
-      qualificationSha,
-      deps,
-      authenticatedPayloads ? "metadata" : "archive",
-      metadata,
+  if (selection.pluginPublishScope !== "none") {
+    const pluginArtifact = {
+      id: plugin.artifactId,
+      name: plugin.artifactName,
+      runId: plugin.runId,
+      digest: plugin.artifactDigest,
+    };
+    const pluginFiles = inspectActionsArtifactZip(
+      await readPayload(request.repository, pluginArtifact, qualificationSha, deps),
+      [PREPARED_NPM_MANIFEST],
     );
-    publication.payloads.push({
-      kind: "plugin-npm-package",
-      artifact: entry.artifact,
-      sha256: authenticatedPayloads ? bytes.slice("sha256:".length) : sha(bytes),
-    });
+    const preparedPlugins = validatePreparedNpmRelease(
+      JSON.parse(pluginFiles.get(PREPARED_NPM_MANIFEST).toString("utf8")),
+      {
+        repository: request.repository,
+        sourceSha: target,
+        workflowSha: qualificationSha,
+        npmDistTag: selection.npmDistTag === "extended-stable" ? "extended-stable" : "default",
+        selectionMode: selection.pluginPublishScope,
+        plugins: selection.plugins.join(","),
+        publisherPolicySha256: sha(client.getWorkflowSource(qualificationSha, plugin.workflowPath)),
+      },
+    );
+    // One fresh bounded inventory replaces an N-request metadata fanout; it is
+    // local to this authentication and never persisted in immutable replay.
+    const pluginArtifacts = authenticatedPayloads
+      ? new Map((await client.getRunArtifacts(plugin.runId)).map((entry) => [entry.id, entry]))
+      : undefined;
+    for (const entry of preparedPlugins.packages) {
+      const metadata = pluginArtifacts?.get(entry.artifact.artifactId);
+      requireValue(!pluginArtifacts || metadata, "retained plugin payload is unavailable");
+      const bytes = await readPayload(
+        request.repository,
+        {
+          id: entry.artifact.artifactId,
+          name: entry.artifact.artifactName,
+          runId: entry.artifact.runId,
+          digest: entry.artifact.artifactDigest,
+          sizeBytes: entry.artifact.artifactSizeBytes,
+        },
+        qualificationSha,
+        deps,
+        authenticatedPayloads ? "metadata" : "archive",
+        metadata,
+      );
+      publication.payloads.push({
+        kind: "plugin-npm-package",
+        artifact: entry.artifact,
+        sha256: authenticatedPayloads ? bytes.slice("sha256:".length) : sha(bytes),
+      });
+    }
   }
   for (const [kind, constituent] of [
     ["candidate-shared-image", binding.sharedImage],
@@ -557,17 +695,33 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       "original publication payload inventory changed",
     );
   }
-  await revalidateReceiptRecoveryRuns(request, client, children);
+  await revalidateReceiptRecoveryRuns(request, client, children, parent);
+  if (policyQualification) {
+    await revalidateReceiptRecoveryPolicy(request, policyQualification.admission, client);
+  }
   client.revalidateQualificationAdmissionAuthority({
     descriptor: request.qualificationAdmission,
     admission,
   });
-  return { admission, children, originalRoot, publication };
+  return {
+    admission,
+    policyAdmission: policyQualification?.admission,
+    children,
+    originalRoot,
+    publication,
+    originalParent: parent,
+  };
 }
 
-export async function revalidateReceiptRecoveryRuns(request, client, verifiedChildren = []) {
+export async function revalidateReceiptRecoveryRuns(
+  request,
+  client,
+  verifiedChildren,
+  originalParent,
+) {
   const tuples = [
-    ...ROLES.map((role) => request.children[role]),
+    request.originalParent,
+    ...Object.values(request.children),
     request.candidateBinding.producer,
     request.publicationArtifacts.npmPreflight.producer,
     {
@@ -576,16 +730,31 @@ export async function revalidateReceiptRecoveryRuns(request, client, verifiedChi
     },
     request.publicationArtifacts.pluginNpm,
   ];
-  for (const tuple of tuples) {
+  const seen = new Set();
+  for (const tuple of tuples.filter(Boolean)) {
+    if (seen.has(String(tuple.runId))) {
+      continue;
+    }
+    seen.add(String(tuple.runId));
     const current = await client.getRun(String(tuple.runId));
-    const verifiedChild = verifiedChildren.find((child) => child.runId === String(tuple.runId));
+    const parent = String(tuple.runId) === request.originalParent.runId;
+    const verifiedChild = verifiedChildren?.find((child) => child.runId === String(tuple.runId));
+    const conclusion =
+      parent && originalParent && (tuple.currentRunAttempt ?? tuple.runAttempt) === tuple.runAttempt
+        ? originalParent.conclusion
+        : verifiedChild?.conclusion;
     requireValue(
       String(current.id) === String(tuple.runId) &&
-        Number(current.run_attempt) === Number(tuple.runAttempt) &&
+        Number(current.run_attempt) ===
+          Number(parent ? (tuple.currentRunAttempt ?? tuple.runAttempt) : tuple.runAttempt) &&
         current.head_sha ===
           (verifiedChild?.workflowSha ?? request.candidateBinding.request.toolingSha) &&
         current.status === "completed" &&
-        current.conclusion === (verifiedChild?.conclusion ?? "success"),
+        (conclusion
+          ? current.conclusion === conclusion
+          : parent
+            ? ["success", "failure"].includes(current.conclusion)
+            : current.conclusion === "success"),
       "original producer or child current attempt changed: " + tuple.runId,
     );
   }
@@ -616,6 +785,10 @@ export async function authenticateReceiptRecovery({
     "sealed payload inventory is unavailable",
   );
   const producer = producerFromManifest(manifest);
+  requireValue(
+    request.workflowSha === undefined || request.workflowSha === producer.sha,
+    "aggregate did not execute the selected recovery P",
+  );
   const revalidateRecoveryAuthority = () =>
     client.verifyReceiptRecoveryAuthority
       ? client.verifyReceiptRecoveryAuthority(producer)
@@ -627,7 +800,7 @@ export async function authenticateReceiptRecovery({
     "missing immutable recovery contract",
   );
   requireValue(
-    run.name === "Full Release Receipt Recovery" &&
+    run.name === "Receipt Recovery " + request.requestId &&
       run.id === Number(producer.runId) &&
       run.run_attempt === producer.runAttempt &&
       run.head_sha === producer.sha &&
@@ -646,9 +819,7 @@ export async function authenticateReceiptRecovery({
       manifest.workflowFullRef === "refs/heads/main" &&
       manifest.workflowRefType === "branch" &&
       manifest.targetRef === manifest.targetSha &&
-      manifest.releaseProfile === "beta" &&
       manifest.rerunGroup === "all" &&
-      manifest.runReleaseSoak === "false" &&
       manifest.sourceParentRunAttempt === producer.runAttempt &&
       !manifest.evidenceReuse &&
       !manifest.executionPlanSha256 &&
@@ -660,8 +831,8 @@ export async function authenticateReceiptRecovery({
   same(
     manifest.controls,
     {
-      stableSoakRequired: false,
-      performanceBlocking: false,
+      stableSoakRequired: ["stable", "full"].includes(manifest.releaseProfile),
+      performanceBlocking: manifest.releaseProfile !== "beta",
       performanceReportPublication: "artifact-only",
     },
     "aggregate controls changed",
@@ -673,7 +844,9 @@ export async function authenticateReceiptRecovery({
   );
   same(
     manifest.childRuns,
-    Object.fromEntries(ROLES.map((role) => [role, request.children[role].runId])),
+    Object.fromEntries(
+      Object.entries(request.children).map(([role, child]) => [role, child.runId]),
+    ),
     "aggregate changed original children",
   );
   const admission = validatePublicationAdmissionBinding(manifest, {
@@ -760,6 +933,9 @@ export async function authenticateReceiptRecovery({
     verified.children.flatMap((child) => child.advisoryJobs),
     "aggregate advisories differ from trusted policy",
   );
+  const scope = resolveAdmittedQualificationScope(verified.admission);
+  same(manifest.releaseProfile, scope.releaseProfile, "aggregate changed original profile");
+  same(manifest.runReleaseSoak, String(scope.runReleaseSoak), "aggregate changed original soak");
   const expectedSource = receiptRecoverySourceRequest(verified.admission, producer);
   const source = validatePublicationSourceBinding(manifest);
   requireValue(
@@ -772,7 +948,7 @@ export async function authenticateReceiptRecovery({
   if (expectedRunAttempts) {
     for (const [id, attempt] of [
       [producer.runId, producer.runAttempt],
-      ...ROLES.map((role) => [request.children[role].runId, request.children[role].runAttempt]),
+      ...Object.values(request.children).map((child) => [child.runId, child.runAttempt]),
     ]) {
       same(expectedRunAttempts.get(id), attempt, "expected attempt changed: " + id);
       expectedRunAttempts.delete(id);
@@ -823,11 +999,12 @@ export async function authenticateReceiptRecovery({
     directRoot: true,
     evidenceReuse: null,
     executionPlan: null,
-    releaseProfile: "beta",
+    releaseProfile: scope.releaseProfile,
     rerunGroup: "all",
-    runReleaseSoak: false,
+    runReleaseSoak: scope.runReleaseSoak,
     repository: request.repository,
     qualificationAdmission: verified.admission,
+    policyAdmission: verified.policyAdmission ?? null,
     producerOnTrustedMainLineage: true,
     verifier,
     validationInputs: manifest.validationInputs,
@@ -841,16 +1018,26 @@ async function main() {
     runId: env.GITHUB_RUN_ID,
     runAttempt: Number(env.GITHUB_RUN_ATTEMPT),
     fullRef: env.GITHUB_REF,
-    sha: env.GITHUB_SHA,
+    sha: env.GITHUB_WORKFLOW_SHA || env.GITHUB_SHA,
   };
   const request = validateReceiptRecoveryRequest(JSON.parse(env.RECEIPT_RECOVERY_REQUEST));
+  requireValue(
+    request.workflowSha === undefined || request.workflowSha === producer.sha,
+    "workflow did not execute the selected recovery P; retain this request and select a new reviewed P",
+  );
   verifyReceiptRecoveryAuthority(request.repository, producer, false);
   mkdirSync(directory, { recursive: true });
-  if (process.argv[2] === "admit") {
+  if (process.argv[2] === "request") {
+    writeFileSync(join(directory, "request.json"), JSON.stringify(request) + "\n", { mode: 0o600 });
+  } else if (process.argv[2] === "admit") {
     const verified = await verifyOriginalReceiptQualification(request);
     writeFileSync(
       join(directory, "verified-qualification.json"),
-      JSON.stringify({ payloads: verified.publication.payloads, children: verified.children }),
+      JSON.stringify({
+        payloads: verified.publication.payloads,
+        children: verified.children,
+        originalParent: verified.originalParent,
+      }),
     );
     const source = receiptRecoverySourceRequest(verified.admission, producer);
     writeFileSync(join(directory, "source-request.json"), JSON.stringify(source));
@@ -871,6 +1058,13 @@ async function main() {
       },
     );
     writeFileSync(join(directory, "source.json"), result);
+    if (verified.policyAdmission) {
+      await revalidateReceiptRecoveryPolicy(
+        request,
+        verified.policyAdmission,
+        createReleaseEvidenceClient(request.repository),
+      );
+    }
     revalidateQualificationAdmissionAuthority({
       descriptor: request.qualificationAdmission,
       admission: verified.admission,
@@ -930,25 +1124,29 @@ async function main() {
       waivers: verified.children.flatMap((child) => child.waivers),
       advisoryJobs: verified.children.flatMap((child) => child.advisoryJobs),
       controls: {
-        stableSoakRequired: false,
-        performanceBlocking: false,
+        stableSoakRequired: ["stable", "full"].includes(context.releaseProfile),
+        performanceBlocking: context.releaseProfile !== "beta",
         performanceReportPublication: "artifact-only",
       },
-      childRuns: Object.fromEntries(ROLES.map((role) => [role, request.children[role].runId])),
+      childRuns: Object.fromEntries(
+        Object.entries(request.children).map(([role, child]) => [role, child.runId]),
+      ),
     };
     const client = createReleaseEvidenceClient(request.repository);
-    await revalidateReceiptRecoveryRuns(request, client, verified.children);
-    const originalParent = await client.getRunAttempt(
-      request.originalParent.runId,
-      request.originalParent.runAttempt,
+    await revalidateReceiptRecoveryRuns(
+      request,
+      client,
+      verified.children,
+      verified.originalParent,
     );
-    client.verifyQualificationAdmission({
+    const originalAdmission = client.verifyQualificationAdmission({
       descriptor: request.qualificationAdmission,
       repository: request.repository,
       candidateSha: manifest.targetSha,
       qualificationSha: request.candidateBinding.request.toolingSha,
-      workflowRef: originalParent.head_branch,
+      workflowRef: verified.originalParent.head_branch,
     });
+    await verifyReceiptRecoveryPolicy(request, originalAdmission, client);
     verifyReceiptRecoveryAuthority(request.repository, producer, false);
     writeFileSync(
       join(directory, "full-release-validation-manifest.json"),
@@ -959,7 +1157,7 @@ async function main() {
       "artifact_name=full-release-validation-" + producer.runId + "-" + producer.runAttempt + "\n",
     );
   } else {
-    throw new Error("Expected admit or seal");
+    throw new Error("Expected request, admit or seal");
   }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

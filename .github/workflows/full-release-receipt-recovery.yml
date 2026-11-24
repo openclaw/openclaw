@@ -1,4 +1,5 @@
 name: Full Release Receipt Recovery
+run-name: Receipt Recovery ${{ fromJSON(inputs.request).requestId }}
 
 on:
   workflow_dispatch:
@@ -16,6 +17,7 @@ env:
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"
+  FULL_RELEASE_RECEIPT_RECOVERY_REQUEST_CONTRACT: "1"
 
 jobs:
   aggregate:
@@ -41,6 +43,15 @@ jobs:
           install-deps: "false"
       - name: Install trusted tooling dependencies without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Retain exact recovery request
+        run: node scripts/full-release-receipt-recovery.mjs request
+      - name: Upload exact recovery request
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: full-release-recovery-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/receipt-recovery/request.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Authenticate retained qualification and collect fresh admission
         run: node scripts/full-release-receipt-recovery.mjs admit
       - name: Upload fresh publication observations

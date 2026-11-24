@@ -214,6 +214,66 @@ describe("memory actor transcript turn binding", () => {
     ).toEqual(messages.map((message) => expect.objectContaining({ type: "message", message })));
   });
 
+  it.each([false, true])(
+    "admits input after prior-run completion unless its lifecycle was explicit (explicit=%s)",
+    async (explicit) => {
+      const { actor, append, history } = await fixture();
+      const expectedState = { status: undefined, abortedLastRun: undefined };
+      const message = {
+        role: "user",
+        content: "Follow up after completion.",
+        idempotencyKey: "next",
+      };
+      const pending = append({
+        ...(explicit ? { expectedSessionState: expectedState } : {}),
+        messages: [
+          {
+            message,
+            preparation: {
+              async prepareMessage() {
+                // The real owner settles the preceding turn after this input was prepared.
+                await expect(
+                  actor.completeTurn(
+                    {
+                      commandId: "prior-completion",
+                      phaseId: "completion",
+                      turn: {
+                        agentId: scope.agentId,
+                        sessionKey,
+                        options: {
+                          expectedSessionId: sessionId,
+                          sessionFile: "synthetic-session.jsonl",
+                          expectedSessionState: expectedState,
+                          messages: [],
+                          sessionLifecyclePatch: { status: "done" },
+                        },
+                      },
+                    },
+                    authority,
+                  ),
+                ).resolves.toMatchObject({ kind: "committed" });
+                return message;
+              },
+            },
+          },
+        ],
+      });
+      if (explicit) {
+        await expect(pending).rejects.toMatchObject({
+          name: "SessionTranscriptWriterClaimReboundError",
+        });
+      } else {
+        await expect(pending).resolves.toMatchObject({
+          appendedMessages: [expect.objectContaining({ appended: true, message })],
+        });
+      }
+      expect(
+        (await history()).events.filter((event) => isRecord(event) && event.type === "message"),
+      ).toHaveLength(explicit ? 0 : 1);
+      expect(actor.snapshot(authority)?.entry?.status).toBe("done");
+    },
+  );
+
   it("prepares fresh input once and publishes the same canonical bytes on retry", async () => {
     const { actor, owner, append, history } = await fixture();
     const original = { role: "user", content: "Original", idempotencyKey: "input-1" };

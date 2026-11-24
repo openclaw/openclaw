@@ -5,6 +5,7 @@ import {
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -267,6 +268,15 @@ export async function createForeignPublicationSession(otherOwner: string, incogn
     createdActor: { type: "human" as const, source: "profile" as const, id: otherOwner },
   };
   await upsertSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, entry);
+  const owner = await assignSessionOwnerInWorker(
+    { agentId: "main", sessionKey: SESSION_KEY },
+    {
+      expectedSessionId: SESSION_ID,
+      owner: { type: "human", id: otherOwner },
+      assignedBy: { type: "system", id: "gateway" },
+    },
+  );
+  expect(owner?.actor.id).toBe(otherOwner);
   const original = mocks.loadSession.getMockImplementation()!;
   mocks.loadSession.mockImplementation((key: string) => ({
     ...original(key),

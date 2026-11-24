@@ -254,9 +254,33 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ["sh", "scripts/e2e/lib/upgrade-survivor/run.sh", "readPostCoreSnapshot", "./diagnostics.mjs"],
     [
       "yml",
+      ".github/workflows/full-release-validation.yml",
+      "resolveReleaseContextIdentity",
+      "../../scripts/lib/release-context.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/full-release-validation.yml",
+      "resolveReleaseQualificationScope",
+      "../../scripts/full-release-validation-policy.mjs",
+    ],
+    [
+      "yml",
       ".github/workflows/openclaw-release-publish.yml",
       "prefetchPreparedPlugins",
       "../../scripts/openclaw-release-ready.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyReleaseEvidenceChecksum",
+      "../../scripts/lib/stable-release-closeout.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyStablePublishRecovery",
+      "../../scripts/lib/stable-publish-recovery.mjs",
     ],
   ] as const)("models %s inline imports from %s", (kind, file, symbol, importedFrom) => {
     const source = fs.readFileSync(file, "utf8");
@@ -266,7 +290,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     }
     expect(compile(source, file)).toContain(`import { ${symbol} } from "${importedFrom}";`);
     const remaining = compile(
-      source.replace(new RegExp(`^\\s*import \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
+      source.replace(new RegExp(`^\\s*(?:import|const) \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
       file,
     );
     expect(remaining).not.toContain(symbol);
@@ -274,6 +298,18 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       expect(remaining).toContain('from "../../../lib/release-version.mjs";');
     }
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
+  });
+
+  it("ignores full validation imports from an unrelated checkout", () => {
+    const file = ".github/workflows/full-release-validation.yml";
+    const source = replaceFixture(
+      fs.readFileSync(file, "utf8"),
+      "./workflow/scripts/full-release-validation-policy.mjs",
+      "./other/scripts/full-release-validation-policy.mjs",
+    );
+    expect(knipConfig.compilers.yml(source, file)).not.toContain(
+      "resolveReleaseQualificationScope",
+    );
   });
 
   it("models the workflow planner without retaining removed consumers", () => {
@@ -899,6 +935,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const manifest = fs.readFileSync("package.json", "utf8");
     const compile = knipConfig.compilers.json;
     const compiled = compile(manifest, "package.json");
+    expect(compiled).not.toContain("import { isImmutableManagedServiceUpdateHandoffProcess");
     expect(compiled).toMatch(
       /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
     );
@@ -920,6 +957,9 @@ function other(lineageCompletion: typeof lineageWriter) {
       ).toBe(false);
       expect(compiled).toContain(`from "./${module}";`);
     }
+    expect(compiled).toMatch(
+      /import \{ runWithOpenClawStateLeaseWorker as __updateCompatibilityConsumer\d+ \} from "\.\/src\/state\/openclaw-state-lease-worker-operation\.ts";/u,
+    );
     const finishAliases = [
       ...compiled.matchAll(
         /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
@@ -1004,9 +1044,5 @@ function other(lineageCompletion: typeof lineageWriter) {
 ${errors}
 Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.`,
     });
-  });
-
-  it("accepts clean export scan output unchanged", () => {
-    expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
   });
 });

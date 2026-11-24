@@ -100,6 +100,13 @@ openclaw-chat-details[mobile] {
   z-index: 2;
 }
 
+/* Automatic docking can reserve space before Details mounts. Don't paint an
+   empty card in that space before the loading or populated view is available. */
+.chat-details[data-desktop][data-awaiting-content] {
+  visibility: hidden;
+  opacity: 0;
+}
+
 .chat-details[data-desktop][data-open] {
   transform: translateX(0);
 }
@@ -544,36 +551,8 @@ button.chat-details__process:is(:hover, :focus-visible) {
   flex: 1;
   min-width: 0;
 }
-.chat-details .chat-pr__link--static .chat-pr__identity {
-  display: grid;
-  gap: 2px;
-}
-.chat-details .chat-pr__repo {
-  overflow: hidden;
-  text-overflow: clip;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 500;
-  flex: 1;
-  min-width: 0;
-}
-.chat-details .chat-pr__number {
-  font-size: 11px;
-  color: var(--muted);
-}
-.chat-details .chat-pr__meta {
-  flex: none;
-  flex-wrap: wrap;
-  justify-content: end;
-  gap: 4px;
-  max-width: 160px;
-}
 .chat-details .chat-pr__diff {
   display: inline-flex;
-  font-size: 10px;
-}
-.chat-details .chat-pr__state {
-  color: var(--muted);
   font-size: 10px;
 }
 .chat-details__changes {
@@ -619,40 +598,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details .chat-pr--compact .chat-pr__link:hover {
   text-decoration: underline;
 }
-.chat-details .chat-pr--compact .chat-pr__meta {
-  max-width: none;
-  justify-content: start;
-  gap: 5px;
-}
-.chat-details .chat-pr--compact .chat-pr__diff {
-  order: 1;
-  margin-inline-start: auto;
-  white-space: nowrap;
-}
-.chat-details .chat-pr__checks-pill {
-  gap: 3px;
-  min-height: 22px;
-  padding: 2px 5px;
-  border: 0;
-  border-radius: 5px;
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  font-size: 10px;
-}
-.chat-details .chat-pr__dismiss {
-  width: 18px;
-  padding: 2px;
-  opacity: 0;
-}
-.chat-details .chat-pr:hover .chat-pr__dismiss,
-.chat-details .chat-pr:focus-within .chat-pr__dismiss {
-  opacity: 1;
-}
-@media (hover: none) {
-  .chat-details .chat-pr__dismiss {
-    opacity: 1;
-  }
-}
-
 .chat-details__badge {
   color: var(--muted);
   font-size: 10px;

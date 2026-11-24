@@ -66,24 +66,6 @@ public struct OpenClawSessionColorStripe: View {
     }
 }
 
-public struct OpenClawSessionColorDot: View {
-    @Environment(\.colorScheme) private var colorScheme
-    private let color: String?
-
-    public init(color: String?) {
-        self.color = color
-    }
-
-    public var body: some View {
-        if let color = OpenClawSessionColor(name: self.color) {
-            Circle()
-                .fill(color.tint(in: self.colorScheme))
-                .frame(width: 7, height: 7)
-                .accessibilityLabel(String(localized: "Session color") + ": " + color.label)
-        }
-    }
-}
-
 public struct OpenClawSessionColorMenu: View {
     @Environment(\.colorScheme) private var colorScheme
     private let color: String?

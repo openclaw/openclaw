@@ -142,6 +142,42 @@ describe("cron creator authority grants", () => {
     ).toBe(false);
   });
 
+  it("does not infer external origin from scoped creation authority", () => {
+    const scope = createScope(
+      "scoped-external",
+      { kind: "external", channel: "discord" },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const grant = mint(scope, undefined, undefined, undefined, "requester");
+    expect(provenance(grant, scope.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerScopedCreation: true,
+    });
+  });
+
+  it("records a channel owner's external origin without granting runtime authority", () => {
+    let current = true;
+    const scope = createScope(
+      "telegram-owner",
+      { kind: "external", channel: "telegram" },
+      { source: "channel-owner", isCurrent: () => current },
+    );
+    const grant = mint(scope, undefined, undefined, undefined, "requester");
+    expect(provenance(grant, scope.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerOrigin: { kind: "external", channel: "telegram" },
+    });
+    expect(consume(grant).authority).toBeUndefined();
+    current = false;
+    expect(() => mint(scope, undefined, undefined, undefined, "requester")).toThrow(
+      "access has ended",
+    );
+  });
+
   it("rejects run substitution and transports private runtime authority only once", () => {
     const scope = createScope("run-authority");
     const runtimeAuthority = {
@@ -153,10 +189,10 @@ describe("cron creator authority grants", () => {
     const grant = mint(scope, undefined, runtimeAuthority);
     expect(grant).toEqual({ runId: "run-authority", token: expect.any(String) });
     expect(() => consume({ ...grant, runId: "run-other" })).toThrow(
-      "Configured MCP cron authority is no longer active",
+      "This run's MCP cron access has ended",
     );
     expect(consume(grant).authority).toEqual(runtimeAuthority);
-    expect(() => consume(grant)).toThrow("Configured MCP cron authority is no longer active");
+    expect(() => consume(grant)).toThrow("This run's MCP cron access has ended");
   });
 
   it.each([
@@ -184,7 +220,7 @@ describe("cron creator authority grants", () => {
       const unspent = mintCurrent();
       expect(consumed.authority).toBeUndefined();
       expect(consumed.assertCurrent).not.toThrow();
-      expect(() => consume(grant)).toThrow("no longer active");
+      expect(() => consume(grant)).toThrow("access has ended");
       await Promise.resolve();
       if (revoked === "issuer" || revoked === "scope") {
         current[revoked] = false;
@@ -198,8 +234,8 @@ describe("cron creator authority grants", () => {
       } else {
         scope.abort();
       }
-      expect(consumed.assertCurrent).toThrow("no longer active");
-      expect(() => consume(unspent)).toThrow("Configured MCP cron authority is no longer active");
+      expect(consumed.assertCurrent).toThrow("access has ended");
+      expect(() => consume(unspent)).toThrow("This run's MCP cron access has ended");
     },
   );
 });
@@ -309,7 +345,7 @@ describe("cron management authority grants", () => {
     expect(() => fixture.mint("cron.add")).toThrow(denied);
 
     const management = fixture.mint();
-    expect(() => consume(management)).toThrow("Configured MCP cron authority is no longer active");
+    expect(() => consume(management)).toThrow("This run's MCP cron access has ended");
     await expect(fixture.run(management, async () => "allowed")).resolves.toBe("allowed");
   });
 
