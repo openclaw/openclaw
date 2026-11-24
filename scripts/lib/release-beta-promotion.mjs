@@ -126,6 +126,18 @@ export function classifyBetaPromotionComparison(
       if (JSON.stringify(expected) !== JSON.stringify(actual)) {
         throw new Error("beta-to-final package contains non-version changes: " + path);
       }
+    } else if (path === "scripts/lib/official-external-channel-catalog.json") {
+      const expected = JSON.parse(before);
+      for (const entry of expected.entries) {
+        // The generator carries install specs and host compatibility floors
+        // through unchanged; only aligned official package versions move.
+        if (entry.source === "official" && entry.version === sourceVersion) {
+          entry.version = version;
+        }
+      }
+      if (JSON.stringify(expected) !== JSON.stringify(JSON.parse(after))) {
+        throw new Error("beta-to-final catalog contains non-version changes: " + path);
+      }
     } else if (before.replaceAll(sourceVersion, version) !== after) {
       throw new Error("beta-to-final generated metadata contains non-version changes: " + path);
     }

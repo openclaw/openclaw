@@ -597,7 +597,12 @@ describe("candidate-owned publish consumer chain", () => {
         ? "changelog-only-release-v1"
         : "exact-target-full-validation-v1";
     const changedPaths = promotion
-      ? ["package.json", "extensions/discord/package.json", "docs/plugins/plugin-inventory.md"]
+      ? [
+          "package.json",
+          "extensions/discord/package.json",
+          "docs/plugins/plugin-inventory.md",
+          "scripts/lib/official-external-channel-catalog.json",
+        ]
       : mode === "changelog"
         ? ["CHANGELOG.md"]
         : [];
@@ -692,6 +697,23 @@ describe("candidate-owned publish consumer chain", () => {
       },
       getSourceFile: (sha: string, path: string) => {
         const version = sha === root.c ? "2026.8.28-beta.1" : "2026.8.28";
+        if (path.endsWith("official-external-channel-catalog.json")) {
+          return JSON.stringify({
+            entries: [
+              {
+                name: "@openclaw/discord",
+                source: "official",
+                version,
+                openclaw: {
+                  install: {
+                    minHostVersion: ">=2026.8.28-beta.1",
+                    npmSpec: "external@2026.8.28-beta.1",
+                  },
+                },
+              },
+            ],
+          });
+        }
         return path.endsWith(".md")
           ? `Plugin inventory: ${version}`
           : JSON.stringify({
