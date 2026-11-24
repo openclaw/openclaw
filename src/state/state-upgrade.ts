@@ -2,27 +2,22 @@
 //
 // Migration inputs are copied into a private shadow, migrated by this build's
 // Doctor, validated, and published by a durable rename plan. PostgreSQL copies
-// retain the original namespace for rollback. Stores whose measured copy estimate
-// exceeds the update window keep the existing in-place migration owner instead;
-// SQLite state still receives its normal private-copy protection.
+// retain the original namespace for rollback. Release trials never migrate an
+// uncovered store; ordinary non-trial starts retain the normal migration-on-open owner.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default-path.js";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import { resolveManagedWorktreeRoot } from "../agents/worktrees/storage-root.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { getMediaDir } from "../media/store-path.js";
 import {
   clonePostgresUpgrade,
   preflightPostgresUpgrade,
   retirePostgresUpgrade,
   validatePostgresUpgrade,
 } from "../snapshot/database-backup.js";
+import { readTrial, resolvePrefix } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
@@ -37,7 +32,7 @@ import {
   discoverDatabases,
   expectedVersion,
   outdatedDatabases,
-  postgresInPlaceUpgradeNotice,
+  stateUpgradeRefusal,
   readUpgradeConfig,
   readVersion,
   type DatabaseTarget,
@@ -293,40 +288,6 @@ export async function upgradeStateDirectory(params: {
     return { status: "current" };
   }
   const config = readUpgradeConfig(configPath);
-  const excludedRoots = [
-    resolveDefaultAgentWorkspaceDir(env),
-    ...listAgentWorkspaceDirs(config, env),
-    ...(config.agents?.defaults?.workspace
-      ? [resolveUserPath(config.agents.defaults.workspace, env)]
-      : []),
-    resolveManagedWorktreeRoot(env),
-    resolveManagedWorktreeRoot(env, config.worktreeRoot),
-    // Plugin storage is not a core migration input. Knowledge Doctor only
-    // normalizes config; browser profile storage belongs to the browser plugin.
-    // Git release installations are code, never state; copying them doubles every release.
-    ...["knowledge", "browser", "backups", "cache", "locks", "tmp", "git-install"].map((name) =>
-      path.join(stateDir, name),
-    ),
-  ].flatMap((dir) => {
-    const absolute = path.resolve(dir);
-    return fs.existsSync(absolute) ? [absolute, fs.realpathSync(absolute)] : [absolute];
-  });
-  const media = getMediaDir({ ...env, OPENCLAW_STATE_DIR: stateDir });
-  const mediaRecords = path.join(media, "outgoing", "records");
-  const within = (file: string, dir: string) =>
-    file === dir || file.startsWith(`${dir}${path.sep}`);
-  const skip = (absolute: string) => {
-    const top = path.relative(stateDir, absolute).split(path.sep)[0] ?? "";
-    return (
-      top.startsWith(WORK_PREFIX) ||
-      top.startsWith(APPLIED_PREFIX) ||
-      excludedRoots.some((dir) => within(absolute, dir)) ||
-      // Managed outgoing JSON is still a Doctor input; payloads are not.
-      (within(absolute, media) &&
-        !within(mediaRecords, absolute) &&
-        !within(absolute, mediaRecords))
-    );
-  };
   const resumedFiles = new Set<string>();
   const resumedGenerations = new Set<string>();
   // A durable plan from an interrupted swap is finished before anything else.
@@ -352,9 +313,7 @@ export async function upgradeStateDirectory(params: {
       retainAppliedPlan(stateDir, plan);
       resumedGenerations.add(plan.appVersion);
       for (const op of plan.ops) {
-        if (!skip(op.live)) {
-          resumedFiles.add(op.live);
-        }
+        resumedFiles.add(op.live);
       }
       params.log.info(`Finished an interrupted state upgrade to ${plan.appVersion}.`);
       resumed = true;
@@ -363,8 +322,13 @@ export async function upgradeStateDirectory(params: {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }
-  const { targets, retainedAgentDirectories } = await discoverDatabases(stateDir, config, env);
-  excludedRoots.push(...retainedAgentDirectories);
+  const inventory = await discoverDatabases(stateDir, config, env);
+  const { targets, skip } = inventory;
+  for (const file of resumedFiles) {
+    if (skip(file)) {
+      resumedFiles.delete(file);
+    }
+  }
   const outdated = outdatedDatabases(targets);
   if (outdated.length === 0) {
     if (resumed) {
@@ -382,19 +346,21 @@ export async function upgradeStateDirectory(params: {
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
-  const inPlaceNotice = postgresInPlaceUpgradeNotice(targets);
-  if (inPlaceNotice) {
-    params.log.warn(inPlaceNotice);
-    // Shared PostgreSQL previously bypassed copy-and-swap (its anchor was v0).
-    // Normal boot/Doctor still owns that in-place path, including SQLite agents.
-    if (targets.some((target) => target.kind === "state" && target.engine === "postgres")) {
-      return resumed ? { status: "resumed" } : { status: "current" };
+  const trial = await readTrial(resolvePrefix(env));
+  const protectedTrial = trial?.phase === "pending" || trial?.phase === "trial";
+  const upgradeRefusal = stateUpgradeRefusal(inventory, stateDir);
+  if (upgradeRefusal) {
+    if (protectedTrial) {
+      return { status: "refused", reason: upgradeRefusal };
     }
+    // Manual installs and plain restarts have no release to roll back. The existing
+    // database-open/Doctor migration owner must still be able to bring them online.
+    return resumed ? { status: "resumed" } : { status: "current" };
   }
-  const postgres = inPlaceNotice ? [] : targets.filter((target) => target.engine === "postgres");
+  // Ordinary starts retain PostgreSQL's existing migration-on-open owner.
+  const postgres = protectedTrial ? targets.filter((target) => target.engine === "postgres") : [];
   const sqliteOutdated = outdated.filter((target) => target.engine === "sqlite");
   try {
-    // The size decision precedes these copy-only prerequisites.
     if (postgres.length > 0) {
       await preflightPostgresUpgrade(
         postgres.map((target) => target.path),
@@ -424,9 +390,8 @@ export async function upgradeStateDirectory(params: {
     );
     const baseline = new Map<string, string | undefined>();
     const liveState = path.join(stateDir, "state", "openclaw.sqlite");
-    const requiredSqlite = new Set([...outdated.map((target) => target.path), liveState]);
     const copyScope = await copyTree(stateDir, shadowRoot, skip, baseline, {
-      requiredSqlite,
+      targets,
       log: params.log,
       additionalCopyBytes: configInside
         ? 0
@@ -469,7 +434,7 @@ export async function upgradeStateDirectory(params: {
     }
     let mode: "chain" | "fallback" = "chain";
     let failedStep: string | undefined;
-    const warnings: string[] = inPlaceNotice ? [inPlaceNotice] : [];
+    const warnings: string[] = [];
     const setAside: Array<{ report: SqliteSwapReport; rows: readonly SetAsideRow[] }> = [];
     let mismatches: string[] = [];
     const fallbackAdds: UpgradeOp[] = [];

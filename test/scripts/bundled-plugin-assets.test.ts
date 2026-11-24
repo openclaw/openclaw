@@ -1,6 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mts";
 import * as assets from "../../scripts/bundled-plugin-assets.mts";
@@ -148,6 +149,39 @@ it("prepares release assets only for plugins present in the built distribution",
   fileWriter(rootDir)("dist/extensions/canvas/package.json", { name: "@openclaw/canvas" });
   const hooks = await readHooks(rootDir, { phase: "package" });
   expect(hooks).toMatchObject([{ phase: "package", command: "node scripts/package-runtime.mjs" }]);
+});
+
+it("keeps package hook progress off the packager's machine-readable stdout", () => {
+  // Release packagers print the tarball path on stdout and run package hooks in-process.
+  const { rootDir, write } = pluginAssetFixture({ package: "node scripts/package-runtime.mjs" });
+  write(
+    "extensions/canvas/scripts/package-runtime.mjs",
+    'console.log("hook stdout"); console.error("hook stderr");\n',
+  );
+  const assetsUrl = pathToFileURL(path.resolve("scripts/bundled-plugin-assets.mts")).href;
+  const runPackagePhase = () =>
+    spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const { runBundledPluginAssetHooks } = await import(${JSON.stringify(assetsUrl)});
+await runBundledPluginAssetHooks({ phase: "package", rootDir: ${JSON.stringify(rootDir)} });
+process.stdout.write("/out/openclaw.tgz\\n");`,
+      ],
+      { encoding: "utf8" },
+    );
+
+  const skipped = runPackagePhase();
+  expect(skipped).toMatchObject({ status: 0, stdout: "/out/openclaw.tgz\n" });
+  expect(skipped.stderr).toContain("No bundled plugin asset package hooks; skipping.");
+
+  write("dist/extensions/canvas/package.json", { name: "@openclaw/canvas" });
+  const packaged = runPackagePhase();
+  expect(packaged).toMatchObject({ status: 0, stdout: "/out/openclaw.tgz\n" });
+  expect(packaged.stderr).toContain("[canvas] package: node scripts/package-runtime.mjs");
+  expect(packaged.stderr).toContain("hook stdout");
+  expect(packaged.stderr).toContain("hook stderr");
 });
 
 it("dispatches discovered build hooks and propagates their failure", async () => {

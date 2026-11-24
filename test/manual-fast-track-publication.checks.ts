@@ -341,6 +341,14 @@ it("does not allow a valid packet to bypass a different actual publisher tag or 
   }
 });
 
+it("digests full-size validation manifests beyond the source-admission byte cap", () => {
+  // Real stable FRV manifests exceed 128 KiB (v2026.11.8: 337 KB).
+  const childEvidence = { log: "x".repeat(300 * 1024) };
+  const digest = releaseFastTrackDigest({ version: 4, childEvidence, runId: "1" });
+  expect(digest).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  expect(releaseFastTrackDigest({ runId: "1", childEvidence, version: 4 })).toBe(digest);
+});
+
 it("recomputes the bounded delta against a matching published fully validated baseline, not a previous fast-track", async () => {
   const root = roots.make("fast-track-publisher-baseline-");
   const git = (...args: string[]) =>

@@ -4,6 +4,7 @@ import {
   publicationSourceJson,
   type PublicationSourceFact,
 } from "../full-release-publication-contract.mjs";
+import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
   collectFastTrackEligibility,
   fastTrackRequestDigest,
@@ -17,8 +18,11 @@ const packetSchema = z.strictObject({
   referenceRunId: runId.optional(),
   referenceRunAttempt: runId.optional(),
 });
+// Evidence manifests exceed the 128 KiB source-admission input cap; digest their canonical JSON uncapped.
 export function releaseFastTrackDigest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(publicationSourceJson(value)).digest("hex")}`;
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify(canonicalizeJsonValue(value)))
+    .digest("hex")}`;
 }
 export function parseFastTrackPacket(value: unknown) {
   const packet = packetSchema.parse(typeof value === "string" ? JSON.parse(value) : value);

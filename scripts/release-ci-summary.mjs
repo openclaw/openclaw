@@ -4450,7 +4450,7 @@ export async function validateReleaseRunEvidence(options, client, recoveryDraft 
 }
 
 // This read-only result proves preparation, never qualification or publication authority.
-// Publishers must authenticate an a fast-track request and npm-release environment approval and verify the sealed bytes.
+// Publishers must authenticate a fast-track request and npm-release environment approval and verify the sealed bytes.
 export async function validateReleaseBuildOnlyEvidence(options, client) {
   const evidence = await validateReleaseEvidenceGraph(
     options,

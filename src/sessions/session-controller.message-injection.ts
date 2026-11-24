@@ -42,6 +42,7 @@ import {
 } from "./session-controller.state.js";
 import { messageAdmissionsByAttachment } from "./session-controller.storage.js";
 import { bindCapturedReplyToolAuthorityCallerRead } from "./session-controller.tool-authority.js";
+import type { NativeSteerInputIdentity } from "./user-turn-transcript.types.js";
 
 export { canInjectReplyMessageTarget } from "./session-controller.message-injection-backend.js";
 
@@ -588,6 +589,7 @@ async function beginPreparedReplyMessageInjectionTarget(
     acceptance.resolve(accepted);
     queueOptions?.onQueueAccepted?.(accepted);
   };
+  let nativeInputIdentity: NativeSteerInputIdentity | undefined;
   const runtimeQueueOptions: ReplyBackendQueueMessageOptions = {
     ...queueOptions,
     // Preserve the admitted human reply even when it cannot answer the incumbent's question.
@@ -609,6 +611,10 @@ async function beginPreparedReplyMessageInjectionTarget(
         recordParticipant();
         settleAcceptance(true);
       }
+    },
+    onNativeInputCommitted: (identity) => {
+      nativeInputIdentity = identity;
+      queueOptions?.onNativeInputCommitted?.(identity);
     },
   };
   const failed = (error: unknown): ReplyMessageInjectionOutcome => {
@@ -635,7 +641,10 @@ async function beginPreparedReplyMessageInjectionTarget(
           return { status: "indeterminate", errorMessage: result.errorMessage };
         }
         if (targetRunId) {
-          await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
+          await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(
+            targetRunId,
+            nativeInputIdentity,
+          );
         }
         return { status: "accepted" };
       })

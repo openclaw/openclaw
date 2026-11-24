@@ -6,7 +6,6 @@ import { t } from "../../i18n/index.ts";
 import {
   type ChatItem,
   type MessageGroup,
-  accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   trimAccumulatedStreamPrefix,
@@ -80,7 +79,6 @@ import {
   findCurrentTurnBounds,
   createRunTurnLookup,
   createToolCallLookup,
-  optionalBoundaryIdentity,
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
@@ -111,6 +109,7 @@ export function buildChatItems(
       projection,
       runId: normalizeOptionalString(item.message.runId),
       callId: normalizeOptionalString(item.message.toolCallId),
+      afterSend: normalizeOptionalString(item.message.openclawToolStreamAfterSendId),
       preview: extractChatMessagePreview(item.message),
     };
   });
@@ -392,7 +391,7 @@ export function buildChatItems(
     );
     return pending ? { ...bounds, beforeKey: pending.key } : (bounds ?? undefined);
   };
-  for (const { projection, preview } of toolItems) {
+  for (const { projection, preview, afterSend } of toolItems) {
     if (!preview) {
       continue;
     }
@@ -404,11 +403,7 @@ export function buildChatItems(
       canvasIdentities.add(baseIdentity);
     }
     const canvasBounds = boundToPendingInputs(
-      resolveRunBounds(
-        canvasRunBounds,
-        projection.item.message.runId,
-        normalizeOptionalString(projection.item.message.openclawToolStreamAfterSendId),
-      ),
+      resolveRunBounds(canvasRunBounds, projection.item.message.runId, afterSend),
     );
     const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
       items,
@@ -521,6 +516,30 @@ export function buildChatItems(
     projections,
     resolveProjectionBounds,
   );
+  // A boundary owns its tool even when Gateway and browser clocks disagree. Only keyed commentary can precede a saved call.
+  const recordedToolKey = keyedSegments.some((segment) => segment.toolCallId)
+    ? createRecordedToolKeyLookup(historyItems)
+    : undefined;
+  const appendToolPreamble = (
+    segment: (typeof segments)[number],
+    id: string | number,
+    text: string,
+  ) => {
+    const key = `stream-seg:${props.sessionKey}:${id}`;
+    const runId = normalizeOptionalString(segment.runId);
+    const callId = segment.toolCallId?.trim();
+    appendStreamSegment(
+      segment,
+      key,
+      text,
+      undefined,
+      segment.itemId ? recordedToolKey?.(runId, callId) : undefined,
+    );
+    const tool = toolLookup.get(runId, callId);
+    if (tool) {
+      tool.predecessorKey = key;
+    }
+  };
   let previousAccumulatedStreamText: string | null = null;
   const maxLen = Math.max(indexedSegments.length, toolItems.length);
   for (let i = 0; i < maxLen; i++) {
@@ -533,17 +552,7 @@ export function buildChatItems(
         text,
       );
       if (visibleText.length > 0 && segment.persisted !== true) {
-        const streamKey = `stream-seg:${props.sessionKey}:${i}`;
-        appendStreamSegment(segment, streamKey, visibleText);
-        const tool = toolLookup.get(
-          normalizeOptionalString(segment.runId),
-          segment.toolCallId?.trim(),
-        );
-        if (tool) {
-          // Gateway and browser clocks can disagree. Keep the assistant text that
-          // introduced a tool causally before its card even when timestamps do not.
-          tool.predecessorKey = streamKey;
-        }
+        appendToolPreamble(segment, i, visibleText);
       }
     }
     const tool = toolItems[i];
@@ -553,29 +562,14 @@ export function buildChatItems(
         hasHandoffToolCall(tool.projection.item.message) ||
         actionRequiredInMessage(tool.projection.item.message))
     ) {
-      tool.projection.bounds = resolveProjectionBounds(
-        tool.runId,
-        normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
-      );
+      tool.projection.bounds = resolveProjectionBounds(tool.runId, tool.afterSend);
       projections.push(tool.projection);
     }
   }
-  // Keyed commentary does not advance cumulative text. Its next root call is
-  // a stronger boundary than provider timestamps, including after persistence.
-  const recordedToolKey = keyedSegments.some((segment) => segment.toolCallId)
-    ? createRecordedToolKeyLookup(historyItems)
-    : undefined;
   for (const segment of keyedSegments) {
     const text = sanitizeStreamText(segment.text);
-    if (text.length > 0) {
-      const streamKey = `stream-seg:${props.sessionKey}:${segment.itemId}`;
-      const runId = normalizeOptionalString(segment.runId);
-      const callId = segment.toolCallId?.trim();
-      appendStreamSegment(segment, streamKey, text, undefined, recordedToolKey?.(runId, callId));
-      const tool = toolLookup.get(runId, callId);
-      if (tool) {
-        tool.predecessorKey = streamKey;
-      }
+    if (text) {
+      appendToolPreamble(segment, segment.itemId!, text);
     }
   }
 
@@ -590,7 +584,7 @@ export function buildChatItems(
 
   const visibleText = trimAccumulatedStreamPrefix(
     sanitizeStreamText(props.stream ?? ""),
-    accumulatedStreamText(segments, sanitizeStreamText),
+    previousAccumulatedStreamText,
   );
   if (props.reasoning) {
     const { runId } = props.reasoning;
@@ -640,12 +634,7 @@ export function buildChatItems(
       hideSearchMiss(item.message, item.key);
       projections.push({
         ...tool.projection,
-        bounds:
-          tool.projection.bounds ??
-          resolveProjectionBounds(
-            tool.runId,
-            normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
-          ),
+        bounds: tool.projection.bounds ?? resolveProjectionBounds(tool.runId, tool.afterSend),
         item,
       });
     }
@@ -702,7 +691,6 @@ export function buildChatItems(
       ),
       isStreaming: true,
       ...optionalRunIdentity(liveRunId),
-      ...optionalBoundaryIdentity(liveRunId),
     });
   }
   if (showWorkingIndicator) {
@@ -713,7 +701,6 @@ export function buildChatItems(
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
       ...optionalRunIdentity(workingRunId),
-      ...optionalBoundaryIdentity(workingRunId),
     };
     if (facts && !activeReasoning && !searchFiltering) {
       streamOnset = prepareChatStreamOnset(props, items, indicator, hasEmptyLiveStream);
