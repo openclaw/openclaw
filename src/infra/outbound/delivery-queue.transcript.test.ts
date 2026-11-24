@@ -314,7 +314,18 @@ describe("delivery-queue confirmed transcript recovery", () => {
       const deliver = vi.fn();
       try {
         const { result, log } = await runRecovery({ deliver });
-        expect(result).toEqual(RECOVERY_SUMMARY.recovered);
+        expect(
+          result,
+          JSON.stringify({
+            state,
+            result,
+            info: log.info.mock.calls.map(([message]) => message),
+            warn: log.warn.mock.calls.map(([message]) => message),
+            error: log.error.mock.calls.map(([message]) => message),
+            commitCalls: commit.mock.calls.length,
+            deliverCalls: deliver.mock.calls.length,
+          }),
+        ).toEqual(RECOVERY_SUMMARY.recovered);
         expect(commit).toHaveBeenCalledOnce();
         expectMockMessageContaining(log.warn, "transcript storage unavailable");
         expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
