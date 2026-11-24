@@ -257,6 +257,23 @@ export default {
           reportOwner(node, field);
         }
       },
+      // Destructuring and parameter defaults: `{ senderIsOwner = true } = input`.
+      AssignmentPattern(node) {
+        const field =
+          node.parent?.type === "Property" && node.parent.value === node && !node.parent.computed
+            ? propertyName(node.parent.key)
+            : node.left.type === "Identifier"
+              ? node.left.name
+              : undefined;
+        if (
+          checkOwner &&
+          field &&
+          OWNER_FIELDS.has(field) &&
+          !passesOwnerAlong(node.right, field)
+        ) {
+          reportOwner(node, field);
+        }
+      },
     };
   },
 };

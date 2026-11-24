@@ -34,8 +34,9 @@ const cases = [
   ["no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0],
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
   ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
-  // Planted divergence: a resumed turn reads its start kind and mints owner status from scopes.
-  ["no-turn-authority-derivation", "turn-authority-derivation-violation.ts", 3, [9, 9, 10]],
+  // Planted divergence: a resumed turn reads its start kind; owner status comes from a
+  // destructuring default and from scopes. Pass-throughs (lines 9-10) are not reported.
+  ["no-turn-authority-derivation", "turn-authority-derivation-violation.ts", 4, [11, 12, 12, 17]],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
 

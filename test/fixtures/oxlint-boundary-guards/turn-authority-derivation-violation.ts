@@ -4,8 +4,15 @@ import type { NormalizedChatSendRequest } from "../../../src/gateway/server-meth
 export function plantDivergence(
   request: NormalizedChatSendRequest,
   authority: { scopes: string[]; grant: { owner: boolean } },
+  input: { senderIsOwner?: boolean },
 ) {
   const passed = { senderIsOwner: authority.grant.owner };
+  const { senderIsOwner: passedAlong } = input;
+  const { senderIsOwner = true } = input;
   const skills = !request.reconnectResumeRequested && request.turnKind === "main";
-  return { ...passed, skills, senderIsOwner: authority.scopes.includes("operator.admin") };
+  return { passed, passedAlong, senderIsOwner, skills, owner: authority.scopes.length > 0 };
+}
+
+export function mintOwner(authority: { scopes: string[] }) {
+  return { senderIsOwner: authority.scopes.includes("operator.admin") };
 }
