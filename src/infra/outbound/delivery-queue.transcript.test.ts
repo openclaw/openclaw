@@ -313,6 +313,8 @@ describe("delivery-queue confirmed transcript recovery", () => {
         .mockRejectedValueOnce(new Error("transcript storage unavailable"));
       const deliver = vi.fn();
       try {
+        const adapterCallsBeforeRecovery =
+          resolveOutboundChannelMessageAdapterMock.mock.calls.length;
         const { result, log } = await runRecovery({ deliver });
         expect(
           result,
@@ -322,6 +324,9 @@ describe("delivery-queue confirmed transcript recovery", () => {
             info: log.info.mock.calls.map(([message]) => message),
             warn: log.warn.mock.calls.map(([message]) => message),
             error: log.error.mock.calls.map(([message]) => message),
+            adapterCalls:
+              resolveOutboundChannelMessageAdapterMock.mock.calls.length -
+              adapterCallsBeforeRecovery,
             commitCalls: commit.mock.calls.length,
             deliverCalls: deliver.mock.calls.length,
           }),
