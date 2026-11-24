@@ -185,8 +185,7 @@ private struct OnboardingCommandChip: View {
             } label: {
                 Image(systemName: self.didCopy ? "checkmark" : "doc.on.doc")
                     .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(
-                        self.didCopy ? OpenClawBrand.activationPrimaryAction : Color.secondary.opacity(0.56))
+                    .foregroundStyle(self.didCopy ? Color.primary : Color.secondary.opacity(0.56))
                     .frame(width: 38, height: 38)
                     .contentTransition(.symbolEffect(.replace))
             }
@@ -195,7 +194,8 @@ private struct OnboardingCommandChip: View {
             .accessibilityLabel("Copy setup code command")
             .accessibilityValue(self.didCopy ? "Copied" : self.command)
         }
-        .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+        // Neutral ink: the accent belongs to the one primary action on the screen.
+        .foregroundStyle(.primary)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 54)

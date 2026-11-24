@@ -409,7 +409,7 @@ struct OnboardingWizardView: View {
                     .contentShape(Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+            .foregroundStyle(.primary)
             .background(.ultraThinMaterial, in: Capsule(style: .continuous))
             .overlay {
                 Capsule(style: .continuous)
@@ -718,7 +718,7 @@ extension OnboardingWizardView {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .controlSize(.regular)
-                .tint(OpenClawBrand.activationPrimaryAction)
+                .tint(.primary)
                 .disabled(!self.canApplySetupCode)
             }
             .frame(minHeight: 50)

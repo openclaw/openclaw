@@ -263,6 +263,7 @@ struct OnboardingDiscoveredGatewaysSection: View {
                     .font(OpenClawType.subheadSemiBold)
             }
             .font(OpenClawType.subheadSemiBold)
+            .tint(.primary)
             .disabled(self.connectingGateway != nil)
         } header: {
             Text("Discovered Gateways")
