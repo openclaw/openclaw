@@ -12,21 +12,6 @@ enum ChatSessionBatchAction: Sendable, Equatable {
 struct ChatSessionBatchResult: Sendable, Equatable {
     let succeededKeys: [String]
     let errorsByKey: [String: String]
-    var warningsByKey: [String: String] = [:]
-}
-
-extension View {
-    /// The row may already be gone, so the initiating window/sheet presents the notice, not the row.
-    func archivePinNotice(_ warning: Binding<String?>) -> some View {
-        self.alert("Personal pin update", isPresented: Binding(
-            get: { warning.wrappedValue != nil },
-            set: { if !$0 { warning.wrappedValue = nil } }))
-        {
-            Button("OK") { warning.wrappedValue = nil }
-        } message: {
-            Text(verbatim: warning.wrappedValue ?? "")
-        }
-    }
 }
 
 enum ChatSessionBatchValidationError: LocalizedError {
@@ -170,7 +155,6 @@ struct ChatSessionInspectorSheet: View {
     @State private var groups: [OpenClawChatSessionGroup] = []
     @State private var isMutatingGroup = false
     @State private var errorText: String?
-    @State private var archivePinWarning: String?
 
     init(viewModel: OpenClawChatViewModel, session: OpenClawChatSessionEntry) {
         self.viewModel = viewModel
@@ -264,7 +248,6 @@ struct ChatSessionInspectorSheet: View {
                 }
             }
             .navigationTitle("Thread Info")
-            .archivePinNotice(self.$archivePinWarning)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { self.dismiss() }
@@ -338,9 +321,7 @@ struct ChatSessionInspectorSheet: View {
             set: { archived in
                 guard self.canonicalSession != nil else { return }
                 self.displayedSession.archived = archived
-                self.viewModel.setSessionArchived(self.displayedSession, archived: archived) { warning in
-                    if let warning { self.archivePinWarning = warning }
-                }
+                self.viewModel.setSessionArchived(self.displayedSession, archived: archived)
             })
     }
 

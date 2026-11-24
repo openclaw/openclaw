@@ -74,18 +74,12 @@ struct ChatSessionSidebarArchiveUndoTests {
     }
 
     func connection(
-        personal: Bool = true,
-        retirePins: Bool = false,
         current: @escaping () -> Bool = { true },
         request: @escaping (OpenClawChatGatewayRequest) async throws -> Data) throws -> OpenClawSessionMenuConnection
     {
         let hello = try JSONDecoder().decode(HelloOk.self, from: JSONSerialization.data(withJSONObject: [
             "type": "hello-ok", "protocol": 3, "server": [:],
-            "features": [
-                "capabilities": (personal ? ["personal-session-pins"] : []) +
-                    (retirePins ? ["personal-archive-pins"] : []),
-                "methods": ["sessions.patch", "sessions.patchMany", "sessions.delete"],
-            ],
+            "features": ["methods": ["sessions.patch", "sessions.patchMany", "sessions.delete"]],
             "snapshot": ["presence": [], "health": [:], "stateVersion": ["presence": 0, "health": 0], "uptimeMs": 0],
             "auth": ["scopes": ["operator.admin"]], "policy": [:],
         ]))
@@ -102,6 +96,8 @@ struct ChatSessionSidebarArchiveUndoTests {
         var entry: [String: Any] = ["sessionId": row.sessionId!, "updatedAt": archived ? 20 : 30]
         if archived {
             entry["archivedAt"] = 20
+        } else if row.pinned == true {
+            entry["pinnedAt"] = 30
         }
         return try JSONSerialization.data(withJSONObject: ["ok": true, "key": row.key, "entry": entry])
     }
@@ -225,7 +221,7 @@ struct ChatSessionSidebarArchiveUndoTests {
     }
 
     @Test(arguments: [false, true], [false, true])
-    func `undo survives navigation and restores the captured incarnation without writing personal pins`(
+    func `undo survives navigation and restores the captured pin and incarnation`(
         pinned: Bool,
         navigateDuringArchive: Bool) async throws
     {
@@ -253,116 +249,9 @@ struct ChatSessionSidebarArchiveUndoTests {
         await self.undo(batch, owner: owner)
         #expect(requests.count == 2)
         #expect(requests.last?.params["archived"]?.value as? Bool == false)
-        #expect(requests.last?.params["pinned"] == nil)
+        #expect(requests.last?.params["pinned"]?.value as? Bool == (pinned ? true : nil))
         #expect(owner.row(key: row.key, agentID: "research")?.isArchived == false)
-        // Reconcile the current personal list, not the pin captured before archive.
-        var current = row
-        current.updatedAt = 30 // The Gateway restore acknowledged this shared row revision.
-        current.pinned = !pinned
-        owner.receive([current], read: owner.beginRead())
-        #expect(owner.row(key: row.key, agentID: "research")?.pinned == !pinned)
-    }
-
-    @Test(arguments: ["conflict", "unknown", "bad-status", "missing-occurrence", "missing-witness"])
-    func `incomplete pin cleanup preserves the confirmed archive without blind pin Undo`(result: String) async throws {
-        let row = try self.row()
-        let batch = ChatSessionSidebarBatch()
-        let owner = OpenClawChatSessionSidebarData()
-        owner.receive([row], read: owner.beginRead())
-        var calls = 0
-        let connection = try self.connection(retirePins: true) { request in
-            calls += 1
-            if calls == 1 {
-                #expect(request.params["retirePersonalPin"]?.value as? Bool == true)
-                return try JSONSerialization.data(withJSONObject: [
-                    "key": row.key, "entry": ["sessionId": row.sessionId!, "archivedAt": 20, "updatedAt": 20],
-                    "archivedAt": result == "missing-occurrence" ? NSNull() as Any : 20,
-                    "archivePin": result == "bad-status" ? 42 as Any :
-                        (result == "missing-witness" ? "removed" : result),
-                ])
-            }
-            #expect(request.params["archived"]?.value as? Bool == false)
-            #expect(request.params["expectedArchivedAt"]?.value as? Int == 20)
-            #expect(request.params["expectedArchived"]?.value as? Bool == true)
-            #expect(request.params["pinned"] == nil)
-            return try self.acknowledgement(row, archived: false)
-        }
-        #expect(await batch.archive(row, mainKey: "main", connection: connection, owner: owner) != nil)
-        #expect(owner.row(key: row.key, agentID: row.agentId)?.isArchived == true)
-        #expect(batch.errors.isEmpty && !batch.notices.isEmpty)
-        await self.undo(batch, owner: owner)
-        #expect(calls == (result == "missing-occurrence" ? 1 : 2))
-        #expect(owner.row(key: row.key, agentID: row.agentId)?.isArchived == (result == "missing-occurrence"))
-    }
-
-    @Test func `batch pin Undo is limited to the retired pins whose captured archive was restored`() async throws {
-        let batch = ChatSessionSidebarBatch()
-        let rows = try ["first", "second", "changed", "not-pinned", "rejected"].map { try self.row($0) }
-        let owner = OpenClawChatSessionSidebarData()
-        owner.receive(rows, read: owner.beginRead())
-        var restored = Set<String>()
-        var pinCalls = 0
-        let connection = try self.connection(retirePins: true) { request in
-            let params = try #require(JSONSerialization
-                .jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
-            if request.method == "sessions.patch" {
-                let row = try #require(rows.first { $0.key == params["key"] as? String })
-                #expect(params["archived"] as? Bool == false && params["expectedArchived"] as? Bool == true)
-                #expect(params["expectedArchivedAt"] as? Int == 20 && params["expectedSessionId"] as? String == row
-                    .sessionId)
-                if row == rows[2] { throw URLError(.badServerResponse) }
-                restored.insert(row.key)
-                return try self.acknowledgement(row, archived: false)
-            }
-            let targets = try #require(params["targets"] as? [[String: Any]])
-            let patch = try #require(params["patch"] as? [String: Any])
-            if let witness = patch["archivePinUndo"] as? String {
-                pinCalls += 1
-                #expect(witness == "receipt" && patch["pinned"] as? Bool == true)
-                #expect(targets.compactMap { $0["key"] as? String } == rows.prefix(2).map(\.key))
-                for (target, row) in zip(targets, rows) {
-                    #expect(target["expectedSessionId"] as? String == row
-                        .sessionId && target["expectedArchived"] as? Bool == false)
-                }
-                throw URLError(.cannotParseResponse) // Both shared restores stand; never replay uncertain pin effects.
-            }
-            #expect(patch["retirePersonalPin"] as? Bool == true && patch["archived"] as? Bool == true)
-            return try JSONSerialization.data(withJSONObject: [
-                "archivePinUndo": "receipt",
-                "outcomes": rows.map { row in
-                    row == rows[4] ? ["key": row.key, "ok": false, "error": ["message": "Archive refused"]] :
-                        [
-                            "key": row.key,
-                            "ok": true,
-                            "archivedAt": 20,
-                            "archivePin": row == rows[3] ? "unchanged" : "removed",
-                        ]
-                },
-            ])
-        }
-        #expect(await batch
-            .run(.archived(true), rows: rows, mainKey: "main", connection: connection) == Array(rows.prefix(4)))
-        await self.undo(batch, owner: owner)
-        #expect(restored == Set([rows[0].key, rows[1].key, rows[3].key]) && pinCalls == 1)
-        #expect(batch.errors[OpenClawChatSessionSidebarData.identity(rows[4])] == "Archive refused")
-        #expect(batch.notices.contains { $0.contains("Threads restored") })
-        #expect(owner.row(key: rows[0].key, agentID: rows[0].agentId)?.isArchived == false)
-    }
-
-    @Test func `undo restores the old shared pin only on a Gateway without personal pins`() async throws {
-        let batch = ChatSessionSidebarBatch()
-        let row = try self.row(pinned: true)
-        var sent: [OpenClawChatGatewayRequest] = []
-        let connection = try self.connection(personal: false) { request in
-            sent.append(request)
-            return try self.acknowledgement(row, archived: request.params["archived"]?.value as? Bool == true)
-        }
-        #expect(await batch.archive(row, mainKey: "main", connection: connection, owner: nil) != nil)
-        await self.undo(batch, owner: nil)
-        #expect(sent.count == 2)
-        #expect(sent.first?.params["pinned"] == nil)
-        #expect(sent.last?.params["archived"]?.value as? Bool == false)
-        #expect(sent.last?.params["pinned"]?.value as? Bool == true)
+        #expect(owner.row(key: row.key, agentID: "research")?.pinned == pinned)
     }
 
     @Test func `replacement identity remains untouched and restore failure stays visible`() async throws {
@@ -414,7 +303,7 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.notices == ["The Gateway changed. Archive Undo is no longer available."])
     }
 
-    @Test func `batch undo restores successful captures without writing personal pins`() async throws {
+    @Test func `batch undo restores successful captures with their pins atomically`() async throws {
         let batch = ChatSessionSidebarBatch()
         let rows = try [self.row("one"), self.row("two"), self.row("three", pinned: false)]
         var restoredKeys: Set<String> = []
@@ -425,7 +314,7 @@ struct ChatSessionSidebarArchiveUndoTests {
                 #expect(request.params["agentId"]?.value as? String == "research")
                 #expect(request.params["expectedSessionId"]?.value as? String == row.sessionId)
                 #expect(request.params["archived"]?.value as? Bool == false)
-                #expect(request.params["pinned"] == nil)
+                #expect(request.params["pinned"]?.value as? Bool == (row.pinned == true ? true : nil))
                 if row.key == rows[2].key {
                     throw NSError(
                         domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Changed \(row.key)"])
