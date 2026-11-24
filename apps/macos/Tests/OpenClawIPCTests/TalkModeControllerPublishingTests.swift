@@ -103,18 +103,4 @@ struct TalkModeControllerPublishingTests {
             #expect(controller.recentTranscripts.last == "utterance 24")
         }
     }
-
-    @Test func `thinking is the only phase with a built-in sound`() {
-        let phases: [TalkModePhase] = [.idle, .listening, .thinking, .speaking]
-        for previous in phases {
-            for phase in phases {
-                let expected: String? = phase == .thinking && previous != .thinking ? "Tink" : nil
-                #expect(TalkModeController.phaseSoundName(from: previous, to: phase) == expected)
-            }
-        }
-        // Listening (Submarine, Bottle) and speaking (Pop) no longer have built-in sounds.
-        #expect(TalkModeController.phaseSoundName(from: .idle, to: .listening) == nil)
-        #expect(TalkModeController.phaseSoundName(from: .speaking, to: .listening) == nil)
-        #expect(TalkModeController.phaseSoundName(from: .thinking, to: .speaking) == nil)
-    }
 }

@@ -316,6 +316,8 @@ final class TalkModeManager {
     private var incrementalSpeechTasksByGeneration: [Int: Task<Void, Never>] = [:]
     private var incrementalSpeechActive = false
     private var incrementalSpeechUsed = false
+    /// Set when an incremental segment fails to play to its end; the reply chime must not follow.
+    private var incrementalSpeechIncomplete = false
     private var incrementalSpeechLanguages = TalkSpeechLanguageSelection(
         provider: nil,
         systemVoice: nil)
@@ -1023,6 +1025,10 @@ final class TalkModeManager {
             throw Self.pushToTalkBusyError()
         }
 
+        // Capture takes over the audio session: the end cue's delayed cleanup must not deactivate it.
+        self.byeChimeTask?.cancel()
+        self.byeChimeTask = nil
+        self.chimePlayer.stop()
         self.invalidateTranscriptProcessing()
         self.stopSpeaking(storeInterruption: false)
         self.cancelPendingStart()
@@ -3276,6 +3282,7 @@ final class TalkModeManager {
         self.cancelIncrementalSpeech()
         self.incrementalSpeechActive = true
         self.incrementalSpeechUsed = false
+        self.incrementalSpeechIncomplete = false
         self.incrementalSpeechLanguages = TalkSpeechLocale.resolvedLanguages(
             directiveLanguage: nil,
             gatewaySelection: self.gatewaySpeechLocaleID)
@@ -3325,19 +3332,23 @@ final class TalkModeManager {
                 self.lastSpokenText = segment
                 guard await self.updateIncrementalContextIfNeeded(speechGeneration: speechGeneration),
                       let context = self.incrementalSpeechContext
-                else { return }
+                else {
+                    if self.isCurrentSpeechGeneration(speechGeneration) { self.incrementalSpeechIncomplete = true }
+                    return
+                }
                 let prefetchedAudio = await self.consumeIncrementalPrefetchedAudioIfAvailable(
                     for: segment,
                     context: context)
                 guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
                 self.incrementalSpeechPrefetchContext = context
                 self.prefetchUpcomingIncrementalSegment(context: context)
-                await self.speakIncrementalSegment(
+                let played = await self.speakIncrementalSegment(
                     segment,
                     context: context,
                     prefetchedAudio: prefetchedAudio,
                     speechGeneration: speechGeneration)
                 guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
+                if !played { self.incrementalSpeechIncomplete = true }
                 self.incrementalSpeechPrefetchContext = nil
             }
         }
@@ -3463,7 +3474,7 @@ final class TalkModeManager {
         if !self.incrementalSpeechUsed {
             await self.playAssistant(text: text)
         }
-        return !Task.isCancelled
+        return !Task.isCancelled && !self.incrementalSpeechIncomplete
     }
 
     private func streamAssistant(
@@ -3603,22 +3614,27 @@ final class TalkModeManager {
         _ text: String,
         context: IncrementalSpeechContext,
         prefetchedAudio: IncrementalPrefetchedAudio?,
-        speechGeneration: Int) async
+        speechGeneration: Int) async -> Bool
     {
-        guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
+        guard self.isCurrentSpeechGeneration(speechGeneration) else { return false }
 
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else {
-            try? await TalkSystemSpeechSynthesizer.shared.speak(
-                text: text,
-                language: self.incrementalSpeechLanguages.systemVoice)
-            return
+            do {
+                try await TalkSystemSpeechSynthesizer.shared.speak(
+                    text: text,
+                    language: self.incrementalSpeechLanguages.systemVoice)
+                return true
+            } catch {
+                return false
+            }
         }
         let result = await self.playElevenLabsSpeech(
             text, context: context, apiKey: apiKey, voiceId: voiceId, prefetchedAudio: prefetchedAudio)
-        guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
+        guard self.isCurrentSpeechGeneration(speechGeneration) else { return false }
         if !result.finished, let interruptedAt = result.interruptedAt {
             self.lastInterruptedAtSeconds = interruptedAt
         }
+        return result.finished
     }
 
     private func playElevenLabsSpeech(

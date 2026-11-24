@@ -366,6 +366,46 @@ struct TalkModeManagerTests {
         #expect(await cues.next() == .bye)
     }
 
+    @Test(.testWaitLimit)
+    func `push to talk taking over during the end cue keeps its audio session`() async throws {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            transport: "gateway-relay")
+        let endCueGate = AsyncStream<Void>.makeStream()
+        let endCueStarted = AsyncStream<Void>.makeStream()
+        var deactivations = 0
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            audioSessionDeactivationAction: { deactivations += 1 },
+            chimePlaybackOverride: { cue in
+                guard cue == .bye else { return }
+                endCueStarted.continuation.yield()
+                for await _ in endCueGate.stream { break }
+            })
+        manager._test_applyLoadedTalkConfig(parsed)
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+        await manager.start()
+        #expect(manager.isListening)
+
+        manager.stop()
+        var started = endCueStarted.stream.makeAsyncIterator()
+        _ = await started.next()
+        let baseline = deactivations
+
+        let capture = try await manager.beginPushToTalk(transcriptionOnly: true)
+        endCueGate.continuation.yield()
+        endCueGate.continuation.finish()
+        for _ in 0..<20 { await Task.yield() }
+
+        // The old end cue's cleanup must not deactivate the session the new capture owns.
+        #expect(deactivations == baseline)
+        #expect(manager._test_audioSessionIsActive())
+        _ = manager.cancelPushToTalk(captureId: capture.captureId)
+    }
+
     @Test func `preserves the released realtime model override`() {
         let parsed = Self.parseRealtime(
             provider: "openai",
