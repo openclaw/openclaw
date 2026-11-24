@@ -157,6 +157,7 @@ try {
   const bootstrap = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not initialize its state");
   const stopped = once(bootstrap, "exit");
+  assert(bootstrap.pid, "T bootstrap did not start");
   process.kill(-bootstrap.pid, "SIGTERM");
   await stopped;
   await waitFor(async () => !(await ready()), "T still owns the seed database");
@@ -176,8 +177,9 @@ try {
   const before = sentinels();
   save("rows-before.json", before);
   assert.equal(before.length, 2, "fixture seed is empty");
-  if (crash)
+  if (crash) {
     fs.writeFileSync(path.join(path.dirname(database), "crash-after-migration.json"), "{}");
+  }
   const gateway = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not become ready");
   assert.equal(gateway.exitCode, null, "T exited before the API update");
@@ -221,10 +223,12 @@ try {
   );
   const after = sentinels();
   assert.equal(after.length, before.length, "row counts changed");
-  assert.deepEqual(
-    after,
-    crash ? before : before.map((row) => ({ ...row, store_json: '{"migrated":true}' })),
-  );
+  if (!crash) {
+    for (const entry of before) {
+      entry.store_json = '{"migrated":true}';
+    }
+  }
+  assert.deepEqual(after, before);
   save("rows-after.json", after);
   assert.equal(
     Boolean(
