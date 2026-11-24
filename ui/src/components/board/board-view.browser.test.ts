@@ -104,6 +104,38 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(parent.scrollTop).toBe(0);
   });
 
+  it("fits a page in the side panel without an outer scrollport or replacing its frame", async () => {
+    const sidebar = document.createElement("div");
+    sidebar.className = "sidebar-region sidebar-region--open";
+    const parent = document.createElement("div");
+    parent.className = "board-session-surface__board";
+    parent.style.cssText = "width: 354px; height: 178px";
+    sidebar.append(parent);
+    document.body.append(sidebar);
+    const view = await mount(undefined, parent);
+    const frame = view.querySelector("iframe")!;
+    view.pageWidgetName = "first";
+    view.snapshot = {
+      ...source,
+      tabs: [source.tabs[0]!],
+      widgets: [{ ...source.widgets[0]!, sizeW: 12, sizeH: 20, presentation: "full-bleed" }],
+    };
+    for (const expanded of [false, true, false]) {
+      sidebar.classList.toggle("sidebar-region--expanded", expanded);
+      await vi.waitFor(() => {
+        const available = parent.getBoundingClientRect();
+        const bounds = frame.getBoundingClientRect();
+        expect(bounds.height).toBeGreaterThan(0);
+        expect(bounds.bottom).toBeLessThanOrEqual(available.bottom + 1);
+        expect(view.scrollHeight).toBeLessThanOrEqual(view.clientHeight + 1);
+      });
+      expect(view.querySelector("iframe")).toBe(frame);
+    }
+    view.pageWidgetName = "";
+    await vi.waitFor(() => expect(view.scrollHeight).toBeGreaterThan(view.clientHeight));
+    expect(view.querySelector("iframe")).toBe(frame);
+  });
+
   it("keeps the overflow-selected tab visible without moving focus from More", async () => {
     const { page } = await import("vitest/browser");
     const view = await mount();

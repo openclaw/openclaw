@@ -1,5 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import {
+  BOARD_DOCUMENT_AUTO_MAX_ROWS,
   BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
   BOARD_GRID_ROW_HEIGHT,
@@ -86,6 +87,10 @@ export class BoardViewState {
     readonly host: BoardViewElement,
     readonly requestUpdate: () => void,
   ) {}
+
+  get fitAutoContent(): boolean {
+    return this.props.fitAutoContent || boardChromeRowPx() > 0;
+  }
 
   sync(): void {
     const previous = this.previous;
@@ -257,8 +262,8 @@ export class BoardViewState {
         t("board.announcement.resized", { title: widget.title || widget.name }),
       ),
     setHeightMode: async (widget, mode) => {
-      // Pinning keeps the currently rendered auto height, not the stale stored
-      // sizeH, so "fixed" freezes exactly what the user sees.
+      // Pin the measured height rather than stale sizeH, within the fixed grid bound.
+      // Taller touch/document Auto widgets shrink to that bound when pinned.
       const sizeH =
         mode === "fixed"
           ? effectiveBoardWidgetRows(
@@ -362,7 +367,12 @@ export class BoardViewState {
     } catch {
       // Synthetic pointers and detached test targets cannot be captured.
     }
-    const items = boardWidgetGridItems(orderedWidgets(snapshot, tab.tabId), this.contentHeights);
+    const items = boardWidgetGridItems(
+      orderedWidgets(snapshot, tab.tabId),
+      this.contentHeights,
+      this.fitAutoContent,
+      this.props.pageWidgetName,
+    );
     this.gesture = {
       dropValid: false,
       mode,
@@ -392,6 +402,7 @@ export class BoardViewState {
     if (!gesture || event.pointerId !== gesture.pointerId) {
       return;
     }
+    const maxItemHeight = this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined;
     if (gesture.mode === "move") {
       const tabTarget = document
         .elementFromPoint(event.clientX, event.clientY)
@@ -432,11 +443,16 @@ export class BoardViewState {
       const targetName = pointerElement?.closest<
         HTMLElementTagNameMap["openclaw-board-widget-cell"]
       >("openclaw-board-widget-cell")?.widget?.name;
-      this.previewItems = previewDrag(items, gesture.name, {
-        name: targetName,
-        x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
-        y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
-      });
+      this.previewItems = previewDrag(
+        items,
+        gesture.name,
+        {
+          name: targetName,
+          x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
+          y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
+        },
+        maxItemHeight,
+      );
       return;
     }
 
@@ -456,6 +472,7 @@ export class BoardViewState {
       gesture.name,
       gesture.originW + deltaW,
       gesture.originH + deltaH,
+      maxItemHeight,
     );
   };
 

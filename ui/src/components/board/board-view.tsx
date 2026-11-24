@@ -64,16 +64,17 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     const widgets = (snapshot?.widgets ?? []).filter(
       (widget) => state.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
+    const fitAutoContent = state.fitAutoContent;
     const rects = tabs.flatMap((tab) =>
       layout(
         (tab.tabId === activeTabId ? state.previewItems : null) ??
           boardWidgetGridItems(
             widgets.filter((widget) => widget.tabId === tab.tabId),
             state.contentHeights,
-            props.fitAutoContent,
+            fitAutoContent,
             props.pageWidgetName,
           ),
-        props.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+        fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
       ),
     );
     const activeNames = new Set(activeWidgets.map((widget) => widget.name));
@@ -105,7 +106,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           boardRevision: snapshot?.revision ?? 0,
           rect,
           contentHeightPx: state.contentHeights.get(rect.name),
-          fitAutoContent: props.fitAutoContent,
+          fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
           tabs,
           session: props.session,

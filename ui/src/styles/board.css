@@ -629,8 +629,8 @@ openclaw-board-widget-cell {
   padding-left: 16px;
 }
 
-/* A lone full-width widget becomes the focused dashboard's page. Keep the
-   regular grid sizing, subtracting only the shell removed from auto heights. */
+/* A lone full-width widget loses its card shell in the main/focused region.
+   Side dashboards retain their regular spacing and widget chrome. */
 :is(.sidebar-region--expanded, .sidebar-region:not(.sidebar-region--open), .board-document__content)
   openclaw-board-view:has(> .board-view--single-full-width) {
   padding: 0;
@@ -659,28 +659,31 @@ openclaw-board-widget-cell {
       border-radius: 0;
     }
   }
+}
 
-  &:has(> .board-view--page) {
+/* A page scrolls within its document, including in the side panel. Ordinary
+   multi-widget grids keep their board scrollport. */
+.board-document__content > openclaw-board-view:has(> .board-view--page),
+.board-session-surface__board > openclaw-board-view:has(> .board-view--page) {
+  height: 100%;
+  overflow: hidden;
+
+  > .board-view {
+    display: flex;
+    flex-direction: column;
     height: 100%;
-    overflow: hidden;
+    min-height: 0;
+  }
 
-    > .board-view {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      min-height: 0;
-    }
+  > .board-view > .board-grid {
+    flex: 1 1 0;
+    min-height: 0;
+    grid-auto-rows: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
 
-    .board-grid {
-      flex: 1 1 0;
-      min-height: 0;
-      grid-auto-rows: minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr);
-    }
-
-    .board-widget:not(.board-widget--dragging) {
-      grid-area: 1 / 1 / -1 / -1 !important;
-    }
+  .board-widget:not(.board-widget--dragging) {
+    grid-area: 1 / 1 / -1 / -1 !important;
   }
 }
 
