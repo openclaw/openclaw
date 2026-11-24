@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { configureMessageActionDecisionSink } from "../../audit/message-action-decision.js";
@@ -822,6 +823,43 @@ describe("message tool secret scoping", () => {
       }
     },
   );
+
+  it("marks a send batched with another tool call as progress", async () => {
+    mockSendResult();
+    const identity = admitTurn({
+      agentId: "main",
+      runId: "run-batched-send",
+      sessionId: "session-batched-send",
+      sessionKey: "agent:main:telegram:direct:123",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentSourceTurnId: "source-turn-1",
+      },
+    });
+    const tool = createMessageTool({ ...identity, sourceReplyDeliveryMode: "message_tool_only" });
+    const toolCall = (id: string, name: string) => ({
+      type: "toolCall" as const,
+      id,
+      name,
+      arguments: {},
+    });
+    const executeIn = (calls: ReturnType<typeof toolCall>[]) =>
+      runWithAgentToolExecutionContext(
+        {
+          assistantMessage: { role: "assistant", content: calls } as never,
+          toolCall: calls[0],
+        },
+        () => tool.execute(calls[0].id, { action: "send", message: "checking", to: "123" }),
+      );
+
+    await executeIn([toolCall("message_ack", "message"), toolCall("read_1", "read")]);
+    await executeIn([toolCall("message_only", "message")]);
+
+    const [batched, alone] = mocks.dispatch.mock.calls.map((call) => call[0]);
+    expect(batched?.sourceReplyFinal).toBe(false);
+    expect(alone?.sourceReplyFinal).toBe(true);
+  });
 
   it("keeps source-less message-tool-only sends outside terminal reconciliation", async () => {
     mockSendResult();

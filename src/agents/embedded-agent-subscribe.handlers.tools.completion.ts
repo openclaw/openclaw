@@ -344,7 +344,10 @@ export async function prepareToolExecutionEnd(
     });
   const sourceReplyFinal =
     deliveredMessageToolSourceReply || messageDelivery?.sourceReplyDelivered
-      ? resolveMessageToolSourceReplyFinal(startArgs, ctx.params.messageToolFinalByDefault)
+      ? resolveMessageToolSourceReplyFinal(startArgs, ctx.params.messageToolFinalByDefault, {
+          assistantMessage: startData?.issuingAssistant,
+          toolCallId,
+        })
       : undefined;
   ctx.state.sourceReplyDelivered ||= messageDelivery?.sourceReplyDelivered;
   if (

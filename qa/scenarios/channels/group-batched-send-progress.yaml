@@ -1,0 +1,126 @@
+title: Group progress send batched with another tool call
+
+scenario:
+  id: group-batched-send-progress
+  surface: channel
+  coverage:
+    primary: [agent-runtime.tool-task-followthrough]
+    secondary: [channels.outbound-group-reply, channels.message-tool-outbound]
+  objective: Verify a message-tool group turn whose assistant message batches a progress send (no `final`) with another tool call keeps running, hands the sibling result back to the model, and posts the final reply.
+  gatewayConfigPatch:
+    messages:
+      groupChat:
+        visibleReplies: message_tool
+  successCriteria:
+    - The first assistant message calls message(action=send) without `final` and read in one response.
+    - The progress message is posted to the group.
+    - The model receives the read result in a second request instead of the turn ending after the progress send.
+    - The final marker is posted once, after the progress message.
+  docsRefs:
+    - docs/channels/groups.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/agents/embedded-agent-message-tool-source-reply.ts
+    - src/agents/embedded-agent-runner/run/message-tool-terminal.ts
+    - src/agents/tools/message-tool-send-final.ts
+  execution:
+    kind: flow
+    providerMode: mock-openai
+    summary: Send a group turn whose first model step batches a progress send with a read; verify the read result reaches the model and the final marker is posted.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-batched-send-room
+      promptSnippet: qa group batched send check
+      prompt: "@openclaw qa group batched send check. Post a short progress message, read `QA_GROUP_BATCHED_EVIDENCE.txt`, then reply with exact marker: `QA-GROUP-BATCHED-OK`"
+      fixtureFile: QA_GROUP_BATCHED_EVIDENCE.txt
+      fixtureContent: "Batched send evidence: the read result reached the model.\n"
+      progressMarker: QA-GROUP-BATCHED-PROGRESS
+      finalMarker: QA-GROUP-BATCHED-OK
+
+flow:
+  steps:
+    - name: batched progress send does not end the turn
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
+            - expr: config.fixtureContent
+            - utf8
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `group:${config.conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: group
+              title: QA Batched Send Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: progressOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'group' && candidate.text.includes(config.progressMarker)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: batchedRequest
+          value:
+            expr: "scenarioRequests[0]"
+        - assert:
+            expr: "batchedRequest && batchedRequest.plannedToolName === 'message' && batchedRequest.plannedToolArgs?.action === 'send' && batchedRequest.plannedToolArgs?.final === undefined"
+            message:
+              expr: "`first request did not plan a progress send without final: ${JSON.stringify(batchedRequest ?? null)}`"
+        - set: readResultRequest
+          value:
+            expr: "scenarioRequests.find((request) => String(request.allInputText ?? '').includes(config.fixtureContent.trim()))"
+        - assert:
+            expr: "Boolean(readResultRequest)"
+            message:
+              expr: "`turn ended after the batched progress send; the read result never reached the model (${scenarioRequests.length} provider request(s))`"
+        - set: groupOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'group')"
+        - set: progressIndex
+          value:
+            expr: "groupOutbound.findIndex((message) => String(message.text ?? '').includes(config.progressMarker))"
+        - set: finalMessages
+          value:
+            expr: "groupOutbound.filter((message) => String(message.text ?? '').trim() === config.finalMarker)"
+        - assert:
+            expr: "finalMessages.length === 1 && groupOutbound.indexOf(finalMessages[0]) > progressIndex"
+            message:
+              expr: "`expected one final marker after the progress message, saw ${JSON.stringify(groupOutbound.map((message) => message.text))}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', providerRequests: scenarioRequests.length, posted: groupOutbound.map((message) => message.text) })"

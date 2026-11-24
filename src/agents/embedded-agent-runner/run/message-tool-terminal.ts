@@ -129,7 +129,10 @@ export function installMessageToolTerminalHook(
     nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
     const toolArgs = argsRecordForToolCall(context);
-    const final = resolveMessageToolSourceReplyFinal(toolArgs, params.messageToolFinalByDefault);
+    const final = resolveMessageToolSourceReplyFinal(toolArgs, params.messageToolFinalByDefault, {
+      assistantMessage: context.assistantMessage,
+      toolCallId: context.toolCall.id,
+    });
     const extractionArgs =
       toolName === "message" &&
       params.currentProvider &&

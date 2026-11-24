@@ -38,7 +38,6 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
-import { resolveMessageToolSourceReplyFinal } from "../embedded-agent-message-tool-source-reply.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
@@ -74,6 +73,7 @@ import {
   shouldRevalidateCompletedMessageAction,
 } from "./message-tool-scheduled-execution.js";
 import { MessageToolSchema } from "./message-tool-schema.js";
+import { resolveExecutingMessageSendFinal } from "./message-tool-send-final.js";
 import {
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
@@ -325,7 +325,7 @@ function* createMessageToolSteps(
         typeof params.final === "boolean" ? params.final : undefined;
       const sourceReplyFinal =
         action === "send"
-          ? resolveMessageToolSourceReplyFinal(params, options?.messageToolFinalByDefault)
+          ? resolveExecutingMessageSendFinal(params, options?.messageToolFinalByDefault)
           : requestedSourceReplyFinal;
       delete params.final;
 

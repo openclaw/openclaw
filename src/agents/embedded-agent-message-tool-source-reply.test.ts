@@ -8,6 +8,7 @@ import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   readMessageToolSourceReplyText,
+  resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingToolDeliveryAction,
@@ -411,5 +412,64 @@ describe("readMessageToolSourceReplyText", () => {
     expect(readMessageToolSourceReplyText({ action: "react", message: "not a reply" })).toBe(
       undefined,
     );
+  });
+});
+
+describe("resolveMessageToolSourceReplyFinal", () => {
+  const assistantWith = (...calls: Array<{ id: string; name: string }>) => ({
+    content: [
+      { type: "thinking", thinking: "plan" },
+      ...calls.map(({ id, name }) => ({ type: "toolCall", id, name, arguments: {} })),
+    ],
+  });
+  const ack = { action: "send", message: "Understood, checking Odoo now." };
+
+  it("treats an omitted final as progress when the same message called another tool", () => {
+    const siblings = {
+      assistantMessage: assistantWith(
+        { id: "send-1", name: "message" },
+        { id: "read-1", name: "read" },
+      ),
+      toolCallId: "send-1",
+    };
+    expect(resolveMessageToolSourceReplyFinal(ack, true, siblings)).toBe(false);
+  });
+
+  it("keeps an omitted final terminal when the send is the message's only work", () => {
+    const only = {
+      assistantMessage: assistantWith({ id: "send-1", name: "message" }),
+      toolCallId: "send-1",
+    };
+    const twoSends = {
+      assistantMessage: assistantWith(
+        { id: "send-1", name: "message" },
+        { id: "send-2", name: "message" },
+      ),
+      toolCallId: "send-1",
+    };
+    expect(resolveMessageToolSourceReplyFinal(ack, true, only)).toBe(true);
+    expect(resolveMessageToolSourceReplyFinal(ack, true, twoSends)).toBe(true);
+    expect(resolveMessageToolSourceReplyFinal(ack, true)).toBe(true);
+  });
+
+  it("ignores an assistant message that did not issue the send", () => {
+    const unrelated = {
+      assistantMessage: assistantWith({ id: "read-1", name: "read" }),
+      toolCallId: "send-1",
+    };
+    expect(resolveMessageToolSourceReplyFinal(ack, true, unrelated)).toBe(true);
+  });
+
+  it("always honors an explicit final and a false default", () => {
+    const siblings = {
+      assistantMessage: assistantWith(
+        { id: "send-1", name: "message" },
+        { id: "exec-1", name: "exec" },
+      ),
+      toolCallId: "send-1",
+    };
+    expect(resolveMessageToolSourceReplyFinal({ ...ack, final: true }, true, siblings)).toBe(true);
+    expect(resolveMessageToolSourceReplyFinal({ ...ack, final: false }, true)).toBe(false);
+    expect(resolveMessageToolSourceReplyFinal(ack, false)).toBe(false);
   });
 });
