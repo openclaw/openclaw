@@ -1,7 +1,5 @@
-import {
-  isReplySessionInitConflictError,
-  type SourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/reply-runtime";
+import type { SourceReplyDeliveryMode } from "openclaw/plugin-sdk/reply-runtime";
+import { isDiscordReplySessionInitConflictError } from "./session-init-conflict.js";
 const DISCORD_SESSION_CONFLICT_FAILURE_TEXT =
   "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.";
 
@@ -17,7 +15,7 @@ export async function completeDiscordSessionConflict(
   deliver: TerminalFailureDelivery,
   onDeliveryError: DeliveryErrorHandler,
 ): Promise<"delivered" | "suppressed" | undefined> {
-  if (!isReplySessionInitConflictError(error)) {
+  if (!isDiscordReplySessionInitConflictError(error)) {
     return undefined;
   }
   if (sourceReplyDeliveryMode === "message_tool_only") {

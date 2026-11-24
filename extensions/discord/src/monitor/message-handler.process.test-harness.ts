@@ -1,9 +1,9 @@
 // Discord tests cover message handler.process plugin behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { isReplySessionInitConflictError } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { isDiscordReplySessionInitConflictError } from "./session-init-conflict.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 const runtimeEnvMocks = vi.hoisted(() => ({
@@ -326,7 +326,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             if (
               delayMs === undefined ||
               sessionInitRetry?.signal?.aborted === true ||
-              !isReplySessionInitConflictError(error)
+              !isDiscordReplySessionInitConflictError(error)
             ) {
               throw error;
             }
