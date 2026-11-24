@@ -592,6 +592,11 @@ non-archived state-database rows, bounded per endpoint by `max_stored_sessions`
 (default 200, accepted range 1 through 1,000); loaded rows are uncapped by that
 setting. Transcript-derived fields and reads remain gated by
 `allowRawTranscripts`; send and interrupt remain gated by `allowWriteControls`.
+`codex_session_read.final_answer` uses bounded native turn and item pages before
+dynamic-result conversion. Turn and item cursors remain independent, and an
+oversized final message continues by UTF-16-safe text offsets bound to its stable
+SHA-256 digest. It returns only an explicitly phased `final_answer` agent message
+and never falls back to the unbounded transcript path.
 
 Compatibility send never starts or resumes an idle thread. `mode: "start"` is
 always refused; `"auto"` and `"steer"` steer only a readable active turn.

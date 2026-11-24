@@ -7,6 +7,7 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
+import { convertToolContents } from "./app-server/dynamic-tool-content.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
 
 type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
@@ -383,6 +384,261 @@ describe("Codex supervision compatibility tools", () => {
     if (text?.type === "text") {
       expect(JSON.parse(text.text)).toEqual(expected);
     }
+  });
+
+  it("recovers a completed final answer before dynamic output truncation", async () => {
+    const finalText = "RECOVERED_FINAL_TAIL";
+    const calls: RecordedRequest[] = [];
+    const request = createEndpointRequest(async (_endpoint, method, params) => {
+      calls.push({ method, ...(params === undefined ? {} : { params }) });
+      if (method === "thread/read") {
+        return {
+          thread: {
+            ...idleThread(),
+            turns: [
+              {
+                id: "earlier-turn",
+                status: "completed",
+                items: [{ type: "reasoning", content: ["x".repeat(40_000)] }],
+              },
+              {
+                id: "completed-turn",
+                status: "completed",
+                items: [
+                  {
+                    type: "agentMessage",
+                    id: "final-message",
+                    phase: "final_answer",
+                    text: finalText,
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      if (method === "thread/turns/list") {
+        return {
+          data: [
+            {
+              id: "completed-turn",
+              status: "completed",
+              items: [],
+              itemsView: "notLoaded",
+            },
+          ],
+          nextCursor: "older-turns",
+          backwardsCursor: null,
+        };
+      }
+      if (method === "thread/items/list") {
+        return {
+          data: [
+            {
+              turnId: "completed-turn",
+              item: {
+                type: "agentMessage",
+                id: "final-message",
+                phase: "final_answer",
+                text: finalText,
+              },
+            },
+          ],
+          nextCursor: "older-items",
+          backwardsCursor: null,
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const result = await readSession(createTools(request), {
+      include_turns: true,
+      final_answer: { turn_id: "completed-turn" },
+    });
+    const [item] = convertToolContents(result.content, 32_000);
+    expect(item?.type).toBe("inputText");
+    const text = item?.type === "inputText" ? item.text : "";
+
+    expect(text).toContain(finalText);
+    expect(text).not.toContain("OpenClaw truncated dynamic tool result");
+    expect(calls.map((call) => call.method)).toEqual(["thread/turns/list", "thread/items/list"]);
+  });
+
+  it("selects the newest completed turn and reads items from that exact turn", async () => {
+    const calls: RecordedRequest[] = [];
+    const request = createEndpointRequest(async (_endpoint, method, params) => {
+      calls.push({ method, ...(params === undefined ? {} : { params }) });
+      if (method === "thread/turns/list") {
+        return {
+          data: [
+            { id: "newest-in-progress", status: "inProgress", items: [] },
+            { id: "newest-completed", status: "completed", items: [] },
+            { id: "older-completed", status: "completed", items: [] },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "thread/items/list") {
+        expect(params).toMatchObject({
+          threadId: "thread-1",
+          turnId: "newest-completed",
+          sortDirection: "desc",
+        });
+        return {
+          data: [
+            {
+              turnId: "newest-completed",
+              item: {
+                type: "agentMessage",
+                id: "newest-final",
+                phase: "final_answer",
+                text: "newest completed answer",
+              },
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(readSession(createTools(request), { final_answer: {} })).resolves.toMatchObject({
+      details: {
+        response: {
+          turn: { id: "newest-completed", status: "completed" },
+          finalAnswer: { id: "newest-final", text: "newest completed answer" },
+        },
+      },
+    });
+    expect(calls.map((call) => call.method)).toEqual(["thread/turns/list", "thread/items/list"]);
+  });
+
+  it("keeps turn, item, and long-answer continuation bounded and loss-aware", async () => {
+    const finalText = "\u0000😀line\n".repeat(1_200);
+    const finalMessageId = "m".repeat(4_096);
+    const calls: RecordedRequest[] = [];
+    const request = createEndpointRequest(async (_endpoint, method, params) => {
+      calls.push({ method, ...(params === undefined ? {} : { params }) });
+      const requestParams = params as Record<string, unknown>;
+      if (method === "thread/turns/list") {
+        return requestParams.cursor === "turn-page-2"
+          ? {
+              data: [
+                {
+                  id: "completed-turn",
+                  status: "completed",
+                  items: [],
+                  itemsView: "notLoaded",
+                },
+              ],
+              nextCursor: null,
+            }
+          : { data: [], nextCursor: "turn-page-2" };
+      }
+      if (method === "thread/items/list") {
+        return requestParams.cursor === "item-page-2"
+          ? {
+              data: [
+                {
+                  turnId: "completed-turn",
+                  item: {
+                    type: "agentMessage",
+                    id: finalMessageId,
+                    phase: "final_answer",
+                    text: finalText,
+                  },
+                },
+              ],
+              nextCursor: null,
+            }
+          : { data: [], nextCursor: "item-page-2" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const tools = createTools(request);
+    const first = await readSession(tools, {
+      final_answer: { turn_id: "completed-turn" },
+    });
+    expect(first.details).toMatchObject({ response: { nextTurnCursor: "turn-page-2" } });
+    const second = await readSession(tools, {
+      final_answer: { turn_id: "completed-turn", turn_cursor: "turn-page-2" },
+    });
+    expect(second.details).toMatchObject({ response: { nextItemCursor: "item-page-2" } });
+
+    let textOffset = 0;
+    let textSha256: string | undefined;
+    let reassembled = "";
+    do {
+      const result = await readSession(tools, {
+        final_answer: {
+          turn_id: "completed-turn",
+          turn_cursor: "turn-page-2",
+          item_cursor: "item-page-2",
+          ...(textOffset > 0 ? { text_offset: textOffset, text_sha256: textSha256 } : {}),
+        },
+      });
+      expect(JSON.stringify(result.details).length).toBeLessThan(16_000);
+      const response = (
+        result.details as {
+          response: {
+            finalAnswer: {
+              text: string;
+              textSha256: string;
+              nextTextOffset?: number;
+            };
+          };
+        }
+      ).response;
+      expect(response).not.toHaveProperty("nextTurnCursor");
+      expect(response).not.toHaveProperty("nextItemCursor");
+      reassembled += response.finalAnswer.text;
+      textSha256 = response.finalAnswer.textSha256;
+      textOffset = response.finalAnswer.nextTextOffset ?? 0;
+    } while (textOffset > 0);
+
+    expect(reassembled).toBe(finalText);
+    expect(textSha256).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(calls).not.toContainEqual(expect.objectContaining({ method: "thread/read" }));
+    expect(
+      calls
+        .filter((call) => call.method === "thread/items/list")
+        .every(
+          (call) =>
+            (call.params as Record<string, unknown>).turnId === "completed-turn" &&
+            (call.params as Record<string, unknown>).sortDirection === "desc",
+        ),
+    ).toBe(true);
+  });
+
+  it("rechecks transcript policy between bounded final-answer requests", async () => {
+    let pluginConfig: unknown = { supervision: readPolicy };
+    const methods: string[] = [];
+    const request = createEndpointRequest(async (_endpoint, method) => {
+      methods.push(method);
+      pluginConfig = { supervision: { enabled: true, allowRawTranscripts: false } };
+      return {
+        data: [{ id: "completed-turn", status: "completed", items: [] }],
+        nextCursor: null,
+      };
+    });
+    const tools = createTools(request, { getPluginConfig: () => pluginConfig });
+
+    await expect(
+      readSession(tools, { final_answer: { turn_id: "completed-turn" } }),
+    ).rejects.toThrow("Codex session reads are disabled");
+    expect(methods).toEqual(["thread/turns/list"]);
+  });
+
+  it("does not fall back to a full-thread read when bounded history is unsupported", async () => {
+    const methods: string[] = [];
+    const request = createEndpointRequest(async (_endpoint, method) => {
+      methods.push(method);
+      throw new Error("thread/turns/list is not supported yet");
+    });
+
+    await expect(
+      readSession(createTools(request), { final_answer: { turn_id: "completed-turn" } }),
+    ).rejects.toThrow("thread/turns/list is not supported yet");
+    expect(methods).toEqual(["thread/turns/list"]);
   });
 
   it("stops loaded-session pagination when Codex cycles through prior cursors", async () => {
