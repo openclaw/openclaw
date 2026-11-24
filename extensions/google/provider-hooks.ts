@@ -14,6 +14,10 @@ import {
 } from "./provider-policy.js";
 import { sanitizeGoogleThinkingPayload } from "./thinking-api.js";
 
+function isGoogleUltraPlanRefusal({ errorMessage }: ProviderFailoverErrorContext): boolean {
+  return /requires an active Google AI Ultra subscription/i.test(errorMessage);
+}
+
 export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
     family: "google-gemini",
@@ -47,9 +51,19 @@ export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
         }
       }
     }),
+  formatBillingError: (context: ProviderFailoverErrorContext) =>
+    isGoogleUltraPlanRefusal(context)
+      ? {
+          message: "This request requires an active Google AI Ultra subscription.",
+          actionUrl: "https://one.google.com/about/google-ai-plans/",
+        }
+      : undefined,
   // Google-family gRPC status codes stay with the shared Gemini provider hook.
-  classifyFailoverReason: ({ code }: ProviderFailoverErrorContext) => {
-    switch (code?.trim().toUpperCase()) {
+  classifyFailoverReason: (context: ProviderFailoverErrorContext) => {
+    if (isGoogleUltraPlanRefusal(context)) {
+      return "billing" as const;
+    }
+    switch (context.code?.trim().toUpperCase()) {
       case "UNAVAILABLE":
         return "overloaded" as const;
       case "DEADLINE_EXCEEDED":

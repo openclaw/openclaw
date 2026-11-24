@@ -12,19 +12,25 @@ describe("billing display projection", () => {
     expect(cause?.billingError?.actionUrl).toBe("http://example.com/");
   });
 
-  it.each(["javascript:alert(1)", "data:text/html,hello", "/plans", "https://", "x".repeat(2049)])(
-    "drops only the invalid billing link %j",
-    (actionUrl) => {
-      const detail = projectChatErrorDetail({
-        provider: "local-provider",
-        failoverReason: "billing",
-        billingError: { message: "  Choose an active plan.  ", actionUrl },
-      });
-      expect(readRunFailureCause(detail)?.billingError).toEqual({
-        message: "Choose an active plan.",
-      });
-    },
-  );
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,hello",
+    "/plans",
+    "https://",
+    "x".repeat(2049),
+    "https://user:pass@example.com/plans",
+    "https://user@example.com/plans",
+    "http://:pass@example.com/plans",
+  ])("drops only the invalid billing link %j", (actionUrl) => {
+    const detail = projectChatErrorDetail({
+      provider: "local-provider",
+      failoverReason: "billing",
+      billingError: { message: "  Choose an active plan.  ", actionUrl },
+    });
+    expect(readRunFailureCause(detail)?.billingError).toEqual({
+      message: "Choose an active plan.",
+    });
+  });
 
   it("bounds messages and never promotes raw previews or non-billing metadata", () => {
     expect(

@@ -372,7 +372,11 @@ export async function recoverEmbeddedRunAttempt(input: {
           })
         : null;
   const retryFailure = promptError
-    ? resolveFailoverClassificationFromError(promptError, preparedRuntime.provider)
+    ? resolveFailoverClassificationFromError(
+        promptError,
+        preparedRuntime.provider,
+        runtime.providerRuntimeHandle?.plugin ?? null,
+      )
     : assistantFailure;
   const providerTransportFailed = attemptAssistant?.diagnostics?.some(
     (diagnostic) => diagnostic.type === "provider_transport_failure",

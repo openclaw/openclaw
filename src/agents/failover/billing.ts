@@ -2,26 +2,36 @@ import {
   normalizeBillingError,
   type BillingError,
 } from "@openclaw/normalization-core/billing-error";
+import { inferSignalStatus } from "./classification-rules.js";
 import type { FallbackAttemptRecord } from "./error.js";
 import type { PreparedProviderFailoverOwner } from "./provider-patterns.js";
 import type { FailoverSignal } from "./signal.js";
 
 export function formatProviderBillingError(
-  signal: Pick<FailoverSignal, "message" | "status" | "code" | "errorType">,
+  signal: FailoverSignal,
   context?: { providerOwner?: PreparedProviderFailoverOwner | null; model?: string },
 ) {
   const owner = context?.providerOwner;
   try {
-    return normalizeBillingError(
-      owner?.formatBillingError?.({
-        provider: owner.id,
-        modelId: context?.model,
-        errorMessage: signal.message ?? "",
-        status: signal.status,
-        code: signal.code,
-        errorType: signal.errorType,
-      }),
-    );
+    if (!owner?.formatBillingError) {
+      return undefined;
+    }
+    for (const errorMessage of [signal.message ?? "", ...(signal.details ?? [])]) {
+      const billingError = normalizeBillingError(
+        owner.formatBillingError({
+          provider: owner.id,
+          modelId: context?.model,
+          errorMessage,
+          status: inferSignalStatus(signal),
+          code: signal.code,
+          errorType: signal.errorType,
+        }),
+      );
+      if (billingError) {
+        return billingError;
+      }
+    }
+    return undefined;
   } catch {
     return undefined;
   }

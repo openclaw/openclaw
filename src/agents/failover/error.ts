@@ -1,6 +1,7 @@
 // Error identity and timeout recognition must not load logging or provider runtime.
 import type { BillingError } from "@openclaw/normalization-core/billing-error";
 import { readErrorName } from "@openclaw/normalization-core/error-coercion";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   readStringField,
@@ -8,7 +9,8 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.types.js";
 import { isProviderRequestSizeCeilingError, isTimeoutErrorMessage } from "./message-patterns.js";
-import type { FailoverReason } from "./signal.js";
+import { extractFailoverSignalDetails } from "./signal-details.js";
+import type { FailoverReason, FailoverSignal } from "./signal.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
@@ -248,4 +250,89 @@ export function isSignalTimeoutReason(reason: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+export function normalizeFailoverStatus(
+  status: number | undefined,
+  code?: string,
+): number | undefined {
+  return code === "selected_auth_profile_unavailable" ? undefined : status;
+}
+
+function readDirectStatusCode(err: unknown): number | undefined {
+  const record = asOptionalObjectRecord(err);
+  const candidate = record?.status ?? record?.statusCode;
+  if (typeof candidate === "number") {
+    return candidate;
+  }
+  if (typeof candidate === "string") {
+    return parseStrictNonNegativeInteger(candidate);
+  }
+  return undefined;
+}
+
+function readStableProviderErrorType(raw: string): string | undefined {
+  const value = raw.trim();
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value) &&
+    !/^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+      value,
+    )
+    ? value
+    : undefined;
+}
+
+function readDirectErrorType(err: unknown): string | undefined {
+  const record = asOptionalObjectRecord(err);
+  if (!record) {
+    return undefined;
+  }
+  const directType = record.errorType;
+  if (typeof directType === "string") {
+    return readStableProviderErrorType(directType);
+  }
+  const detailType = (record.detail as { type?: unknown } | undefined)?.type;
+  if (typeof detailType === "string") {
+    return readStableProviderErrorType(detailType);
+  }
+  const type = normalizeOptionalString(record.type);
+  return type && !/^(?:error|exception)$/i.test(type)
+    ? readStableProviderErrorType(type)
+    : undefined;
+}
+
+function readDirectProvider(err: unknown): string | undefined {
+  return normalizeOptionalString(asOptionalObjectRecord(err)?.provider);
+}
+
+function readDirectErrorDetails(err: unknown): string[] | undefined {
+  const candidate = asOptionalObjectRecord(err);
+  if (!candidate) {
+    return undefined;
+  }
+  return extractFailoverSignalDetails(
+    candidate.param,
+    candidate.errorBody,
+    candidate.body,
+    candidate.detail,
+    candidate.error,
+  );
+}
+
+export function normalizeErrorSignal(
+  err: unknown,
+  providerHint?: string,
+  scope: "direct" | "nested" = "nested",
+): FailoverSignal {
+  const read = <T>(reader: (candidate: unknown) => T | undefined) =>
+    scope === "direct" ? reader(err) : findErrorProperty(err, reader);
+  const message = read(readDirectErrorMessage);
+  const code = read(readDirectErrorCode);
+  return {
+    status: normalizeFailoverStatus(read(readDirectStatusCode), code),
+    code,
+    errorType: read(readDirectErrorType),
+    message: message || undefined,
+    provider: read(readDirectProvider) ?? providerHint,
+    details: readDirectErrorDetails(err),
+  };
 }

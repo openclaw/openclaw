@@ -1,6 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
@@ -12,10 +10,13 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js"
 for (const billing of [false, true]) {
   let instance: OpenClawTestInstance;
   let upstreamRequests = 0;
-  const message = "Using your plan in third-party apps requires an active subscription.";
-  const actionUrl = "https://example.com/plans";
+  const refusal = "requires an active Google AI Ultra subscription";
+  const message = "This request requires an active Google AI Ultra subscription.";
+  const actionUrl = "https://one.google.com/about/google-ai-plans/";
+  const provider = billing ? "google" : "fixture";
+  const model = billing ? "gemini-4-argon" : "current";
   const suite = createControlUiE2eSuite({
-    name: billing ? "Provider billing recovery copy" : "A failed reply says why",
+    name: billing ? "Google subscription recovery copy" : "A failed reply says why",
     startServerBeforeBrowser: true,
     async startServer() {
       const upstream = await reserveTestPortListener({
@@ -34,7 +35,9 @@ for (const billing of [false, true]) {
                 JSON.stringify({
                   error: billing
                     ? {
-                        message: "Payment required. " + message + " " + actionUrl,
+                        code: 403,
+                        status: "PERMISSION_DENIED",
+                        message: refusal,
                         privateDetail: "RAW_BILLING_CANARY",
                       }
                     : { message: "Incorrect API key provided", code: "invalid_api_key" },
@@ -45,14 +48,20 @@ for (const billing of [false, true]) {
       });
       instance = await createChatGatewayInstance({
         name: "chat-provider-failure-cause",
-        provider: "fixture",
+        provider,
         identity: "Assistant",
-        model: "current",
-        api: "openai-completions",
-        baseUrl: "http://127.0.0.1:" + upstream.claim.port + "/v1",
+        model,
+        api: billing ? "google-generative-ai" : "openai-completions",
+        baseUrl: "http://127.0.0.1:" + upstream.claim.port + (billing ? "/v1beta" : "/v1"),
         apiKey: "sk-synthetic-revoked",
-        models: [{ id: "current", name: "Fixture model" }],
-        config: { update: { checkOnStart: false }, browser: { enabled: false } },
+        models: [{ id: model, name: billing ? "Google refusal fixture" : "Fixture model" }],
+        config: {
+          update: { checkOnStart: false },
+          browser: { enabled: false },
+          ...(billing
+            ? { plugins: { allow: ["google"], entries: { google: { enabled: true } } } }
+            : {}),
+        },
       });
       const close = async () => {
         try {
@@ -64,43 +73,6 @@ for (const billing of [false, true]) {
         }
       };
       try {
-        if (billing) {
-          const plugin = instance.state.path("billing-provider");
-          await mkdir(plugin);
-          await writeFile(
-            path.join(plugin, "openclaw.plugin.json"),
-            JSON.stringify({
-              id: "fixture",
-              providers: ["fixture"],
-              activation: { onStartup: true },
-              configSchema: { type: "object", properties: {}, additionalProperties: false },
-            }),
-          );
-          await writeFile(
-            path.join(plugin, "package.json"),
-            JSON.stringify({
-              name: "billing-fixture",
-              version: "0.0.0",
-              type: "module",
-              openclaw: { extensions: ["./index.js"] },
-            }),
-          );
-          await writeFile(
-            path.join(plugin, "index.js"),
-            'export default { id: "fixture", register(api) { api.registerProvider({ id: "fixture", label: "Fixture", auth: [], formatBillingError: ({ status }) => status === 403 ? ' +
-              JSON.stringify({ message, actionUrl }) +
-              " : undefined }); } };",
-          );
-          const config = JSON.parse(await readFile(instance.configPath, "utf8"));
-          await instance.state.writeConfig({
-            ...config,
-            plugins: {
-              allow: ["fixture"],
-              load: { paths: [plugin] },
-              entries: { fixture: { enabled: true } },
-            },
-          });
-        }
         await instance.startGateway();
       } catch (error) {
         await close();
@@ -145,7 +117,7 @@ for (const billing of [false, true]) {
             await failure.waitFor({ timeout: 60_000 });
             expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
               billing
-                ? "Fixture reports a billing problem"
+                ? "Gemini API key reports a billing problem"
                 : "Fixture didn’t accept the saved credentials",
             );
             expect(await failure.locator(".chat-run-failure__icon").isVisible()).toBe(true);
@@ -198,7 +170,7 @@ for (const billing of [false, true]) {
           }
           await failure.getByRole("button", { name: "Open Models", exact: true }).click();
           await page.waitForURL((url) => url.pathname.endsWith("/settings/model-providers"));
-          expect(new URL(page.url()).searchParams.get("provider")).toBe("fixture");
+          expect(new URL(page.url()).searchParams.get("provider")).toBe(provider);
         },
       );
     });

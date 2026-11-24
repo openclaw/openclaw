@@ -366,8 +366,8 @@ classification, retries, account selection, or fallback policy.
 Return deliberate user-facing copy, not a raw response body, diagnostic preview,
 credentials, or an authentication-bearing URL. The host trims and bounds the
 message to 600 characters; empty messages retain the generic copy. The optional
-action URL must be an absolute HTTP(S) URL no longer than 2,048 characters. An
-invalid URL drops only the link. Undefined, malformed, or throwing hooks retain
+action URL must be an absolute HTTP(S) URL no longer than 2,048 characters, with
+no username or password. An invalid URL drops only the link. Undefined, malformed, or throwing hooks retain
 the generic copy.
 
 For example, a provider that requires a plan for third-party clients can return
@@ -382,6 +382,14 @@ formatBillingError: (ctx) =>
       }
     : undefined,
 ```
+
+Assistant failures, thrown exceptions, and typed billing failures use the same
+prepared provider owner. Existing guidance is retained when a typed failure is
+enriched; formatters consume that fact instead of discovering another provider.
+
+The bundled Google adapter recognizes the refusal that requires an active Google
+AI Ultra subscription and supplies a public Google AI plans link. Unknown refusals
+retain the generic copy; raw HTTP error bodies are not promoted into display copy.
 
 The normalized `billingError` fact travels with billing failures through fallback
 attempts, terminal chat events, and saved run-failure notices. Presentation never

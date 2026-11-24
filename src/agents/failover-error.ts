@@ -1,10 +1,8 @@
 import type { BillingError } from "@openclaw/normalization-core/billing-error";
-import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -18,17 +16,14 @@ import { SkillResourceDeliveryLimitError } from "../skills/runtime/resource-deli
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { formatProviderBillingError } from "./failover/billing.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
-import {
-  classifyFailoverSignal,
-  extractFailoverSignalDetails,
-  isUnclassifiedNoBodyHttpSignal,
-} from "./failover/classify.js";
+import { classifyFailoverSignal, isUnclassifiedNoBodyHttpSignal } from "./failover/classify.js";
 import {
   FailoverError,
   findErrorProperty,
   isFailoverError,
   isTimeoutError,
-  readDirectErrorCode,
+  normalizeErrorSignal,
+  normalizeFailoverStatus,
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
@@ -36,7 +31,7 @@ import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.j
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import { resolveRetryAfterMs } from "./failover/retry-evidence.js";
-import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
+import type { FailoverClassification, FailoverReason } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
   AgentHarnessModelRequestPolicyError,
@@ -182,10 +177,6 @@ export function resolveFailoverStatus(reason: FailoverReason, code?: string): nu
   return normalizeFailoverStatus(FAILOVER_STATUS.get(reason), code);
 }
 
-function normalizeFailoverStatus(status: number | undefined, code?: string): number | undefined {
-  return code === "selected_auth_profile_unavailable" ? undefined : status;
-}
-
 const FAILOVER_STATUS = new Map<FailoverReason, number>([
   ["billing", 402],
   ["server_error", 500],
@@ -201,65 +192,6 @@ const FAILOVER_STATUS = new Map<FailoverReason, number>([
   ["model_not_found", 404],
   ["session_expired", 410],
 ]);
-
-function readDirectStatusCode(err: unknown): number | undefined {
-  const record = asOptionalObjectRecord(err);
-  const candidate = record?.status ?? record?.statusCode;
-  if (typeof candidate === "number") {
-    return candidate;
-  }
-  if (typeof candidate === "string") {
-    return parseStrictNonNegativeInteger(candidate);
-  }
-  return undefined;
-}
-
-function readStableProviderErrorType(raw: string): string | undefined {
-  const value = raw.trim();
-  return /^[A-Z][A-Z0-9_:-]*$/.test(value) &&
-    !/^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
-      value,
-    )
-    ? value
-    : undefined;
-}
-
-function readDirectErrorType(err: unknown): string | undefined {
-  const record = asOptionalObjectRecord(err);
-  if (!record) {
-    return undefined;
-  }
-  const directType = record.errorType;
-  if (typeof directType === "string") {
-    return readStableProviderErrorType(directType);
-  }
-  const detailType = (record.detail as { type?: unknown } | undefined)?.type;
-  if (typeof detailType === "string") {
-    return readStableProviderErrorType(detailType);
-  }
-  const type = normalizeOptionalString(record.type);
-  return type && !/^(?:error|exception)$/i.test(type)
-    ? readStableProviderErrorType(type)
-    : undefined;
-}
-
-function readDirectProvider(err: unknown): string | undefined {
-  return normalizeOptionalString(asOptionalObjectRecord(err)?.provider);
-}
-
-function readDirectErrorDetails(err: unknown): string[] | undefined {
-  const candidate = asOptionalObjectRecord(err);
-  if (!candidate) {
-    return undefined;
-  }
-  return extractFailoverSignalDetails(
-    candidate.param,
-    candidate.errorBody,
-    candidate.body,
-    candidate.detail,
-    candidate.error,
-  );
-}
 
 function hasSessionTranscriptWriterClaimRebound(
   err: unknown,
@@ -347,25 +279,6 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   return resolveModelFallbackError(err).kind === "coordination";
 }
 
-function normalizeErrorSignal(
-  err: unknown,
-  providerHint?: string,
-  scope: "direct" | "nested" = "nested",
-): FailoverSignal {
-  const read = <T>(reader: (candidate: unknown) => T | undefined) =>
-    scope === "direct" ? reader(err) : findErrorProperty(err, reader);
-  const message = read(readDirectErrorMessage);
-  const code = read(readDirectErrorCode);
-  return {
-    status: normalizeFailoverStatus(read(readDirectStatusCode), code),
-    code,
-    errorType: read(readDirectErrorType),
-    message: message || undefined,
-    provider: read(readDirectProvider) ?? providerHint,
-    details: readDirectErrorDetails(err),
-  };
-}
-
 function getNestedErrorCandidates(err: unknown): unknown[] {
   const candidate = asOptionalObjectRecord(err);
   return [candidate?.error, candidate?.cause].filter(
@@ -382,6 +295,7 @@ function decideNestedFormatOverride(
   inheritedStatus: number | undefined,
   seen: Set<object>,
   depth: number,
+  providerOwner?: PreparedProviderFailoverOwner | null,
 ): boolean | null {
   if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
     return null;
@@ -403,11 +317,21 @@ function decideNestedFormatOverride(
   ) {
     return true;
   }
-  if (hasDirectMessage && (nestedCandidates.length === 0 || classifyFailoverSignal(directSignal))) {
+  if (
+    hasDirectMessage &&
+    (nestedCandidates.length === 0 ||
+      classifyFailoverSignal(directSignal, { providerPlugin: providerOwner }))
+  ) {
     return false;
   }
   for (const nestedCandidate of nestedCandidates) {
-    const decision = decideNestedFormatOverride(nestedCandidate, nestedStatus, seen, depth + 1);
+    const decision = decideNestedFormatOverride(
+      nestedCandidate,
+      nestedStatus,
+      seen,
+      depth + 1,
+      providerOwner,
+    );
     if (decision !== null) {
       return decision;
     }
@@ -420,6 +344,7 @@ function resolveFailoverClassificationFromErrorInternal(
   seen: Set<object>,
   depth: number,
   providerHint?: string,
+  providerOwner?: PreparedProviderFailoverOwner | null,
 ): FailoverClassification | null {
   if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
     return null;
@@ -431,10 +356,13 @@ function resolveFailoverClassificationFromErrorInternal(
     seen.add(err);
   }
   if (isFailoverError(err)) {
-    const classification = classifyFailoverSignal({
-      ...normalizeErrorSignal(err, providerHint),
-      message: err.rawError ?? err.message,
-    });
+    const classification = classifyFailoverSignal(
+      {
+        ...normalizeErrorSignal(err, providerHint),
+        message: err.rawError ?? err.message,
+      },
+      { providerPlugin: providerOwner },
+    );
     if (classification?.kind === "reason" && classification.sameModelRetry === false) {
       return { kind: "reason", reason: err.reason, sameModelRetry: false };
     }
@@ -444,7 +372,7 @@ function resolveFailoverClassificationFromErrorInternal(
     };
   }
   const signal = normalizeErrorSignal(err, providerHint);
-  const classification = classifyFailoverSignal(signal);
+  const classification = classifyFailoverSignal(signal, { providerPlugin: providerOwner });
   const nestedCandidates = getNestedErrorCandidates(err);
 
   if (!classification || classification.kind === "context_overflow") {
@@ -454,6 +382,7 @@ function resolveFailoverClassificationFromErrorInternal(
         seen,
         depth + 1,
         providerHint,
+        providerOwner,
       );
       if (nestedClassification) {
         return nestedClassification;
@@ -468,6 +397,7 @@ function resolveFailoverClassificationFromErrorInternal(
         signal.status,
         seen,
         depth + 1,
+        providerOwner,
       );
       if (shouldClearFormat === true) {
         return null;
@@ -494,6 +424,7 @@ function resolveFailoverClassificationFromErrorInternal(
 export function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
+  providerOwner?: PreparedProviderFailoverOwner | null,
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
@@ -510,15 +441,22 @@ export function resolveFailoverClassificationFromError(
   if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
     return null;
   }
-  return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
+  return resolveFailoverClassificationFromErrorInternal(
+    err,
+    new Set<object>(),
+    0,
+    providerHint,
+    providerOwner,
+  );
 }
 
 export function resolveFailoverReasonFromError(
   err: unknown,
   providerHint?: string,
+  providerOwner?: PreparedProviderFailoverOwner | null,
 ): FailoverReason | null {
   return failoverReasonFromClassification(
-    resolveFailoverClassificationFromError(err, providerHint),
+    resolveFailoverClassificationFromError(err, providerHint, providerOwner),
   );
 }
 
@@ -612,7 +550,7 @@ export function describeFailoverError(err: unknown): {
 }
 
 type FailoverErrorContext = {
-  providerOwner?: PreparedProviderFailoverOwner;
+  providerOwner?: PreparedProviderFailoverOwner | null;
   rateLimitRetriesExhausted?: number;
   provider?: string;
   model?: string;
@@ -639,8 +577,17 @@ export function coerceToFailoverError(
       return null;
     }
     const status = normalizeFailoverStatus(err.status, err.code);
+    const billingError =
+      err.billingError ??
+      (err.reason === "billing"
+        ? formatProviderBillingError(
+            { ...normalizeErrorSignal(err), message: err.rawError ?? err.message },
+            context,
+          )
+        : undefined);
     if (
       !Object.is(status, err.status) ||
+      billingError !== err.billingError ||
       (context?.authMode && !err.authMode) ||
       (context?.timeout && !err.timeout) ||
       context?.rateLimitRetriesExhausted !== undefined
@@ -650,9 +597,9 @@ export function coerceToFailoverError(
         renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
         {
           reason: err.reason,
-          billingError: err.billingError,
-          provider: err.provider,
-          model: err.model,
+          billingError,
+          provider: err.provider ?? context?.provider ?? context?.providerOwner?.id,
+          model: err.model ?? context?.model,
           profileId: err.profileId,
           authMode: err.authMode ?? context?.authMode,
           status,
@@ -679,7 +626,11 @@ export function coerceToFailoverError(
     }
     return err;
   }
-  const reason = resolveFailoverReasonFromError(err, context?.provider);
+  const reason = resolveFailoverReasonFromError(
+    err,
+    context?.providerOwner?.id ?? context?.provider,
+    context?.providerOwner ?? null,
+  );
   if (!reason) {
     return null;
   }
@@ -701,7 +652,7 @@ export function coerceToFailoverError(
             : undefined,
         rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
         rateLimitResetAt: retryAfterMs === undefined ? undefined : Date.now() + retryAfterMs,
-        provider: context?.provider ?? signal.provider,
+        provider: context?.provider ?? signal.provider ?? context?.providerOwner?.id,
         model: context?.model,
         profileId: context?.profileId,
         authMode: context?.authMode,

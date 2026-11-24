@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import { classifyProviderFailoverSignalWithPlugin } from "../../plugins/provider-failover.js";
 import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
 import { coerceToFailoverError, FailoverError } from "../failover-error.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
 import { isContextOverflowError } from "../failover/context-overflow.js";
+import { resolveReplyFailoverFacts } from "../failover/request-error-facts.js";
 import { formatBillingErrorMessage } from "../failover/user-copy.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
-import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
+import {
+  classifyAssistantErrorFacts,
+  formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
+} from "./error-text.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 
 vi.mock("../../plugins/provider-failover.js", () => ({
@@ -15,24 +21,96 @@ vi.mock("../../plugins/provider-failover.js", () => ({
 }));
 
 describe("assistant diagnostic provider ownership", () => {
-  it.each([undefined, { message: "Choose an active plan." }])(
-    "retains a typed failure's billing fact without calling the provider again: %j",
-    (billingError) => {
-      const formatBillingError = vi.fn(() => ({ message: "Replacement copy" }));
-      const failure = new FailoverError("Payment required", { reason: "billing", billingError });
-      const enriched = coerceToFailoverError(failure, {
-        authMode: "oauth",
-        providerOwner: { id: "fixture", formatBillingError },
-      });
-      expect(enriched?.billingError).toBe(billingError);
-      expect(formatBillingError).not.toHaveBeenCalled();
-    },
-  );
+  it("retains a typed failure’s billing fact without calling the provider again", () => {
+    const billingError = { message: "Choose an active plan." };
+    const formatBillingError = vi.fn(() => ({ message: "Replacement copy" }));
+    const failure = new FailoverError("Payment required", { reason: "billing", billingError });
+    const enriched = coerceToFailoverError(failure, {
+      authMode: "oauth",
+      providerOwner: { id: "fixture", formatBillingError },
+    });
+    expect(enriched?.billingError).toBe(billingError);
+    expect(formatBillingError).not.toHaveBeenCalled();
+  });
 
   beforeEach(() => {
     vi.mocked(classifyProviderFailoverSignalWithPlugin)
       .mockReset()
       .mockReturnValue("model_not_found");
+  });
+
+  it.each(["thrown", "wrapped", "typed"] as const)(
+    "prepares identical billing guidance for assistant and %s failures",
+    (shape) => {
+      const billingError = {
+        message: "Choose an active plan.",
+        actionUrl: "https://example.com/plans",
+      };
+      const formatBillingError = vi.fn(() => billingError);
+      const providerOwner = {
+        id: "prepared-owner",
+        classifyFailoverReason: ({ code }: { code?: string }) =>
+          code === "plan_scope_denied" ? ("billing" as const) : undefined,
+        formatBillingError,
+      };
+      const context = { provider: "custom-route", model: "model-a", providerOwner };
+      const assistant = makeAssistantMessageFixture({
+        provider: "custom-route",
+        errorMessage: "403 plan scope denied",
+        errorCode: "plan_scope_denied",
+      });
+      const facts = classifyAssistantErrorFacts(assistant, context);
+      expect(facts).toMatchObject({ reason: "billing", billingError });
+      expect(formatAssistantErrorText(assistant, context, facts)).toBe(billingError.message);
+      expect(formatUserFacingAssistantErrorText(assistant, context, facts)).toBe(
+        billingError.message,
+      );
+      expect(formatBillingError).toHaveBeenCalledOnce();
+      formatBillingError.mockClear();
+      const thrown = Object.assign(new Error("plan scope denied"), {
+        status: 403,
+        code: "plan_scope_denied",
+      });
+      const input =
+        shape === "typed"
+          ? new FailoverError(thrown.message, {
+              reason: "billing",
+              status: 403,
+              code: thrown.code,
+              provider: "custom-route",
+              model: "model-a",
+            })
+          : shape === "wrapped"
+            ? new Error("request failed", { cause: thrown })
+            : thrown;
+      const failure = coerceToFailoverError(input, context)!;
+      expect(failure).toMatchObject({
+        reason: "billing",
+        billingError,
+        provider: "custom-route",
+        model: "model-a",
+      });
+      expect(
+        resolveReplyFailureSummary({
+          error: failure,
+          message: failure.message,
+          facts: resolveReplyFailoverFacts(failure, failure.message),
+        }),
+      ).toEqual({ kind: "billing", text: billingError.message });
+      expect(coerceToFailoverError(failure, context)?.billingError).toEqual(billingError);
+      expect(formatBillingError).toHaveBeenCalledOnce();
+      expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not discover a different provider while normalizing an unowned exception", () => {
+    const failure = coerceToFailoverError(
+      { status: 403, code: "plan_scope_denied", message: "plan scope denied" },
+      { provider: "custom-route" },
+    );
+    expect(failure?.reason).toBe("auth");
+    expect(failure?.billingError).toBeUndefined();
+    expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
   it.each(["provider sent an opaque failure", "prompt reached the tenant maximum"])(

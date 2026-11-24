@@ -1,5 +1,9 @@
 // @vitest-environment node
 import { beforeEach, expect, it } from "vitest";
+import {
+  HARNESS_UPDATE_REQUIRED_CODE,
+  type RunFailureCause,
+} from "../../../../src/shared/run-failure-notice.js";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -29,6 +33,75 @@ const persistedFailure = (runId: string, seq: number) => ({
   content: summary,
   timestamp: seq,
   openclawRunError: { runId, summary },
+});
+
+const billingCause = {
+  provider: "google",
+  failoverReason: "billing",
+  billingError: { message: "Upgrade your plan", actionUrl: "https://example.com/plans" },
+} satisfies RunFailureCause;
+
+it.each([
+  ["provider", { ...billingCause, provider: "other-provider" }],
+  ["reason", { ...billingCause, failoverReason: "auth" }],
+  [
+    "billing message",
+    { ...billingCause, billingError: { ...billingCause.billingError, message: "Add credits" } },
+  ],
+  [
+    "action URL",
+    {
+      ...billingCause,
+      billingError: { ...billingCause.billingError, actionUrl: "https://example.com/credits" },
+    },
+  ],
+  ["missing action URL", { ...billingCause, billingError: { message: "Upgrade your plan" } }],
+  ["missing billing details", { provider: "google", failoverReason: "billing" }],
+  ["harness update action", { ...billingCause, code: HARNESS_UPDATE_REQUIRED_CODE }],
+  ["missing cause", undefined],
+] satisfies Array<[string, RunFailureCause | undefined]>)(
+  "preserves distinct recovery notices in the chat projection: %s",
+  (_reason, cause) => {
+    const errors = [
+      { runId: "first", summary, cause: billingCause },
+      { runId: "latest", summary, cause },
+    ];
+    const notices = buildChatItems(
+      createProps({
+        messages: errors.map((openclawRunError, index) => ({
+          ...persistedFailure(openclawRunError.runId, index + 1),
+          openclawRunError,
+        })),
+      }),
+    ).filter((item) => item.kind === "notice" && item.runError);
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toMatchObject({ runError: errors[0] });
+    expect(notices[1]).toMatchObject({ runError: { runId: "latest" } });
+    for (const notice of notices) {
+      expect(notice).not.toHaveProperty("repeatCount");
+    }
+  },
+);
+
+it("sums existing counts for value-identical recovery details without crossing user input", () => {
+  const notice = (runId: string, repeatCount: number): Notice => ({
+    ...failure(runId),
+    runError: {
+      runId,
+      summary,
+      cause: { ...billingCause, billingError: { ...billingCause.billingError } },
+    },
+    repeatCount,
+  });
+  const first = notice("first", 2);
+  const second = notice("second", 3);
+  const user = message("user", { role: "user", content: "Try once more" });
+  const latest = notice("latest", 1);
+  expect(projectRunFailureStreaks([first, second, user, latest])).toEqual([
+    { ...second, repeatCount: 5 },
+    user,
+    latest,
+  ]);
 });
 
 it("keeps only the latest identical failure across internal updates and interrupted output", () => {

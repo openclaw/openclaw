@@ -21,6 +21,8 @@ export function normalizeBillingError(value: unknown): BillingError | undefined 
       const url = new URL(actionUrl);
       if (
         (url.protocol === "https:" || url.protocol === "http:") &&
+        !url.username &&
+        !url.password &&
         url.href.length <= BILLING_ERROR_ACTION_URL_MAX_CHARS
       ) {
         return { message, actionUrl: url.href };

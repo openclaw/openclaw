@@ -26,7 +26,16 @@ export function projectRunFailureStreaks(items: ChatItem[]): ChatItem[] {
     if (isRealUserInput(item)) {
       latest = undefined;
     } else if (item.kind === "notice" && item.runError) {
-      if (latest?.runError?.summary === item.runError.summary) {
+      const cause = item.runError.cause;
+      const latestCause = latest?.runError?.cause;
+      if (
+        latest?.runError?.summary === item.runError.summary &&
+        latestCause?.provider === cause?.provider &&
+        latestCause?.failoverReason === cause?.failoverReason &&
+        latestCause?.code === cause?.code &&
+        latestCause?.billingError?.message === cause?.billingError?.message &&
+        latestCause?.billingError?.actionUrl === cause?.billingError?.actionUrl
+      ) {
         latest = { ...latest, repeatCount: (latest.repeatCount ?? 1) + (item.repeatCount ?? 1) };
         result[latestIndex] = latest;
         continue;
