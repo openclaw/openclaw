@@ -164,6 +164,19 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
+Once the resident launcher owns an installation, `gateway install` keeps that
+state directory's selected launcher as its service entry. Explicit retained-CLI
+recovery still uses the requested recovery entry. Dry-run previews, immutable
+activation, and switches that need the in-place installer refuse with a next
+step; they never replace a launcher-owned installation through that other path.
+Explicit package versions, dist-tags, npm specs, and `--no-restart` keep their
+prepared-release behavior.
+
+A node-only installation with an installed node service, no Gateway service
+definition, and no live local Gateway stays with its package installer.
+`openclaw update` uses the existing package update flow for that installation;
+it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
+
 Early Git source-updater recovery is a compatibility exception. Its separate CLI
 worker never enters Gateway startup. It opens a repair run after the first
 readiness check and finishes rebuilding and cleanup after the second. Neither
