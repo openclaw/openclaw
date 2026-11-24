@@ -18,8 +18,12 @@ prepare beside the serving version, check with the new code, maintain plugins,
 then start a trial under a resident launcher. A candidate that cannot start rolls
 back automatically. See [Updating](/install/updating).
 
+PostgreSQL stores whose copy-time estimate exceeds the update window keep
+in-place migration, with a recorded warning and without automatic data rollback.
+See the [database protection policy](/install/updating).
+
 `--no-restart` leaves the Gateway running and activates the trial at its next
-start, with the same rollback protection. The new Gateway performs state
+start, using the same database protection policy. The new Gateway performs state
 migrations at boot; plugin failures are reported without failing the core update.
 
 The older admission, in-place replacement, and recovery details on this page

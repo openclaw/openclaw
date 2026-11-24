@@ -26,25 +26,31 @@ updaters keep their original messages for the first upgrade hop.
 ## Protected release rollback
 
 Prepared-release updates of Git, npm, pnpm, and Bun installs migrate private
-state and agent copies before publishing them. PostgreSQL schema upgrades use
-only a private server-side copy; the original application schema and rows stay
-unchanged. All required SQLite inputs remain private too, including mixed-engine
-installations.
+state and agent copies before publishing them. PostgreSQL stores selected for
+protection use a private server-side copy; the original application schema and
+rows stay unchanged. Required SQLite inputs remain private too, including
+mixed-engine installations.
 
-If the candidate fails, the launcher restores the previous release, local
+Preparation uses the [copy-time policy](/install/updating) to select protection.
+Larger PostgreSQL stores keep the existing in-place migration path, without
+automatic data rollback. Update output and the saved report name that limitation.
+Back up those stores before updating.
+
+If a protected candidate fails, the launcher restores the previous release, local
 migration originals, and PostgreSQL anchors. Those anchors select the original
 namespaces; no PostgreSQL restore runs during rollback. Writes made only during
 the failed trial are discarded. Recovery is confirmed by the previous Gateway's
 readiness, not by restoring files alone. An unavailable PostgreSQL server can
 still leave the Gateway unavailable.
 
-There is no portable-export or unprotected in-place fallback. If the protected
-copy cannot be prepared, including after a revoked `CREATE` grant, startup
-refuses through the existing exit 78 and names the obstruction. Correct that
-cause before retrying. `--no-restart` delays copying until the next actual start.
+For stores selected for protection, there is no portable-export or in-place
+fallback after a failed copy. If the copy cannot be prepared, including after a
+revoked `CREATE` grant, startup refuses through the existing exit 78 and names the
+obstruction. Correct that cause before retrying. `--no-restart` delays copying
+until the next actual start.
 
-Every schema-changing PostgreSQL update changes the affected namespace name
-and lengthens the restart. Allow server space for both copies, indexes, WAL,
+Each protected schema-changing PostgreSQL update changes the affected namespace
+name and lengthens the restart. Allow server space for both copies, indexes, WAL,
 temporary work, and retained generations. Paired namespace/anchor retention and
 warning-only cleanup are described in the
 [PostgreSQL operator guide](/gateway/postgresql#updates-and-schema-migrations).

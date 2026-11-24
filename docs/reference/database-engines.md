@@ -917,8 +917,8 @@ captures. See [Backups](/install/backups) and [Backup CLI](/cli/backup).
 Updates preserve each store's physical engine; they never silently port a store
 or fall back to SQLite.
 
-**Protected release trials:** when state or agent schemas need an upgrade,
-candidate startup makes a private server-side PostgreSQL copy under stopped-writer
+**Protected release trials:** when schemas need an upgrade and preparation selects
+copy protection, candidate startup makes a private server-side PostgreSQL copy under stopped-writer
 custody. It migrates and validates all private inputs, including SQLite stores in
 mixed-engine installations, before writing the durable swap plan and publishing
 new anchors. The original PostgreSQL application schema and rows stay unchanged.
@@ -933,14 +933,15 @@ grant, uses the existing configuration-refusal exit (78) and names the cause.
 `--no-restart` defers copying until actual startup; same-schema releases do not
 make a protected PostgreSQL copy.
 
-The affected namespace name changes on every schema-changing update. Allow a
+The affected namespace name changes on each protected schema-changing update. Allow a
 longer restart and temporary double server storage plus indexes, WAL, temporary
 work, and retained generations. Keep active, immediate-prior, and pinned or
 recovery anchor/namespace pairs. Pruning drops only update-created or
 verified-owned namespaces. A failed drop retains the pair and reports a warning,
 without failing a serving release. Same-server copies do not replace portable
-backups. Large-store trial completion still needs qualification; this contract
-does not set a store-size threshold or change the trial deadline. See the
+backups. Stores whose copy-time estimate exceeds the update window instead keep
+in-place migration, without automatic data rollback; update output and the saved
+report name that limitation. See the
 [PostgreSQL update procedure](/gateway/postgresql#updates-and-schema-migrations).
 
 **Legacy in-place updates:** before database mutation, the installed updater
@@ -958,7 +959,7 @@ pre-migration captures of a PostgreSQL store are portable: each `.postgres.bak`
 or `.postgres` directory holds `anchor.sqlite`, a `database.sqlite` export image,
 and `manifest.json`. You can copy that set to another host and restore it without
 the original server. This setting does not select the protected release-trial
-carrier; release trials always use the server-side copy.
+carrier; protected release trials always use the server-side copy.
 
 Set `database.postgres.recoveryCaptures: "server"` to keep those rows on the
 server instead:
