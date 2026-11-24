@@ -9,11 +9,8 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   return { ...actual, callGateway: callGatewayMock };
 });
 
-import {
-  parseBareSessionInvocation,
-  parseSessionTargetInput,
-  SessionTargetParseError,
-} from "./session-ref.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { parseBareSessionInvocation, parseSessionTargetInput } from "./session-ref.js";
 import { resolveSessionTarget } from "./session-target.js";
 
 function errorText(run: () => unknown): string {
@@ -80,7 +77,7 @@ describe("session target parsing", () => {
     "https://gateway.example/DASHBOARD/main/deadbeef",
     "ftp://gateway.example/dashboard/main/deadbeef",
   ])("rejects %j with the typed accepted-forms error", (input) => {
-    expect(() => parseSessionTargetInput(input)).toThrow(SessionTargetParseError);
+    expect(() => parseSessionTargetInput(input)).toThrow(ExpectedCliError);
     expect(() => parseSessionTargetInput(input)).toThrow("Accepted session targets:");
   });
 
@@ -211,11 +208,11 @@ describe("session target resolution", () => {
         raw: "https://gateway.example/dashboard/main/movies-a1166b81",
         gateway: { url: "wss://other.example" },
       }),
-    ).rejects.toThrow("pass one target");
+    ).rejects.toThrow(ExpectedCliError);
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("prints bounded ambiguity candidates without listing or describing", async () => {
+  it("rejects ambiguous and missing sessions with the expected-error contract", async () => {
     callGatewayMock.mockResolvedValue({
       ok: false,
       candidates: [
@@ -224,10 +221,10 @@ describe("session target resolution", () => {
       ].map(([key, displayName]) => ({ key, displayName })),
     });
 
-    await expect(resolveSessionTarget({ raw: "12345678" })).rejects.toThrow(
-      /Alpha\s+123456780aaa4000[\s\S]*Beta\s+123456780bbb4000/u,
-    );
+    await expect(resolveSessionTarget({ raw: "12345678" })).rejects.toThrow(ExpectedCliError);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    callGatewayMock.mockResolvedValue({ ok: false });
+    await expect(resolveSessionTarget({ raw: "12345678" })).rejects.toThrow(ExpectedCliError);
   });
 
   it("sends remote not-found recovery to the target Control UI, not the local session store", async () => {

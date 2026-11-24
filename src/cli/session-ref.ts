@@ -8,13 +8,18 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const SESSION_TARGET_HELP =
   "Accepted session targets: https://host[/base]/{chat|dashboard}/<agent>[/<ref>], <host>/<agent>/<ref>, or a bare <slug>-<shortid>, <shortid>, or agent:... key.";
 
-export class SessionTargetParseError extends Error {
+export class SessionTargetParseError extends ExpectedCliError {
   constructor() {
-    super(SESSION_TARGET_HELP);
+    super({
+      message: SESSION_TARGET_HELP,
+      humanOutput: SESSION_TARGET_HELP,
+      machineOutput: SESSION_TARGET_HELP,
+    });
     this.name = "SessionTargetParseError";
   }
 }
