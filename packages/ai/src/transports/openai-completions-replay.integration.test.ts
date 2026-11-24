@@ -20,7 +20,12 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
     { field: "reasoning", provider: "openai", expected: "reasoning" },
     { field: "reasoning", switchModel: true },
     { field: "reasoning", provider: "opencode-go", expected: "reasoning_content" },
-  ])("replays reasoning with %j", async ({ field, required, expected, provider, switchModel }) => {
+    { openRouter: true, required: true, expected: "reasoning_content" },
+    { openRouter: true },
+    { openRouter: true, field: "reasoning", required: true, expected: "reasoning_content" },
+    { openRouter: true, field: "reasoning_text", required: true, expected: "reasoning_content" },
+  ])("replays reasoning with %j", async (testCase) => {
+    const { field, required, expected, provider, switchModel, openRouter } = testCase;
     const requests: Array<{ messages: Array<Record<string, unknown>> }> = [];
     await withServer(
       (_request, response, body) => {
@@ -28,7 +33,7 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
         const chunks =
           requests.length === 1
             ? [
-                makeCompletionsChunk({ [field]: "Check the forecast." }),
+                ...(field ? [makeCompletionsChunk({ [field]: "Check the forecast." })] : []),
                 makeCompletionsChunk(
                   makeCompletionsToolDelta("call_weather", "weather", "{}"),
                   "tool_calls",
@@ -43,11 +48,16 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
       },
       async (baseUrl) => {
         const model = makeCompletionsModel({
-          provider: provider ?? "custom-reasoning",
+          provider: provider ?? (openRouter ? "reflection" : "custom-reasoning"),
+          ...(openRouter ? { id: "reflection/beam-1.0-501b-a23b" } : {}),
           baseUrl,
-          ...(required ? { compat: { requiresReasoningContentOnAssistantMessages: true } } : {}),
+          compat: {
+            ...(openRouter ? { thinkingFormat: "openrouter" } : {}),
+            ...(required ? { requiresReasoningContentOnAssistantMessages: true } : {}),
+          },
         });
         const context: Context = {
+          systemPrompt: "Answer weather questions.",
           messages: [{ role: "user", content: "What is the weather?", timestamp: 1 }],
           tools: [{ name: "weather", description: "", parameters: { type: "object" } }],
         };
@@ -56,12 +66,14 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
         const options = { apiKey: "synthetic-key", reasoningEffort: "medium" as const };
         const first = await (await stream(model, context, options)).result();
         expect(first.stopReason).toBe("toolUse");
-        expect(first.content).toContainEqual({
-          type: "thinking",
-          thinking: "Check the forecast.",
-          thinkingSignature:
-            provider === "opencode-go" && mode === "direct" ? "reasoning_content" : field,
-        });
+        if (field) {
+          expect(first.content).toContainEqual({
+            type: "thinking",
+            thinking: "Check the forecast.",
+            thinkingSignature:
+              provider === "opencode-go" && mode === "direct" ? "reasoning_content" : field,
+          });
+        }
         context.messages.push(
           first,
           makeTextToolResult("call_weather", "weather", "sunny", false, 2),
@@ -71,8 +83,14 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
         ).result();
         expect(second.stopReason).toBe("stop");
         expect(requests).toHaveLength(2);
-        const assistant = requests[1]?.messages.find((message) => message.role === "assistant");
-        expect(assistant).toBeDefined();
+        expect(requests[0]?.messages.map((message) => message.role)).toEqual(["system", "user"]);
+        expect(requests[1]?.messages.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+        ]);
+        const assistant = requests[1]?.messages[2];
         const replayFields = new Set([
           "reasoning",
           "reasoning_text",
@@ -83,7 +101,7 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
           Object.fromEntries(
             Object.entries(assistant ?? {}).filter(([key]) => replayFields.has(key)),
           ),
-        ).toStrictEqual(expected ? { [expected]: "Check the forecast." } : {});
+        ).toStrictEqual(expected ? { [expected]: field ? "Check the forecast." : "" } : {});
       },
     );
   });
