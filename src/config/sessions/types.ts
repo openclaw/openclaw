@@ -24,6 +24,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowExecTargetRequirement,
 } from "../../cron/scheduled-tool-policy.js";
+import type { QueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { PluginJsonValue as SessionPluginJsonValue } from "../../plugins/host-hook-json.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
@@ -284,6 +285,31 @@ type SessionEntryCore = SessionEntryProvenance &
     pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
     /** Trusted session initialization is incomplete; all work admission stays blocked. */
     initializationPending?: true;
+    /** Ordinary Template admission owns this exact pending incarnation until verified setup. */
+    templateInitialization?: {
+      source: { packageName: string; version?: string };
+      /** The original Add's zone follows this admission through reviewed or chat setup. */
+      deviceTimeZone?: string;
+      agentConfig: import("../types.agents.js").AgentEntryConfig;
+      workspaceIdentity: string;
+      /** Verified intent recorded before instructions or config can change. */
+      preparing?: {
+        agentConfig: import("../types.agents.js").AgentEntryConfig;
+        planDigest: string;
+        sourceIntegrity: string;
+        /** Only previously absent files (digest) and directories (null). */
+        workspaceAdditions: Record<string, string | null>;
+      };
+      configured?: { planDigest: string; sourceIntegrity: string };
+    };
+    /** Creation is finished; Retry continues only this hidden Template setup turn. */
+    templateSetup?: import("../../templates/conversation.js").TemplateSetupOpening & {
+      source: { packageName: string; version?: string };
+      /** From the verified manifest, never inferred from the agent's editable workspace. */
+      requiredAutomationIds?: string[];
+      /** Avoid replaying the greeting when Retry only needs to report dependency results. */
+      openingComplete?: true;
+    };
     /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
     pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
     /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -590,6 +616,21 @@ type SessionEntryCore = SessionEntryProvenance &
     /** A committed lossy compaction affected this history; cleared with a new session. */
     compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
+    /**
+     * Last read-only prompt-cache prewarm (`agents.defaults.promptCacheKeepWarm`). It keeps a
+     * keep-warm series and the cache-TTL pruning clock across Gateway restarts. Readers ignore it
+     * unless its reply is still in the transcript they read and the route matches.
+     */
+    promptCacheKeepWarm?: {
+      /** Transcript entry of the provider reply whose cached prefix the pings keep warm. */
+      anchorEntryId: string;
+      provider: string;
+      model: string;
+      /** Request start of the last successful prewarm. */
+      lastPingAt: number;
+      /** Successful prewarms since the last human turn. */
+      pings: number;
+    };
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
     /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
@@ -620,6 +661,8 @@ type SessionEntryCore = SessionEntryProvenance &
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
     skillsSnapshot?: SessionSkillSnapshot;
+    /** Parent prompt preference persisted by spawn before the child can launch. */
+    toolUsageRankingSeed?: import("../../agents/tool-usage-ranking.js").ToolUsageRankingSnapshot;
     /** Explicit authorized immutable library pins; current speakers never replace this selection. */
     skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     systemPromptReport?: SessionSystemPromptReport;
@@ -641,7 +684,24 @@ export type SessionProfileInvolvement = {
   lastMention?: { generation: string; sequence: number; timestamp: number };
 };
 
+/**
+ * The scheduled parent a cron `:run:` row's occurrence was admitted against: the
+ * parent's exact incarnation and the occurrence's owner bit.
+ */
+export type SessionScheduledMemoryParent = {
+  sessionKey: string;
+  sessionId: string;
+  /** Absent when the job's link recorded only the parent session id. */
+  lifecycleRevision?: string;
+  senderIsOwner: boolean;
+};
+
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /**
+   * Written only by cron run preparation on a child-placement `:run:` row, so a
+   * session the run spawns can resolve its memory audience through that parent.
+   */
+  scheduledMemoryParent?: SessionScheduledMemoryParent;
   /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
   localWorkspaceHandoff?: {
     worktreeId: string;
@@ -666,6 +726,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Restart resume scope the latest run started under; see session-restart-resume-scope. */
+  lifecycleRestartScope?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
@@ -682,8 +744,23 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
-  /** Written only by committed graceful shutdown, consumed by the next startup. */
-  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  /** Running root-session resume only; accepted queued input owns its own durable row. */
+  resumeAfterRestart?: {
+    /** A direct chat turn in a visible spawned session, not its original delegated run. */
+    directChat?: true;
+    /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
+    operatorSource?: QueuedOperatorRecoverySource;
+    /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */
+    scope?: string;
+  };
+  /**
+   * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
+   * through current device, auth, profile and role revalidation; never an executable grant.
+   */
+  operatorSources?: Record<
+    string,
+    import("../../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot
+  >;
   /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
   mainRestartRecovery?: { cycleId: string };
 };

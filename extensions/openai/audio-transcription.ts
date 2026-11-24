@@ -20,11 +20,14 @@ import { classifyOpenAIBaseUrl, OPENAI_API_BASE_URL } from "./base-url.js";
 import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 
 export async function transcribeOpenAiAudio(params: AudioTranscriptionRequest) {
+  const model = params.model?.trim() || OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL;
   return await transcribeOpenAiCompatibleAudio({
     ...params,
     provider: "openai",
     defaultBaseUrl: OPENAI_API_BASE_URL,
     defaultModel: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+    // gpt-transcribe replaces the single `language` hint with a `languages` list.
+    languageField: /^gpt-transcribe(?:-|$)/.test(model) ? "languages[]" : "language",
   });
 }
 

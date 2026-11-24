@@ -5,6 +5,7 @@ import { WebSocket } from "ws";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as nodeInvokePluginPolicy from "../node-invoke-plugin-policy.js";
 import { NodeRegistry, type NodeInvokeResult } from "../node-registry.js";
@@ -17,6 +18,8 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
+import { linkedClaw } from "../openclaw-id/openclaw-id.test-support.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import { expectRecordFields, requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
   bindNodeRegistry,
@@ -26,6 +29,7 @@ import {
   firstRespondCall,
   mockArg,
   registerNodeInvokeUploadTests,
+  registerNodeInvokeWakeFixture,
   type RespondCall,
   type TestNodeSession,
 } from "./nodes.invoke.test-support.js";
@@ -513,6 +517,8 @@ describe("plugin surface refresh", () => {
 });
 
 describe("node.invoke APNs wake path", () => {
+  registerNodeInvokeWakeFixture();
+
   beforeEach(() => {
     resetNodeWakeStateForTest();
     mocks.captureNodePairingGeneration.mockReset().mockImplementation(async (nodeId: string) => ({
@@ -539,10 +545,6 @@ describe("node.invoke APNs wake path", () => {
     mocks.sendApnsBackgroundWake.mockClear();
     mocks.sendApnsAlert.mockClear();
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(false);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   describe("node readiness recovery", () => {
@@ -1481,47 +1483,6 @@ describe("node.invoke APNs wake path", () => {
     invalidateNodeWakeState(nodeId);
   });
 
-  it("does not raw-dispatch when runtime authority closes during an awaited policy check", async () => {
-    const nodeId = "ios-node-authority-close";
-    const nodeRegistry = mockNode(() => makeNodeSession(nodeId, { connId: "authority-conn" }), {
-      ok: true,
-      payload: { delivered: true },
-    });
-    let authorityActive = true;
-    const releaseHandoff = vi.fn();
-    const retainForHandoff = vi.fn(() => releaseHandoff);
-    vi.spyOn(nodeInvokePluginPolicy, "applyPluginNodeInvokePolicy").mockImplementationOnce(
-      async () => {
-        await Promise.resolve();
-        authorityActive = false;
-        return null;
-      },
-    );
-    mocks.sanitizeNodeInvokeParamsForForwarding.mockReturnValueOnce({
-      ok: true,
-      params: { command: ["echo", "approved"] },
-      approvalAuthority: { recordId: "approval-backend-bridge", decision: "allow-always" },
-    });
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      client: createOperatorClient(),
-      requestParams: { nodeId },
-      execApprovalManager: {
-        projectDecisionIfActive: (_id, decision) => (authorityActive ? decision : null),
-        retainForHandoff,
-      },
-    });
-
-    expect(retainForHandoff).toHaveBeenCalledWith("approval-backend-bridge");
-    expect(releaseHandoff).toHaveBeenCalledOnce();
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expectInvokeError(respond, {
-      message: "approved runtime authority closed before node dispatch",
-      details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-    });
-  });
-
   it.each(["invalidated", "prior generation"])(
     "does not dispatch through a %s node session",
     async (state) => {
@@ -1745,7 +1706,84 @@ describe("node.invoke APNs wake path", () => {
     expect(await pendingPayload(nodeId)).toMatchObject({ nodeId, actions: [] });
   });
 
-  it.each(["agent runtime", "forwarded approval"])(
+  it.each([
+    { removalAt: "before pull", sameKey: false },
+    { removalAt: "during pairing validation", sameKey: false },
+    { removalAt: "before pull", sameKey: true },
+  ])(
+    "drops a removed ID requester's action $removalAt (sameKey=$sameKey)",
+    async ({ removalAt, sameKey }) => {
+      mocks.loadApnsRegistration.mockResolvedValue(null);
+      const nodeId = `ios-node-id-removal-${removalAt}-${sameKey}`;
+      const claw = await linkedClaw();
+      const peerKey = `iroh:${"a".repeat(64)}` as const;
+      expect(
+        await claw.authority.submit(
+          await claw.sign({
+            op: "add",
+            account_id: "member",
+            role: "operator",
+            peer_keys: [peerKey],
+            invite_id: null,
+          }),
+          "tunnel",
+        ),
+      ).toMatchObject({ ok: true });
+      setOpenClawIdTunnelPrincipalLookup(claw.authority.currentPeer);
+      const principal = expectDefined(claw.authority.currentPeer(peerKey), "admitted member");
+      const connection = new AbortController();
+      const client = {
+        ...createOperatorClient(),
+        connectionSignal: connection.signal,
+        internal: { openclawIdPrincipal: principal },
+      };
+      const revoked = await invokeForeground(nodeId, { client });
+      const revokedId = requireGatewayRecord(
+        firstRespondCall(revoked)[2]?.details,
+        "queued",
+      ).queuedActionId;
+      expect(typeof revokedId).toBe("string");
+      // A transport close alone must not retire accepted work.
+      connection.abort();
+      const socketOnly = await pendingPayload(nodeId);
+      expectQueuedAction(socketOnly, { id: revokedId });
+      // Even the same key from a local caller must not adopt the member's action.
+      const local = await invokeForeground(nodeId, {
+        requestParams: { idempotencyKey: sameKey ? `pending:${nodeId}` : "independent" },
+      });
+      const localId = requireGatewayRecord(
+        firstRespondCall(local)[2]?.details,
+        "local queued",
+      ).queuedActionId;
+      expect(localId).not.toBe(revokedId);
+      const remove = await claw.sign({ op: "remove", account_id: "member" });
+      if (removalAt === "before pull") {
+        expect(await claw.authority.submit(remove, "tunnel")).toMatchObject({ ok: true });
+      } else {
+        mocks.isNodePairingGenerationCurrent.mockImplementationOnce(async () => {
+          expect(await claw.authority.submit(remove, "tunnel")).toMatchObject({ ok: true });
+          return true;
+        });
+      }
+      expectQueuedAction(await pendingPayload(nodeId), { id: localId });
+      // A later approval of the same peer cannot revive the discarded action.
+      expect(
+        await claw.authority.submit(
+          await claw.sign({
+            op: "add",
+            account_id: "member",
+            role: "operator",
+            peer_keys: [peerKey],
+            invite_id: null,
+          }),
+          "tunnel",
+        ),
+      ).toMatchObject({ ok: true });
+      expectQueuedAction(await pendingPayload(nodeId), { id: localId });
+    },
+  );
+
+  it.each(["agent runtime", "operator run", "forwarded approval"])(
     "does not persist %s authority into a later foreground pull",
     async (authority) => {
       mocks.loadApnsRegistration.mockResolvedValue(null);
@@ -1782,10 +1820,22 @@ describe("node.invoke APNs wake path", () => {
               },
               validateAgentRuntimeApprovalAuthority: () => true,
             }
-          : {
-              client,
-              execApprovalManager: { projectDecisionIfActive: (_id, decision) => decision },
-            },
+          : authority === "operator run"
+            ? {
+                client: {
+                  ...client,
+                  internal: {
+                    operatorRunAuthority: createTestOperatorAuthority({
+                      profileId: "operator",
+                      scopes: ["operator.write"],
+                    }),
+                  },
+                },
+              }
+            : {
+                client,
+                execApprovalManager: { projectDecisionIfActive: (_id, decision) => decision },
+              },
       );
       expectInvokeError(respond, {
         details: { nodeError: { code: "NODE_BACKGROUND_UNAVAILABLE" } },

@@ -17,7 +17,6 @@ const PAGES = [
   { path: "usage", trigger: ".usage-phone-actions__trigger", item: "Refresh" },
   { path: "meetings", trigger: ".transcripts-page-menu__trigger", item: "Refresh" },
   { path: "logs", trigger: "button.logs-toolbar__button[title='More actions']", item: "Refresh" },
-  { path: "activity?view=live", trigger: ".activity-live-actions__trigger", item: "Expand all" },
   { path: "settings/agents/main/overview", trigger: ".agents-page-menu__trigger", item: "Refresh" },
   { path: "settings/skills", trigger: ".skill-library-search__icon", item: "Search skills" },
 ] as const;
@@ -60,27 +59,30 @@ suite.define(() => {
       },
     );
   });
-  it("leaves Agents one Refresh, in the menu, and no hole beside New agent", async () => {
+  it("moves New agent and Refresh into the Agents menu, with no row above the tabs", async () => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), viewport: { width: 390, height: 800 } },
       async ({ page }) => {
         await install(page);
         await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`);
-        const create = page.locator(".agents-create-btn");
-        await create.waitFor();
+        const trigger = page.locator(".agents-page-menu__trigger");
+        await trigger.waitFor();
+        expect(await page.locator(".agents-create-btn").count()).toBe(0);
         expect(
           await page.locator("main.content").getByRole("button", { name: "Refresh" }).count(),
         ).toBe(0);
-        const row = (await page.locator(".agents-toolbar-row").boundingBox())!;
-        const button = (await create.boundingBox())!;
-        expect(Math.abs(button.x + button.width - (row.x + row.width))).toBeLessThan(1);
+        expect(await page.locator("main.content .page-header-actions").isVisible()).toBe(false);
+        await trigger.click();
+        const items = page.getByRole("menuitem");
+        await expect.poll(() => items.first().textContent()).toContain("New agent");
+        expect(await items.first().isDisabled()).toBe(false);
       },
     );
   });
 
-  it("keeps the menu on the page from 601px, where the header does not float", async () => {
+  it("keeps the menu on the page from 641px, where the header does not float", async () => {
     await suite.withPage(
-      { ...createControlUiE2eContextOptions(), viewport: { width: 601, height: 800 } },
+      { ...createControlUiE2eContextOptions(), viewport: { width: 641, height: 800 } },
       async ({ page }) => {
         await install(page);
         await page.goto(`${suite.server.baseUrl}meetings`);

@@ -109,7 +109,7 @@ export class ChatSessionCompanionComments {
     if (!this.stopReloadGuard) {
       this.stopReloadGuard = registerControlUiReloadGuard(
         () => !this.current(),
-        () => showToast({ message: t("common.saving") }),
+        () => showToast({ severity: undefined, message: t("common.saving") }),
       );
       if (typeof window !== "undefined") {
         this.stopBeforeUnload = listen(window, "beforeunload", (event) => {

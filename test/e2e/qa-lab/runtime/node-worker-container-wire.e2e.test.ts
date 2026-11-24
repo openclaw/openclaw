@@ -404,7 +404,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
           controlUiProof.fullAccessPatch.prematureChatSend,
           controlUiProof.page
             .locator(".chat-queue")
-            .getByText("Applying chat settings")
+            .getByText("Applying session settings")
             .waitFor({ state: "visible", timeout: 30_000 })
             .then(() => "queued-behind-settings" as const),
         ]);

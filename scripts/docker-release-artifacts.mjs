@@ -15,6 +15,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { promoteDockerChannel } from "./docker-channel-promote.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import { releaseEvidenceProducerTuple } from "./lib/release-evidence-identity.mjs";
 import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
 import {
   collectDockerAttestationErrors,
@@ -128,6 +129,7 @@ function isDockerReleaseArtifactName(name, sourceSha) {
 }
 
 export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, runId, runAttempt }) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest);
   const prepared = manifest.publicationArtifacts?.docker;
   // Historical successful FRV manifests did not prepare publication images.
   // Their recovery route invokes the same preparation owner before publishing.
@@ -136,8 +138,8 @@ export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, run
   }
   requireValue(
     manifest.targetSha === sourceSha &&
-      String(manifest.runId) === String(runId) &&
-      String(manifest.runAttempt) === String(runAttempt),
+      String(evidenceProducer.runId) === String(runId) &&
+      String(evidenceProducer.runAttempt) === String(runAttempt),
     "Docker qualification does not match the selected full release run.",
   );
   // FRV authorizes the release; its recorded producer owns the immutable bytes.
@@ -661,8 +663,23 @@ export async function verifyDockerReleaseProducer(
     "Docker producer attempt is not available.",
   );
   const { workflowPath, fullRef } = verifyDockerProducerRun(currentRun, manifest, currentAttempt);
+  let authenticated;
+  if (fullReleaseManifest) {
+    const { authenticateCandidateOwnedArtifact } =
+      await import("./validate-full-release-validation-evidence.mjs");
+    authenticated = await authenticateCandidateOwnedArtifact({
+      manifest: fullReleaseManifest,
+      repository,
+      candidateSha: manifest.sourceSha,
+      qualificationSha: toolingSha,
+      publisherSha,
+      publisherFullRef,
+      client: evidenceClient,
+    });
+  }
   requireValue(
-    (currentRun.status === "completed" && currentRun.conclusion === "success") ||
+    (currentRun.status === "completed" &&
+      (currentRun.conclusion === "success" || authenticated?.fastTrack)) ||
       (currentRun.status === "in_progress" && currentRun.conclusion === null),
     "Docker producer is neither active nor successfully completed.",
   );
@@ -683,7 +700,8 @@ export async function verifyDockerReleaseProducer(
       ["failure", "cancelled", "timed_out"].includes(preparedRun.conclusion);
     requireValue(
       (preparedRun.status === "completed" && preparedRun.conclusion === "success") ||
-        resumingOwnPublication,
+        resumingOwnPublication ||
+        authenticated?.fastTrack,
       "Historical Docker producer did not qualify for this publication.",
     );
   }
@@ -711,31 +729,21 @@ export async function verifyDockerReleaseProducer(
       sealJob.head_sha === toolingSha,
     "Exact Docker preparation job has not completed successfully.",
   );
-  // Historical producers keep their ancestry contract. Candidate publication
+  // Standalone refresh and focused-beta keep their workflow/ancestry contract. Candidate publication
   // must carry the authenticated owner callback, never reconstruct it from JSON.
   /** @type {() => void} */
   let revalidateAuthority;
-  if (fullReleaseManifest?.sourceAdmission?.qualificationAdmission) {
-    const { authenticateCandidateOwnedArtifact } =
-      await import("./validate-full-release-validation-evidence.mjs");
-    const authenticated = await authenticateCandidateOwnedArtifact({
-      manifest: fullReleaseManifest,
-      repository,
-      candidateSha: manifest.sourceSha,
-      qualificationSha: toolingSha,
-      publisherSha,
-      publisherFullRef,
-      client: evidenceClient,
-    });
+  if (fullReleaseManifest) {
     if (!authenticated) {
       throw new Error("Missing authenticated candidate admission.");
     }
     revalidateAuthority = authenticated.revalidateAuthority;
+    const evidenceProducer = releaseEvidenceProducerTuple(fullReleaseManifest);
     const selected = preparedDockerEvidenceFromFullRelease({
       manifest: fullReleaseManifest,
       sourceSha: manifest.sourceSha,
-      runId: fullReleaseManifest.runId,
-      runAttempt: fullReleaseManifest.runAttempt,
+      runId: evidenceProducer.runId,
+      runAttempt: evidenceProducer.runAttempt,
     });
     requireValue(
       selected.preparedRunId === producer.runId &&

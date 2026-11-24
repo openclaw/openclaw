@@ -1,2 +1,0 @@
-30
-# Committing membership and lifecycle facts must outrank older published sharing facts.

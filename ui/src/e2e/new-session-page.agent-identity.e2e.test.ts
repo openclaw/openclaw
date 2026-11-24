@@ -100,6 +100,7 @@ suite.define(() => {
         {
           name: "main_only",
           source: "skill",
+          skillReferenceable: true,
           skillModelVisible: true,
         },
       ],

@@ -77,7 +77,7 @@ it("discovers new models and refreshes known metadata without changing the infer
           compat: { supportsTools: true },
         },
         { id: "hf:zai-org/GLM-5.2", input: ["text"], contextWindow: 262144, maxTokens: 65536 },
-        { id: "syn:small:vision", reasoning: false, input: ["text", "image"], maxTokens: 8192 },
+        { id: "syn:small:vision", reasoning: false, input: ["text", "image"], maxTokens: 32_768 },
       ],
     },
   });

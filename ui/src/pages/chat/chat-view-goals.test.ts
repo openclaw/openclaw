@@ -85,6 +85,7 @@ it.each([true, false])(
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     toggle?.click();
     renderGoal({ lastStatusNote: "Waiting for CI" }, { connected });
+    expect(container.querySelector(".agent-chat__goal")).toBe(goal);
     const detail = goalPart("detail");
     expect(detail?.getAttribute("aria-hidden")).toBe("false");
     expect(text("detail-objective")).toBe(objective);
@@ -95,6 +96,12 @@ it.each([true, false])(
       ),
     ).toEqual(["12k/50k", "·", "15s"]);
     expect(button("Hide goal details")?.getAttribute("aria-expanded")).toBe("true");
+    renderGoal({ id: "goal-2" }, { connected });
+    expect(button("Show goal details")?.getAttribute("aria-expanded")).toBe("false");
+    if (connected) {
+      button("Pause goal")?.click();
+      expect(onGoalAction).toHaveBeenLastCalledWith("goal-2", "pause");
+    }
   },
 );
 

@@ -17,7 +17,7 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 
 it.each(["before grant", "during grant", "birthtime"] as const)(
   "refuses cleanup effects when the borrowed physical identity changes: %s",
-  (change) => {
+  async (change) => {
     const databasePath = path.join(directories.make("sqlite-cleanup-admission-"), "state.sqlite");
     fs.writeFileSync(databasePath, "original");
     const identity = readDatabasePathIdentitySync(databasePath);
@@ -54,7 +54,7 @@ it.each(["before grant", "during grant", "birthtime"] as const)(
       ).toThrow("database no longer matches its borrowed native owner");
       expect(effect).not.toHaveBeenCalled();
     } finally {
-      admission.finish();
+      await admission.finish();
     }
   },
 );
@@ -69,7 +69,7 @@ it("keeps worker admission requests independent of host lock-record loading", ()
 
 it.each(["current", "revoked after grant"] as const)(
   "clears a prior refusal only after fresh live authority (%s)",
-  (custodyState) => {
+  async (custodyState) => {
     const refusal = new Error("Synthetic first-stage refusal");
     const custody = new SqliteWorkerSlotCustody().createRequest();
     custody.activate();
@@ -114,7 +114,7 @@ it.each(["current", "revoked after grant"] as const)(
       expect(requests).toBe(2);
       expect(admission.failure).toBe(refusal);
     } finally {
-      admission.finish();
+      await admission.finish();
     }
   },
 );

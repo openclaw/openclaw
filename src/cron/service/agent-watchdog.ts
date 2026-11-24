@@ -1,5 +1,6 @@
 /** Timeout watchdogs for cron runner setup and execution phases. */
 import { raceWithTimeout } from "@openclaw/retry";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -56,6 +57,10 @@ export function createCronAgentWatchdog(params: {
 }) {
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
+  // The job budget is process-local, so it is measured on the monotonic clock:
+  // lane waits pause it with `remainingTimeoutMs` and `setTimeout` consumes it.
+  let timeoutStartedAt = 0;
+  let remainingTimeoutMs = params.jobTimeoutMs;
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
@@ -69,12 +74,13 @@ export function createCronAgentWatchdog(params: {
     params.triggerTimeout(reason);
   };
   const startTimeout = () => {
-    if (timeoutId || state === "disposed") {
+    if (timeoutId || waitingForLane || state === "disposed" || state === "timed_out") {
       return;
     }
+    timeoutStartedAt = monotonicNow();
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
-    }, params.jobTimeoutMs);
+    }, remainingTimeoutMs);
   };
   const clearSetupTimeout = () => {
     if (!setupTimeoutId) {
@@ -108,7 +114,7 @@ export function createCronAgentWatchdog(params: {
   const isWaitingForExecution = () =>
     state === "waiting_for_initial_progress" || state === "waiting_for_fallback_execution";
   const startPreExecutionTimeout = () => {
-    if (preExecutionTimeoutId || !isWaitingForExecution()) {
+    if (preExecutionTimeoutId || waitingForLane || !isWaitingForExecution()) {
       return;
     }
     preExecutionTimeoutId = setTimeout(() => {
@@ -137,24 +143,27 @@ export function createCronAgentWatchdog(params: {
 
   return {
     start: () => {
-      // The job deadline bounds admission and teardown too, even if the runner
-      // never reports startup. Phase watchdogs may fail a stalled run sooner.
+      // Bound silent setup and teardown stalls, but pause explicit capacity waits.
       startTimeout();
       if (params.deferUntilRunner) {
         startSetupTimeout();
       }
     },
     noteLaneWait: () => {
-      if (state === "waiting_for_runner") {
-        waitingForLane = true;
-        clearSetupTimeout();
+      waitingForLane = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+        remainingTimeoutMs -= monotonicNow() - timeoutStartedAt;
       }
+      clearSetupTimeout();
+      clearPreExecutionTimeout();
     },
     noteLaneAdmitted: () => {
-      if (state === "waiting_for_runner") {
-        waitingForLane = false;
-        startSetupTimeout();
-      }
+      waitingForLane = false;
+      startTimeout();
+      startSetupTimeout();
+      startPreExecutionTimeout();
     },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
       if (state === "disposed" || state === "timed_out") {

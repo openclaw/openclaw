@@ -230,9 +230,17 @@ export const validateChatToolTitlesParams = createProtocolValidator(
   S.ChatToolTitlesParamsSchema,
   Checks.isChatToolTitlesParams,
 );
+export const validateChatPendingInputsOwnParams = createProtocolValidator(
+  S.ChatPendingInputsOwnParamsSchema,
+  Checks.isChatPendingInputsOwnParams,
+);
 export const validateChatPendingInputsDismissParams = createProtocolValidator(
   S.ChatPendingInputsDismissParamsSchema,
   Checks.isChatPendingInputsDismissParams,
+);
+export const validateChatSteerNowParams = createProtocolValidator(
+  S.ChatSteerNowParamsSchema,
+  Checks.isChatSteerNowParams,
 );
 export const validateChatPredictParams = createProtocolValidator(
   S.ChatPredictParamsSchema,

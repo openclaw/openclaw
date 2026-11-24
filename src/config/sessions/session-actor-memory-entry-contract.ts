@@ -95,10 +95,7 @@ export type SessionActorMemoryEntryWrites = {
       consumePendingReset?: boolean;
       prepareIf?: { kind: "live-model-switch-pending" };
       expected?: { entry: SessionEntry | undefined };
-      guards?: Pick<
-        SessionEntryPatchCommit,
-        "shouldCommitIf" | "cliHistory" | "conversation" | "sources"
-      >;
+      guards?: Pick<SessionEntryPatchCommit, "shouldCommitIf" | "conversation" | "sources">;
     };
     output: SessionEntry | undefined;
   };

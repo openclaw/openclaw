@@ -1,5 +1,6 @@
 /** Offline destination ownership and conservative adoption of historical import evidence. */
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -12,6 +13,7 @@ import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
   readMigrationArtifactIdentity,
+  statMigrationPath,
   type MigrationArtifact,
 } from "../infra/session-sqlite-migration-artifact.js";
 import {
@@ -23,7 +25,7 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   countTranscriptEventsForPath,
-  readOnlySqliteValidationSnapshot,
+  readSessionImportValidationSnapshot,
   type ReadOnlySqliteValidationSnapshot,
 } from "../infra/session-sqlite-migration-readers.js";
 import {
@@ -42,6 +44,34 @@ import type { RecoveryArtifactReference } from "./doctor-session-sqlite-recovery
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
+/**
+ * A reboot can renumber a volume's st_dev. The original sits beside its destination, so when its
+ * recorded inode and metadata are still on the destination's current device, both files moved
+ * together: the volume was renumbered, not swapped for another one with a colliding inode.
+ * Callers verify the original's bytes separately; a replaced destination still fails its inode check.
+ */
+function isOriginalBesideDestination(
+  move: SessionSqliteMigrationMove,
+  sqlitePath: string,
+  destination: fs.BigIntStats,
+): boolean {
+  const artifact = move.kind === "database-backup" ? move.artifact : undefined;
+  const witness =
+    artifact?.disposal.state === "pending-disposal" && !statMigrationPath(move.archivePath)
+      ? artifact.disposal.claimPath
+      : move.archivePath;
+  const stat = statMigrationPath(witness, { bigint: true });
+  return Boolean(
+    artifact &&
+    path.dirname(witness) === path.dirname(sqlitePath) &&
+    stat?.isFile() &&
+    stat.dev === destination.dev &&
+    String(stat.ino) === artifact.identity.ino &&
+    String(stat.mtimeNs) === artifact.identity.mtimeNs &&
+    stat.size === BigInt(artifact.identity.size),
+  );
+}
+
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
 export function createRecoveryDestinationVerifier(
   stateDir: string,
@@ -54,8 +84,29 @@ export function createRecoveryDestinationVerifier(
   >();
   return (refs: Iterable<Pick<RecoveryArtifactReference, "target" | "run" | "move">>) => {
     for (const { target, run, move } of refs) {
+      const disposal = move.artifact?.disposal;
+      if (
+        disposal?.state === "pending-disposal" &&
+        !statMigrationPath(move.archivePath) &&
+        !statMigrationPath(disposal.claimPath)
+      ) {
+        // A consented disposal whose bytes are already gone protects nothing here.
+        continue;
+      }
       const paths = resolveSqliteDatabaseFilePaths(target.sqlitePath);
       assertDoctorSqliteMaintenancePathsNotAliased("update recovery cleanup", paths, [stateDir]);
+      if (target.databaseIdentity && run.manifest.updateRunId) {
+        // Its update run's outcome released this backup. The live file may legitimately be
+        // a new inode (the updater's own rollback and the startup swap replace it), but a
+        // backup is never released while its database is missing or aliased.
+        const live = fs.lstatSync(target.sqlitePath, { bigint: true, throwIfNoEntry: false });
+        if (!live?.isFile() || live.nlink !== 1n) {
+          throw new Error(
+            "Recovery destination database is missing or aliased; originals retained.",
+          );
+        }
+        continue;
+      }
       const expected = destinations.get(target.sqlitePath);
       let agentId = expected?.agentId;
       if (!expected) {
@@ -89,12 +140,14 @@ export function createRecoveryDestinationVerifier(
       }
       const identity = target.databaseIdentity;
       const deviceChanged = identity !== undefined && identity.dev !== String(files[0]!.dev);
+      const remounted =
+        deviceChanged && isOriginalBesideDestination(move, target.sqlitePath, files[0]!);
       // Owned cleanup tolerates its live Gateway writing between this stat and a fingerprint,
       // so it needs contents only to re-certify a moved destination. Otherwise ignore SHM
       // reader bookkeeping, but freshly fingerprint WAL/journal contents even on coarse
       // filesystem clocks. Raw descriptor closes stay outside the serving process.
       const generation =
-        options.allowOwnedMutation && !deviceChanged
+        options.allowOwnedMutation && (!deviceChanged || remounted)
           ? undefined
           : readSqliteFileGenerationSync(target.sqlitePath);
       if (
@@ -117,9 +170,10 @@ export function createRecoveryDestinationVerifier(
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      if (identity && deviceChanged && generation) {
-        // An inode can collide across volumes. Older manifests can only be re-certified
-        // when a full producer-verified original proves the entire closed destination image.
+      if (identity && deviceChanged) {
+        // An inode can collide across volumes. Without a remount witness, older manifests can
+        // only be re-certified when a producer-verified original proves the entire closed
+        // destination image.
         const original =
           move.kind === "database-backup" &&
           move.sourcePath === target.sqlitePath &&
@@ -128,9 +182,11 @@ export function createRecoveryDestinationVerifier(
             ? move.artifact.identity
             : undefined;
         if (
-          (generation.wal?.size ?? 0n) > 32n ||
-          (generation.journal?.size ?? 0n) > 0n ||
-          generation.database.sha256 !== (identity.sha256 ?? original?.sha256)
+          !remounted &&
+          (!generation ||
+            (generation.wal?.size ?? 0n) > 32n ||
+            (generation.journal?.size ?? 0n) > 0n ||
+            generation.database.sha256 !== (identity.sha256 ?? original?.sha256))
         ) {
           throw new Error(
             `Recovery destination device changed from ${identity.dev} to ${files[0]!.dev}; destination contents could not be verified against recorded recovery evidence. Originals retained. Run openclaw doctor --fix to check current state; retain the originals for manual verification.`,
@@ -140,7 +196,7 @@ export function createRecoveryDestinationVerifier(
         target.databaseIdentity = {
           ...identity,
           dev: String(files[0]!.dev),
-          sha256: generation.database.sha256,
+          ...(generation && !remounted && { sha256: generation.database.sha256 }),
         };
         writeSessionSqliteMigrationManifest(run);
       }
@@ -283,11 +339,11 @@ export function validateLegacySessionRecords(
     return true;
   }
   const issueCountBeforeValidation = report.issues.length;
-  const validation = readOnlySqliteValidationSnapshot(target);
+  const validation = readSessionImportValidationSnapshot(target, env);
   if (!validation.ok) {
     report.issues.push({
       code: "sqlite_read_failed",
-      message: `SQLite validation read failed: ${String(validation.error)}`,
+      message: `Session validation read failed: ${String(validation.error)}`,
     });
     return false;
   }
@@ -320,13 +376,13 @@ function validateLegacySessionRecord(
         : undefined
       : snapshot.sessionIdsBySessionKey.get(normalizedKey);
   if (!sqliteSessionId) {
-    recordIssue("sqlite_entry_missing", `SQLite entry is missing for ${normalizedKey}.`);
+    recordIssue("sqlite_entry_missing", `Session entry is missing for ${normalizedKey}.`);
     return;
   }
   if (sqliteSessionId !== record.entry.sessionId) {
     recordIssue(
       "sqlite_entry_mismatch",
-      `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
+      `Stored sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
     );
     return;
   }
@@ -375,8 +431,8 @@ function validateLegacySessionRecord(
     recordIssue(
       "sqlite_transcript_count_mismatch",
       beforeArchive
-        ? `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
-        : `SQLite transcript has ${sqliteEvents} events; source has ${result.events}, but its events are not all present with matching content. Run openclaw doctor --session-sqlite recover to import a missing suffix or identify conflicting events.`,
+        ? `Stored transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
+        : `Stored transcript has ${sqliteEvents} events; source has ${result.events}, but its events are not all present with matching content. Run openclaw doctor --session-sqlite recover to import a missing suffix or identify conflicting events.`,
     );
     return;
   }

@@ -1,6 +1,7 @@
-import type { SourceReplyDeliveryMode } from "openclaw/plugin-sdk/reply-runtime";
-
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
+import {
+  isReplySessionInitConflictError,
+  type SourceReplyDeliveryMode,
+} from "openclaw/plugin-sdk/reply-runtime";
 const DISCORD_SESSION_CONFLICT_FAILURE_TEXT =
   "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.";
 
@@ -16,8 +17,7 @@ export async function completeDiscordSessionConflict(
   deliver: TerminalFailureDelivery,
   onDeliveryError: DeliveryErrorHandler,
 ): Promise<"delivered" | "suppressed" | undefined> {
-  const message = error instanceof Error ? error.message : String(error);
-  if (!REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message)) {
+  if (!isReplySessionInitConflictError(error)) {
     return undefined;
   }
   if (sourceReplyDeliveryMode === "message_tool_only") {

@@ -118,7 +118,7 @@ it("leaves the notifications route before an admitted Web Push command settles",
   const outlet = mountRouterOutlet({ router, retryContext: context });
   const send = () =>
     Array.from(outlet.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Send test"),
+      button.textContent?.includes("Test all browsers"),
     );
   try {
     await router.navigate("notifications", context);

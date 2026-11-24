@@ -9,6 +9,7 @@ import {
 import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
@@ -28,6 +29,7 @@ import {
 } from "./cron-creator-authority-context.js";
 import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import { runAgentCleanupStep } from "./run-cleanup-timeout.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 type ResolvedAgentCommandDeps = Awaited<ReturnType<typeof resolveAgentCommandDeps>>;
@@ -46,7 +48,8 @@ export async function runLocalAgentCommand<TResult>(params: {
 }): Promise<TResult> {
   const existingHost = getBoundLegacyPluginSdkResourceHost();
   const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
-  const host = existingHost ?? new LegacyPluginSdkResourceHost();
+  const host =
+    existingHost ?? new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   if (!existingHost) {
     host.bindScheduler(scheduler);
   }
@@ -106,18 +109,35 @@ export async function runLocalAgentCommand<TResult>(params: {
                   // Tool policy dispatches through the global runner; a headless run has no root.
                   ensureGlobalHookRunner();
                   return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
-                    lease.run(() =>
-                      params.run(
-                        {
-                          ...admittedPrepared,
-                          commandRuntimeContext: {
-                            config: lease.snapshot.config,
-                            pluginGeneration: lease.pluginGeneration,
+                    lease.run(async () => {
+                      try {
+                        return await params.run(
+                          {
+                            ...admittedPrepared,
+                            commandRuntimeContext: {
+                              config: lease.snapshot.config,
+                              pluginGeneration: lease.pluginGeneration,
+                            },
                           },
-                        },
-                        resolvedDeps,
-                      ),
-                    ),
+                          resolvedDeps,
+                        );
+                      } finally {
+                        if (opts.cleanupMemoryOnRunEnd) {
+                          // Drain indexing in its generation; a failure keeps temporary state.
+                          await runAgentCleanupStep({
+                            runId: prepared.runId,
+                            sessionId: prepared.sessionId,
+                            step: "memory-search-managers",
+                            cleanup: async () => {
+                              const { closeActiveMemorySearchManagersCore } =
+                                await import("../plugins/memory-runtime.js");
+                              await closeActiveMemorySearchManagersCore();
+                            },
+                            log: { warn: (message) => params.runtime.error(message) },
+                          });
+                        }
+                      }
+                    }),
                   );
                 },
               );

@@ -25,16 +25,33 @@ const observers = Number(values.observers);
 assert.ok(Number.isSafeInteger(observers) && observers >= 1);
 const companions: Array<() => void> = [];
 const owner = path.resolve(values.owner);
-const { watchChildMemory }: typeof import("../../src/process/child-memory.js") = await import(
-  pathToFileURL(owner).href
-);
+const {
+  watchHostExecMemory,
+  getHostExecMemoryBudget,
+}: typeof import("../../src/process/child-memory.js") = await import(pathToFileURL(owner).href);
+// Qualify only this task's automatic budget; the owner remains latched thereafter.
+const budget = (() => {
+  const constrainedMemory = Object.getOwnPropertyDescriptor(process, "constrainedMemory");
+  const rss = Object.getOwnPropertyDescriptor(process.memoryUsage, "rss");
+  assert.ok(constrainedMemory && rss);
+  try {
+    process.constrainedMemory = () => 1024 ** 3;
+    process.memoryUsage.rss = () => 0;
+    return getHostExecMemoryBudget();
+  } finally {
+    Object.defineProperty(process, "constrainedMemory", constrainedMemory);
+    Object.defineProperty(process.memoryUsage, "rss", rss);
+  }
+})();
+assert.ok(budget);
+assert.equal(budget.memoryBytes, 640 * 1024 ** 2, "Proof requires at least 1 GiB physical RAM");
+const limitBytes = budget.memoryBytes;
 const fixture = fileURLToPath(new URL("./child-memory-fixture.cjs", import.meta.url));
 const child = spawn(process.execPath, [fixture, "2"], {
   detached: true,
   stdio: ["pipe", "pipe", "inherit"],
 });
 const originalSetTimeout = globalThis.setTimeout;
-const limitBytes = 768 * 1024 ** 2;
 let stop: (() => void) | undefined;
 let phaseTimeout: NodeJS.Timeout | undefined;
 let armAt = 0;
@@ -112,30 +129,21 @@ try {
       return timer;
     }, originalSetTimeout);
   });
-  stop = watchChildMemory({
-    pid: child.pid,
-    limitBytes,
-    onLimit: (bytes) => {
-      observedBytes = bytes;
-      limitAt = Date.now();
-      process.kill(-child.pid!, "SIGKILL");
-    },
-    onDiagnostic: (text) => {
-      diagnostic += text;
-    },
-  });
-  // Overlapping high-bound observers exercise shared reads without another runaway.
+  const onLimit = () => {
+    if (limitAt) {
+      return;
+    }
+    limitAt = Date.now();
+    process.kill(-child.pid!, "SIGKILL");
+  };
+  const onDiagnostic = (text: string) => {
+    diagnostic += text;
+    observedBytes = Number(/RAM (\d+)\//u.exec(text)?.[1] ?? 0) * 1024 ** 2;
+  };
+  stop = watchHostExecMemory({ pid: child.pid, onLimit, onDiagnostic });
+  // Overlapping observers share the same charge and idempotent cancellation.
   for (let index = 1; index < observers; index++) {
-    companions.push(
-      watchChildMemory({
-        pid: child.pid,
-        limitBytes: Number.MAX_SAFE_INTEGER,
-        onLimit: () => assert.fail("High-bound observer unexpectedly fired"),
-        onDiagnostic: (text) => {
-          diagnostic += text;
-        },
-      }),
-    );
+    companions.push(watchHostExecMemory({ pid: child.pid, onLimit, onDiagnostic }));
   }
   await slowSample;
   // The pending five-second timer remains real; remove observation before the burst.
@@ -164,7 +172,7 @@ try {
   assert.ok(exitAt - burstAt <= 6000, "Runaway survived beyond the accepted six-second bound");
   assert.equal(exitSignal, "SIGKILL");
   assert.ok(observedBytes > limitBytes);
-  assert.match(diagnostic, /Command killed for exceeding its host memory bound/);
+  assert.match(diagnostic, /shared host exec memory budget was exceeded/);
   const result = {
     scope: "real worker-descendant burst immediately after a low/stable sample; no fake clocks",
     node: process.version,

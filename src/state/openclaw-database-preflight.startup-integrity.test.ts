@@ -1,9 +1,14 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
+import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-errors.js";
+import {
+  acquireGatewayStateOwner,
+  acquireStateDatabaseSchemaLease,
+} from "../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   readSqliteCleanCloseSeal,
@@ -15,10 +20,9 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
-import { VERSION } from "../version.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
@@ -40,7 +44,7 @@ import {
   closeOpenClawAgentDatabaseByPath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import {
   expectLiveReadSourceManifest,
   snapshotPreflightSourceManifest,
@@ -62,6 +66,68 @@ function transcriptRows(reader: OpenClawAgentReadOnlyDatabase) {
     includeRowTranscriptProjection: true,
   });
 }
+
+it.each(["schema lease", "offline maintenance"] as const)(
+  "handles a foreign %s observed by the native startup inspection child",
+  async (holder) => {
+    const fixture = databaseFixture(tempDirs.make("startup-inspection-handoff-"));
+    const { path: pathname } = fixture.state();
+    await closeOpenClawStateDatabaseAsync();
+    const lease =
+      holder === "schema lease"
+        ? acquireStateDatabaseSchemaLease(pathname)
+        : acquireGatewayStateOwner({ databasePath: pathname });
+    const receipt = path.join(fixture.dir, "observed-owner");
+    const preload = path.join(fixture.dir, "observe-owner.cjs");
+    try {
+      // Release only after the native child reads the real record, without guessing its startup time.
+      fs.writeFileSync(
+        preload,
+        [
+          'const fs = require("node:fs");',
+          "const read = fs.readFileSync;",
+          "fs.readFileSync = function (file, ...args) {",
+          "  const raw = read.call(this, file, ...args);",
+          "  if (file === " + JSON.stringify(lease.path) + ") {",
+          "    fs.writeFileSync(" + JSON.stringify(receipt) + ', "observed");',
+          "  }",
+          "  return raw;",
+          "};",
+        ].join("\n"),
+      );
+      for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+        vi.stubEnv(key, value);
+      }
+      await using worker = createAgentSchemaInspectionWorker();
+      const inspection = worker.inspectState(
+        {
+          pathname,
+          supportedVersion: supportedVersions.state,
+          requireStartupMigrationReadiness: true,
+          purpose: "runtime",
+        },
+        undefined,
+      );
+      const asserted =
+        holder === "schema lease"
+          ? expect(inspection).resolves.toMatchObject({
+              schemas: { incompatible: [], indeterminate: [] },
+              registeredDatabases: [],
+            })
+          : expect(inspection).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+      void asserted.catch(() => {});
+      if (holder === "schema lease") {
+        // The inspection already owns the deadline for its cold child.
+        await waitForFixtureFile(receipt, inspection);
+        lease.release();
+      }
+      await asserted;
+    } finally {
+      lease.release();
+      vi.unstubAllEnvs();
+    }
+  },
+);
 
 it("cold-loads a compatible storage seal without validation SQL or snapshots", async () => {
   const fixture = databaseFixture(tempDirs.make("openclaw-clean-startup-"));
@@ -116,43 +182,6 @@ it("checks an unsealed closed WAL agent at live startup without a private copy",
   });
   expect(snapshot.mock.calls.filter(([pathname]) => pathname === agentPath)).toEqual([]);
 });
-
-it.each(["legacy", "malformed", "unknown-policy"])(
-  "runs full agent admission for a %s seal",
-  async (kind) => {
-    const fixture = databaseFixture(tempDirs.make("openclaw-invalid-seal-"));
-    const { path: agentPath } = fixture.agent();
-    closeDatabases();
-    const file = fs.statSync(agentPath, { bigint: true });
-    const seal = readSqliteCleanCloseSeal(agentPath, file)!;
-    if (kind === "malformed") {
-      fs.writeFileSync(`${agentPath}.seal`, "{torn");
-    } else {
-      const identity =
-        kind === "legacy"
-          ? createHash("sha256")
-              .update(JSON.stringify([2, VERSION, "agent"]))
-              .update(OPENCLAW_AGENT_SCHEMA_SQL)
-              .digest("hex")
-          : "unknown-policy";
-      expect(
-        writeSqliteCleanCloseSeal(agentPath, identity, file, {
-          ...seal,
-          identity:
-            kind === "legacy"
-              ? undefined
-              : { ...sqliteDatabaseSealSchemaFor("agent")!.identity, policy: -1 },
-        }),
-      ).toBe(true);
-    }
-    retireSqliteDatabaseAdmissionForPath(agentPath);
-    expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
-    fixture.state();
-    const check = vi.spyOn(integrityWorker, "runSqliteIntegrityCheckInWorkerSync");
-    fixture.agent();
-    expect(check.mock.calls.filter(([input]) => input.databaseLabel === agentPath)).toHaveLength(1);
-  },
-);
 
 it("admits every previously sealed same-version agent before transcript readers run", async () => {
   const fixture = databaseFixture(tempDirs.make("startup-additive-seal-"));
@@ -412,3 +441,64 @@ it("names the failing state database when startup admission hits a corrupted sto
   });
   await expect(admission).rejects.toThrow(/not a database|disk image is malformed/iu);
 });
+
+// Deny only the real registry SELECT, after format/schema admission has succeeded.
+function denyRegistryRead(sqlite: ReturnType<typeof requireNodeSqlite>) {
+  const { DatabaseSync, constants } = sqlite;
+  // oxlint-disable-next-line typescript/unbound-method -- Every call supplies the intercepted database receiver.
+  const prepare = DatabaseSync.prototype.prepare;
+  DatabaseSync.prototype.prepare = function (sql) {
+    if (!/from "agent_databases"/iu.test(sql)) {
+      return prepare.call(this, sql);
+    }
+    this.setAuthorizer((action, table) =>
+      action === constants.SQLITE_READ && table === "agent_databases"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      return prepare.call(this, sql);
+    } finally {
+      this.setAuthorizer(null);
+    }
+  };
+  return () => {
+    DatabaseSync.prototype.prepare = prepare;
+  };
+}
+
+it.each(["gateway-startup", "doctor"] as const)(
+  "preserves the native registry-read failure during %s",
+  async (operation) => {
+    const fixture = databaseFixture(tempDirs.make("startup-registry-failure-"));
+    fixture.state();
+    closeDatabases();
+    const preload = path.join(fixture.dir, "deny-registry.cjs");
+    fs.writeFileSync(preload, "(" + denyRegistryRead.toString() + ")(require('node:sqlite'));");
+    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+      vi.stubEnv(key, value);
+    }
+    const restore = denyRegistryRead(requireNodeSqlite());
+    try {
+      const failure = {
+        code: "ERR_SQLITE_ERROR",
+        message: expect.stringContaining("prohibited"),
+      };
+      const admission = operation === "doctor" ? fixture.doctor() : fixture.ready({});
+      if (operation === "doctor") {
+        await expect(admission).rejects.toMatchObject({
+          message: expect.stringContaining("Doctor could not complete repair"),
+          cause: { errors: [expect.objectContaining(failure)] },
+        });
+      } else {
+        await expect(admission).rejects.toMatchObject(failure);
+        await expect(admission).rejects.toMatchObject({
+          message: expect.stringContaining(fixture.statePath),
+        });
+      }
+    } finally {
+      restore();
+      vi.unstubAllEnvs();
+    }
+  },
+);

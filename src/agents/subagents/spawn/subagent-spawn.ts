@@ -150,7 +150,6 @@ export async function spawnSubagentDirect(
       throw new Error("Operator subagent spawn requires its current Gateway binding");
     }
     if (params.collect && operatorAuthority) {
-      operatorAuthority.assertCurrent();
       preparationHold.retainAuthority(operatorAuthority.retain?.());
     }
     const childPlan = await resolveSubagentChildPlan({
@@ -164,7 +163,7 @@ export async function spawnSubagentDirect(
       sandboxMode,
       swarmEnabled: swarmConfig.enabled,
       requesterSandboxed: ctx.sandboxed,
-      creatorProfileId,
+      spawnedBy: { profileId: creatorProfileId, operatorAuthority },
     });
     if (!childPlan.ok) {
       return childPlan.result;
@@ -227,6 +226,7 @@ export async function spawnSubagentDirect(
           cleanupUnlaunchedSession = () => cleanupCreatedSession(threadBindingReady);
         },
         cfg,
+        projectRequester: childPlan.resolved.projectRequester,
         requesterAgentId,
         targetAgentId,
         childSessionKey,

@@ -1,5 +1,5 @@
 ---
-summary: "Google Gemini setup (AI Studio API key, Vertex AI, optional CLI runtime, and multimodal tools)"
+summary: "Google Gemini setup (Gemini API key, Vertex AI, optional CLI runtime, and multimodal tools)"
 title: "Google (Gemini)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
@@ -17,11 +17,11 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 
 ## Getting started
 
-For most installations, use a Google AI Studio API key. Use `google-vertex` when
+For most installations, use a Gemini API key. Use `google-vertex` when
 the Gateway already runs inside a managed Google Cloud environment.
 
 <Tabs>
-  <Tab title="AI Studio API key">
+  <Tab title="Gemini API key">
     **Recommended for:** standard Gemini API access.
 
     <Steps>
@@ -82,17 +82,17 @@ the Gateway already runs inside a managed Google Cloud environment.
 
   <Tab title="Gemini CLI runtime">
     **Advanced use only:** run a standard `google/*` model through an installed
-    Gemini CLI while keeping authentication on the supported AI Studio API-key
+    Gemini CLI while keeping authentication on the supported Gemini API key
     path.
 
     OpenClaw does not offer new Gemini CLI OAuth or Antigravity OAuth setup.
     [Google ended consumer Gemini CLI Login with Google access on June 18, 2026](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals),
     and the [Antigravity terms](https://antigravity.google/terms) prohibit
     third-party tools from accessing the service through Antigravity OAuth. Use
-    an AI Studio API key or Vertex AI instead.
+    a Gemini API key or Vertex AI instead.
 
     <Steps>
-      <Step title="Configure Google AI Studio">
+      <Step title="Configure a Gemini API key">
         Complete the API-key setup in the first tab. OpenClaw must have a usable
         `google` API-key profile before the CLI runtime can be selected.
       </Step>
@@ -132,7 +132,7 @@ the Gateway already runs inside a managed Google Cloud environment.
     </Steps>
 
     - Runtime: `google-gemini-cli`
-    - Auth: selected Google AI Studio API-key profile
+    - Auth: selected Gemini API key profile
     - Model refs: `google/*`
 
     `google-gemini-cli` is the CLI backend the bundled Google plugin registers.
@@ -142,7 +142,7 @@ the Gateway already runs inside a managed Google Cloud environment.
 
     Existing valid Gemini CLI OAuth profiles remain executable for compatibility,
     but OpenClaw cannot create or repair them. If one breaks, replace it with a
-    Google AI Studio API-key profile.
+    Gemini API key profile.
 
     `google-gemini-cli/*` refs remain legacy compatibility aliases. New configs
     should use `google/*` model refs plus the explicit runtime selection above.
@@ -165,6 +165,17 @@ calling, structured outputs, and search grounding. It uses implicit context
 caching only: explicit `cachedContents` handles and the Live API are not
 supported. See [Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon).
 
+## Gemini 4 Hydrogen
+
+`google/gemini-4-hydrogen` has a 1,048,576-token context window shared by input
+and output, and up to 65,536 output tokens by default. Google accepts text,
+image, video, audio, and PDF input. Thinking levels are low, medium, and high;
+xhigh currently sends high. Like Argon, it supports implicit context caching only.
+The catalog prices it at Google's paid-tier rates per million tokens: $1.50 input,
+$7.50 output (thinking tokens included), and $0.075 cached input. See
+[Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen)
+and [pricing](https://ai.google.dev/gemini-api/docs/pricing#gemini-4-hydrogen).
+
 The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
 1,048,576-token context window and up to 65,536 output tokens. The built-in
 `gemini-flash` alias selects this model; `gemini-flash-lite` selects
@@ -175,6 +186,7 @@ The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
 | Capability             | Supported                     |
 | ---------------------- | ----------------------------- |
 | Chat completions       | Yes                           |
+| Decision models        | Yes (Gemini Decision)         |
 | Image generation       | Yes                           |
 | Music generation       | Yes                           |
 | Text-to-speech         | Yes                           |
@@ -197,6 +209,28 @@ candidate finish reason is still required for a successful result. First-frame
 quota errors participate in API-key rotation. For Gemini's first-response retry,
 usage metadata, response IDs, and empty or unspecified finish states do not count
 as generated output or disable the existing retry deadline.
+
+## Decision models
+
+The `google` plugin serves `google/gemini-decision-1` through the Gemini
+Decisions API as a [Decision model](/concepts/decision-models). With a Gemini
+API key configured, select it in the Decision picker or set:
+
+```json5
+{
+  agents: { defaults: { decisionModel: "google/gemini-decision-1" } },
+}
+```
+
+It is typed-only: it stays out of the chat model pickers and runs only on the
+Gemini Developer API, not Vertex AI. It accepts text, JSON (sent as text), or
+one inline PNG, JPEG, or WebP image up to 4 MiB, with Boolean, Choice, and
+Score questions of 2 to 255 options. Question keys must match `[A-Za-z0-9_-]`,
+up to 64 characters. Gemini requires instructions, so Choice and Score questions
+without them ask which option or level best fits the input; Boolean questions
+need instructions or true/false criteria. Gemini's HTTP 400 limit and safety
+rejections return `unsupported-input`. Usage is priced at $0.10 per million
+input tokens, with no output-token charge.
 
 ## Web search
 
@@ -263,12 +297,12 @@ remain omitted.
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
-`google/gemini-3.1-flash-image`.
+`google/gemini-nano-banana-2.1`.
 
-- Also supports `google/gemini-3-pro-image`
+- Also supports `google/gemini-3.1-flash-image` and `google/gemini-3-pro-image`
 - Generate: up to 4 images per request
-- Edit mode: enabled, up to 5 input images
-- Geometry controls: `size`, `aspectRatio`, and `resolution`
+- Edit mode: enabled, up to 5 input images (up to 14 reference images on `google/gemini-nano-banana-2.1`)
+- Geometry controls: `size`, `aspectRatio` (including `1:4`, `4:1`, `1:8`, and `8:1` on `google/gemini-nano-banana-2.1`), and `resolution` (`1K`, `2K`, `4K`)
 
 To use Google as the default image provider:
 
@@ -278,7 +312,7 @@ To use Google as the default image provider:
     defaults: {
       mediaModels: {
         image: {
-          primary: "google/gemini-3.1-flash-image",
+          primary: "google/gemini-nano-banana-2.1",
         },
       },
     },

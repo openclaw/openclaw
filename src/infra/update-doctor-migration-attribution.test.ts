@@ -7,15 +7,22 @@ import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
+  adoptUpdateBootDatabaseWrites,
+  restoreFailedUpdateDatabases,
+} from "../cli/update-cli/update-command-database-backup.js";
+import {
   observeUpdateParentDatabaseWrites,
   recordUpdateDatabaseWrites,
 } from "../cli/update-cli/update-command-database-receipts.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
+import { resolveDoctorUpdateAdmission } from "../commands/doctor-maintenance-admission.js";
 import { repairAuthProfileMigration } from "../commands/doctor/auth-profile-repair.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -23,10 +30,19 @@ import {
   repairOpenClawStateDatabaseIndexesForDoctor,
   repairOpenClawStateDatabaseReadabilityForDoctor,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
+import { readExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
+import * as sqliteTransactions from "./sqlite-transaction.js";
+import {
+  detectLegacyExecApprovals,
+  migrateLegacyExecApprovals,
+} from "./state-migrations.exec-approvals.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 import {
   runUpdateStateInspectionWorker,
@@ -40,19 +56,22 @@ import { readUpdateDatabaseGenerations } from "./update-database-generations.js"
 import * as updateGenerations from "./update-database-generations.js";
 import { recordUpdateModelRetirement } from "./update-deferred-model-retirement.js";
 import {
+  runWithDoctorMigrationBackup,
+  runWithUpdateDoctorMigrationCapture,
+} from "./update-doctor-migration-attribution.js";
+import {
   beginUpdateSqliteCompanion,
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-  runWithDoctorMigrationBackup,
-  runWithUpdateDoctorMigrationCapture,
-} from "./update-doctor-migration-attribution.js";
+} from "./update-doctor-migration-context.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -76,6 +95,58 @@ function migrate(database: DatabaseSync, pathname: string) {
   });
 }
 
+it.each([false, true])(
+  "attributes successful boot writes and preserves preexisting-write rollback refusal: %s",
+  async (preexistingWrite) => {
+    const { root, pathname, env } = fixture(
+      "credentials.sqlite",
+      "INSERT INTO retained VALUES (7);",
+    );
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    const backup: UpdateDatabaseBackup = {
+      directory: root,
+      databases: [
+        {
+          path: pathname,
+          snapshotPath: pathname,
+          userVersion: 0,
+          sha256: "0".repeat(64),
+          sizeBytes: fs.statSync(pathname).size,
+        },
+      ],
+      sourcePaths: [pathname],
+      missingPaths: [],
+      sourceGenerations: generations,
+      warnings: [],
+      migration: { name: "first Doctor", backup: root, from: generations, to: generations },
+    };
+    if (preexistingWrite) {
+      using database = new DatabaseSync(pathname);
+      database.exec("UPDATE retained SET value = 8;");
+    }
+    const result = await adoptUpdateBootDatabaseWrites(backup, env, async () => {
+      using database = new DatabaseSync(pathname);
+      database.exec("UPDATE retained SET value = 9;");
+      return { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+    });
+    expect(result.status).toBe("ok");
+    const { receipt, warnings } = await withCapture(env, backup.migration!.to, async () => {
+      using database = new DatabaseSync(pathname);
+      migrate(database, pathname);
+      expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 9 }]);
+    });
+    expect(receipt?.unchanged).toBe(!preexistingWrite);
+    expect(backup.migration!.from).toEqual(generations);
+    expect(warnings).toEqual(
+      preexistingWrite
+        ? [
+            "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
+          ]
+        : [],
+    );
+  },
+);
+
 it("refuses a changed companion the session never opened", async () => {
   const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
   const { pathname: companionPath } = fixture("companion.sqlite", "PRAGMA journal_mode=DELETE;");
@@ -97,8 +168,21 @@ it.each([
   "read-only reader opens",
   "last writable reader closes",
   "read-only reader opens before admission",
+  "read-only reader rebuilds a checkpointed index",
 ])("migrates a captured WAL database when its %s without writing", async (transition) => {
   const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  if (transition === "read-only reader rebuilds a checkpointed index") {
+    const writer = new DatabaseSync(pathname);
+    const pin = new DatabaseSync(pathname, { readOnly: true });
+    pin.prepare("SELECT * FROM retained").all();
+    writer.exec(
+      "UPDATE retained SET value = 8; UPDATE retained SET value = 7; PRAGMA wal_checkpoint(TRUNCATE);",
+    );
+    writer.close();
+    pin.close();
+    expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+    expect(fs.readFileSync(`${pathname}-shm`).readUInt32LE(8)).not.toBe(0);
+  }
   // SQLite only removes the zero-write WAL index when a writable handle closes.
   const reader =
     transition === "last writable reader closes" ? new DatabaseSync(pathname) : undefined;
@@ -110,9 +194,13 @@ it.each([
   }
   const { receipt, warnings } = await withCapture(env, generations, async () => {
     reader?.close();
-    if (transition === "read-only reader opens") {
+    if (
+      transition === "read-only reader opens" ||
+      transition === "read-only reader rebuilds a checkpointed index"
+    ) {
       using readOnly = new DatabaseSync(pathname, { readOnly: true });
-      readOnly.prepare("SELECT * FROM retained").all();
+      readOnly.prepare("PRAGMA user_version").get();
+      readOnly.prepare("SELECT name FROM sqlite_master").all();
     }
     expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);
     using database = new DatabaseSync(pathname);
@@ -264,7 +352,7 @@ it.each(["already exclusive", "retain exclusive"])(
   },
 );
 
-it.each(["different content", "same content"])(
+it.each(["different content", "same content", "different content with a rebuilt index"])(
   "rejects a captured WAL database after an outside commit with %s",
   async (change) => {
     const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
@@ -276,12 +364,85 @@ it.each(["different content", "same content"])(
         writer.exec("UPDATE retained SET value = 7;");
       }
       writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+      if (change === "different content with a rebuilt index") {
+        writer.close();
+        using reader = new DatabaseSync(pathname, { readOnly: true });
+        reader.prepare("PRAGMA user_version").get();
+        reader.prepare("SELECT name FROM sqlite_master").all();
+      }
       using database = new DatabaseSync(pathname);
       expect(() => migrate(database, pathname)).toThrow(
         "SQLite migration source changed after update capture:",
       );
     });
     expect(receipt).toMatchObject({ unchanged: false });
+  },
+);
+
+it.each(["credential write", "WAL index rebuild"])(
+  "migrates after a %s while the parent's restore stays refused",
+  async (change) => {
+    const { root, pathname, env } = fixture(
+      "credentials.sqlite",
+      "INSERT INTO retained VALUES (7);",
+    );
+    // A status reader outlives the parent's last ledger commit, so capture binds live WAL evidence.
+    const reader = new DatabaseSync(pathname, { readOnly: true });
+    reader.prepare("SELECT value FROM retained").all();
+    const writer = new DatabaseSync(pathname);
+    writer.exec("INSERT INTO retained VALUES (8);");
+    writer.close();
+    const captured = readUpdateDatabaseGenerations([pathname]);
+    reader.close();
+    if (change === "credential write") {
+      using credentials = new DatabaseSync(pathname);
+      credentials.exec("INSERT INTO retained VALUES (9); PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+    // The next native open after the readers leave rebuilds the index without a commit.
+    const rebuilt = new DatabaseSync(pathname, { readOnly: true });
+    rebuilt.prepare("SELECT value FROM retained").all();
+    rebuilt.close();
+    const admitted = readUpdateDatabaseGenerations([pathname]);
+    expect(admitted).not.toEqual(captured);
+
+    const { receipt, warnings } = await withCapture(env, captured, async () => {
+      using database = new DatabaseSync(pathname);
+      migrate(database, pathname);
+    });
+    expect(warnings).toEqual([
+      "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
+    ]);
+    expect(receipt).toMatchObject({ unchanged: false, fromGenerations: admitted });
+    const backup: UpdateDatabaseBackup = {
+      directory: root,
+      databases: [],
+      missingPaths: [],
+      sourcePaths: [pathname],
+      sourceGenerations: captured,
+      warnings: [],
+    };
+    recordUpdateDatabaseWrites(backup, receipt, { name: "openclaw doctor" });
+    expect(backup.restoreRefusal).toBe(
+      "databases changed after snapshot capture; the writer is unknown",
+    );
+    const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
+    expect(
+      await restoreFailedUpdateDatabases({
+        backup,
+        result,
+        runId: "stale-capture",
+        env,
+        assertCurrent() {},
+      }),
+    ).toBe(false);
+    expect(result.rollbackOutcome?.status).toBe("not-attempted");
+    using preserved = new DatabaseSync(pathname, { readOnly: true });
+    expect(preserved.prepare("SELECT value, migrated FROM retained ORDER BY value").all()).toEqual(
+      (change === "credential write" ? [7, 8, 9] : [7, 8]).map((value) => ({
+        value,
+        migrated: null,
+      })),
+    );
   },
 );
 
@@ -320,7 +481,11 @@ function legacyGeneration(file: string): string {
 it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
   "verifies a 2026.9.34 inventory through migration and native close: %s",
   async (change) => {
-    const { root, pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+    // DELETE mode keeps same-content commit evidence after close, independent of timestamps.
+    const { root, pathname, env } = fixture(
+      "source.sqlite",
+      `INSERT INTO retained VALUES (7); ${change === "same-content commit" ? "PRAGMA journal_mode=DELETE;" : ""}`,
+    );
     const missing = path.join(root, "missing.sqlite");
     const generations = { [pathname]: legacyGeneration(pathname), [missing]: null };
     expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);
@@ -328,24 +493,21 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
       fs.renameSync(pathname, `${pathname}.old`);
       fs.copyFileSync(`${pathname}.old`, pathname);
     }
-    // Retain committed WAL evidence; closing the last writer can erase its commit history.
-    using writer = new DatabaseSync(pathname);
-    if (change === "changed data" || change === "same-content commit") {
-      writer.exec("UPDATE retained SET value = 8;");
-      if (change === "same-content commit") {
-        writer.exec("UPDATE retained SET value = 7;");
+    {
+      using writer = new DatabaseSync(pathname);
+      if (change === "changed data" || change === "same-content commit") {
+        writer.exec("UPDATE retained SET value = 8;");
+        if (change === "same-content commit") {
+          writer.exec("UPDATE retained SET value = 7;");
+        }
       }
     }
     const { receipt, warnings } = await withCapture(env, generations, async () => {
       using database = new DatabaseSync(pathname);
-      if (change === "unchanged") {
-        migrate(database, pathname);
-        expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
-      } else {
-        expect(() => migrate(database, pathname)).toThrow(
-          "SQLite migration source changed after update capture:",
-        );
-      }
+      migrate(database, pathname);
+      expect(database.prepare("SELECT value FROM retained").all()).toEqual([
+        { value: change === "changed data" ? 8 : 7 },
+      ]);
     });
     expect(receipt?.unchanged).toBe(change === "unchanged");
     if (change === "unchanged") {
@@ -354,36 +516,94 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
         fromGenerations: generations,
         generations: { [pathname]: legacyGeneration(pathname), [missing]: null },
       });
+    } else {
+      expect(warnings).toEqual([
+        "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
+      ]);
     }
   },
 );
 
-it.each(["2026.9.33", "2026.9.34"])(
-  "answers the unmarked %s parent in its original format",
-  async (version) => {
+it.each([
+  { version: "2026.9.7", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.8", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.33", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.34", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.37", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.37", ownsRun: true, profile: "restored" },
+  { version: "2026.9.37", ownsRun: false, profile: "fresh" },
+  { version: "2026.10.33", ownsRun: true, profile: "fresh" },
+])(
+  "round-trips the $version capture through Doctor and unmarked rollback (ownsRun=$ownsRun, profile=$profile)",
+  async ({ version, ownsRun, profile }) => {
     const { root, env, pathname } = fixture("source.sqlite", "SELECT 1;");
-    const parent = readUpdateRunDriver();
+    const parent = readUpdateRunDriver(ownsRun ? process.pid : process.ppid);
     createUpdateRun({ trigger: "cli", before: { version }, origin: { driver: parent } }, { env });
+    // The updater closes its ledger writer before handing the inventory to Doctor.
+    await closeOpenClawStateDatabaseAsync();
+    const shared = fs.realpathSync(resolveOpenClawStateSqlitePath(env));
+    if (profile === "restored") {
+      // The published updater restores a standalone rollback-journal image.
+      using restoredState = new DatabaseSync(shared);
+      restoredState.exec("PRAGMA journal_mode=DELETE");
+    }
+    // Earlier parents can inspect a single store without requesting the shared ledger.
+    const missing = path.join(root, "missing.sqlite");
+    const paths =
+      version === "2026.9.8" || version === "2026.9.33" || version === "2026.9.34"
+        ? [pathname]
+        : [pathname, shared, missing];
+    const maintenance = await acquireGatewayLock({
+      env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
+      timeoutMs: 0,
+    });
+    if (!maintenance) {
+      throw new Error("Test could not acquire rollback maintenance");
+    }
     try {
+      const physical = ownsRun && version !== "2026.10.33";
+      const capture = physical
+        ? Object.fromEntries(
+            paths.map((file) => [file, file === missing ? null : legacyGeneration(file)]),
+          )
+        : readUpdateDatabaseGenerations(paths);
+      const { receipt } = await withCapture(env, capture, async () => {
+        if (profile === "restored") {
+          await openOpenClawStateDatabaseForDoctor({ env });
+          // Agent maintenance needs a second writer while Doctor retains its state handle.
+          using leaseWriter = new DatabaseSync(shared, { timeout: 0 });
+          leaseWriter.exec("BEGIN IMMEDIATE; ROLLBACK");
+        }
+        using db = new DatabaseSync(pathname);
+        migrate(db, pathname);
+      });
+      expect(receipt).toMatchObject({ unchanged: true, fromGenerations: capture });
+      expect(receipt?.generations?.[pathname]).not.toBe(capture[pathname]);
       const stagingRoot = path.join(root, "staging");
       fs.mkdirSync(stagingRoot);
       const worker = { nodeRunner: process.execPath, sourceEnv: env, stagingRoot };
-      const inspect = async () =>
-        parseUpdateStateInspectionWorker(
-          await runUpdateStateInspectionWorker({
-            ...worker,
-            input: { mode: "database-generations", paths: [pathname], stateDir: root, config: {} },
-            databases: await readUpdateStateDatabaseSizes([pathname], worker),
-          }),
-          z.record(z.string(), z.string()),
-        );
-      expect(await inspect()).toEqual({ [pathname]: legacyGeneration(pathname) });
+      const restored = parseUpdateStateInspectionWorker(
+        await runUpdateStateInspectionWorker({
+          ...worker,
+          input: {
+            mode: "database-generations",
+            paths,
+            stateDir: env.OPENCLAW_STATE_DIR,
+            config: {},
+          },
+          databases: await readUpdateStateDatabaseSizes(paths, worker),
+        }),
+        z.record(z.string(), z.string().nullable()),
+      );
+      expect(restored).toEqual(receipt?.generations);
       // A candidate-produced recapture must stay current even in the old updater's run.
       expect(await readUpdateDatabaseGenerationsIsolated([pathname], { env })).toEqual(
         readUpdateDatabaseGenerations([pathname]),
       );
     } finally {
-      await closeOpenClawStateDatabaseAsync();
+      await maintenance.release();
     }
   },
 );
@@ -420,6 +640,85 @@ async function withCapture(
     }
   }
 }
+
+it.each(
+  (["doctor", "version", "readability"] as const).flatMap((scope) =>
+    (["clean", "retained WAL", "retained journal", "wrong mode"] as const).map((shape) => ({
+      scope,
+      shape,
+    })),
+  ),
+)("captures $scope phases before migrating legacy approvals ($shape)", async ({ scope, shape }) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { env, stateDir } = state;
+    const pathname = openOpenClawStateDatabase({ env }).path;
+    const sourcePath = await state.writeJson("exec-approvals.json", {
+      version: 1,
+      defaults: { security: "deny" },
+      agents: {},
+      socket: { path: "/tmp/fixture.sock", token: "synthetic-token" },
+    });
+    await closeOpenClawStateDatabaseAsync();
+    const retained = shape === "retained WAL" || shape === "retained journal";
+    if (retained) {
+      const setup = spawnNodeEvalSync(`
+          const { DatabaseSync } = await import('node:sqlite');
+          const db = new DatabaseSync(${JSON.stringify(pathname)});
+          const wal = ${shape === "retained WAL"};
+          db.exec(wal ? 'PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;' : 'PRAGMA journal_mode=PERSIST;');
+          db.exec('CREATE TABLE retained(value);');
+          if (wal) {
+            const reader = new DatabaseSync(${JSON.stringify(pathname)}, { readOnly: true });
+            reader.exec('BEGIN; SELECT * FROM retained;');
+            db.close(); reader.exec('COMMIT'); reader.close();
+          } else db.close();
+        `);
+      expect(setup.status, setup.stderr).toBe(0);
+      expect(
+        fs.statSync(`${pathname}-${shape === "retained WAL" ? "wal" : "journal"}`).size,
+      ).toBeGreaterThan(32);
+    } else if (shape === "wrong mode") {
+      fs.chmodSync(pathname, 0o644);
+    }
+    const generations = readUpdateDatabaseGenerations([
+      pathname,
+      state.statePath("client", "credentials.sqlite"),
+    ]);
+    const { receipt, warnings } = await withCapture(env, generations, async () => {
+      const inspections = await import("./update-candidate-state.inspection.js");
+      const observations = vi.spyOn(inspections, "readUpdateSqliteDatabaseGenerationPairIsolated");
+      const transactions = vi.spyOn(sqliteTransactions, "runSqliteImmediateTransactionSync");
+      await repairDoctorStateSchemaAsync({ env }, scope);
+      const writing = scope !== "readability";
+      expect(
+        observations.mock.calls.filter(([paths]) => paths.length === 1 && paths[0] === pathname),
+      ).toHaveLength((writing ? 2 : 0) + (retained ? 2 : 0));
+      expect(transactions.mock.calls.length > 0).toBe(writing);
+      await openOpenClawStateDatabaseForDoctor({ env });
+      resolveDoctorUpdateAdmission(env).assertCurrent();
+      await executeExistingOpenClawStateRead(
+        { env },
+        { type: "updateRuns.recoveryAdmission" },
+        shape === "clean" ? { current: true, live: true } : { current: true },
+      );
+      const result = await migrateLegacyExecApprovals({
+        env,
+        stateDir,
+        detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+      });
+      expect(result.warnings).toEqual([]);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+    });
+    expect(warnings).toEqual([]);
+    expect(receipt?.unchanged).toBe(true);
+    expect(
+      JSON.parse(readExecApprovalsConfigRow(openOpenClawStateDatabase({ env }).db)!.raw_json),
+    ).toMatchObject({ defaults: { security: "deny" } });
+    expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
+      socket: { socket_path: "/tmp/fixture.sock", socket_token: "synthetic-token" },
+    });
+  }),
+);
 
 it.each(["native", "worker"] as const)(
   "completes retirement after Doctor migrations and %s parent bookkeeping",
@@ -692,7 +991,13 @@ it.each(["captured-generation", null, undefined])(
         backupPath: "/synthetic/relocated/scoped.bak",
       };
     });
-    const capture = { expected: () => generation, assertCurrent() {}, accept() {}, refuse };
+    const capture = {
+      expected: () => generation,
+      rebuiltIndex: () => undefined,
+      assertCurrent() {},
+      accept() {},
+      refuse,
+    };
     runWithDoctorMigrationBackup(backup, () =>
       runWithUpdateDoctorMigrationCapture(capture, () => {
         const getBackup = () =>

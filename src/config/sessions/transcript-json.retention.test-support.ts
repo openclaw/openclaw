@@ -13,7 +13,13 @@ function append(index: number) {
   const message = {
     role: "toolResult",
     content: [block],
-    details: { tail: donor.slice(-1024), unicode },
+    details: {
+      tail: donor.slice(-1024),
+      unicode,
+      short: donor.slice(64, 76),
+      boundary: donor.slice(64, 77),
+      shortCons: donor.slice(64, 70) + donor.slice(80, 86),
+    },
   };
   const entry = { type: "message", id: String(index), message };
   if (mode === "frozen") {
@@ -31,6 +37,9 @@ function append(index: number) {
 
 assert.equal(typeof global.gc, "function", "retention probe requires --expose-gc");
 const gc = global.gc!;
+// V8 already owns short strings; their frozen containers need no replacement either.
+const shortFields = Object.freeze({ role: "toolResult", text: "🦞\ud800", id: "123456789012" });
+assert.equal(normalizeTranscriptJsonValue(shortFields, ""), shortFields);
 normalizeTranscriptJsonValue({ message: { content: [{ type: "text", text: "warm" }] } }, "");
 gc();
 gc();
@@ -64,6 +73,9 @@ for (const entry of retained) {
   assert.equal(block.text, "A".repeat(2048));
   assert.equal(entry.message.details.tail, "A".repeat(1024));
   assert.equal(entry.message.details.unicode, unicode);
+  assert.equal(entry.message.details.short, "A".repeat(12));
+  assert.equal(entry.message.details.boundary, "A".repeat(13));
+  assert.equal(entry.message.details.shortCons, "A".repeat(12));
   // A later preparation keeps the already-owned payload instead of cloning its graph again.
   assert.equal(normalizeTranscriptJsonValue(entry.message, ""), entry.message);
   assert.equal(normalizeTranscriptJsonValue(entry, ""), entry);

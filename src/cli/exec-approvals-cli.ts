@@ -43,10 +43,12 @@ import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js"
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   EXEC_APPROVALS_STDIN_MAX_BYTES,
   formatCliError,
   readStdin,
+  renderEffectivePolicyTable,
   runApprovalsAction,
 } from "./exec-approvals-cli.shared.js";
 import { loadSnapshotLocal, saveSnapshotLocal } from "./exec-approvals-local.js";
@@ -213,7 +215,8 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
       native: params.native,
       baseHash: params.baseHash,
     });
-    next = await loadSnapshot(params.opts, params.nodeId);
+    // The accepted mutation owns this readback until its saved policy can be reported.
+    next = await runOutsideAsyncWorkScope(() => loadSnapshot(params.opts, params.nodeId));
   } else if (params.source === "local") {
     // Announced at the write, not at target resolution: no-op allowlist edits and
     // rejected `set` input never reach here and must not claim a write happened.
@@ -1034,26 +1037,7 @@ export function registerExecApprovalsCli(program: Command) {
           defaultRuntime.log(policyMuted(effectivePolicy.note));
           return;
         }
-        const rows = effectivePolicy.scopes.map((summary) => ({
-          Scope: summary.scopeLabel,
-          Requested: `security=${summary.security.requested} (${summary.security.requestedSource})\nask=${summary.ask.requested} (${summary.ask.requestedSource})`,
-          Host: `security=${summary.security.host} (${summary.security.hostSource})\nask=${summary.ask.host} (${summary.ask.hostSource})\naskFallback=${summary.askFallback.effective} (${summary.askFallback.source})`,
-          Effective: `security=${summary.security.effective}\nask=${summary.ask.effective}`,
-          Notes: `${summary.security.note}; ${summary.ask.note}`,
-        }));
-        defaultRuntime.log(
-          renderTerminalSafeTable({
-            width: getTerminalTableWidth(),
-            columns: [
-              { key: "Scope", header: "Scope", minWidth: 12 },
-              { key: "Requested", header: "Requested", minWidth: 24, flex: true },
-              { key: "Host", header: "Host", minWidth: 24, flex: true },
-              { key: "Effective", header: "Effective", minWidth: 16 },
-              { key: "Notes", header: "Notes", minWidth: 20, flex: true },
-            ],
-            rows,
-          }).trimEnd(),
-        );
+        defaultRuntime.log(renderEffectivePolicyTable(effectivePolicy.scopes));
         defaultRuntime.log("");
         defaultRuntime.log(policyMuted(`Precedence: ${effectivePolicy.note}`));
       });

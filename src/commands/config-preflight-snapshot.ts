@@ -10,6 +10,7 @@ import {
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
 import { resolveConfigPath } from "../config/paths.js";
+import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -302,8 +303,9 @@ export async function readAdmittedConfigSnapshot(params: {
                   measureDoctorConfigPreflightStep(
                     "admission.plugin-config",
                     async () => {
-                      const read = await params.readSnapshot(
-                        coreRecovery ? { isolateEnv: true } : undefined,
+                      const read = await withLiveStateReads(
+                        () => params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
+                        { startupConfig: true },
                       );
                       metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
                       return read;
@@ -390,7 +392,7 @@ async function assertStartupStateReady(params: {
     () => import("../state/openclaw-database-preflight.js"),
   );
   const agentCount = listAgentIds(params.cfg).length;
-  const admissionMetrics: Record<string, number> = { agentCount };
+  const admissionMetrics: Record<string, number | string> = { agentCount };
   let registeredDatabases: readonly { agentId: string; path: string }[] = [];
   await measureDoctorConfigPreflightStep(
     "admission.database-readiness",
@@ -412,15 +414,11 @@ async function assertStartupStateReady(params: {
     undefined,
     () => admissionMetrics,
   );
-  const [
-    { assertSessionStoreMigrationComplete },
-    { resolveAllAgentSessionStoreCandidateTargetsSync },
-  ] = await measureDoctorConfigPreflightStep("admission.session-runtime-import", () =>
-    Promise.all([
-      import("../config/sessions/startup-migration.js"),
-      import("../config/sessions/targets.js"),
-    ]),
-  );
+  const { resolveAllAgentSessionStoreCandidateTargetsSync } =
+    await measureDoctorConfigPreflightStep(
+      "admission.session-runtime-import",
+      () => import("../config/sessions/targets.js"),
+    );
   const targets = await measureDoctorConfigPreflightStep(
     "admission.session-targets",
     () =>
@@ -435,7 +433,17 @@ async function assertStartupStateReady(params: {
   );
   await measureDoctorConfigPreflightStep(
     "admission.session-readiness",
-    () => assertSessionStoreMigrationComplete({ ...params, targets }),
+    async () => {
+      // Clean profiles do not need the legacy source inspector and its schema graph.
+      if (!targets.some(({ storePath }) => isExistingLegacySessionStore(storePath))) {
+        return;
+      }
+      const { assertSessionStoreMigrationComplete } = await measureDoctorConfigPreflightStep(
+        "admission.session-migration-runtime-import",
+        () => import("../config/sessions/startup-migration.js"),
+      );
+      assertSessionStoreMigrationComplete({ ...params, targets });
+    },
     undefined,
     () => ({ targetCount: targets.length }),
   );

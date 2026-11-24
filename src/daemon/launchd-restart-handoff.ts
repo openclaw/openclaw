@@ -159,7 +159,7 @@ function scheduleDetachedLaunchdHandoff(params: {
   env?: Record<string, string | undefined>;
   mode: LaunchdHandoffMode;
   waitForPid?: number;
-}): LaunchdRestartHandoffResult {
+}): Result<{ spawned: Promise<boolean>; pid: number | undefined }, string> {
   const env = params.env ?? process.env;
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
@@ -200,7 +200,7 @@ function scheduleDetachedLaunchdHandoff(params: {
       child.once("error", () => resolve(false));
     });
     child.unref();
-    return ok(spawned);
+    return ok({ spawned, pid: child.pid });
   } catch (error) {
     return err(formatErrorMessage(error));
   }
@@ -211,12 +211,26 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
   mode: LaunchdRestartHandoffMode;
   waitForPid?: number;
 }): LaunchdRestartHandoffResult {
-  return scheduleDetachedLaunchdHandoff(params);
+  const handoff = scheduleDetachedLaunchdHandoff(params);
+  return handoff.ok ? ok(handoff.value.spawned) : handoff;
+}
+
+/** Synchronous supervisor exit can confirm a PID, but cannot wait for the spawn event. */
+export function scheduleDetachedLaunchdRestartHandoffSync(
+  params: Parameters<typeof scheduleDetachedLaunchdRestartHandoff>[0],
+): Result<void, string> {
+  const handoff = scheduleDetachedLaunchdHandoff(params);
+  if (!handoff.ok) {
+    return handoff;
+  }
+  // A later spawn error is accepted here; login/boot still reads the staged plist.
+  return handoff.value.pid ? ok(undefined) : err("helper failed to spawn");
 }
 
 export function scheduleDetachedLaunchdMaintenancePark(params: {
   env?: Record<string, string | undefined>;
   waitForPid?: number;
 }): LaunchdRestartHandoffResult {
-  return scheduleDetachedLaunchdHandoff({ ...params, mode: "park" });
+  const handoff = scheduleDetachedLaunchdHandoff({ ...params, mode: "park" });
+  return handoff.ok ? ok(handoff.value.spawned) : handoff;
 }

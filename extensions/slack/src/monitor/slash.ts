@@ -5,7 +5,6 @@ import type {
   SlackCommandMiddlewareArgs,
   SlackOptionsMiddlewareArgs,
 } from "@slack/bolt";
-import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -25,6 +24,7 @@ import {
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import {
+  loadCommandArgMenuModelCatalog,
   mergeNativeCommandSpecs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
@@ -545,15 +545,9 @@ export function createSlackCommandHandler(params: {
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
-            ? await loadPreparedModelCatalog({
-                config: cfg,
-                ...(menuRoute
-                  ? {
-                      agentId: menuRoute.agentId,
-                      agentDir: resolveAgentDir(cfg, menuRoute.agentId),
-                    }
-                  : {}),
-                readOnly: true,
+            ? await loadCommandArgMenuModelCatalog({
+                cfg,
+                ...(menuRoute ? { agentId: menuRoute.agentId } : {}),
               })
             : undefined;
         const menu = await resolveCommandArgMenuAsync({

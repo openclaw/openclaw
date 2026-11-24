@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { fileURLToPath } from "node:url";
 import {
   receiveMessageOnPort,
   type MessagePort,
@@ -35,8 +36,22 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   private readonly diagnosticName: string;
   threadId = 0;
   started = false;
+  /** Where this worker's code lives; eval and non-file workers have no path. */
+  get sourcePath(): string | undefined {
+    if (this.evalSource) {
+      return undefined;
+    }
+    if (!(this.filename instanceof URL)) {
+      return this.filename;
+    }
+    return this.filename.protocol === "file:" ? fileURLToPath(this.filename) : undefined;
+  }
   executionStopped = false;
-  private executionExitCode: number | undefined;
+  executionExitCode: number | undefined;
+  terminalFailure?: Error;
+  get taskChannelFailure(): Error | undefined {
+    return this.taskPort?.failure;
+  }
   private referenced = true;
   private stopping = false;
   private joined = false;
@@ -92,6 +107,11 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.cpuRequests.size > 0 ||
       this.heapRequests.size > 0
     );
+  }
+
+  private refreshReference(): void {
+    this.resourceBinding?.setReferenced(this.needsReference);
+    this.runtime.refreshReference();
   }
 
   service(): void {
@@ -188,6 +208,8 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       }
     };
     connection?.port.on("message", forward);
+    // The native handle's work/stop state, not its passive relay, owns liveness.
+    connection?.port.unref();
     const dispose = () => {
       if (disposed) {
         return;
@@ -199,6 +221,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     };
     return {
       attachment: lease.attachment,
+      setReferenced: lease.setReferenced,
       receive(response: BrokerResourceResponse) {
         lease.receive(response);
       },
@@ -298,7 +321,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     this.taskPort?.assertAvailable();
     this.referenced = true;
     // Host references own process liveness; the supervisor's control port stays referenced.
-    this.runtime.refreshReference();
+    this.refreshReference();
     return this;
   }
 
@@ -307,7 +330,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     if (!this.joined && this.runtime.failure) {
       throw this.runtime.failure;
     }
-    this.runtime.refreshReference();
+    this.refreshReference();
     return this;
   }
 
@@ -339,7 +362,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
         this.stopping = false;
         this.rejectStopCompletion(error);
       }
-      this.runtime.refreshReference();
+      this.refreshReference();
     }
     return this.stopCompletion.operation;
   }
@@ -374,7 +397,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       requests.delete(requestId);
       pending.reject(error);
     }
-    this.runtime.refreshReference();
+    this.refreshReference();
     return pending.operation.result;
   }
 
@@ -388,6 +411,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
 
   ownerFailed(error: Error): void {
     this.runInContext(() => {
+      this.terminalFailure ??= error;
       this.taskPort?.close();
       this.stopping = false;
       this.rejectSamples(error);
@@ -398,6 +422,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
 
   ownerJoined(error: Error): void {
     this.runInContext(() => {
+      this.terminalFailure ??= error;
       this.stopping = false;
       this.supervisorJoined = true;
       this.rejectSamples(error);
@@ -434,7 +459,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     if (!this.runtime.failure) {
       this.runtime.post({ type: "release", id: this.id });
     }
-    this.runtime.refreshReference();
+    this.refreshReference();
     if (this.resourceBinding) {
       this.resourceBinding.release();
     } else {
@@ -489,10 +514,9 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     } else if (reply.type === "resource-message") {
       this.resourceBinding?.receive(reply.response);
     } else if (reply.type === "error" || reply.type === "messageerror") {
-      this.emit(
-        reply.type,
-        toErrorObject(decodeNativeWorkerFailure(reply.error), "Native worker failed"),
-      );
+      const error = toErrorObject(decodeNativeWorkerFailure(reply.error), "Native worker failed");
+      this.terminalFailure ??= error;
+      this.emit(reply.type, error);
     } else if (reply.type === "create-error") {
       // A constructor refusal has no native Worker to join and emits no fake exit.
       this.joined = true;
@@ -505,7 +529,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.rejectSamples(error);
       this.stopCompletion.resolve();
       this.runtime.handles.delete(this.id);
-      this.runtime.refreshReference();
+      this.refreshReference();
       this.abandonResource();
       this.emit("error", error);
     } else if (reply.type === "stopped") {
@@ -556,6 +580,6 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.cpuRequests.delete(reply.requestId);
       this.heapRequests.delete(reply.requestId);
     }
-    this.runtime.refreshReference();
+    this.refreshReference();
   }
 }

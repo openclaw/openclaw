@@ -40,7 +40,7 @@ export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string 
 export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";
-  // Device signatures are byte-for-byte compared by the gateway. Normalize
+  // Verification reconstructs the same payload bytes on the Gateway. Normalize
   // optional metadata before joining so case differences do not break auth.
   const platform = normalizeDeviceMetadataForAuth(params.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(params.deviceFamily);

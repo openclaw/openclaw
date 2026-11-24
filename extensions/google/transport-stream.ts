@@ -29,10 +29,12 @@ import {
   createGoogleVideoPlaceholder,
   GOOGLE_VIDEO_SLOT_OMISSION,
   materializeGoogleVideoSlots,
+  prepareFinalModelRequestJson,
   type GoogleVideoSlots,
   requiresGoogleToolCallId,
   convertGoogleTools,
   type GoogleStreamChunk as GoogleSseChunk,
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -60,6 +62,11 @@ import {
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
 import { collectGoogleTransportApiKeys } from "./transport-api-keys.js";
+import {
+  assertGoogleRequestSize,
+  replaceGooglePartWithText,
+  serializeGoogleRequest,
+} from "./transport-request-body.js";
 import { hasGoogleFirstResponseActivity, parseGoogleSseChunks } from "./transport-stream-sse.js";
 import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
 import { resolveGoogleVertexAuthorizedUserHeaders } from "./vertex-adc.js";
@@ -76,6 +83,7 @@ type GoogleTransportOptions = SimpleStreamOptions &
   ProviderCallStreamOptions & {
     cachedContent?: string;
     topP?: number;
+    seed?: number;
     toolChoice?:
       | "auto"
       | "none"
@@ -115,7 +123,6 @@ const GOOGLE_NATIVE_VIDEO_MIME: ReadonlySet<string> = new Set([
   "video/3gpp",
 ]);
 const GOOGLE_VIDEO_MIME_OMISSION = "(video omitted: unsupported Google video MIME type)";
-const GOOGLE_REQUEST_BYTES_EXCLUSIVE = 20_000_000;
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
@@ -276,11 +283,10 @@ export function buildGoogleGenerativeAiParams(
     options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
     options?.maxTokens,
   );
-  if (typeof options?.temperature === "number") {
-    generationConfig.temperature = options.temperature;
-  }
-  if (typeof options?.topP === "number") {
-    generationConfig.topP = options.topP;
+  for (const key of ["temperature", "topP", "seed"] as const) {
+    if (typeof options?.[key] === "number") {
+      generationConfig[key] = options[key];
+    }
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;
@@ -329,31 +335,6 @@ export function buildGoogleGenerativeAiParams(
     }
   }
   return params;
-}
-
-function replaceGooglePartWithText(part: Record<string, unknown>, text: string): void {
-  Object.keys(part).forEach((key) => Reflect.deleteProperty(part, key));
-  part.text = text;
-}
-
-function serializeGoogleRequest(
-  request: GoogleGenerateContentRequest,
-  videoSlots: Record<string, unknown>[],
-): string {
-  let body = JSON.stringify(request);
-  for (const slot of videoSlots.toReversed()) {
-    if (Buffer.byteLength(body, "utf8") < GOOGLE_REQUEST_BYTES_EXCLUSIVE) {
-      break;
-    }
-    replaceGooglePartWithText(slot, GOOGLE_VIDEO_SLOT_OMISSION);
-    body = JSON.stringify(request);
-  }
-  if (Buffer.byteLength(body, "utf8") >= GOOGLE_REQUEST_BYTES_EXCLUSIVE) {
-    throw new Error(
-      `Google request body must be smaller than ${GOOGLE_REQUEST_BYTES_EXCLUSIVE} bytes`,
-    );
-  }
-  return body;
 }
 
 function resolveGoogleGemini3FirstResponseRetryMs(): number {
@@ -427,6 +408,7 @@ async function openGoogleSseAttempt(params: {
   headers: Record<string, string>;
   request: GoogleGenerateContentRequest;
   videoSlots: Record<string, unknown>[];
+  finalJson?: ReturnType<typeof prepareFinalModelRequestJson>;
   parentSignal?: AbortSignal;
   firstResponseTimeoutMs: number;
   errorPrefix: string;
@@ -439,10 +421,16 @@ async function openGoogleSseAttempt(params: {
       : undefined;
   const signal = attemptSignal?.signal ?? params.parentSignal;
   try {
+    const wireJson = serializeGoogleRequest(params.request, params.videoSlots);
+    const body = params.finalJson ? await params.finalJson(wireJson) : wireJson;
+    if (typeof body !== "string") {
+      assertGoogleRequestSize(body.byteLength);
+    }
+    signal?.throwIfAborted();
     const response = await params.guardedFetch(params.url, {
       method: "POST",
       headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
+      body,
       signal,
     });
     // Response hooks share the first-response deadline. A stalled hook must cancel
@@ -513,10 +501,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           : context;
         const videoSlots: GoogleVideoSlots = new Map();
         let params = buildGoogleGenerativeAiParams(model, providerContext, options, videoSlots);
-        const nextParams = await options?.onPayload?.(params, canonicalModel);
-        if (nextParams !== undefined) {
-          params = nextParams as GoogleGenerateContentRequest;
-        }
+        const finalJson = prepareFinalModelRequestJson(options);
+        const nextParams = await applyProviderPayloadHook(options, params, canonicalModel);
+        params = nextParams as GoogleGenerateContentRequest;
         const trustedVideoSlots: Record<string, unknown>[] = [];
         materializeGoogleVideoSlots(
           params,
@@ -603,6 +590,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             headers: omitNullRequestHeaders(requestHeaders) ?? {},
             request,
             videoSlots: trustedVideoSlots,
+            finalJson,
           };
           const errorPrefix =
             kind === "google-vertex"

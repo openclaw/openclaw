@@ -37,7 +37,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   isRawModelRun: boolean;
 }) {
   const { attempt } = params;
-  const bootstrapWorkspaceDir = resolveRunBootstrapWorkspaceDir({
+  const bootstrapWorkspaceDir = await resolveRunBootstrapWorkspaceDir({
     ...attempt,
     workspaceDir: params.setup.resolvedWorkspace,
     agentId: params.setup.sessionAgentId,
@@ -59,7 +59,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   });
   const resolveWorkspaceBootstrapFiles = () =>
     resolveBootstrapFilesForRun({
-      bootstrapUserProfileId: attempt.bootstrapUserProfileId,
+      bootstrapUserProfileId: attempt.sessionUserProfileId,
       config: attempt.config,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
@@ -175,6 +175,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   return {
     ...bootstrapBudget,
     bootstrapMode,
+    bootstrapCompleted: bootstrapRouting.bootstrapCompleted,
     contextFiles,
     bootstrapInjectionStats,
     shouldRecordCompletedBootstrapTurn,

@@ -157,6 +157,7 @@ describe("Gateway core reload policy", () => {
   it.each([
     { change: "allow", mode: "noop" },
     { change: "remove-policy", mode: "noop" },
+    { change: "project-grant", mode: "noop" },
     { change: "default", mode: "hot" },
     { change: "github-assignment", mode: "hot" },
     { change: "remove-role", mode: "hot" },
@@ -193,6 +194,10 @@ describe("Gateway core reload policy", () => {
         break;
       case "remove-policy":
         delete role.modelPolicy;
+        break;
+      case "project-grant":
+        role.projects = ["handbook"];
+        roles.definitions.staff!.projects = "*";
         break;
       case "default":
         roles.default = "staff";
@@ -277,4 +282,32 @@ describe("Gateway core reload policy", () => {
     expect(plan.hotReasons).toEqual(restart ? [] : [path]);
     expect(resolveConfigReloadMetadata(path).kind).toBe(restart ? "restart" : "hot");
   });
+
+  it("reloads plugins when OpenClaw ID is switched on or off without restarting", () => {
+    const off: OpenClawConfig = {};
+    const disabled: OpenClawConfig = { gateway: { openclawId: { enabled: false } } };
+    const enabled: OpenClawConfig = {
+      gateway: { openclawId: { enabled: true, relayUrl: "https://relay.test/" } },
+    };
+    for (const [before, after] of [
+      [off, enabled],
+      [disabled, enabled],
+      [enabled, disabled],
+    ] as const) {
+      const paths = diffGatewayReloadPaths(before, after, listConfigReloadRefinementPrefixes());
+      expect(
+        buildGatewayReloadPlan(paths, { previousConfig: before, candidateConfig: after }),
+      ).toMatchObject({ restartGateway: false, reloadPlugins: true });
+    }
+    expect(buildGatewayReloadPlan(["gateway.openclawId.relayUrl"])).toMatchObject({
+      restartGateway: false,
+      reloadPlugins: false,
+    });
+  });
+});
+
+it("hot-applies the publication-reader opt-in without restarting", () => {
+  const plan = buildGatewayReloadPlan(["gateway.sessionControl.publicationReadEnabled"]);
+  expect(plan.restartGateway).toBe(false);
+  expect(plan.reloadPlugins).toBe(false);
 });

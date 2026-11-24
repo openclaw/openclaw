@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
@@ -14,7 +16,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -110,6 +112,43 @@ describe("synthetic operator scope attenuation", () => {
   );
 });
 
+describe("own-run exec approvals under a System launch client", () => {
+  it.each([
+    ["exec.approval.request", true],
+    ["exec.approval.waitDecision", true],
+    ["exec.approval.resolve", false],
+  ] as const)("lets a subagent run call %s: %s", async (method, allowed) => {
+    const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+      expect(client?.connect.scopes).toEqual(["operator.approvals"]);
+      respond(true, { ok: true });
+    });
+    const context = createContext([[method, "operator.approvals", "approval-proof", handler]]);
+    // Subagent launches and settle wakes run their tools under a write-only System client.
+    const client = createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } });
+    await withPluginRuntimeGatewayRequestScope(
+      { client, context, isWebchatConnect: () => false },
+      () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:subagent:child",
+            operationalRunInstance: createOperationalRunInstanceRef("child-run"),
+            receiptAuthority: () => true,
+          },
+          async () => {
+            const request = callAgentToolGatewayRequest({ method, params: {} });
+            if (allowed) {
+              await expect(request).resolves.toEqual({ ok: true });
+            } else {
+              await expect(request).rejects.toThrow("missing scope: operator.approvals");
+            }
+          },
+        ),
+    );
+    expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  });
+});
+
 describe("registered plugin SDK scope attenuation", () => {
   afterEach(() => resetTestPluginRegistry());
 
@@ -129,7 +168,7 @@ describe("registered plugin SDK scope attenuation", () => {
       const sourceController = new AbortController();
       const current = () => true;
       const source = expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: identified,
           context,
           hasCurrentClientAuthority: current,
@@ -208,7 +247,6 @@ describe("registered plugin SDK scope attenuation", () => {
         expect(accepted.profileId).toBe(source.authority.profileId);
         expect(accepted.source).toBe(source.authority.source);
         expect(accepted.scopes).toEqual([`operator.${effective}`]);
-        expect(accepted.assertCurrent).not.toThrow();
 
         const writeResult = await invoke(true);
         expect(writeResult.ok).toBe(effective === "write");
@@ -218,7 +256,7 @@ describe("registered plugin SDK scope attenuation", () => {
         }
 
         const recaptured = expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client: { ...client, connect: { ...client.connect, scopes: ["operator.admin"] } },
             context,
           }),
@@ -227,12 +265,11 @@ describe("registered plugin SDK scope attenuation", () => {
         releases.push(recaptured.release);
         expect(recaptured.authority.scopes).toEqual([`operator.${effective}`]);
         expect(recaptured.authority.source).toBe(source.authority.source);
-        expect(recaptured.authority.signal).toBe(source.authority.signal);
-        expect(recaptured.authority.assertCurrent).not.toThrow();
+        expect(recaptured.authority.signal?.aborted).not.toBe(true);
         sourceController.abort(new Error("original operator source revoked"));
-        expect(recaptured.authority.signal?.aborted).toBe(true);
-        await expect(invoke(false)).rejects.toThrow("original operator source revoked");
-        expect(handler).toHaveBeenCalledTimes(effective === "write" ? 2 : 1);
+        expect(recaptured.authority.signal?.aborted).not.toBe(true);
+        await expect(invoke(false)).resolves.toMatchObject({ ok: true });
+        expect(handler).toHaveBeenCalledTimes(effective === "write" ? 3 : 2);
       } finally {
         releases.forEach((release) => release());
       }
@@ -343,7 +380,7 @@ describe("native tool scope provenance", () => {
     });
     const captured = testCase.system
       ? undefined
-      : await captureGatewayOperatorRunAuthority({ client: sourceClient, context });
+      : await prepareGatewayOperatorRunAuthority({ client: sourceClient, context });
     const client: GatewayClient = testCase.system
       ? createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } })
       : { ...sourceClient, internal: { operatorRunAuthority: captured?.authority } };

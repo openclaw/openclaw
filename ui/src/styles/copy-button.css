@@ -15,10 +15,16 @@
 .chat-copy-btn__icon-check,
 .chat-copy-btn__icon-failed {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   display: flex;
   transition: opacity 150ms ease;
+}
+
+/* The glyph fills its box, so a button's own svg size can't push it off-centre. */
+.chat-copy-btn .chat-copy-btn__icon svg {
+  width: 100%;
+  height: 100%;
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .chat-copy-btn__icon-check,

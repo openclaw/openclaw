@@ -573,6 +573,10 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       release: vi.fn(),
       removeIfLossless: vi.fn(),
     },
+    skills: {
+      readUsage: vi.fn(async () => ({ tracked: false, usage: new Map() })),
+      recordUsed: vi.fn(() => false),
+    },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),
       invoke: vi.fn(),

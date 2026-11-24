@@ -69,6 +69,10 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+Growing final-answer text uses the assistant stream. Answer-candidate telemetry
+publishes snapshots when a candidate starts, completes with authoritative text,
+is superseded, or is selected; it does not repeat the full answer for every delta.
+
 After a transient provider retry, final-answer recovery uses the original
 persisted user prompt and the completed tool results. It can produce a summary
 when the native turn finishes without text, without running those tools again.
@@ -102,6 +106,12 @@ MCP progress, streamed patch updates, reasoning section markers, and model metad
 keep native work from appearing stalled. Terminal interaction also informs process
 cleanup. These notifications remain enabled. Older app-servers that do not recognize
 the optional capability ignore it; the normal minimum-version check still applies.
+
+Local app-server process creation and stdio forwarding run in a dedicated worker
+thread. A slow executable launch therefore leaves the Gateway event loop available
+for other requests. The worker preserves the Gateway's parent-process identity,
+so existing orphan registration and descendant cleanup still apply. Each retained
+app-server has one transport worker; shared-client idle retirement closes both.
 
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page
@@ -765,7 +775,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.164.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.169.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

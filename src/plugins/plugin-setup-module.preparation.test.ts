@@ -27,7 +27,6 @@ import {
 } from "./plugin-setup-module.js";
 import {
   copyPluginSourceFile,
-  createPluginSourceDirectoryCapture,
   hashPluginSourceFile,
   inspectPluginCaptureSource,
   readPluginCapturedCode,
@@ -215,6 +214,8 @@ it.for(["readdirSync", "lstatSync", "realpathSync", "escape", "cycle", "nonregul
                 : undefined,
           },
           receipt: createPluginGenerationReceipt(),
+          executionAliases: new Map(),
+          executionSources: new Map(),
           onPackageMetadata() {},
         })(original, directory);
       const realpath = fs.realpathSync;
@@ -305,7 +306,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
   },
 );
 
-it.for(["inspect", "scan", "metadata"] as const)(
+it.for(["inspect", "metadata"] as const)(
   "keeps private %s validation fatal",
   (operation, context) => {
     if (operation === "metadata" && process.platform === "win32") {
@@ -330,19 +331,10 @@ it.for(["inspect", "scan", "metadata"] as const)(
           undefined,
         );
       }
-      if (operation === "scan") {
-        const input = prepared ? retained : original;
-        return createPluginSourceDirectoryCapture(() => {})(
-          input,
-          input,
-          input,
-          new Set([input]),
-          !prepared,
-        );
-      }
       const metadata = path.join(root, "package.json");
       const capture = createPluginPackageMetadataCapture({
         sourceForCaptured: () => path.join(original, "package.json"),
+        retainedManifest: () => ({ exports: { "./*": "./*.js" } }),
         packageForFile: () => ({ sourceRoot: original, state: "entry", captureTarget() {} }),
         resolveSource: (source) =>
           prepared
@@ -350,8 +342,7 @@ it.for(["inspect", "scan", "metadata"] as const)(
             : undefined,
       });
       capture.record(metadata, () => {});
-      capture.setManifest(metadata, { exports: { "./*": "./*.js" } });
-      capture.prepare();
+      return capture.prepare();
     };
     for (const prepared of [false, true]) {
       let failure: unknown;

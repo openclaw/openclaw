@@ -29,7 +29,7 @@ export function resolveTalkAgentConsultAuthority(
   const replyCaller = client ? resolveChatSendCallerContext(client) : undefined;
   if (replyCaller) {
     // Talk has no task-suggestion acceptance UI, even when its hosting client does.
-    replyCaller.GatewayClientCaps = replyCaller.GatewayClientCaps.filter(
+    replyCaller.GatewayClientCaps = replyCaller.GatewayClientCaps?.filter(
       (cap) => cap !== GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
     );
   }

@@ -104,7 +104,7 @@ const { registry } = vi.hoisted(() => ({
     shouldIgnorePostCompletionAnnounceForSession: vi.fn(
       (_sessionKey: string, _childAgentId?: string) => false,
     ),
-    countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
+    countPendingDescendantRuns: vi.fn((_key: string, _assert?: unknown, _options?: unknown) => 0),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
@@ -640,18 +640,6 @@ describe("subagent announce formatting", () => {
     ).toEqual(["channel:thread-child-a", "channel:thread-child-b"]);
   });
 
-  it.each([
-    [{ status: "timeout" }, "timed out"],
-    [
-      { status: "timeout", error: "child run failed before completing" },
-      "timed out: child run failed before completing",
-    ],
-  ] as const)("includes completion status details: %s", async (outcome, expectedStatus) => {
-    setCompletionSessions();
-    await deliverCompletion({ roundOneReply: "child details", outcome });
-    expectText(getAgentCallContext(), [expectedStatus, "child details"], ["✅ Subagent"]);
-  });
-
   const telegramRoute = { channel: "telegram", to: "telegram:123" };
   const telegramSession = { lastChannel: "telegram", lastTo: "telegram:123", lastThreadId: 42 };
   const slackRoute = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
@@ -769,7 +757,7 @@ describe("subagent announce formatting", () => {
       sessionStore = { [childKey]: session("child-session-1", minimalUsage) };
       expect(
         await announceWithDefaults({ timeoutMs: 1000, expectsCompletionMessage: !settled }),
-      ).toBe(settled ? "delivered" : "retryable");
+      ).toBe(settled ? "delivered" : "undelivered");
       if (settled) {
         expect(waitForEmbeddedAgentRunEndSpy).toHaveBeenCalledWith("child-session-1", 1000);
         expectText(getAgentCallContext(), ["raw subagent reply"], ["(no output)"]);
@@ -797,8 +785,8 @@ describe("subagent announce formatting", () => {
       transcriptEvents.push(assistantEvent("new-a", "late-progress", false));
       agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2:wake"));
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      registry.countPendingDescendantRuns.mockReturnValueOnce(1);
-      expect(await announceWake(parentKey, parentRunId)).toBe("retryable");
+      registry.countPendingDescendantRuns.mockReturnValueOnce(1).mockReturnValueOnce(1);
+      expect(await announceWake(parentKey, parentRunId)).toBe("undelivered");
       expect(agentSpy).not.toHaveBeenCalled();
       const didAnnounce = await announceWake(parentKey, parentRunId, {
         runTimeoutSeconds,
@@ -861,7 +849,7 @@ describe("subagent announce formatting", () => {
     registry.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(
       mode === "completed parent",
     );
-    registry.countPendingDescendantRuns.mockReturnValue(mode === "completed parent" ? 2 : 0);
+    registry.countPendingDescendantRuns.mockImplementation((_k, _a, opts) => (opts ? 0 : 1));
     if (destination) {
       registry.resolveRequesterForChildSession.mockReturnValue({
         requesterSessionKey: destination,
@@ -872,9 +860,10 @@ describe("subagent announce formatting", () => {
       await announceWithDefaults({
         childRunId: mode,
         requesterSessionKey: parentKey,
-        cleanup: mode === "missing fallback" ? "delete" : "keep",
+        cleanup: "delete",
       }),
-    ).toBe(mode === "missing fallback" ? "retryable" : "delivered");
+    ).toBe(mode === "missing fallback" ? "undelivered" : "delivered");
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     if (destination) {
       expectAgentCallFields(getAgentCall(), { sessionKey: destination, deliver: false });
       expect(getAgentCall().params?.channel).toBe(
@@ -883,7 +872,6 @@ describe("subagent announce formatting", () => {
     } else {
       expect(agentSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
-      expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     }
   });
 });

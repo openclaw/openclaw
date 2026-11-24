@@ -1,6 +1,8 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForTerminalSession } from "../../app-route-paths.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -8,6 +10,7 @@ import {
 import { startCatalogSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+import { foldPastedTextAttachments } from "../chat/pasted-text-card.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
@@ -36,6 +39,7 @@ export async function submitDraftInTerminal(options: {
   place: DraftPlaceState;
   flow: {
     readonly message: string;
+    readonly attachmentDraft: { readonly attachments: readonly ChatAttachment[] };
     canSubmit(): boolean;
     noteBlockedSubmitAttempt(): void;
     setError(message: string): void;
@@ -58,7 +62,11 @@ export async function submitDraftInTerminal(options: {
     return;
   }
   const submission = options.capture(client);
-  const initialMessage = flow.message.trim();
+  // Terminals accept no files; the submit gate admits only pasted-text cards, which are message text.
+  const initialMessage = foldPastedTextAttachments(
+    flow.message,
+    flow.attachmentDraft.attachments,
+  ).text.trim();
   const terminalInput = {
     hostId: place.terminalHostId,
     cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
@@ -114,7 +122,7 @@ export async function submitDraftInTerminal(options: {
     }
   } catch (error) {
     if (submission.isCurrent()) {
-      flow.setError(error instanceof Error ? error.message : String(error));
+      flow.setError(formatUiError(error));
     }
   } finally {
     if (submission.isRequestCurrent()) {

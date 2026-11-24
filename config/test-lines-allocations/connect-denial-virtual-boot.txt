@@ -1,2 +1,0 @@
-# Start the connect-denial observation on a paused clock, including the first handshake.
-6

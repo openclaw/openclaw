@@ -314,7 +314,13 @@ export function createManagedLinuxDesktop(
         host: "127.0.0.1",
         port: active.port,
         timeoutMs: 1_000,
+        vncPassword: active.password,
       });
+      if (probe.kind === "auth-rejected") {
+        throw new Error(
+          `managed Linux desktop rejected its VNC password on 127.0.0.1:${active.port}`,
+        );
+      }
       lastProbe = probe.kind;
       if (probe.kind === "rfb" && probe.securityTypes.includes(2)) {
         return;

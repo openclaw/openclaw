@@ -7,11 +7,16 @@ export type ChatSendInternalOptions = {
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
+  /** Source-authorized literal human input, restricted to this exact live backend. */
+  activeSteer?: { runId: string; profileId: string };
   /** The creation owner has validated an agent-authored opening turn and its source authority. */
   stageCreatedInput?: true;
   transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   toolsAllow?: string[];
+  deferWorkspaceBootstrap?: true;
+  /** Only the Control UI Add owner may admit this tool-enabled setup continuation. */
+  templateSetup?: true;
   beforeDispatch?: (params: {
     runId: string;
     assertCurrent: () => void;

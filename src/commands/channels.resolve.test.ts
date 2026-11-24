@@ -77,9 +77,9 @@ describe("channelsResolveCommand", () => {
   });
 
   it("rejects missing entries before config for a named account", async () => {
-    await expect(channelsResolveCommand({ account: "work", entries: [] }, runtime)).rejects.toThrow(
-      "At least one entry is required.",
-    );
+    const rejected = channelsResolveCommand({ account: "work", entries: [] }, runtime);
+    await expect(rejected).rejects.toThrow("At least one entry is required.");
+    await expect(rejected).rejects.toHaveProperty("name", "ExpectedCliError");
     expect(mocks.loadConfig).not.toHaveBeenCalled();
   });
 
@@ -125,7 +125,7 @@ describe("channelsResolveCommand", () => {
 
     await expect(
       channelsResolveCommand({ agent: "   ", channel: "telegram", entries: ["friends"] }, runtime),
-    ).rejects.toThrow("--agent must not be blank");
+    ).rejects.toMatchObject({ name: "ExpectedCliError", message: "--agent must not be blank" });
 
     expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
     expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
@@ -137,11 +137,11 @@ describe("channelsResolveCommand", () => {
       catalogEntry: { id: "external-chat" },
     });
 
-    await expect(
-      channelsResolveCommand({ channel: "external-chat", entries: ["friends"] }, runtime),
-    ).rejects.toThrow(
+    const rejected = channelsResolveCommand({ channel: "external-chat", entries: ["x"] }, runtime);
+    await expect(rejected).rejects.toThrow(
       /Channel plugin "external-chat" is not installed\. Run .*channels add --channel external-chat.* first\./,
     );
+    await expect(rejected).rejects.toHaveProperty("name", "ExpectedCliError");
   });
 
   it.each([

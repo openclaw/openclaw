@@ -47,6 +47,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   }
   const capture = async (referenceManifestRef: string, baseManifestRef?: string) =>
     await captureManifest({
+      mode: "eligible",
       workspaceDir: row.workspace_dir,
       manifestHome: row.home_dir,
       baseCommit: source.baseCommit,

@@ -1,10 +1,13 @@
 // Tests how an admitted interactive run continues a turn the stale watchdog dropped.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
 import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+  createCatalogCodeModeHarness,
+  pluginToolWithExecute,
+  resetCodeModeTestState,
+} from "../../agents/code-mode.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,6 +18,7 @@ import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/c
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../../sessions/session-controller.watchdog-state.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
@@ -45,6 +49,7 @@ import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,
+  STALLED_TURN_GUIDANCE,
 } from "./stalled-turn-recovery.js";
 import { createReplyParams } from "./test-helpers.js";
 
@@ -266,6 +271,78 @@ describe("runReplyAgent stalled turn continuation", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
+  it("settles a real Code Mode bridge that never replies at the quiet-tool bound and drains newer input", async () => {
+    // Leave worker and SQLite timers real; only advance the controller's wall clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const bridgeStarted = createDeferred();
+    const toolSettled = createDeferred<unknown>();
+    const bridge = pluginToolWithExecute("never_reply", "Never replies", async () => {
+      bridgeStarted.resolve();
+      return await new Promise<never>(() => {});
+    });
+    executeAgentTurnMock.mockImplementationOnce(
+      async ({ replyOperation }: { replyOperation: ReplyOperation }) => {
+        const harness = createCatalogCodeModeHarness([bridge], {
+          codeMode: { executor: "node" },
+          abortSignal: replyOperation.abortSignal,
+        });
+        const watchdogAttempt = replyOperation.watchdog.attachAttempt({
+          assertCurrent: () => replyOperation.abortSignal.throwIfAborted(),
+        });
+        const tool = wrapToolWithBeforeToolCallHook(harness.tools[0]!, {
+          ...harness.ctx,
+          watchdogAttempt,
+        });
+        try {
+          const result = await tool.execute(
+            "never-reply-call",
+            {
+              code: "return await never_reply({});",
+              awaitResults: true,
+            },
+            replyOperation.abortSignal,
+          );
+          toolSettled.resolve(result);
+          return { runId: "stalled-run", outcome: { kind: "aborted", reason: "user" } };
+        } finally {
+          watchdogAttempt.close();
+        }
+      },
+    );
+    try {
+      const stalled = await createStalledRun();
+      await awaitGateBeforeSettlement(
+        bridgeStarted.promise,
+        stalled.run,
+        "Code Mode settled before the bridge started",
+      );
+      const startedAt = Date.now();
+      const queued = createQueuedRequest(stalled, { senderId: "traveler", to: "12345" });
+      expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
+        true,
+      );
+      vi.setSystemTime(startedAt + SESSION_WATCHDOG_QUIET_TOOL_MS - 1);
+      await stalled.operation.watchdog.tick();
+      expect(stalled.operation.result).toBeNull();
+      expect(drainedRuns).not.toHaveBeenCalled();
+
+      vi.setSystemTime(startedAt + SESSION_WATCHDOG_QUIET_TOOL_MS);
+      await stalled.operation.watchdog.tick();
+      expect(stalled.operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(await toolSettled.promise).toMatchObject({
+        details: { status: "failed", code: "aborted" },
+      });
+      expect(isReplyOperationStalledBeforeOutput(stalled.operation)).toBe(true);
+      expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+      await settleStalledOwner(stalled);
+      await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledExactlyOnceWith(queued));
+      expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    } finally {
+      await resetCodeModeTestState();
+      vi.useRealTimers();
+    }
+  });
+
   it("queues one transcript-only recovery without transferring personal authoring authority", async () => {
     const stalled = await createStalledRun({
       skillLibraryAuthoring: {
@@ -288,7 +365,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     await settleStalledOwner(stalled);
     await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
     const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.prompt).toContain("previous turn stopped making progress");
+    expect(recovery?.prompt).toContain(STALLED_TURN_GUIDANCE);
     await expectTranscriptOnlyRecovery(stalled, recovery);
     expect(recovery?.disableTools).toBeUndefined();
     const authoring = recovery?.run.skillLibraryAuthoring;
@@ -353,7 +430,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       expect(stalled.runState.continueStalledTurn?.()).toBe(true);
       expect(queued.currentInboundContext?.fragments).toContainEqual({
         kind: "runtime-instruction",
-        text: expect.stringContaining("previous turn stopped making progress"),
+        text: expect.stringContaining(STALLED_TURN_GUIDANCE),
       });
       await settleStalledOwner(stalled);
       await settled.promise;
@@ -475,28 +552,6 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
     expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([]);
-  });
-
-  it("falls back to the notice once the stalled turn's authority is revoked", async () => {
-    let revoked = false;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("operator authority revoked");
-        }
-      },
-    });
-    const stalled = await createStalledRun({ operatorAuthority });
-    await stallBeforeOutput(stalled);
-    revoked = true;
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
-
-    await settleStalledOwner(stalled);
-    expect(drainedRuns).not.toHaveBeenCalled();
   });
 
   it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {

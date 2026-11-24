@@ -122,8 +122,10 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
   const base = createContext();
   // Replace the base capability only after installing the publishing Gateway.
   base.runtimeConfig.dispose();
-  const { request } = base;
-  const client = createTestGatewayClient(request);
+  const { request, setupOptions } = base;
+  const client = createTestGatewayClient((...args) =>
+    (args[0] === "openclaw.setup.options" ? setupOptions : request)(...args),
+  );
   const snapshot = {
     ...base.snapshot,
     client,
@@ -177,6 +179,7 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     client,
     context,
     request,
+    setupOptions,
     snapshot,
     publishGatewaySnapshot: publication.publish,
   };
@@ -197,7 +200,7 @@ export function mountDetection(
 
 export function modalButton(page: ParentNode, label: string) {
   return [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
-    (button) => button.textContent?.trim() === label,
+    (button) => (button.getAttribute("aria-label") ?? button.textContent?.trim()) === label,
   );
 }
 

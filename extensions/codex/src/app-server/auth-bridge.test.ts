@@ -20,7 +20,17 @@ import {
   resolveCodexAppServerPreparedAuthProfileSnapshot as prepareSnapshot,
 } from "./auth-bridge.js";
 import {
-  fingerprintTokenAuthProfileCacheKey,
+  type AccountRotation,
+  type AuthProfileCredential,
+  type AuthProfileStore,
+  type OAuthProfile,
+  type Rotation,
+  authHandoff,
+  oauthProfile,
+  rotation,
+  tokenResult,
+} from "./auth-bridge.test-support.js";
+import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-cache-key.js";
@@ -289,26 +299,6 @@ async function expectPathMissing(filePath: string): Promise<void> {
   throw new Error(`Expected missing path: ${filePath}`);
 }
 
-type AuthProfileStore = ReturnType<typeof loadStore>;
-type AuthProfileCredential = AuthProfileStore["profiles"][string];
-
-type OAuthProfile = Extract<AuthProfileCredential, { type: "oauth" }>;
-
-function oauthProfile(
-  prefix: string,
-  overrides: Partial<Omit<OAuthProfile, "type" | "provider">> = {},
-): OAuthProfile {
-  return {
-    type: "oauth",
-    provider: "openai",
-    access: `${prefix}-access`,
-    refresh: `${prefix}-refresh`,
-    // Fresh fixtures must outlive the proactive OAuth refresh window.
-    expires: Date.now() + 24 * 60 * 60_000,
-    ...overrides,
-  };
-}
-
 function profileStore<T extends AuthProfileCredential>(credential: T) {
   return { version: 1, profiles: { "openai:work": credential } };
 }
@@ -317,28 +307,6 @@ function profile(agentDir: string, authProfileStore?: AuthProfileStore) {
   return { agentDir, authProfileId: "openai:work", authProfileStore };
 }
 
-function authHandoff(access: string, chatgptAccountId: string) {
-  return { accessFingerprint: fingerprintTokenAuthProfileCacheKey(access), chatgptAccountId };
-}
-
-type Rotation = Pick<OAuthProfile, "access" | "refresh" | "expires">;
-type AccountRotation = Rotation & { accountId: string };
-function rotation(
-  prefix: string,
-  overrides: Partial<Rotation> & { accountId: string },
-): AccountRotation;
-function rotation(prefix: string, overrides?: Partial<Rotation>): Rotation;
-function rotation(prefix: string, overrides: Partial<AccountRotation> = {}): Rotation {
-  return {
-    access: `${prefix}-access`,
-    refresh: `${prefix}-refresh`,
-    expires: Date.now() + 60_000,
-    ...overrides,
-  };
-}
-function tokenResult(accessToken: string, chatgptAccountId: string) {
-  return { accessToken, chatgptAccountId, chatgptPlanType: null };
-}
 function expectProfiles(
   expected: Partial<OAuthProfile>,
   ...profiles: (AuthProfileCredential | undefined)[]
@@ -1322,7 +1290,9 @@ describe("Codex auth bridge", () => {
     expect(f.read()).toMatchObject({ access: replacement, refresh: "account-b-refresh" });
   });
 
-  it("coalesces scoped startup logins and validates each refresh waiter", async ({ agentDir }) => {
+  it("reuses the scoped startup rotation and validates each refresh callback", async ({
+    agentDir,
+  }) => {
     const refresh = createDeferred<AccountRotation>();
     const started = createDeferred<void>();
     oauth.refresh.mockImplementationOnce(() => {
@@ -1333,16 +1303,24 @@ describe("Codex auth bridge", () => {
     const f = authFixture(agentDir, credential);
     const first = f.apply();
     const second = f.apply();
-    const compatibleWaiter = f.refresh({ previousAccountId: "account-a" });
+    const compatibleWaiter = f.refresh({
+      previousAccountId: "account-a",
+      authHandoff: authHandoff(credential.access, "account-a"),
+    });
     const incompatibleWaiter = f.refresh({
       authHandoff: authHandoff(credential.access, "account-b"),
     });
+    // Ownership lookup may reach the callback before or after the shared rotation settles.
+    // Both boundaries must reject the incompatible workspace without returning its tokens.
     const incompatibleRejection = expect(incompatibleWaiter).rejects.toThrow(
-      "ChatGPT workspace changed during Codex token refresh",
+      /ChatGPT workspace changed (?:before|during) Codex token refresh/,
     );
     await started.promise;
 
-    refresh.resolve(rotation("refreshed", { accountId: "account-a" }));
+    // A successful rotation must outlive the proactive refresh window.
+    refresh.resolve(
+      rotation("refreshed", { accountId: "account-a", expires: Date.now() + 24 * 60 * 60_000 }),
+    );
 
     await expect(Promise.all([first, second])).resolves.toEqual([
       authHandoff("refreshed-access", "account-a"),

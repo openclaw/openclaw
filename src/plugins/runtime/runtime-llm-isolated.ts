@@ -17,7 +17,7 @@ import type {
   LlmCompleteErrorCode,
   LlmCompleteParams,
   LlmIsolatedAgentRuntimeCompleteParams,
-} from "./types-core.js";
+} from "./runtime-llm.types.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const ISOLATED_COMPLETION_ERRORS = new Map<unknown, readonly [LlmCompleteErrorCode, string]>([
@@ -177,12 +177,6 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
   } catch (error) {
     if (isLlmOperatorAuthorizationError(error)) {
       throw error;
-    }
-    // Source revocation can win the abort race before the operation rechecks authority.
-    try {
-      params.operatorAuthority?.assertCurrent();
-    } catch (authorizationError) {
-      throw createLlmOperatorAuthorizationError(authorizationError);
     }
     if (isLlmRuntimeLifecycleFailure(error)) {
       throw error;

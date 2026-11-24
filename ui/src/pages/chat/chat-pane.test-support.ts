@@ -115,6 +115,7 @@ export type TestChatPane = HTMLElement &
     catalogLoadGeneration: number;
     continueCatalogSession: ChatPaneRuntime["continueCatalogSession"];
     forkFromMessage: (entryId: string) => Promise<void>;
+    retireHeaderSessionMutations: () => void;
     createSession: () => Promise<boolean>;
     restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
     resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];
@@ -145,9 +146,9 @@ export type TestChatPane = HTMLElement &
     handleTranscriptScroll: (event: Event) => void;
     handleTranscriptHistoryIntent: (event: Event) => void;
     historyAutoLoadBlocked: boolean;
-    historyObserverArmed: boolean;
+    historyReaderIntent: boolean;
     transcriptScrollTop: number | null;
-    syncHistoryObserver: () => void;
+    evaluateHistoryEdge: () => void;
     loadCatalogSession: ChatPaneRuntime["loadCatalogSession"];
     prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
     loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;

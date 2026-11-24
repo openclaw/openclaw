@@ -55,10 +55,13 @@ adjust the printed dashboard URL as described in [Containerized Gateway](/instal
 Use [Health checks](/install/docker#health-checks) to verify the gateway and
 [Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
 
-When the CLI shares Gateway state, add `pid: "service:openclaw-gateway"` to the
-`openclaw-cli` service in your Compose override so ownership checks can see the
-Gateway's processes; sharing the network alone does not share the PID namespace.
-Alternatively, run the TUI inside the Gateway container with
+The `openclaw-cli` service shares the Gateway's PID namespace
+(`pid: "service:openclaw-gateway"`) as well as its network, so ownership checks
+can see the Gateway's processes and config or channel changes reach the running
+Gateway. Keep both settings if you define your own CLI service; sharing the
+network alone does not share the PID namespace. Stopping or recreating the
+Gateway container also ends any running `openclaw-cli` container.
+You can also run the TUI inside the Gateway container with
 `docker compose exec openclaw-gateway openclaw tui`. A different PID namespace
 now refuses unverifiable ownership instead of reclaiming the running Gateway's
 lock. `tui --local` starts an embedded agent and is not a PID-namespace workaround
@@ -125,7 +128,7 @@ does not reveal the full token.
   </Accordion>
 
   <Accordion title="Shared-network security note">
-    `openclaw-cli` uses `network_mode: "service:openclaw-gateway"` so CLI commands can reach the gateway over `127.0.0.1`. Treat this as a shared trust boundary. The compose config drops `NET_RAW`/`NET_ADMIN` and enables `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
+    `openclaw-cli` uses `network_mode: "service:openclaw-gateway"` and `pid: "service:openclaw-gateway"` so CLI commands can reach the gateway over `127.0.0.1` and verify that it owns the shared state. Treat this as a shared trust boundary: the CLI container can also see and signal Gateway processes. The compose config drops `NET_RAW`/`NET_ADMIN` and enables `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
   </Accordion>
 
   <Accordion title="Docker Desktop DNS failures in openclaw-cli">

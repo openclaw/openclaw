@@ -7,7 +7,7 @@ import {
 } from "../embedded-agent-runner/session-prompt-state.js";
 import type { SessionEntry } from "./session-manager-types.js";
 import { SessionManager } from "./session-manager.js";
-import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
+import { shareSessionSystemPrompt, shareSystemPromptPrefix } from "./system-prompt-pool.js";
 
 const MIB = 1024 * 1024;
 const prompt = ("## Synthetic instructions\n" + "Keep every byte.\n".repeat(8000)).slice(0, 131072);
@@ -124,3 +124,31 @@ assert.equal(admission.history.deref(), undefined, "admission retained the trans
 admission.prepared.commit();
 assert.equal(admission.prepared.systemPrompt, prompt);
 admission.lease[Symbol.dispose]();
+
+// Exact UTF-16 keys preserve distinct strings that UTF-8 hashes collapse.
+for (const suffix of ["\ud800", "\ud801", "\ufffd", "\ud800"]) {
+  const text = "Synthetic Unicode prompt. ".repeat(100) + suffix;
+  assert.equal(shareSystemPromptPrefix(text), text);
+}
+
+// Promoting a hit must keep the owned key, not the caller's much larger backing string.
+await drainGlobalSingletonLifecycleState();
+shareSystemPromptPrefix("x".repeat(128 * 1024));
+await setImmediate();
+collect();
+const beforeSliceHit = process.memoryUsage().heapUsed;
+function shareSlice() {
+  return shareSystemPromptPrefix(
+    Buffer.alloc(8 * MIB, 120)
+      .toString("ascii")
+      .slice(0, 128 * 1024),
+  );
+}
+const sharedSlice = shareSlice();
+await setImmediate();
+collect();
+assert.equal(sharedSlice.length, 128 * 1024);
+assert.ok(
+  process.memoryUsage().heapUsed - beforeSliceHit < MIB,
+  "Pool retained a caller's backing string",
+);

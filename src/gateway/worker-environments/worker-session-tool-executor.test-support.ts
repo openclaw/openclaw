@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { createAvailablePortalTools } from "../../agents/tools/portal-tool.js";
@@ -250,7 +250,6 @@ export async function createWorkerSessionToolTestFixture(
   const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
   const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
   let sourceRunActive = true;
-  let operatorAuthorityActive = true;
   const assertSourceCurrent = () => assert(sourceRunActive, "source worker run ended");
   const sessionTarget = {
     agentId: source.agentId,
@@ -310,11 +309,9 @@ export async function createWorkerSessionToolTestFixture(
       assertSourceCurrent,
       undefined,
       options.operatorProfileId
-        ? createAdmittedRunOperatorAuthority({
+        ? createTestOperatorAuthority({
             profileId: options.operatorProfileId,
             scopes: options.operatorScopes ?? ["operator.write"],
-            assertCurrent: () =>
-              assert(operatorAuthorityActive, "source operator authority revoked"),
           })
         : undefined,
     );
@@ -403,7 +400,7 @@ export async function createWorkerSessionToolTestFixture(
   function createToolRuntime(
     runtimeOptions: Pick<
       Parameters<typeof createWorkerGatewayTools>[0],
-      "prepareTools" | "skillWorkshop"
+      "prepareTools" | "skillLibrary"
     > & {
       identity?: WorkerConnectionIdentity;
       additionalInheritedToolNamesRef?: string[];
@@ -489,17 +486,13 @@ export async function createWorkerSessionToolTestFixture(
     identity,
     execute,
     createToolRuntime,
-    createTools: (
-      skillWorkshop?: Parameters<typeof createWorkerGatewayTools>[0]["skillWorkshop"],
-    ) => createWorkerGatewayTools({ ...executorParams, identity, skillWorkshop }),
+    createTools: (skillLibrary?: Parameters<typeof createWorkerGatewayTools>[0]["skillLibrary"]) =>
+      createWorkerGatewayTools({ ...executorParams, identity, skillLibrary }),
     sourceClaim,
     delegatedAuthorities,
     closeSourceRun: () => {
       sourceRunActive = false;
       scheduledAdmission?.close();
-    },
-    revokeOperatorAuthority: () => {
-      operatorAuthorityActive = false;
     },
     spawnState,
     activate,
