@@ -663,8 +663,23 @@ export async function verifyDockerReleaseProducer(
     "Docker producer attempt is not available.",
   );
   const { workflowPath, fullRef } = verifyDockerProducerRun(currentRun, manifest, currentAttempt);
+  let authenticated;
+  if (fullReleaseManifest) {
+    const { authenticateCandidateOwnedArtifact } =
+      await import("./validate-full-release-validation-evidence.mjs");
+    authenticated = await authenticateCandidateOwnedArtifact({
+      manifest: fullReleaseManifest,
+      repository,
+      candidateSha: manifest.sourceSha,
+      qualificationSha: toolingSha,
+      publisherSha,
+      publisherFullRef,
+      client: evidenceClient,
+    });
+  }
   requireValue(
-    (currentRun.status === "completed" && currentRun.conclusion === "success") ||
+    (currentRun.status === "completed" &&
+      (currentRun.conclusion === "success" || authenticated?.fastTrack)) ||
       (currentRun.status === "in_progress" && currentRun.conclusion === null),
     "Docker producer is neither active nor successfully completed.",
   );
@@ -685,7 +700,8 @@ export async function verifyDockerReleaseProducer(
       ["failure", "cancelled", "timed_out"].includes(preparedRun.conclusion);
     requireValue(
       (preparedRun.status === "completed" && preparedRun.conclusion === "success") ||
-        resumingOwnPublication,
+        resumingOwnPublication ||
+        authenticated?.fastTrack,
       "Historical Docker producer did not qualify for this publication.",
     );
   }
@@ -718,17 +734,6 @@ export async function verifyDockerReleaseProducer(
   /** @type {() => void} */
   let revalidateAuthority;
   if (fullReleaseManifest) {
-    const { authenticateCandidateOwnedArtifact } =
-      await import("./validate-full-release-validation-evidence.mjs");
-    const authenticated = await authenticateCandidateOwnedArtifact({
-      manifest: fullReleaseManifest,
-      repository,
-      candidateSha: manifest.sourceSha,
-      qualificationSha: toolingSha,
-      publisherSha,
-      publisherFullRef,
-      client: evidenceClient,
-    });
     if (!authenticated) {
       throw new Error("Missing authenticated candidate admission.");
     }
