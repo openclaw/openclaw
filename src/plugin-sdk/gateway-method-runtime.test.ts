@@ -4,7 +4,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { dispatchGatewayMethod } from "./gateway-method-runtime.js";
+import { dispatchGatewayMethod, sendToResolvedSession } from "./gateway-method-runtime.js";
 import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./plugin-test-contracts.js";
 
 const { dispatchRaw } = vi.hoisted(() => ({ dispatchRaw: vi.fn() }));
@@ -97,3 +97,56 @@ it.each([
     }
   },
 );
+
+const destination = { sessionKey: "agent:main:example", sessionId: "original" };
+const send = { target: destination, message: "one turn", idempotencyKey: "request-1" };
+
+it.each([
+  [{ ok: true, payload: { status: "started", runId: "request-1" } }, "accepted"],
+  [{ ok: true, payload: { status: "in_flight", runId: "request-1" } }, "accepted"],
+  [{ ok: true, payload: { status: "started", runId: "other" } }, "unconfirmed"],
+  [{ ok: true, payload: { status: "completed", runId: "request-1" } }, "unconfirmed"],
+  [{ ok: true, payload: null }, "unconfirmed"],
+  [
+    { ok: false, error: { code: "INVALID_REQUEST", message: "The destination was replaced" } },
+    "unconfirmed",
+  ],
+  [{ ok: false, error: { code: "FORBIDDEN" } }, "forbidden"],
+  [new Error("response lost"), "unconfirmed"],
+] as const)(
+  "binds admission to a resolved target and its acknowledged request %#",
+  async (reply, outcome) => {
+    dispatchRaw.mockReset();
+    if (reply instanceof Error) dispatchRaw.mockRejectedValue(reply);
+    else dispatchRaw.mockResolvedValue(reply);
+    const result = await withPluginRuntimeGatewayRequestScope(
+      {
+        client: { id: "plugin" } as GatewayRequestHandlerOptions["client"],
+        gatewayMethodDispatchAllowed: true,
+        isWebchatConnect: () => false,
+      },
+      () => sendToResolvedSession(send),
+    );
+    expect(result).toBe(outcome);
+    expect(dispatchRaw).toHaveBeenCalledExactlyOnceWith(
+      "chat.send",
+      {
+        sessionKey: destination.sessionKey,
+        sessionId: destination.sessionId,
+        expectedSessionId: destination.sessionId,
+        message: send.message,
+        idempotencyKey: send.idempotencyKey,
+      },
+      { disableSyntheticClient: true, requireScopedClient: true },
+    );
+  },
+);
+
+it("refuses a missing request scope or incomplete resolved target without dispatch", async () => {
+  dispatchRaw.mockReset();
+  await expect(sendToResolvedSession(send)).resolves.toBe("forbidden");
+  await expect(
+    sendToResolvedSession({ ...send, target: { ...destination, sessionId: "" } }),
+  ).resolves.toBe("unconfirmed");
+  expect(dispatchRaw).not.toHaveBeenCalled();
+});
