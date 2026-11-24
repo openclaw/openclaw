@@ -241,8 +241,9 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
         JSON.stringify({ attribution: owner.id }),
       ]);
       expect(retained).toHaveLength(2);
-      for (const authority of retained)
+      for (const authority of retained) {
         expect(() => authority.assertCurrent()).toThrow("Gateway request authority expired");
+      }
     });
   });
 
