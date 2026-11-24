@@ -698,7 +698,12 @@ it("continues owning-run Doctor maintenance", async () => {
   expect(result).toMatchObject({ finishError: undefined, restartCalls: 1 });
   expect(mocks.stops).toBe(1);
   expect(result.logs).toContain("Stopped the managed Gateway for Doctor repair.");
-  expect(result.logs).toContain("Gateway restarted and verified after Doctor maintenance.");
+  expect(result.logs).toContainEqual(
+    expect.stringContaining("Its repairs write state the running Gateway also writes;"),
+  );
+  const restarted = result.logs.indexOf("Gateway restarted and verified after Doctor maintenance.");
+  expect(restarted).toBeGreaterThan(-1);
+  expect(result.logs[restarted + 1]).toMatch(/^The Gateway was stopped for \d+\.\d s\.$/u);
 });
 
 it("rechecks update admission after failed restoration inspection", async () => {

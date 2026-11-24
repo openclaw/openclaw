@@ -80,6 +80,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   let stopped: PreManagedServiceStop | undefined;
   let serviceVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
+  let stoppedAtMs: number | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
     warnings.push(message);
@@ -296,6 +297,10 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       });
     }
     params.runtime.log("Gateway restarted and verified after Doctor maintenance.");
+    const stoppedMs = stoppedAtMs === undefined ? undefined : performance.now() - stoppedAtMs;
+    if (stoppedMs !== undefined) {
+      params.runtime.log(`The Gateway was stopped for ${(stoppedMs / 1000).toFixed(1)} s.`);
+    }
     if (staleReplacement) {
       const warning = `Warning: Replaced stale Gateway PID ${staleReplacement.pid ?? "unknown"} through its service manager; verified ${staleReplacement.version} build ${staleReplacement.buildId} after Doctor maintenance.`;
       warn(warning);
@@ -585,10 +590,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                       });
                     }
                     if (stopped?.stopped) {
+                      stoppedAtMs = performance.now();
                       params.runtime.log("Stopped the managed Gateway for Doctor repair.");
                       // Forced termination cannot run our restoration finalizer.
                       params.runtime.log(
-                        `Doctor restores the managed Gateway after repairs settle. If forcibly terminated: ${formatDoctorRecoveryHint(stopped.serviceEnv ?? env)}`,
+                        `Its repairs write state the running Gateway also writes; Doctor restores the managed Gateway after repairs settle. If forcibly terminated: ${formatDoctorRecoveryHint(stopped.serviceEnv ?? env)}`,
                       );
                     }
                     await admitRepair();
