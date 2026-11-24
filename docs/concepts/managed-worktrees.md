@@ -55,8 +55,10 @@ OpenClaw does not sweep arbitrary host temp entries based on their names.
 Branch pickers display the last recorded local refs while discovery refreshes in
 background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
-from a remote or scans checkout contents. Ref changes invalidate the suggestions,
-and session creation validates the selected base before changing a checkout.
+from a remote or scans checkout contents. Ref changes and Git initialization in
+the selected folder or an intermediate parent invalidate the suggestions, so a
+new nested repository supplies its own branches. Session creation validates the
+selected base before changing a checkout.
 Failed or non-Git discovery becomes eligible for another user-requested read after
 five seconds of elapsed time, even if the system wall clock moves backward.
 
