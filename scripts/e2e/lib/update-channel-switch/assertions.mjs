@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { readJson } from "../fixtures/common.mjs";
@@ -9,7 +10,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-beta-registry|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
 }
@@ -163,8 +164,54 @@ function prepareGitFixture(root) {
   writeControlUi(root);
 }
 
-function assertUpdate(channel) {
+async function assertBetaRegistry(tarball, root) {
+  const view = JSON.parse(fs.readFileSync(0, "utf8"));
+  // npm 12 emits an array; older npm emits a single manifest for an exact selector.
+  assert(!Array.isArray(view) || view.length === 1, "beta registry did not return one manifest");
+  const metadata = Array.isArray(view) ? view[0] : view;
+  const installed = readJson(path.join(root, "package.json"));
+  assert.equal(metadata.name, "openclaw");
+  assert.equal(metadata.version, installed.version, "beta fixture selected the wrong version");
+  assert.deepEqual(metadata.openclaw?.schemaVersions, installed.openclaw?.schemaVersions);
+  assert.equal(
+    new URL(metadata.dist.tarball).origin,
+    new URL(process.env.NPM_CONFIG_REGISTRY).origin,
+  );
+  const hash = createHash("sha512");
+  for await (const chunk of fs.createReadStream(tarball)) {
+    hash.update(chunk);
+  }
+  assert.equal(
+    metadata.dist.integrity,
+    `sha512-${hash.digest("base64")}`,
+    "beta tarball digest changed",
+  );
+}
+
+function assertUpdate(channel, expectedVersion) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  if (channel === "beta" && Object.hasOwn(payload, "phase")) {
+    // This fixture starts on the candidate package, with stable stored in config.
+    // The beta selector changes the channel, not the already-current package bytes.
+    assert(expectedVersion);
+    assert.equal(payload.phase, "finished");
+    assert.equal(payload.status, "skipped");
+    assert.equal(payload.reason, "already-current");
+    assert.equal(payload.before?.version, expectedVersion);
+    assert.equal(payload.target?.kind, "package");
+    assert.equal(payload.target.version, expectedVersion);
+    assert.deepEqual(
+      payload.steps.map(({ step, status }) => ({ step, status })),
+      [
+        { step: "requested", status: "completed" },
+        { step: "staging", status: "skipped" },
+        { step: "plugins", status: "completed" },
+      ],
+    );
+    assert.deepEqual(payload.repair, []);
+    assert(!payload.origin.nextAction, "beta channel switch requested repair");
+    return;
+  }
   if (payload.status !== "ok") {
     throw new Error(`expected ${channel} update status ok, got ${payload.status}`);
   }
@@ -268,6 +315,7 @@ const commands = {
   "prepare-git-fixture": (root = "/tmp/openclaw-git") => prepareGitFixture(root),
   "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
   "assert-update": assertUpdate,
+  "assert-beta-registry": assertBetaRegistry,
   "assert-main-refusal": assertMainRefusal,
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
@@ -280,4 +328,4 @@ const commands = {
 if (!Object.hasOwn(commands, command)) {
   usage();
 }
-commands[command](...args);
+await commands[command](...args);

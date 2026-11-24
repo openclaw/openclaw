@@ -161,15 +161,20 @@ UPDATE_JSON="$main_json" node scripts/e2e/lib/update-channel-switch/assertions.m
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
 
 echo "==> package stable -> package beta channel"
+npm view openclaw@beta --json | node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-beta-registry "$package_tgz" /tmp/npm-prefix/lib/node_modules/openclaw
 set +e
-beta_json="$(openclaw update --channel beta --yes --json --no-restart)"
+# Both halves of the guarded loopback seam must be present. The release updater
+# packs the bare override, so npm must use beta rather than its default latest.
+beta_json="$(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw npm_config_tag=beta NPM_CONFIG_TAG=beta \
+  openclaw update --channel beta --yes --json --no-restart)"
 beta_status=$?
 set -e
 printf "%s\n" "$beta_json"
 if [ "$beta_status" -ne 0 ]; then
   exit "$beta_status"
 fi
-UPDATE_JSON="$beta_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update beta
+UPDATE_JSON="$beta_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update beta "$package_version"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel beta
 node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-installed-version \

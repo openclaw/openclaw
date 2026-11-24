@@ -1,4 +1,5 @@
 import { execFileSync, execSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -14,6 +15,89 @@ import { fixtureFiles } from "./script-fixture-files.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const assertionScript = "scripts/e2e/lib/update-channel-switch/assertions.mjs";
+
+it("binds the beta selector to the loopback candidate metadata and exact tarball", () => {
+  const { file, write, json } = fixtureFiles(tempDirs.make("update-channel-beta-target-"));
+  const registry = "http://127.0.0.1:12345";
+  const version = "2026.11.15-beta.1";
+  const schemaVersions = { state: 41, agent: 24 };
+  const bytes = "synthetic candidate archive bytes";
+  json("package.json", { version, openclaw: { schemaVersions } });
+  write("candidate.tgz", bytes);
+  const manifest = {
+    name: "openclaw",
+    version,
+    openclaw: { schemaVersions },
+    dist: {
+      tarball: `${registry}/openclaw/-/candidate.tgz`,
+      integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+    },
+  };
+  const check = (metadata: typeof manifest | (typeof manifest)[]) =>
+    spawnSync(
+      testNodeExecPath,
+      [assertionScript, "assert-beta-registry", file("candidate.tgz"), file(".")],
+      {
+        encoding: "utf8",
+        env: { ...process.env, NPM_CONFIG_REGISTRY: registry },
+        input: JSON.stringify(metadata),
+      },
+    );
+  const selected = check(manifest);
+  expect(selected.status, selected.stderr).toBe(0);
+  const selectedNpm12 = check([manifest]);
+  expect(selectedNpm12.status, selectedNpm12.stderr).toBe(0);
+  expect(check([manifest, manifest]).status).toBe(1);
+  expect(
+    check({ ...manifest, openclaw: { schemaVersions: { ...schemaVersions, state: 40 } } }).status,
+  ).toBe(1);
+  expect(check({ ...manifest, dist: { ...manifest.dist, integrity: "sha512-wrong" } }).status).toBe(
+    1,
+  );
+  expect(
+    check({
+      ...manifest,
+      dist: { ...manifest.dist, tarball: "https://registry.npmjs.org/candidate.tgz" },
+    }).status,
+  ).toBe(1);
+});
+
+it.each([
+  { name: "already-current", patch: {}, status: 0 },
+  { name: "pending activation", patch: { phase: "activating", status: "running" }, status: 1 },
+  {
+    name: "different version",
+    patch: { target: { kind: "package", version: "2026.11.10-beta.3" } },
+    status: 1,
+  },
+  {
+    name: "failed maintenance",
+    patch: { steps: [{ step: "plugins", status: "failed" }] },
+    status: 1,
+  },
+])("checks the native beta channel receipt: $name", ({ patch, status }) => {
+  const version = "2026.11.15-beta.1";
+  const receipt = {
+    phase: "finished",
+    status: "skipped",
+    reason: "already-current",
+    before: { version },
+    target: { kind: "package", version },
+    repair: [],
+    origin: {},
+    steps: [
+      { step: "requested", status: "completed" },
+      { step: "staging", status: "skipped" },
+      { step: "plugins", status: "completed" },
+    ],
+    ...patch,
+  };
+  const result = spawnSync(testNodeExecPath, [assertionScript, "assert-update", "beta", version], {
+    encoding: "utf8",
+    env: { ...process.env, UPDATE_JSON: JSON.stringify(receipt) },
+  });
+  expect(result.status, result.stderr).toBe(status);
+});
 
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
