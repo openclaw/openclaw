@@ -171,18 +171,15 @@ without a pending schema migration do not add these restrictions.
 Startup migrates and validates private copies before publishing their durable
 file-swap plan or PostgreSQL anchors. Every inventoried SQLite store is a required
 copy, including a current-schema agent store that Doctor may access while another
-store upgrades. PostgreSQL preparation counts each namespace's table storage,
-indexes and TOAST once, and estimates 90 seconds/GiB, with at most 600 seconds for
-the protected copy. Original PostgreSQL schema and rows remain unchanged.
+store upgrades. PostgreSQL uses a private server-side copy. Original PostgreSQL
+schema and rows remain unchanged. Store size is not an update-admission rule.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
 
-An over-budget estimate refuses before the old Gateway stops; it never selects
-in-place migration inside a release trial. The refusal names the reason and the
-[manual migration procedure](#large-store-updates). A failed private preparation
-uses the existing configuration refusal (exit 78). There is no portable-export
-fallback; restore missing copy privileges or namespace ownership before retrying.
+A failed private preparation uses the existing configuration refusal (exit 78).
+There is no portable-export or in-place trial fallback; restore missing copy
+privileges or namespace ownership before retrying.
 
 A trial started by an older preparer repeats admission before migration. A refused
 trial exits 78 and the launcher restores the previous release. Ordinary non-trial
@@ -197,42 +194,14 @@ verified-owned namespaces; a failed drop retains the recovery pair and reports
 a warning without failing a serving release. These recovery copies are not an
 off-server backup.
 
-### Large-store updates
+### Uncovered database paths
 
-A size refusal leaves the old Gateway serving. Freeing local disk space fixes a
-space refusal, not a migration-time estimate. For an external store, move it into
-the named recovery boundary and update its agent configuration and registration.
-
-SQLite preparation is estimated at 13 MB/s of database and journal bytes,
-conservatively rounded down from the **whole-chain** measured rate. A
-1,077,460,992-byte SQLite fixture with 1,000 sessions and 107,520 transcript
-messages completed the real Doctor chain in 78.100 seconds on Linux x64,
-Node 24.22.1. No startup-time subtraction or optimistic incremental extrapolation
-is used. The estimate reserves ten minutes of the twenty-minute trial for Gateway
-startup and adds PostgreSQL's copy estimate for mixed stores. It is an admission
-estimate, not a completion guarantee.
-
-If the stores cannot fit the trial budget, use an explicit maintenance window.
-For an npm install, keep a verified full backup and the previous package, then:
-
-```bash
-openclaw backup create
-openclaw backup verify <backup-archive>
-openclaw gateway stop
-npm install -g openclaw@<target-version>
-openclaw doctor --fix
-openclaw gateway restart
-```
-
-Replace `<target-version>` with the exact release you intended to install. Run
-Doctor from the newly installed package while the Gateway is stopped; do not
-restart if Doctor fails. A package reinstall replaces the forwarding marker, so
-this Doctor uses the new package, not the old selected release. The subsequent
-restart can adopt it without a pending schema migration. This is an operator-led
-migration, not an automatically reversible release trial. If it fails, retain the
-stopped state and use [backup recovery](/install/updating/rollback-and-recovery)
-with the matching previous package. Other install methods use their documented
-manual package replacement instead of `npm install`.
+An uncovered-path refusal leaves the old Gateway serving. Before moving a SQLite
+database, create and verify a full backup, stop the Gateway, then move its complete
+database family into the named recovery layout and update its registration and
+agent-directory configuration. Do not move an open database or separate its WAL
+from its main file. Restart the old Gateway and verify readiness before retrying
+the update.
 
 Before a startup migration replaces a SQLite database, the swap owner drains its
 readers and retires the retained admission descriptors for both the live database

@@ -10,7 +10,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-schema-versions.js";
-import { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { preflightStateUpgrade } from "./state-upgrade-databases.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
@@ -25,7 +25,7 @@ it.each([
   { gib: 6, trial: true },
   { gib: 7, trial: true },
   { gib: 7, trial: false },
-])("protects or refuses $gib GiB only inside a release trial ($trial)", async ({ gib, trial }) => {
+])("protects $gib GiB without size admission (trial: $trial)", async ({ gib, trial }) => {
   const root = dirs.make("state-upgrade-pg-size-");
   const statePath = path.join(root, "state", "openclaw.sqlite");
   const agentPath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -58,11 +58,7 @@ it.each([
     retainedAgentIds: [],
     registeredAgentDatabases: [],
   });
-  vi.spyOn(backup, "preflightPostgresUpgrade").mockImplementation(async () => {
-    if (gib === 7) {
-      throw new Error("This role cannot CREATE protected copies");
-    }
-  });
+  vi.spyOn(backup, "preflightPostgresUpgrade").mockResolvedValue(undefined);
   vi.spyOn(backup, "clonePostgresUpgrade").mockImplementation(async (source, anchor) => {
     fs.copyFileSync(source, anchor);
     using db = new DatabaseSync(anchor);
@@ -71,11 +67,7 @@ it.each([
   });
   vi.spyOn(backup, "validatePostgresUpgrade").mockResolvedValue(undefined);
   const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
-  if (gib === 7) {
-    await expect(preflightStateUpgrade(env, {})).rejects.toThrow(
-      /PostgreSQL copy estimate.*manual migration/is,
-    );
-  }
+  await preflightStateUpgrade(env, {});
   if (trial) {
     await createTrialPending(
       {
@@ -102,25 +94,6 @@ it.each([
       return { warnings: [] };
     },
   });
-  if (gib === 7) {
-    expect(result).toMatchObject(
-      trial
-        ? { status: "refused", reason: expect.stringContaining("PostgreSQL copy estimate") }
-        : { status: "current" },
-    );
-    expect(fs.readFileSync(statePath)).toEqual(original);
-    expect(readBackupEngine(agentPath)).toMatchObject({ namespace: "original_agent" });
-    expect(backup.clonePostgresUpgrade).not.toHaveBeenCalled();
-    if (!trial) {
-      openOpenClawStateDatabase({ env });
-      await closeOpenClawStateDatabaseAsync();
-      using migrated = new DatabaseSync(statePath, { readOnly: true });
-      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-    }
-    return;
-  }
   expect(result).toMatchObject({ status: "upgraded", mode: "chain", pinned: false });
   expect(readBackupEngine(agentPath)).toMatchObject({ namespace: "private_agent" });
   using state = new DatabaseSync(statePath, { readOnly: true });

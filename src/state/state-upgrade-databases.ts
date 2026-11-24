@@ -15,6 +15,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
@@ -23,7 +24,6 @@ import {
   type PluginMetadataStateRow,
 } from "../plugins/plugin-metadata-state.kernel.js";
 import { inspectPostgresUpgrade, preflightPostgresUpgrade } from "../snapshot/database-backup.js";
-import { TRIAL_BUDGET_MS } from "../update/launcher.js";
 import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
 import {
   isArtifactPreservingStateRead,
@@ -47,9 +47,6 @@ const UNRESTORABLE_DIRECTORIES: Record<string, true> = {
   tmp: true,
   logs: true,
 };
-// Real 1,077,460,992-byte Doctor chain: 78,100 ms; round its whole-chain rate down.
-// Qualification details: docs/install/updating.md#large-store-updates.
-const SQLITE_UPGRADE_BYTES_PER_MS = 13_000;
 
 export type DatabaseTarget = {
   kind: "state" | "agent";
@@ -117,8 +114,7 @@ export async function discoverDatabases(
         `Cannot inspect database ${pathname}. Run openclaw doctor with the current version before retrying the update.`,
       );
     }
-    const inspect = (readable: string) => {
-      using db = openNodeSqliteDatabase(readable, { readOnly: true });
+    const inspect = (db: DatabaseSync) => {
       return {
         engine: readEngineAnchorIdentity(db, pathname).engine,
         version: readVersion(db, kind),
@@ -137,16 +133,28 @@ export async function discoverDatabases(
     };
     let image;
     if (isArtifactPreservingStateRead()) {
-      const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+      // check-release is already an isolated reader, not the serving Gateway.
+      const bounded = tryInspectSqliteReadOnlyInProcess(pathname, inspect, {
         preserveSourceArtifacts: true,
       });
-      try {
-        image = inspect(prepared.location);
-      } finally {
-        await prepared.cleanupAsync();
+      if (bounded) {
+        image = bounded.value;
+      } else {
+        const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+          preserveSourceArtifacts: true,
+        });
+        try {
+          using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+          image = inspect(db);
+        } finally {
+          await prepared.cleanupAsync();
+        }
       }
     } else {
-      image = withRecoveredSource(pathname, inspect);
+      image = withRecoveredSource(pathname, (readable) => {
+        using db = openNodeSqliteDatabase(readable, { readOnly: true });
+        return inspect(db);
+      });
     }
     if (image.state) {
       metadataRows = image.state.metadataRows;
@@ -308,8 +316,6 @@ export function stateUpgradeRefusal(
   }
   const realStateDir = fs.realpathSync(stateDir);
   const device = fs.statSync(stateDir).dev;
-  const namespaces = new Map<string, number>();
-  let sqliteBytes = 0;
   for (const target of targets) {
     const relative = path.relative(stateDir, target.path);
     const parts = relative.split(path.sep);
@@ -329,25 +335,6 @@ export function stateUpgradeRefusal(
     ) {
       return `The release trial cannot restore database ${target.path}. Move it to a real directory inside ${stateDir}, at most four directories deep and outside git-install, npm, node_modules, tmp and logs. For an agent use agents/<agent-id>/agent/openclaw-agent.sqlite, without backup or companion suffixes, and update its registration/configuration. Replace symlinked or separately mounted directories with local directories before retrying openclaw update.`;
     }
-    if (target.postgres) {
-      namespaces.set(target.postgres.namespace, target.postgres.physicalBytes);
-    } else {
-      sqliteBytes += stat?.size ?? 0;
-      for (const suffix of ["-wal", "-journal"]) {
-        sqliteBytes += fs.statSync(`${target.path}${suffix}`, { throwIfNoEntry: false })?.size ?? 0;
-      }
-    }
-  }
-  let bytes = 0;
-  for (const size of namespaces.values()) {
-    bytes += size;
-  }
-  const gib = bytes / 1024 ** 3;
-  const estimateMs =
-    gib * 90_000 + (sqliteBytes > 0 ? sqliteBytes / SQLITE_UPGRADE_BYTES_PER_MS : 0);
-  // The launcher retains ten minutes for post-migration startup.
-  if (estimateMs > TRIAL_BUDGET_MS / 2) {
-    return `The ${gib > 0 ? "PostgreSQL copy" : "SQLite upgrade"} estimate (${gib.toFixed(2)} GiB PostgreSQL, ${(sqliteBytes / 1024 ** 3).toFixed(2)} GiB SQLite; ${Math.ceil(estimateMs / 60_000)} minutes) exceeds the release-trial migration budget. Follow the manual migration steps at https://docs.openclaw.ai/install/updating#large-store-updates before retrying.`;
   }
   return undefined;
 }

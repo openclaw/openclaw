@@ -35,7 +35,7 @@ manual qualification can run all three majors. See the
 | CLI and interactive setup/onboard                 | Supported                               | Includes one-shot commands and Doctor; PostgreSQL `onboard --reset` deliberately refuses.                                                                                                                                      |
 | Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                                                            |
 | Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                                                           |
-| Update admission, forward migrations and recovery | Supported                               | Release trials protect stores estimated to copy within ten minutes; larger stores refuse before the old Gateway stops and name the manual migration procedure. Legacy capture/restore has separate generation checks.          |
+| Update admission, forward migrations and recovery | Supported                               | Release trials use protected server-side copies, with no size refusal or in-place trial fallback. Legacy capture/restore has separate generation checks.                                                                       |
 | Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. See [evidence and service/turn limits](#published-stable-upgrade-qualification).                                    |
 | Published stable 2026.11.5 PostgreSQL upgrade     | Linux CI coverage                       | Linux CI upgrades both PostgreSQL 17 stores then checks that the candidate foreground Gateway can read the original session and transcript. See [the qualification scope and limits](#published-stable-upgrade-qualification). |
 | Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                                                        |
@@ -1046,10 +1046,9 @@ matching server store's version without migrating it. An older server schema can
 therefore reach the stopped-writer migration phase; a newer schema or mismatched
 anchor identity still refuses the update.
 
-While the previous Gateway still serves, preparation totals physical storage for
-the PostgreSQL namespaces that would be cloned, including indexes and TOAST once.
-At the measured estimate of 90 seconds/GiB, a total of at most 600 seconds
-(about 6.67 GiB) selects a **private server-side copy**:
+Preparation checks the PostgreSQL copy prerequisites while the previous Gateway
+serves. A schema-changing update uses a **private server-side copy**, without a
+size-based admission rule:
 
 1. After the previous Gateway and other writers stop, the candidate copies each
    affected PostgreSQL store into a fresh private namespace. Required SQLite
@@ -1074,12 +1073,9 @@ through the existing configuration-refusal exit (78) and names the obstruction.
 Restore missing copy privileges or namespace ownership before retrying; see
 [runtime role requirements](#provision-a-database-and-runtime-role).
 
-An estimate above 600 seconds **refuses the release update before the old Gateway
-stops**. No release trial migrates PostgreSQL in place. The refusal includes the
-size and points to [large-store updates](/install/updating#large-store-updates).
-Use that verified-backup and manual maintenance procedure if the protected copy
-cannot fit. An ordinary non-trial Gateway start still uses its normal migration
-owner; store size does not strand a manually installed Gateway.
+Store size does not refuse the release update and never selects an in-place
+trial path. An ordinary non-trial Gateway start still uses its normal migration
+owner.
 
 The copy preserves and verifies schema, table, column, and sequence grants,
 including grant options and schema-specific default privileges. Existing reader,

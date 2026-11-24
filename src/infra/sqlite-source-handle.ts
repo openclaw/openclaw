@@ -1,7 +1,11 @@
 // Native source readers run in an isolated child or an already-drained owner.
 import type { DatabaseSync } from "node:sqlite";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
-import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  resolveImmutableSqliteFileUri,
+  resolveReadOnlyShmSqliteFileUri,
+} from "./node-sqlite.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 
 // A failed native close remains owned until the reader process exits.
@@ -12,12 +16,16 @@ export function withSqliteSourceReadDatabase<T>(
   pathname: string,
   inspectionOperation: "source" | "snapshot",
   operation: (database: DatabaseSync) => T,
-  options: { timeout?: number; readOnlyShm?: boolean } = {},
+  options: { timeout?: number; view?: "readonly-shm" | "immutable" } = {},
 ): T {
   assertStateDatabaseAccessAllowed(pathname);
   const database = withSqliteInspectionOperation(inspectionOperation, () =>
     openNodeSqliteDatabase(
-      options.readOnlyShm ? resolveReadOnlyShmSqliteFileUri(pathname) : pathname,
+      options.view === "immutable"
+        ? resolveImmutableSqliteFileUri(pathname)
+        : options.view === "readonly-shm"
+          ? resolveReadOnlyShmSqliteFileUri(pathname)
+          : pathname,
       { readOnly: true, timeout: options.timeout },
     ),
   );
