@@ -73,6 +73,12 @@ it("keeps pending admissions through capacity pressure and recovers their origin
       { assertCurrent() {} },
     );
     const store = new A2aTaskStore(terminal, pending);
+    const oversized = store.create("ctx", "alice", "m".repeat(1_048_576));
+    await expect(store.start(oversized.id)).rejects.toMatchObject({
+      code: -32602,
+      message: expect.stringContaining("shorter message or context ID"),
+    });
+    expect(store.get(oversized.id, "alice")).toBeUndefined();
     const first = store.create("ctx", "alice", "first");
     await store.start(first.id);
     const refused = store.create("ctx", "alice", "next");
