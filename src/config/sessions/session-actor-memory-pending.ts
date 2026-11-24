@@ -25,6 +25,7 @@ import {
   resolvePendingInputHistoryLimit,
   selectPendingInputHistoryPage,
   parseSessionPendingInputMessage,
+  restagePendingInputMessageJson,
 } from "./session-pending-input-value.js";
 import type {
   SessionInputCompletion,
@@ -260,6 +261,8 @@ export function createSessionActorMemoryPending(
           ? {
               ...row,
               state: "queued",
+              // Like the SQL kernel: an adopted or folded owed row takes the new bytes.
+              message_json: restagePendingInputMessageJson(row.message_json, input.messageJson),
               run_id: input.runId,
               lifecycle_generation: input.lifecycleGeneration,
               end_cause: null,
