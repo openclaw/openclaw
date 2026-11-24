@@ -35,48 +35,49 @@ const persistedFailure = (runId: string, seq: number) => ({
   openclawRunError: { runId, summary },
 });
 
+const billingError = { message: "Upgrade your plan", actionUrl: "https://example.com/plans" };
 const billingCause = {
   provider: "google",
   failoverReason: "billing",
-  billingError: { message: "Upgrade your plan", actionUrl: "https://example.com/plans" },
+  billingError,
 } satisfies RunFailureCause;
 
 it.each([
   ["provider", { ...billingCause, provider: "other-provider" }],
-  ["reason", { ...billingCause, failoverReason: "auth" }],
+  [
+    "reason",
+    { provider: "google", failoverReason: "auth" },
+    { provider: "google", failoverReason: "rate_limit" },
+  ],
   [
     "billing message",
-    { ...billingCause, billingError: { ...billingCause.billingError, message: "Add credits" } },
+    { ...billingCause, billingError: { ...billingError, message: "Add credits" } },
   ],
   [
     "action URL",
     {
       ...billingCause,
-      billingError: { ...billingCause.billingError, actionUrl: "https://example.com/credits" },
+      billingError: { ...billingError, actionUrl: "https://example.com/credits" },
     },
   ],
   ["missing action URL", { ...billingCause, billingError: { message: "Upgrade your plan" } }],
   ["missing billing details", { provider: "google", failoverReason: "billing" }],
   ["harness update action", { ...billingCause, code: HARNESS_UPDATE_REQUIRED_CODE }],
   ["missing cause", undefined],
-] satisfies Array<[string, RunFailureCause | undefined]>)(
+] satisfies Array<[string, RunFailureCause | undefined, RunFailureCause?]>)(
   "preserves distinct recovery notices in the chat projection: %s",
-  (_reason, cause) => {
+  (_reason, cause, firstCause = billingCause) => {
     const errors = [
-      { runId: "first", summary, cause: billingCause },
-      { runId: "latest", summary, cause },
+      { runId: "first", summary, cause: firstCause },
+      { runId: "latest", summary, ...(cause ? { cause } : {}) },
     ];
-    const notices = buildChatItems(
-      createProps({
-        messages: errors.map((openclawRunError, index) => ({
-          ...persistedFailure(openclawRunError.runId, index + 1),
-          openclawRunError,
-        })),
-      }),
-    ).filter((item) => item.kind === "notice" && item.runError);
-    expect(notices).toHaveLength(2);
-    expect(notices[0]).toMatchObject({ runError: errors[0] });
-    expect(notices[1]).toMatchObject({ runError: { runId: "latest" } });
+    const notices = buildItems({
+      messages: errors.map((openclawRunError, index) => ({
+        ...persistedFailure(openclawRunError.runId, index + 1),
+        openclawRunError,
+      })),
+    }).filter((item) => item.kind === "notice" && item.runError);
+    expect(notices).toMatchObject(errors.map((runError) => ({ runError })));
     for (const notice of notices) {
       expect(notice).not.toHaveProperty("repeatCount");
     }

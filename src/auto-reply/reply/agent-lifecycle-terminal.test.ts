@@ -54,19 +54,16 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       actionUrl: "https://example.com/plans",
     };
     const attempts: FallbackAttempt[] = [];
-    let lastError: FailoverError | undefined;
-    for (const [provider, model, reason, guidance] of [
-      ["paid-provider", "model-a", "billing", billingError],
-      ["other-provider", "model-b", "timeout", undefined],
-    ] as const) {
-      lastError = new FailoverError("provider diagnostic", {
-        provider,
-        model,
-        reason,
-        billingError: guidance,
-      });
-      appendFailedCandidateAttempt({ attempts, candidate: { provider, model }, error: lastError });
-    }
+    const paid = { provider: "paid-provider", model: "model-a" };
+    const other = { provider: "other-provider", model: "model-b" };
+    const firstError = new FailoverError("provider diagnostic", {
+      ...paid,
+      reason: "billing",
+      billingError,
+    });
+    const lastError = new FailoverError("provider diagnostic", { ...other, reason: "timeout" });
+    appendFailedCandidateAttempt({ attempts, candidate: paid, error: firstError });
+    appendFailedCandidateAttempt({ attempts, candidate: other, error: lastError });
     let aggregate: unknown;
     try {
       throwFallbackFailureSummary({
@@ -80,13 +77,11 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       aggregate = error;
     }
     expect(aggregate).toMatchObject({ reason: "timeout" });
-    const terminal = createTerminal();
-    terminal.emit("error", aggregate);
+    createTerminal().emit("error", aggregate);
     expect(emitted().data).toMatchObject({
       error: billingError.message,
       errorObservation: {
-        provider: "paid-provider",
-        model: "model-a",
+        ...paid,
         failoverReason: "billing",
         billingError,
       },

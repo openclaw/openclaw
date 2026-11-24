@@ -18,7 +18,8 @@ type CliResumeAttempt = {
 };
 
 type CliExitFailoverErrorParams = {
-  context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">;
+  context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane"> &
+    Pick<NonNullable<Parameters<typeof coerceToFailoverError>[1]>, "providerOwner">;
   candidates: readonly string[];
   retryEmptyFailure: boolean;
   resumeAtArg?: string;
@@ -30,7 +31,7 @@ export function createCliFailoverError(
   message: string,
   reason: FailoverError["reason"],
   context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
-  options?: Pick<FailoverError, "cause" | "cliTimeout" | "code" | "timeout">,
+  options?: Pick<FailoverError, "cause" | "cliTimeout" | "code" | "timeout" | "billingError">,
 ): FailoverError {
   return new FailoverError(message, {
     reason,
@@ -129,5 +130,8 @@ export function createCliExitFailoverError(params: CliExitFailoverErrorParams): 
       : candidates.length === 0 && params.retryEmptyFailure
         ? "cli_unknown_empty_failure"
         : params.classifyErrorCode?.(message);
-  return createCliFailoverError(message, reason, params.context, { code });
+  return createCliFailoverError(message, reason, params.context, {
+    code,
+    billingError: classified?.billingError,
+  });
 }

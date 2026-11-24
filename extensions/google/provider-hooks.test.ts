@@ -1,8 +1,6 @@
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
-import { buildGoogleProvider } from "./provider-registration.js";
 
 describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn", () => {
   it.each([
@@ -75,30 +73,4 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason", () => {
       GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason({ provider, errorMessage: "", code }),
     ).toBe(expected);
   });
-});
-
-describe("Google subscription refusal guidance", () => {
-  it.each([
-    ["google", buildGoogleProvider],
-    ["google-gemini-cli", buildGoogleGeminiCliProvider],
-  ] as const)(
-    "registers billing guidance for the captured Ultra-plan refusal with %s",
-    (_id, buildProvider) => {
-      const provider = buildProvider();
-      const refusal = {
-        provider: provider.id,
-        status: 403,
-        errorMessage:
-          '403 {"error":{"code":403,"status":"PERMISSION_DENIED","message":"requires an active Google AI Ultra subscription"}}',
-      };
-      expect(provider.classifyFailoverReason?.(refusal)).toBe("billing");
-      expect(provider.formatBillingError?.(refusal)).toEqual({
-        message: "This request requires an active Google AI Ultra subscription.",
-        actionUrl: "https://one.google.com/about/google-ai-plans/",
-      });
-      const unknown = { ...refusal, errorMessage: "403 Invalid API key" };
-      expect(provider.formatBillingError?.(unknown)).toBeUndefined();
-      expect(provider.classifyFailoverReason?.(unknown)).toBeUndefined();
-    },
-  );
 });

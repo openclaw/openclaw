@@ -236,6 +236,7 @@ async function runPreparedCliAgentOwned(
   let executePreparedCliRun: typeof import("./cli-runner/execute.runtime.js").executePreparedCliRun;
   const { params } = context;
   const cliFailoverContext = {
+    providerOwner: context.providerOwner ?? null,
     provider: params.provider,
     model: context.modelId,
     sessionId: params.sessionId,

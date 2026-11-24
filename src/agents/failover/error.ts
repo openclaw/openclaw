@@ -12,7 +12,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.types.js";
 import { isProviderRequestSizeCeilingError, isTimeoutErrorMessage } from "./message-patterns.js";
-import { extractFailoverSignalDetails } from "./signal-details.js";
+import { extractFailoverSignalDetails, MAX_FAILOVER_DETAIL_CANDIDATES } from "./signal-details.js";
 import type { FailoverReason, FailoverSignal } from "./signal.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -330,6 +330,20 @@ export function normalizeErrorSignal(
     scope === "direct" ? reader(err) : findErrorProperty(err, reader);
   const message = read(readDirectErrorMessage);
   const code = read(readDirectErrorCode);
+  let remainingCauses = MAX_FAILOVER_DETAIL_CANDIDATES;
+  const causes =
+    scope === "nested"
+      ? collectErrorGraphCandidates(err, (candidate) => {
+          if (remainingCauses === 0) {
+            return [];
+          }
+          const next = [candidate.error, candidate.cause]
+            .filter((value) => value != null)
+            .slice(0, remainingCauses);
+          remainingCauses -= next.length;
+          return next;
+        }).slice(1)
+      : [];
   return {
     status: normalizeFailoverStatus(read(readDirectStatusCode), code),
     code,
@@ -337,15 +351,10 @@ export function normalizeErrorSignal(
     message: message || undefined,
     provider: read(readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
-    providerCauseDetails:
-      scope === "nested"
-        ? extractFailoverSignalDetails(
-            ...collectErrorGraphCandidates(err, (candidate) => [candidate.error, candidate.cause])
-              .slice(1)
-              .flatMap((candidate) =>
-                [readDirectErrorMessage(candidate)].concat(readDirectErrorDetails(candidate) ?? []),
-              ),
-          )
-        : undefined,
+    providerCauseDetails: extractFailoverSignalDetails(
+      ...causes.flatMap((candidate) =>
+        [readDirectErrorMessage(candidate)].concat(readDirectErrorDetails(candidate) ?? []),
+      ),
+    ),
   };
 }

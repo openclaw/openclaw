@@ -30,6 +30,7 @@ import type {
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   isSubagentSessionKey,
@@ -537,6 +538,13 @@ async function prepareCliRunContextWithinReadFence(
     normalizeOptionalString(params.modelProvider) ??
     normalizeOptionalString(params.provider) ??
     params.provider;
+  const providerOwner =
+    resolveProviderRuntimePluginHandle({
+      provider: modelProvider,
+      modelId,
+      config: runConfig,
+      workspaceDir,
+    }).plugin ?? null;
   const normalizedCatalogModel = normalizeCliModel(modelId, backendResolved.config);
   const normalizedModel =
     backendResolved.resolveModelId?.({
@@ -1553,6 +1561,7 @@ async function prepareCliRunContextWithinReadFence(
       workspaceDir,
       cwd,
       backendResolved,
+      providerOwner,
       hostOwnedTools,
       ...(turnAudience.memoryAudience ? { memoryAudience: turnAudience.memoryAudience } : {}),
       preparedBackend: preparedBackendFinal,

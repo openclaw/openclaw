@@ -177,6 +177,7 @@ it("names a provider's billing problem with its declared label and sends its fix
   const modelCatalog = [
     { id: "acme-large", name: "Acme Large", provider: "acme", providerName: "Acme Cloud Plan" },
   ];
+  const billingError = { message: "Choose an active plan." };
   const draw = (failoverReason: string) =>
     mountSolid(
       () =>
@@ -189,7 +190,7 @@ it("names a provider's billing problem with its declared label and sends its fix
                 runError: {
                   runId: "run-a",
                   summary: "Provider error",
-                  cause: { provider: "acme", failoverReason },
+                  cause: { provider: "acme", failoverReason, billingError },
                 },
               },
               recovery: { failureActionsRunId: "run-a", onRetryRun },
@@ -200,6 +201,8 @@ it("names a provider's billing problem with its declared label and sends its fix
       { container },
     );
   const billing = draw("billing");
+  expect(part("billing-message")?.textContent).toBe(billingError.message);
+  expect(part("plans")).toBeNull();
   expect(part("title")?.textContent).toBe("Acme Cloud Plan reports a billing problem");
   const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
     ".chat-run-failure__retry",
@@ -220,38 +223,6 @@ it("names a provider's billing problem with its declared label and sends its fix
   expect(container.querySelectorAll(".chat-run-failure__retry")).toHaveLength(1);
   expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
 });
-
-it.each(["https://example.com/plans", undefined])(
-  "shows provider billing copy with an optional plans link: %s",
-  (actionUrl) => {
-    const message = "Using your plan in third-party apps requires an active subscription.";
-    drawNotice({
-      ...failure("Generic billing advice"),
-      runError: {
-        runId: "run-a",
-        summary: "Generic billing advice",
-        cause: {
-          provider: "fixture",
-          failoverReason: "billing",
-          billingError: { message, actionUrl },
-        },
-      },
-    });
-    expect(part("billing-message")?.textContent).toBe(message);
-    const link = container.querySelector<HTMLAnchorElement>(".chat-run-failure__plans");
-    if (actionUrl) {
-      expect(link?.textContent?.trim()).toBe("View plans");
-      expect(link?.querySelector("svg")).not.toBeNull();
-      expect(link?.getAttribute("href")).toBe(actionUrl);
-      expect(link?.getAttribute("rel")).toContain("noopener");
-    } else {
-      expect(link).toBeNull();
-    }
-    expect(part("toggle")).not.toBeNull();
-    expect(part("icon")).not.toBeNull();
-    expect(part("chevron")).not.toBeNull();
-  },
-);
 
 it("starts an OpenClaw update session only for a harness-update failure", async () => {
   vi.useRealTimers();

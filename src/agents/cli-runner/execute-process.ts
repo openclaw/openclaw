@@ -25,8 +25,7 @@ import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { formatCliOutputError, parseCliOutput } from "../cli-output.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "../embedded-agent-runner/run/lane-runtime.js";
-import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
-import { classifyFailoverReason } from "../failover/classify.js";
+import { coerceToFailoverError, FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
@@ -89,6 +88,7 @@ export async function executeCliProcess(params: {
   const context = params.context;
   const runParams = context.params;
   const failoverContext = {
+    providerOwner: context.providerOwner ?? null,
     provider: runParams.provider,
     model: context.modelId,
     sessionId: runParams.sessionId,
@@ -136,13 +136,14 @@ export async function executeCliProcess(params: {
       sessionId: outputErrorContext.sessionId,
     });
     const terminalFailure = output.terminalFailure?.reason;
+    const classified = terminalFailure ? null : coerceToFailoverError(message, failoverContext);
     // Record terminal facts before provider hooks can throw or reclassify them;
     // losing a max-turn stop here could replay tools in another model attempt.
     const reason = terminalFailure
       ? terminalFailure === "synthetic_no_response"
         ? "format"
         : "unknown"
-      : (classifyFailoverReason(message, { provider: outputErrorContext.provider }) ?? "unknown");
+      : (classified?.reason ?? "unknown");
     const code = terminalFailure
       ? `cli_${terminalFailure}`
       : reason === "context_overflow"
@@ -150,6 +151,7 @@ export async function executeCliProcess(params: {
         : outputErrorContext.classifyErrorCode?.(output.errorText);
     return new FailoverError(message, {
       reason,
+      billingError: classified?.billingError,
       provider: outputErrorContext.provider,
       model: outputErrorContext.model,
       sessionId: outputErrorContext.sessionId,

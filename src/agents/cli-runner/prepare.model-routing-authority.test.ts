@@ -1,11 +1,13 @@
 // Exercises CLI routing receipts at the exact post-admission dispatch boundary.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
+import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import * as providerRuntime from "../../plugins/provider-hook-runtime.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -15,6 +17,7 @@ import {
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { persistAuthProfileBatch } from "../auth-profiles/upsert-with-lock.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { runPreparedCliAgent } from "../cli-runner.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
@@ -25,7 +28,14 @@ import {
   replaceDiscoveredContextTokenCache,
 } from "../context-cache.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
+import { FailoverError } from "../failover-error.js";
+import { resolveReplyFailoverFacts } from "../failover/request-error-facts.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import {
+  createManagedRun,
+  createSuccessfulProcessExit,
+  supervisorSpawnMock,
+} from "./execute.test-support.js";
 import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
@@ -251,7 +261,7 @@ describe("CLI model-routing receipt authority", () => {
   });
 });
 
-describe("CLI context-window ownership", () => {
+describe("CLI provider-owned context and failures", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
   beforeEach(() => {
@@ -270,8 +280,64 @@ describe("CLI context-window ownership", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     resetContextWindowCacheForTest();
+    supervisorSpawnMock.mockReset();
     await fixture.cleanup();
   });
+
+  it.each(["exit", "result", "throw"])(
+    "carries the prepared Google owner through CLI %s into the billing reply",
+    async (failure) => {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          { ...buildDefaultTestCliBackend(), id: "google-gemini-cli", modelProvider: "google" },
+        ],
+      });
+      const context = await fixture.prepare({
+        provider: "google-gemini-cli",
+        ...(failure === "exit" ? {} : { modelProvider: "google" }),
+        disableTrajectory: true,
+        config: { plugins: { allow: ["google"], entries: { google: { enabled: true } } } },
+      });
+      using discovery = vi.spyOn(providerRuntime, "resolveProviderRuntimePluginHandle");
+      const refusal = "requires an active Google AI Ultra subscription";
+      const message = `This request ${refusal}.`;
+      context.preparedBackend.backend.output = "jsonl";
+      if (failure === "throw") {
+        supervisorSpawnMock.mockRejectedValueOnce(new Error(refusal));
+      } else {
+        supervisorSpawnMock.mockResolvedValueOnce(
+          createManagedRun({
+            ...createSuccessfulProcessExit(),
+            exitCode: failure === "exit" ? 1 : 0,
+            stderr: failure === "exit" ? refusal : "",
+            stdout:
+              failure === "result"
+                ? JSON.stringify({ type: "result", status: "error", error: { message: refusal } }) +
+                  "\n"
+                : "",
+          }),
+        );
+      }
+      const error: unknown = await runPreparedCliAgent(context).catch((caught: unknown) => caught);
+      assert.instanceOf(error, FailoverError);
+      expect(error).toMatchObject({
+        reason: "billing",
+        billingError: {
+          message,
+          actionUrl: "https://one.google.com/about/google-ai-plans/",
+        },
+      });
+      expect(
+        resolveReplyFailureSummary({
+          error,
+          message: error.message,
+          facts: resolveReplyFailoverFacts(error, error.message),
+        }),
+      ).toEqual({ kind: "billing", text: message });
+      expect(discovery).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps test-cli stable when another provider loads the same model", async () => {
     const provider = "test-cli";

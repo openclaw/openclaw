@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import { classifyProviderFailoverSignalWithPlugin } from "../../plugins/provider-failover.js";
 import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
@@ -27,95 +27,68 @@ describe("assistant diagnostic provider ownership", () => {
       .mockReturnValue("model_not_found");
   });
 
-  it.each(["thrown", "wrapped", "inherited", "typed", "guided"] as const)(
-    "prepares identical billing guidance for assistant and %s failures",
-    (shape) => {
-      const billingError = {
-        message: "This request requires an active Google AI Ultra subscription.",
-        actionUrl: "https://one.google.com/about/google-ai-plans/",
-      };
-      const isPlanRefusal = ({ errorMessage }: { errorMessage: string }) =>
-        /requires an active Google AI Ultra subscription/i.test(errorMessage);
-      const formatBillingError = vi.fn((context: { errorMessage: string }) =>
-        isPlanRefusal(context) ? billingError : undefined,
-      );
-      const providerOwner = {
-        id: "prepared-owner",
-        classifyFailoverReason: (context: { errorMessage: string }) =>
-          isPlanRefusal(context) ? ("billing" as const) : undefined,
-        formatBillingError,
-      };
-      const context = {
-        provider: "custom-route",
-        model: "model-a",
-        authMode: "oauth",
-        providerOwner,
-      };
-      const assistant = makeAssistantMessageFixture({
-        provider: "custom-route",
-        errorMessage: billingError.message,
-      });
-      const facts = classifyAssistantErrorFacts(assistant, context);
-      expect(facts).toMatchObject({ reason: "billing", billingError });
-      expect(formatAssistantErrorText(assistant, context, facts)).toBe(billingError.message);
-      expect(formatUserFacingAssistantErrorText(assistant, context, facts)).toBe(
-        billingError.message,
-      );
-      expect(formatBillingError).toHaveBeenCalledOnce();
+  it("prepares one billing reply across assistant and exception shapes", () => {
+    const billingError = { message: "Choose a plan.", actionUrl: "https://example.com/plans" };
+    const isPlanRefusal = ({ errorMessage }: { errorMessage: string }) =>
+      errorMessage.includes(billingError.message);
+    const formatBillingError = vi.fn((context: { errorMessage: string }) =>
+      isPlanRefusal(context) ? billingError : undefined,
+    );
+    const providerOwner = {
+      id: "prepared-owner",
+      classifyFailoverReason: (context: { errorMessage: string }) =>
+        isPlanRefusal(context) ? ("billing" as const) : undefined,
+      formatBillingError,
+    };
+    const attribution = { provider: "custom-route", model: "model-a" };
+    const context = { ...attribution, authMode: "oauth", providerOwner };
+    const assistant = makeAssistantMessageFixture({
+      ...attribution,
+      errorMessage: billingError.message,
+    });
+    const facts = classifyAssistantErrorFacts(assistant, context);
+    expect(facts).toMatchObject({ reason: "billing", billingError });
+    expect(formatAssistantErrorText(assistant, context, facts)).toBe(billingError.message);
+    expect(formatUserFacingAssistantErrorText(assistant, context, facts)).toBe(
+      billingError.message,
+    );
+    expect(formatBillingError).toHaveBeenCalledOnce();
+    const cause = new Error(billingError.message);
+    const thrown = Object.assign(new Error(billingError.message), { status: 403 });
+    const typed = { ...attribution, reason: "billing" as const, status: 403, cause };
+    const inputs = {
+      thrown,
+      wrapped: new Error("request failed", { cause: thrown }),
+      inherited: Object.assign(new Error("request failed", { cause }), { status: 403 }),
+      typed: new FailoverError("request failed", typed),
+      guided: new FailoverError("request failed", { ...typed, billingError }),
+    };
+    let failure: FailoverError | null = null;
+    for (const [shape, input] of Object.entries(inputs)) {
       formatBillingError.mockClear();
-      const thrown = Object.assign(new Error(billingError.message), {
-        status: shape === "inherited" || shape === "typed" ? undefined : 403,
-      });
-      const input =
-        shape === "typed" || shape === "guided"
-          ? new FailoverError("request failed", {
-              reason: "billing",
-              billingError: shape === "guided" ? billingError : undefined,
-              status: 403,
-              cause: thrown,
-              provider: "custom-route",
-              model: "model-a",
-            })
-          : shape === "wrapped"
-            ? new Error("request failed", { cause: thrown })
-            : shape === "inherited"
-              ? Object.assign(new Error("request failed", { cause: thrown }), { status: 403 })
-              : thrown;
-      const failure = coerceToFailoverError(input, context)!;
-      expect(failure).toMatchObject({
+      failure = coerceToFailoverError(input, context);
+      expect(failure, shape).toMatchObject({
+        ...attribution,
         reason: "billing",
         billingError,
-        provider: "custom-route",
-        model: "model-a",
         status: 403,
       });
-      expect(
-        resolveReplyFailureSummary({
-          error: failure,
-          message: failure.message,
-          facts: resolveReplyFailoverFacts(failure, failure.message),
-        }),
-      ).toEqual({ kind: "billing", text: billingError.message });
       const calls = formatBillingError.mock.calls.length;
-      expect(coerceToFailoverError(failure, context)?.billingError).toBe(failure.billingError);
-      expect(formatBillingError).toHaveBeenCalledTimes(calls);
       expect(calls === 0).toBe(shape === "guided");
       if (calls) {
         expect(formatBillingError).toHaveBeenLastCalledWith(
           expect.objectContaining({ provider: "prepared-owner", status: 403 }),
         );
       }
-      expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not discover policy or promote generic nested billing without an owner", () => {
-    const failure = coerceToFailoverError(
-      { status: 403, message: "Forbidden", cause: new Error("insufficient credits") },
-      { provider: "custom-route", providerOwner: null },
-    );
-    expect(failure?.reason).toBe("auth");
-    expect(failure?.billingError).toBeUndefined();
+    }
+    assert.instanceOf(failure, FailoverError);
+    expect(
+      resolveReplyFailureSummary({
+        error: failure,
+        message: failure.message,
+        facts: resolveReplyFailoverFacts(failure, failure.message),
+      }),
+    ).toEqual({ kind: "billing", text: billingError.message });
     expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
@@ -188,7 +161,13 @@ describe("assistant diagnostic provider ownership", () => {
     expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
-  it("records diagnostics without discovering provider policy", () => {
+  it("records diagnostics and classifies unowned exceptions without provider discovery", () => {
+    const failure = coerceToFailoverError(
+      { status: 403, message: "Forbidden", cause: new Error("insufficient credits") },
+      { provider: "custom-route", providerOwner: null },
+    );
+    expect(failure?.reason).toBe("auth");
+    expect(failure?.billingError).toBeUndefined();
     expect(
       classifyAssistantFailoverReason(
         makeAssistantMessageFixture({ errorMessage: "provider sent an opaque failure" }),

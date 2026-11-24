@@ -31,7 +31,7 @@ import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.j
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import { resolveRetryAfterMs } from "./failover/retry-evidence.js";
-import type { FailoverClassification, FailoverReason } from "./failover/signal.js";
+import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
   AgentHarnessModelRequestPolicyError,
@@ -345,6 +345,7 @@ function resolveFailoverClassificationFromErrorInternal(
   depth: number,
   providerHint?: string,
   providerOwner?: PreparedProviderFailoverOwner | null,
+  normalizedSignal?: FailoverSignal,
 ): FailoverClassification | null {
   if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
     return null;
@@ -355,10 +356,11 @@ function resolveFailoverClassificationFromErrorInternal(
     }
     seen.add(err);
   }
+  const signal = normalizedSignal ?? normalizeErrorSignal(err, providerHint);
   if (isFailoverError(err)) {
     const classification = classifyFailoverSignal(
       {
-        ...normalizeErrorSignal(err, providerHint),
+        ...signal,
         message: err.rawError ?? err.message,
       },
       { providerPlugin: providerOwner },
@@ -371,7 +373,6 @@ function resolveFailoverClassificationFromErrorInternal(
       reason: err.reason,
     };
   }
-  const signal = normalizeErrorSignal(err, providerHint);
   const classification = classifyFailoverSignal(signal, { providerPlugin: providerOwner });
   const nestedCandidates = getNestedErrorCandidates(err);
 
@@ -421,11 +422,11 @@ function resolveFailoverClassificationFromErrorInternal(
   return null;
 }
 
-export function resolveFailoverClassificationFromError(
+function resolveFailoverErrorFacts(
   err: unknown,
   providerHint?: string,
   providerOwner?: PreparedProviderFailoverOwner | null,
-): FailoverClassification | null {
+): { signal: FailoverSignal; classification: FailoverClassification | null } | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
   if (
@@ -441,13 +442,26 @@ export function resolveFailoverClassificationFromError(
   if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
     return null;
   }
-  return resolveFailoverClassificationFromErrorInternal(
-    err,
-    new Set<object>(),
-    0,
-    providerHint,
-    providerOwner,
-  );
+  const signal = normalizeErrorSignal(err, providerHint);
+  return {
+    signal,
+    classification: resolveFailoverClassificationFromErrorInternal(
+      err,
+      new Set<object>(),
+      0,
+      providerHint,
+      providerOwner,
+      signal,
+    ),
+  };
+}
+
+export function resolveFailoverClassificationFromError(
+  err: unknown,
+  providerHint?: string,
+  providerOwner?: PreparedProviderFailoverOwner | null,
+): FailoverClassification | null {
+  return resolveFailoverErrorFacts(err, providerHint, providerOwner)?.classification ?? null;
 }
 
 export function resolveFailoverReasonFromError(
@@ -626,16 +640,17 @@ export function coerceToFailoverError(
     }
     return err;
   }
-  const reason = resolveFailoverReasonFromError(
+  const facts = resolveFailoverErrorFacts(
     err,
     context?.providerOwner?.id ?? context?.provider,
     context?.providerOwner,
   );
-  if (!reason) {
+  const reason = failoverReasonFromClassification(facts?.classification ?? null);
+  if (!facts || !reason) {
     return null;
   }
 
-  const signal = normalizeErrorSignal(err);
+  const { signal } = facts;
   const message = signal.message ?? String(err);
   const status = signal.status ?? resolveFailoverStatus(reason, signal.code);
   const retryAfterMs =

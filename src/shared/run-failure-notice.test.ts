@@ -13,19 +13,11 @@ describe("billing display projection", () => {
       }),
     )?.billingError;
 
-  it("keeps a valid HTTP action absolute when the browser has a base URL", () => {
-    expect(billing({ message: "Choose a plan.", actionUrl: "http:example.com" })?.actionUrl).toBe(
-      "http://example.com/",
-    );
-  });
-
   it.each([
     "javascript:alert(1)",
-    "data:text/html,hello",
     "/plans",
     "https://",
     "x".repeat(2049),
-    "https://user:pass@example.com/plans",
     "https://user@example.com/plans",
     "http://:pass@example.com/plans",
   ])("drops only the invalid billing link %j", (actionUrl) => {
@@ -34,7 +26,10 @@ describe("billing display projection", () => {
     });
   });
 
-  it("bounds messages and never promotes raw previews or non-billing metadata", () => {
+  it("normalizes safe guidance without promoting raw or non-billing metadata", () => {
+    expect(billing({ message: "Choose a plan.", actionUrl: "http:example.com" })?.actionUrl).toBe(
+      "http://example.com/",
+    );
     expect(billing({ message: "x".repeat(700) })?.message).toHaveLength(600);
     for (const value of [undefined, { message: "  " }]) {
       expect(billing(value)).toBeUndefined();

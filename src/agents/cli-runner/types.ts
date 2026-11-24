@@ -28,6 +28,7 @@ import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
+import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
@@ -233,6 +234,7 @@ export type PreparedCliRunContext = {
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
+  providerOwner?: PreparedProviderFailoverOwner | null;
   hostOwnedTools?: readonly string[];
   /** Host-minted memory audience for this turn's hooks; its leases release with run cleanup. */
   memoryAudience?: MemoryAudience;
