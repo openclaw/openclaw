@@ -15,7 +15,6 @@ import {
   type SelectionRow as SelectionTarget,
   type SelectionChange,
 } from "./session-row-projection-record.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -28,14 +27,18 @@ type SelectionScope = Omit<
 >;
 const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
+type SessionRowSelectionSource = {
+  onSelectionChange(listener: (change: SelectionChange) => void): void;
+  onMembershipChange(listener: (sessionKey?: string) => void): void;
+};
 
 // Topology retires scopes; accepted facts advance only their affected partitions.
 const sessionRowSelections = new WeakMap<
-  SessionRowProjection,
+  SessionRowSelectionSource,
   Map<SelectionScope, Map<boolean, ReturnType<typeof createSessionRowSelection>>>
 >();
 
-export function sessionRowSelectionScopes(projection: SessionRowProjection) {
+export function sessionRowSelectionScopes(projection: SessionRowSelectionSource) {
   const previous = sessionRowSelections.get(projection);
   if (previous) {
     return previous;
