@@ -13,7 +13,6 @@ import {
   SqliteDatabaseGenerationSlot,
   readSqliteDatabaseAdmissionIdentity as identity,
   readSqliteDatabaseFactRevision,
-  readSqliteDatabaseGeneration,
   isSqliteDatabaseAdmissionFactCurrent as valid,
   isSqliteDatabaseAdmissionRetired as isRetired,
   type Admission,
