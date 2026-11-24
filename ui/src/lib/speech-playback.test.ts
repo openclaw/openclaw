@@ -17,6 +17,7 @@ vi.mock("../../../packages/markdown-core/src/chunk-text.js", async (importOrigin
 const chunkingLoadedAtBoot = chunking.loaded;
 
 let started = createDeferred();
+let primer: ReturnType<typeof createDeferred> | undefined;
 const audio: FakeAudio[] = [];
 const players: GatewaySpeechPlayback[] = [];
 const createUrl = vi.fn(() => "blob:synthetic-speech");
@@ -26,6 +27,8 @@ class FakeAudio extends EventTarget {
   play = vi.fn(async () => {
     if (this.src.startsWith("blob:")) {
       started.resolve();
+    } else if (this.src.startsWith("data:")) {
+      return primer?.promise;
     }
   });
   pause = vi.fn();
@@ -39,6 +42,7 @@ class FakeAudio extends EventTarget {
 
 beforeEach(() => {
   started = createDeferred();
+  primer = undefined;
   audio.length = 0;
   createUrl.mockClear();
   revokeUrl.mockClear();
@@ -51,6 +55,7 @@ afterEach(() => {
   for (const playback of players.splice(0)) {
     playback.stop();
   }
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -83,6 +88,42 @@ it.each(["tts.speak", "talk.speak"] as const)(
     element.dispatchEvent(new Event("ended"));
     await speaking;
     expect(revokeUrl).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([false, true])(
+  "plays speech after a stalled primer (late settlement: %s)",
+  async (settleLate) => {
+    vi.useFakeTimers();
+    const pendingPrimer = createDeferred();
+    primer = pendingPrimer;
+    const requested = createDeferred();
+    const request = createGatewayRequestMock(async () => {
+      requested.resolve();
+      return speechResult;
+    });
+    const speaking = player().speak(createTestGatewayClient(request), "Reply", "talk.speak");
+    await requested.promise;
+
+    const element = expectDefined(audio[0], "the primed speech element");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(element.play).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(element.play).toHaveBeenCalledTimes(2);
+    expect(element.pause).toHaveBeenCalledOnce();
+    expect(element.removeAttribute).toHaveBeenCalledExactlyOnceWith("src");
+    expect(element.load).toHaveBeenCalledTimes(2);
+    expect(element.load.mock.invocationCallOrder[0]).toBeLessThan(
+      element.play.mock.invocationCallOrder[1] ?? 0,
+    );
+
+    if (settleLate) {
+      pendingPrimer.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(element.pause).toHaveBeenCalledOnce();
+    }
+    element.dispatchEvent(new Event("ended"));
+    await speaking;
   },
 );
 
