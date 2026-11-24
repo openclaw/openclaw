@@ -6,6 +6,10 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import { admitSidebarBootScope } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import "../test-helpers/app-sidebar-suite.ts";
@@ -26,6 +30,7 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
+import * as sessionTree from "./app-sidebar-session-tree.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import * as sessionLeadingIndicator from "./session-leading-indicator.ts";
 import { setSessionsGrouping } from "./session-organizer-menu.runtime.ts";
@@ -145,6 +150,78 @@ async function restoreCachedRows(
 }
 
 describe("sidebar projection memo", () => {
+  it("keeps the row tree through group readiness and applies changed group order", async () => {
+    const alpha = session("alpha", { category: "Alpha" });
+    const rows = [alpha, session("beta", { category: "Beta" })];
+    const result = sessionsResult(rows);
+    const groups = [
+      { name: "Alpha", position: 0 },
+      { name: "Beta", position: 1 },
+    ];
+    const pending = createDeferred<{ groups: typeof groups; sectionOrder: string[] }>();
+    let refreshing = false;
+    const client = createTestGatewayClient(async (method) => {
+      if (method === "sessions.list") {
+        return result;
+      }
+      if (method === "sessions.groups.list") {
+        return refreshing
+          ? pending.promise
+          : { groups, sectionOrder: ["category:Alpha", "category:Beta"] };
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "questions.list") {
+        return { questions: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const gateway = createGatewayHarness(client);
+    gateway.publish({
+      hello: gatewayHelloForMethods(
+        ["sessions.list", "sessions.groups.list", "sessions.subscribe"],
+        ["operator.read"],
+      ),
+    });
+    const sessions = createTestSessionCapability(gateway.gateway);
+    await sessions.refresh({ agentId: "main" });
+    await sessions.groupsLoad();
+    const context = createContext(gateway.gateway, sessions, makeBootRoster());
+    const { sidebar, provider } = await mountSidebarContext(context);
+    onTestFinished(() => {
+      pending.resolve({ groups, sectionOrder: [] });
+      provider.remove();
+    });
+    await settleLitElement(sidebar);
+    const row = sidebar.querySelector(`[data-session-key="${alpha.key}"]`);
+    expect(row).not.toBeNull();
+    const order = () =>
+      Array.from(sidebar.querySelectorAll("[data-session-section]"), (section) =>
+        section.getAttribute("data-session-section"),
+      ).filter((id) => id === "category:Alpha" || id === "category:Beta");
+    expect(order()).toEqual(["category:Alpha", "category:Beta"]);
+    const projectTree = vi.spyOn(sessionTree, "projectSessionTree");
+    projectRows.mockClear();
+
+    refreshing = true;
+    sessions.groupsInvalidate();
+    const loading = sessions.groupsLoad();
+    await settleLitElement(sidebar);
+    expect(sessions.groupsStatus()).toBe("loading");
+    expect(projectRows).not.toHaveBeenCalled();
+    expect(projectTree).not.toHaveBeenCalled();
+    expect(sidebar.querySelector(`[data-session-key="${alpha.key}"]`)).toBe(row);
+
+    pending.resolve({ groups, sectionOrder: ["category:Beta", "category:Alpha"] });
+    await loading;
+    await settleLitElement(sidebar);
+    expect(sessions.groupsStatus()).toBe("ready");
+    expect(projectRows).toHaveBeenCalled();
+    expect(order()).toEqual(["category:Beta", "category:Alpha"]);
+    expect(sidebar.querySelector(`[data-session-key="${alpha.key}"]`)).toBe(row);
+  });
+
   it("keeps a saved group collapsed when opening its top-level session", async () => {
     const storageKey = "openclaw:sidebar:sessions:collapsed-sections";
     const saved = JSON.stringify(["category:Alpha"]);

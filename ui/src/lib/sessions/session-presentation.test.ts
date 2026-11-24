@@ -81,6 +81,26 @@ function harness() {
   };
 }
 describe("session roster presentation", () => {
+  it("invalidates rows before publishing side facts without replacing the roster", async () => {
+    const h = harness();
+    await h.sessions.refresh({ agentId: "main" });
+    const result = h.sessions.state.result;
+    const observed: number[] = [];
+    h.sessions.subscribe(() => observed.push(h.sessions.rowPresentationRevision));
+    let revision = h.sessions.rowPresentationRevision;
+    for (const summary of [{ numbers: [42], state: "open" as const }, undefined]) {
+      h.sessions.setPullRequestSummary(row.key, summary);
+      expect(h.sessions.state.result).toBe(result);
+      expect(observed.at(-1)).toBe(++revision);
+    }
+    const release = h.sessions.beginArchive(row.key, row.sessionId);
+    expect(release).not.toBeNull();
+    expect(h.sessions.state.result).toBe(result);
+    expect(observed.at(-1)).toBe(++revision);
+    release?.();
+    expect(observed.at(-1)).toBe(++revision);
+  });
+
   it("presents accepted history while the first canonical roster is pending", async () => {
     const h = harness();
     h.hold();

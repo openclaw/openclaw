@@ -106,7 +106,7 @@ export function sidebarNavigationInputs(
     context?.gateway.snapshot.hello,
     context?.gateway.snapshot.selfUser?.id,
     context?.sessions,
-    context?.sessions.revision,
+    context?.sessions.rowPresentationRevision,
     host.sessionSortMode,
     host.sessionProjection.createdOrderRevision,
     host.sessionsShowCron,
@@ -264,7 +264,7 @@ export function memoizedSidebarCatalogs(
   return memo.read(
     () => [
       host.sessionDataContext,
-      host.sessionDataContext?.sessions.revision,
+      host.sessionDataContext?.sessions.rowPresentationRevision,
       host.expandedAgentId(),
       host.resolveSessionAttention,
       host.sessionData.sessionCatalogs,

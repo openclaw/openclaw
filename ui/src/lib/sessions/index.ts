@@ -11,6 +11,7 @@ import type { SessionCreateOutcome } from "./create.ts";
 import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
 import {
+  createSessionPublication,
   createSessionState,
   type SessionCacheOptions,
   type SessionCapability,
@@ -122,10 +123,9 @@ export function createSessionCapability(
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, object>();
-  const listeners = new Set<(next: SessionState) => void>();
+  const publication = createSessionPublication(() => state);
   const createdListeners = new Set<(key: string) => void>();
   const thinkingClaims = createSessionThinkingClaims(gateway, () => roster.requestRevision);
-  let publicationRevision = 0;
   let canonicalListRevision = 0;
   let canonicalListScopeKey: number | undefined;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
@@ -133,13 +133,6 @@ export function createSessionCapability(
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | "list" | null = null;
-
-  const notifySubscribers = () => {
-    publicationRevision += 1;
-    for (const listener of listeners) {
-      listener(state);
-    }
-  };
 
   const publish = (next: SessionState, errorSource?: "session-observer" | "operation" | "list") => {
     if (next.error === null) {
@@ -161,7 +154,7 @@ export function createSessionCapability(
       }
     }
     githubPublication.observeRows(next.result?.sessions ?? [], next.agentId);
-    notifySubscribers();
+    publication.notify();
   };
 
   const retirePullRequestSummary = (key: string) => {
@@ -211,7 +204,7 @@ export function createSessionCapability(
         publish({ ...state, error: null });
       } else if (previousError !== error) {
         // Query and operation errors must not hide observer transitions from other views.
-        notifySubscribers();
+        publication.notify();
       }
       if (previousError !== null && error === null) {
         // Observer outages do not replay events; every held query must close the gap.
@@ -237,7 +230,7 @@ export function createSessionCapability(
     onWarmListsRetired: (agentIds) => {
       const selectedId = agentSelection.state.selectedId;
       if (!presentation.result && selectedId && agentIds.has(normalizeAgentId(selectedId))) {
-        notifySubscribers();
+        publication.notify();
       }
     },
     observerError: () => sessionEventSubscriptionError,
@@ -281,6 +274,7 @@ export function createSessionCapability(
     snapshot: () => gateway.snapshot,
     readState: () => state,
     publish,
+    notifyStatus: () => publication.notify(false),
     refreshRows: () => roster.refresh({ ...roster.lastOptions(), force: true }),
     retryDelayMs: sessionRetryDelayMs,
   });
@@ -313,7 +307,7 @@ export function createSessionCapability(
     roster.redecorateLists();
     if (result !== presentation.result) {
       presentation = { ...presentation, result };
-      notifySubscribers();
+      publication.notify();
     }
   };
   const mutations = createSessionMutations({
@@ -333,7 +327,7 @@ export function createSessionCapability(
     archiveFields: roster.observations,
     readRevision: () => roster.requestRevision,
     redecorateLists,
-    notifyPendingChange: notifySubscribers,
+    notifyPendingChange: publication.notify,
     notifyCreated,
     clearThink: thinkingClaims.clear,
     suspendThink: thinkingClaims.suspend,
@@ -434,7 +428,7 @@ export function createSessionCapability(
       if (presentationProfileId !== undefined && presentationProfileId !== selfUserId) {
         roster.retireWarmLists();
         retirePresentation();
-        notifySubscribers();
+        publication.notify();
       }
       presentationProfileId = selfUserId;
     } else if (!connected && !next.client) {
@@ -530,7 +524,7 @@ export function createSessionCapability(
 
   const stopSelection = watchSelectedAgent(agentSelection, (nextAgentId, foreground) => {
     retirePresentation();
-    notifySubscribers();
+    publication.notify();
     // Selection publishes before Gateway hydration. A new connection bootstraps
     // the current selection; route changes on a hydrated connection replace its roster.
     if (nextAgentId && hydratedClient === gateway.snapshot.client) {
@@ -620,7 +614,10 @@ export function createSessionCapability(
 
   return {
     get revision() {
-      return publicationRevision;
+      return publication.revision;
+    },
+    get rowPresentationRevision() {
+      return publication.rowPresentationRevision;
     },
     get state() {
       return state;
@@ -661,7 +658,7 @@ export function createSessionCapability(
     listSnapshot: roster.listSnapshot,
     subscribeList: (scope, listener) =>
       roster.isPrimaryList(scope)
-        ? registerListener(listeners, () => listener(roster.listSnapshot(scope)))
+        ? publication.subscribe(() => listener(roster.listSnapshot(scope)))
         : roster.subscribeList(scope, listener),
     refreshList: roster.refreshList,
     reconcile,
@@ -721,7 +718,7 @@ export function createSessionCapability(
     groupsUpdate: groups.update,
     groupsDelete: groups.delete,
     subscribeCreated: (listener) => registerListener(createdListeners, listener),
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: publication.subscribe,
     dispose() {
       retirePresentation();
       cacheLifecycle.dispose();
@@ -743,7 +740,7 @@ export function createSessionCapability(
       stopSelection();
       stopEvents();
       createdListeners.clear();
-      listeners.clear();
+      publication.clear();
     },
   };
 }

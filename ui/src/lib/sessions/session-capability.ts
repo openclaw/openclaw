@@ -1,4 +1,5 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { BootRecord } from "../../app/boot-record.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
@@ -39,6 +40,33 @@ export function createSessionState(
     groups: bootRecord?.groups.map((group) => group.name) ?? [],
     groupSettings: bootRecord?.groups ?? [],
     sectionOrder: bootRecord?.sectionOrder ?? [],
+  };
+}
+
+export function createSessionPublication(readState: () => SessionState) {
+  const listeners = new Set<(state: SessionState) => void>();
+  let revision = 0;
+  let rowPresentationRevision = 0;
+  return {
+    get revision() {
+      return revision;
+    },
+    get rowPresentationRevision() {
+      return rowPresentationRevision;
+    },
+    notify(rowPresentationChanged = true) {
+      revision += 1;
+      // Pending intents and other side facts can change without a new state object.
+      // Only an explicit readiness-only producer may skip row invalidation.
+      if (rowPresentationChanged) {
+        rowPresentationRevision += 1;
+      }
+      for (const listener of listeners) {
+        listener(readState());
+      }
+    },
+    subscribe: (listener: (state: SessionState) => void) => registerListener(listeners, listener),
+    clear: () => listeners.clear(),
   };
 }
 
@@ -86,6 +114,8 @@ export type SessionCapability = Pick<
     readonly canonicalListError: string | null;
     /** Advances for every publication, including pending facts outside state. */
     readonly revision: number;
+    /** Conservative row/side-fact invalidation; excludes explicit readiness-only notifications. */
+    readonly rowPresentationRevision: number;
     /** Memory-only presentation; never authority for mutations or live row observations. */
     readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached"> & {
       profileId?: string | null;

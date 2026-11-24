@@ -6,4 +6,6 @@
 # retain the planning base when main advances beyond the candidate's fork.
 # Cover cheap and delayed first rows, empty pagination, disposal/session replacement,
 # retained chrome, and source-preview parsing/cache invalidation at their owners.
-397
+# Cover readiness-only notifications, unchanged row-tree identity, real group
+# reordering, and pending archive / pull-request side-fact invalidation.
+537
