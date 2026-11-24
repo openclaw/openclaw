@@ -18,6 +18,19 @@ function acceptedEventId(value: unknown, label: string): string {
   return value;
 }
 
+export function requireMatrixPublicSendEventId(value: unknown, roomId: string): string {
+  const sent = record(value, "Matrix send response");
+  assert.equal(sent.deliveryStatus, "sent", "Matrix send must succeed");
+  assert.equal(sent.channel, "matrix", "Matrix send must identify the channel");
+  const result = record(sent.result, "Matrix send payload");
+  assert.deepEqual(
+    result.target,
+    { kind: "room", id: roomId },
+    "Matrix send must identify the requested room",
+  );
+  return acceptedEventId(result.messageId, "Matrix send");
+}
+
 export async function runPublicMessageActionsScenario(context: MatrixQaScenarioContext) {
   const gatewayCall = context.gatewayCall;
   assert(gatewayCall, "Matrix public actions require the child Gateway RPC client");
@@ -74,7 +87,9 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
       `Matrix ${name} result`,
     );
     remaining();
-    assert.equal(result.ok, true, `Matrix ${name} must succeed`);
+    if (name !== "send") {
+      assert.equal(result.ok, true, `Matrix ${name} must succeed`);
+    }
     return result;
   };
   const observe = async (predicate: (event: MatrixQaObservedEvent) => boolean) =>
@@ -108,10 +123,10 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
     assert(await observer.prime(), "Matrix observer needs a pre-action sync cursor");
 
     const sent = await action("send", { to: room.roomId, message: marker });
-    const sendResult = record(sent.result, "Matrix send payload");
-    const messageId = acceptedEventId(sendResult.messageId, "Matrix send");
+    // Public sends now go through the Gateway-owned durable delivery path.
+    // Other actions still use the provider action envelope.
+    const messageId = requireMatrixPublicSendEventId(sent, room.roomId);
     completed.push(`send accepted=${messageId}`);
-    assert.equal(sendResult.roomId, room.roomId, "send result must identify the requested room");
     await observe((event) => event.eventId === messageId && event.type === "m.room.message");
     const original = await eventContent(messageId, "m.room.message");
     assert.equal(original.body, marker);
