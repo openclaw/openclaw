@@ -12,8 +12,10 @@ import { streamSessionEntriesInWorker } from "./session-transcript-read-worker-r
 
 const body = "synthetic detail ".repeat(262_144);
 
-it("exports every medium transcript through the production 512 MiB worker", async () => {
-  await withOpenClawTestState({ label: "memory-export-working-set" }, async (state) => {
+it("exports every medium transcript through the production 512 MiB worker", async ({
+  onTestFinished,
+}) => {
+  const proof = withOpenClawTestState({ label: "memory-export-working-set" }, async (state) => {
     const requests = Array.from({ length: 72 }, (_, index) => ({
       absPath: "agent:main:chat:medium-" + index,
       options: {
@@ -36,34 +38,45 @@ it("exports every medium transcript through the production 512 MiB worker", asyn
       ).toBe(true);
     }
     // The previous worker retained all projected sources plus all rendered results and OOMed.
-    const contents = requests.map((): string[] => []);
+    // Verify one transcript before acknowledging its summary, instead of
+    // retaining and tokenizing the whole batch in the test process.
+    let lines: string[] = [];
     const results = await streamSessionEntriesInWorker(
       requests.map((request) => ({ ...request, pages: true, messages: false })),
       async (index, update) => {
         if ("reset" in update) {
-          contents[index] = [];
+          lines = [];
         } else if ("page" in update) {
-          contents[index]!.push(...update.page.lines);
+          lines.push(...update.page.lines);
+        } else {
+          const result = update.value;
+          if (!("summary" in result) || !result.summary) {
+            throw new Error("Synthetic hot source was reported cold");
+          }
+          // The renderer normalizes spaces, wraps between these short words,
+          // and prefixes every wrapped line with the role.
+          const content = lines
+            .map((line) => {
+              if (!line.startsWith("User: ")) {
+                throw new Error("Exported line lost its user role");
+              }
+              return line.slice("User: ".length);
+            })
+            .join(" ");
+          const expected = "HEAD_" + index + " " + body + "TAIL_" + index;
+          expect(content === expected, "complete transcript body").toBe(true);
+          expect(result.summary.lineCount).toBe(lines.length);
+          lines = [];
         }
       },
     );
     expect(results).toHaveLength(requests.length);
-    for (const [index, result] of results.entries()) {
-      if (!("summary" in result) || !result.summary) {
-        throw new Error("Synthetic hot source was reported cold");
-      }
-      const content = contents[index]!.join("\n");
-      expect(content.startsWith("User: HEAD_" + index + " ")).toBe(true);
-      expect(content.endsWith(" TAIL_" + index)).toBe(true);
-      expect(result.summary.lineCount).toBe(contents[index]!.length);
-      const words = /\b(?:synthetic|detail)\b/g;
-      let wordCount = 0;
-      while (words.test(content)) {
-        wordCount++;
-      }
-      expect(wordCount).toBe(262_144 * 2);
-    }
   });
+  // Join the test-owned state after a timeout before the next fixture starts.
+  onTestFinished(async () => {
+    await Promise.allSettled([proof]);
+  });
+  await proof;
 }, 30_000);
 
 it("classifies a message-bearing large transcript without retaining its complete raw history", async () => {
