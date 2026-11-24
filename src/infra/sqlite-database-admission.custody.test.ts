@@ -127,6 +127,8 @@ it("lets a raw worker's first snapshot retire a descriptor adopted after it star
   expect(fs.fstatSync(record.descriptor).isFile()).toBe(true);
   expect(fs.fstatSync(acquisition.descriptor).isFile()).toBe(true);
   sibling.close();
+  expect(state.registry.records.has(record.identity)).toBe(false);
+  expect(state.registry.descriptors.has(record.identity)).toBe(true);
   worker.postMessage("retire", []);
   expect(await withinTest(exited, signal)).toEqual([0]);
   expect(isSqliteDescriptorCustodyClosed(record.descriptorCustody)).toBe(true);

@@ -269,16 +269,15 @@ export class SqliteDatabaseAdmissionRegistry {
     if (selected && !isBatch && this.records.get(selected.identity) !== selected) {
       return;
     }
-    // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
+    // A logical row can retire before another isolate closes its shared custody.
+    // Reclaim closed physical owners even when no logical row remains to point to them.
+    for (const [identity, retained] of this.descriptors) {
+      if (isSqliteDescriptorCustodyClosed(retained.descriptorCustody)) {
+        this.descriptors.delete(identity);
+      }
+    }
     for (const current of this.records.values()) {
       if (isSqliteDatabaseAdmissionRetired(current)) {
-        const retained = this.descriptors.get(current.identity);
-        if (
-          isSqliteDescriptorCustodyClosed(current.descriptorCustody) &&
-          retained?.descriptorCustody.id === current.descriptorCustody.id
-        ) {
-          this.descriptors.delete(current.identity);
-        }
         this.forget(current.identity);
         continue;
       }
