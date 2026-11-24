@@ -186,7 +186,7 @@ fetched to fill `In-Reply-To`, `References` and the `Re:` subject, and its text 
 
 ```bash
 cat message.eml | himalaya message send
-himalaya message send --save Sent /path/to/message.eml
+himalaya message send --save sent /path/to/message.eml
 ```
 
 ## Tips
