@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigValidationIssue } from "../config/types.openclaw.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { isConfiguredPluginPathDiagnosticCode } from "../plugins/discovery-availability.js";
@@ -20,7 +21,7 @@ export function configValidationIssuesToHealthFindings(
     requirement: "valid-config",
     fixHint:
       issue.fixHint ??
-      "Run `openclaw doctor --fix` to migrate or remove retired keys. If no migration applies, correct the value or use `openclaw config unset <key>` with the rejected key path, then rerun Doctor.",
+      `Run \`${formatCliCommand("openclaw doctor --fix")}\` to migrate or remove retired keys. If no migration applies, find the active config with \`${formatCliCommand("openclaw config file")}\`, correct or remove the reported setting manually, and rerun Doctor.`,
   }));
 }
 

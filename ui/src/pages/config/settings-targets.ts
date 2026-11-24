@@ -54,6 +54,25 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  codeMode: {
+    routeId: "ai-agents",
+    labelKey: "configView.toolWorkflows.codeMode",
+    search: "?section=tools",
+    hash: "#config-section-tools",
+    searchKeys: [
+      "configView.toolWorkflows.codeModeDescription",
+      "configView.toolWorkflows.executor",
+    ],
+    aliases: "code mode auto node quickjs executor",
+  },
+  toolSearch: {
+    routeId: "ai-agents",
+    labelKey: "configView.toolWorkflows.toolSearch",
+    search: "?section=tools",
+    hash: "#config-section-tools",
+    searchKeys: ["configView.toolWorkflows.toolSearchDescription"],
+    aliases: "tool search deferred schemas catalog",
+  },
   webSearch: {
     routeId: "search",
     labelKey: "tabs.search",

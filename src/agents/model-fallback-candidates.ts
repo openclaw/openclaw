@@ -23,7 +23,7 @@ import {
   hasExactConfiguredProviderModel,
 } from "./configured-provider-model.js";
 import { resolveContextTokensForModelFromCache } from "./context-resolution.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { extractObservedOverflowTokenCount } from "./embedded-agent-helpers/context-overflow-observation.js";
 import { isFailoverError } from "./failover/error.js";
 import type {
@@ -35,9 +35,9 @@ import type {
 import {
   type ModelManifestNormalizationContext,
   modelKey,
-  normalizeModelRef,
   normalizeProviderId,
 } from "./model-ref-shared.js";
+import { normalizeModelRef } from "./model-selection-normalize.js";
 import {
   buildModelAliasIndex,
   resolveConfiguredModelFallbacks,
@@ -97,8 +97,9 @@ export function preferContextFitFallbackCandidates(params: {
 type ModelCandidateChainParams = ModelManifestNormalizationContext & {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
-  provider: string;
-  model: string;
+  /** The requested route; omitted parts use the configured primary. */
+  provider?: string;
+  model?: string;
   /** An explicit list, including empty, replaces the configured model fallbacks. */
   fallbacksOverride?: string[];
   requestedRouteResolution?: ModelFallbackRouteResolution;
@@ -300,31 +301,17 @@ function resolveFallbackCandidatesUncached(
         cfg: params.cfg,
         agentId: params.agentId,
         defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: false,
         manifestPlugins: params.manifestPlugins,
       })
-    : null;
+    : undefined;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
-  const defaultModel = primary?.model ?? DEFAULT_MODEL;
   const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
-  const modelRaw = normalizeOptionalString(params.model) || defaultModel;
+  // No requested and no configured model leaves only the configured fallbacks.
+  const modelRaw = normalizeOptionalString(params.model) || primary?.model;
   const allowPluginModelAliases =
     params.allowPluginNormalization !== false && params.cfg?.plugins?.enabled !== false;
   const requestedRouteResolution = params.requestedRouteResolution ?? "raw";
-  const normalizedPrimary =
-    requestedRouteResolution === "resolved"
-      ? { provider: normalizeProviderId(providerRaw), model: modelRaw }
-      : normalizeModelRef(providerRaw, modelRaw, {
-          allowPluginNormalization:
-            params.allowPluginNormalization !== false &&
-            allowsPluginModelNormalization({
-              cfg: params.cfg,
-              provider: providerRaw,
-              model: modelRaw,
-            }),
-          manifestPlugins: params.manifestPlugins,
-        });
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     agentId: params.agentId,
@@ -333,39 +320,54 @@ function resolveFallbackCandidatesUncached(
     manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addCandidate } = createModelCandidateCollector();
-  let requestedCandidate = normalizedPrimary;
-  const exactRequestedRouteConfigured =
-    hasExactConfiguredProviderModel({
-      cfg: params.cfg,
-      provider: normalizedPrimary.provider,
-      model: normalizedPrimary.model,
-    }) || aliasIndex.byKey.has(modelKey(normalizedPrimary.provider, normalizedPrimary.model));
-  // Persisted legacy pairs may still contain aliases. Prepared routes already
-  // own their provider, so reparsing them can silently select another route.
-  if (requestedRouteResolution === "raw" && !exactRequestedRouteConfigured) {
-    requestedCandidate =
-      resolveModelAliasFromPair({
+  if (modelRaw) {
+    const normalizedPrimary =
+      requestedRouteResolution === "resolved"
+        ? { provider: normalizeProviderId(providerRaw), model: modelRaw }
+        : normalizeModelRef(providerRaw, modelRaw, {
+            allowPluginNormalization:
+              params.allowPluginNormalization !== false &&
+              allowsPluginModelNormalization({
+                cfg: params.cfg,
+                provider: providerRaw,
+                model: modelRaw,
+              }),
+            manifestPlugins: params.manifestPlugins,
+          });
+    let requestedCandidate = normalizedPrimary;
+    const exactRequestedRouteConfigured =
+      hasExactConfiguredProviderModel({
         cfg: params.cfg,
-        agentId: params.agentId,
-        provider: providerRaw,
-        model: modelRaw,
-        defaultProvider,
-        aliasIndex,
-        allowPluginNormalization:
-          params.allowPluginNormalization !== false &&
-          allowsPluginModelNormalization({
-            cfg: params.cfg,
-            provider: providerRaw,
-            model: modelRaw,
-          }),
-        manifestPlugins: params.manifestPlugins,
-      }) ?? normalizedPrimary;
+        provider: normalizedPrimary.provider,
+        model: normalizedPrimary.model,
+      }) || aliasIndex.byKey.has(modelKey(normalizedPrimary.provider, normalizedPrimary.model));
+    // Persisted legacy pairs may still contain aliases. Prepared routes already
+    // own their provider, so reparsing them can silently select another route.
+    if (requestedRouteResolution === "raw" && !exactRequestedRouteConfigured) {
+      requestedCandidate =
+        resolveModelAliasFromPair({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          provider: providerRaw,
+          model: modelRaw,
+          defaultProvider,
+          aliasIndex,
+          allowPluginNormalization:
+            params.allowPluginNormalization !== false &&
+            allowsPluginModelNormalization({
+              cfg: params.cfg,
+              provider: providerRaw,
+              model: modelRaw,
+            }),
+          manifestPlugins: params.manifestPlugins,
+        }) ?? normalizedPrimary;
+    }
+    addCandidate(
+      requestedCandidate,
+      "requested",
+      params.manifestPlugins !== undefined ? "resolved" : requestedRouteResolution,
+    );
   }
-  addCandidate(
-    requestedCandidate,
-    "requested",
-    params.manifestPlugins !== undefined ? "resolved" : requestedRouteResolution,
-  );
 
   const modelFallbacks =
     params.fallbacksOverride !== undefined

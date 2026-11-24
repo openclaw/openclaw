@@ -25,6 +25,10 @@ matching `agents.defaults.voiceModel` take precedence. File transcription produc
 a final transcript after the utterance ends. The catalog marks file transcription
 ready only when a configured provider or CLI command is available.
 
+The catalog checks only the providers named by your media models when reporting
+file-transcription and voice-note readiness. Periodic refreshes still detect
+changes in credentials, provider availability, and installed transcription commands.
+
 Capture pauses during the agent response and speech playback, then resumes for
 the next utterance. Stop cancels the call's own chat run and playback. A Talk
 failure, including the two-minute answer timeout, ends capture and playback but
@@ -128,7 +132,11 @@ and does not prevent the agent from adopting that consult's recorded input.
 Completed agent answers and newly admitted tasks still close the older input;
 speech records do not reopen it.
 
-Gateway-controlled native WebRTC calls receive shared-session history as quoted
+Fresh Gateway-relay calls, including Android Talk, load the selected session's
+recent history at startup, just as voice replacements do. Starting with an empty
+session adds no history.
+
+Gateway-relay and Gateway-controlled native WebRTC calls receive shared-session history as quoted
 historical background in their instructions, not as the new call's own user or
 assistant messages. This background can include prior calls and backing-agent
 answers; it does not establish the current call's live task state. It retains

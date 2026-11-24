@@ -10,11 +10,13 @@ export async function retainMemberRecoveryUses(
   previous: StoredClaw | undefined,
   candidate: StoredClaw,
   profiles: OpenClawIdMemberProfiles,
-): Promise<StoredClaw> {
-  const next = await retainMemberProfiles(previous, candidate, profiles);
+  memberRolesEnabled: () => boolean,
+): Promise<{ record: StoredClaw; assertCurrent: () => void }> {
+  const retained = await retainMemberProfiles(previous, candidate, profiles, memberRolesEnabled);
+  const next = retained.record;
   const state = next.authority;
   if (!state) {
-    return next;
+    return retained;
   }
   const uses: MemberRecoveryUse[] = [];
   for (const [accountId, member] of Object.entries(state.members)) {
@@ -47,7 +49,10 @@ export async function retainMemberRecoveryUses(
       });
     }
   }
-  return uses.length
-    ? { ...next, member_recovery_uses: [...(next.member_recovery_uses ?? []), ...uses] }
-    : next;
+  return {
+    ...retained,
+    record: uses.length
+      ? { ...next, member_recovery_uses: [...(next.member_recovery_uses ?? []), ...uses] }
+      : next,
+  };
 }

@@ -38,6 +38,7 @@ export function listSlackMessageActions(
     ["pins", ["pin", "unpin", "list-pins"]],
     ["memberInfo", ["member-info"]],
     ["emojiList", ["emoji-list"]],
+    ["channelInfo", ["channel-list"]],
   ] as const) {
     if (gates.some((isEnabled) => isEnabled(gate, gate === "channels" ? false : undefined))) {
       actions.push(...enabledActions);

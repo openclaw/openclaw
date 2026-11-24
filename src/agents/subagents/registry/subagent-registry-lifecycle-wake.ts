@@ -18,15 +18,11 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
-import {
-  SubagentCompletionSourceChangedError,
-  SubagentRequesterWakeProgressChangedError,
-} from "../completion/subagent-completion-admission.store.js";
+import { SubagentCompletionSourceChangedError } from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
-import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   RequesterSettleWakeEvaluation,
@@ -60,7 +56,7 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isRequesterSettleMemberReady } from "./subagent-run-liveness.js";
 
 const pendingRequesterTransitions = new WeakMap<
   object,
@@ -223,7 +219,7 @@ function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
 }
 
 /** One in-flight evaluation per owed continuation; members of one cohort share it. */
-export function requesterSettleWakeScope(entry: SubagentRunRecord): string {
+function requesterSettleWakeScope(entry: SubagentRunRecord): string {
   const wake = entry.requesterSettleWake;
   const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
   if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
@@ -288,7 +284,6 @@ export function scheduleRequesterSettleWake(
   if (
     entry.collect ||
     !requesterSessionKey ||
-    (isCompletedRequesterDeliveryBlocked(entry) && admittedWake?.requesterYieldBatch !== true) ||
     entry.execution.status === "running" ||
     !hasSubagentRunEnded(entry) ||
     awaitsStoppedPauseRetirement(entry) ||
@@ -338,14 +333,19 @@ export function scheduleRequesterSettleWake(
       return false;
     }
   };
-  const admittedBatch = (
-    entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
-      ? [runId]
-      : (admittedWake?.batchRunIds ?? [runId])
-  ).flatMap((id) => {
-    const member = params.runs.get(id);
-    return member ? [member] : [];
-  });
+  const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
+  // Failure settlement owns offered results, never a still-working member's future completion.
+  const offeredBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
+    (id) => {
+      const member = params.runs.get(id);
+      return member?.requesterSettleWake &&
+        member.requesterSettleWake.rearmGeneration === admittedWake?.rearmGeneration &&
+        (pauseNotice || isRequesterSettleMemberReady(member))
+        ? [member]
+        : [];
+    },
+  );
+  const admittedBatch = subagentRuns.selectCompletionAuthorityBatch(offeredBatch, entry);
   let settleObserved = pendingSettlement?.scope === scope ? pendingSettlement.settle : undefined;
   let publishDispatch = pendingTransition?.scope === scope ? pendingTransition.commit : undefined;
   const completeBatch = async (
@@ -378,12 +378,7 @@ export function scheduleRequesterSettleWake(
         entry,
         async (releasePreparation) => {
           // Admission can wait; reread the row before a blocked receipt is executed again.
-          if (
-            !isSourceCurrent() ||
-            awaitsStoppedPauseRetirement(entry) ||
-            (isCompletedRequesterDeliveryBlocked(entry) &&
-              entry.requesterSettleWake?.requesterYieldBatch !== true)
-          ) {
+          if (!isSourceCurrent() || awaitsStoppedPauseRetirement(entry)) {
             return;
           }
           try {
@@ -529,8 +524,8 @@ export function scheduleRequesterSettleWake(
             if (isGatewayRestartDrainError(error)) {
               return;
             }
-            if (error instanceof SubagentRequesterWakeProgressChangedError) {
-              // Another attempt already owns this wake's newer progress.
+            if (error instanceof SubagentCompletionSourceChangedError) {
+              // A rejected owner must yield, not settle the current owner's owed results.
               for (const member of admittedBatch) {
                 const key = getSubagentRunRuntimeKey(member);
                 if (pendingRequesterSettlements.get(key)?.settle === settleObserved) {
@@ -601,35 +596,6 @@ export function scheduleRequesterSettleWake(
             });
             if (!isSourceCurrent()) {
               return;
-            }
-            if (error instanceof SubagentCompletionSourceChangedError && !settleObserved) {
-              const noticeScope = admittedWake?.batchRunIds ? scope : `${scope}\0${runId}`;
-              try {
-                const { appendAssistantMessageToSessionTranscript } =
-                  await import("../../../config/sessions/transcript.js");
-                const notice = await appendAssistantMessageToSessionTranscript({
-                  agentId: entry.requesterAgentId,
-                  sessionKey: requesterSessionKey,
-                  storePath: entry.requesterStorePath,
-                  idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
-                  text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
-                  assertCurrent: () => {
-                    if (!isSourceCurrent() || requesterSettleWakeScope(entry) !== scope) {
-                      throw new Error("Requester wake changed before rejection notice", {
-                        cause: error,
-                      });
-                    }
-                  },
-                });
-                if (!notice.ok) {
-                  throw new Error(notice.reason, { cause: error });
-                }
-              } catch (noticeError) {
-                params.warn("failed to record requester settle wake rejection notice", {
-                  error: buildSafeLifecycleErrorMeta(noticeError),
-                  runId,
-                });
-              }
             }
             // Delivery may have succeeded before its bookkeeping failed. Preserve that result.
             await (

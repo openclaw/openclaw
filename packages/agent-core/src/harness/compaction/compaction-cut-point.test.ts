@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
+import {
+  collectCompactionCutEntryFact,
+  findCutPointFromFacts,
+  getMessageFromEntryForCompaction,
+} from "./compaction-cut-point.js";
 import { estimateTokens, findCutPoint } from "./compaction.js";
 import { createMessageEntry as messageEntry } from "./compaction.test-support.js";
 import { assistant, text, toolCall, toolResult, user } from "./shard-fixtures.test-support.js";
@@ -47,6 +52,57 @@ function buildTranscriptWithToolResult(
     result,
   ].map(messageEntry);
 }
+
+it("keeps occurrence cuts and pending budgets after releasing the source payloads", () => {
+  const entries = [
+    userText("old request", 1),
+    callingAssistant("bash", "repeat"),
+    { ...toolResultText("large removed payload ".repeat(10_000), 2), toolCallId: "repeat" },
+    userText("pending request", 3),
+    callingAssistant("read", "repeat"),
+    {
+      ...toolResultText("synthetic", 4),
+      toolCallId: "repeat",
+      isError: true,
+      details: { openclawSyntheticMissingToolResult: true },
+    },
+    callingAssistant("read", "other"),
+    { ...toolResultText("late real result", 5), toolCallId: "repeat" },
+    { ...toolResultText("other result", 6), toolCallId: "other" },
+    assistantText("complete", 7),
+  ].map(messageEntry);
+  const facts = structuredClone(entries.map((entry) => collectCompactionCutEntryFact(entry)));
+  const estimates = entries.map((entry) => {
+    const message = getMessageFromEntryForCompaction(entry);
+    return message ? estimateTokens(message) : 0;
+  });
+  const estimateAt = (index: number) => {
+    const value = estimates[index];
+    assert(value !== undefined);
+    return value;
+  };
+  const constraints = { requestBoundary: { entryId: "entry-3", preserve: true } };
+  const budgets = [1, 100, 20_000];
+  const expected = budgets.map((budget) =>
+    findCutPoint(entries, 0, entries.length, budget, constraints),
+  );
+  expect(expected[0]?.firstKeptEntryIndex).toBe(3);
+  const retention = {
+    ...constraints,
+    budget: { maxTokens: 100, reserveTokens: 10, estimateTokens },
+  };
+  const retained = findCutPoint(entries, 0, entries.length, 100, retention);
+  entries.length = 0;
+  expect(JSON.stringify(facts)).not.toContain("removed payload");
+  budgets.forEach((budget, index) => {
+    expect(findCutPointFromFacts(facts, 0, facts.length, budget, constraints, estimateAt)).toEqual(
+      expected[index],
+    );
+  });
+  expect(findCutPointFromFacts(facts, 0, facts.length, 100, retention, estimateAt)).toEqual(
+    retained,
+  );
+});
 
 describe("findCutPoint", () => {
   function foregroundBudget(entries: SessionTreeEntry[]) {

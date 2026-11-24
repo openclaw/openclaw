@@ -7,6 +7,25 @@ describe("Feishu text command admission", () => {
   const { handleFeishuMessage, resolvedTurnCalls, runtimeStub } = setupFeishuBroadcastTestHarness();
 
   it.each([
+    "@Ada /status",
+    "@Ada /model openai/gpt-4o-mini",
+    "Send /model to choose another model.",
+  ])("keeps ordinary mention-shaped prose as text: %j", async (text) => {
+    await handleFeishuMessage({
+      cfg: createFeishuTestConfig({ dmPolicy: "open", allowFrom: ["*"] }),
+      event: createFeishuTestEvent({ messageId: `msg-prose-${text}`, text }),
+      botOpenId: "ou-bot",
+      runtime: createRuntimeEnv(),
+    });
+    expect(resolvedTurnCalls).toHaveLength(1);
+    expect(resolvedTurnCalls[0]?.ctxPayload).toMatchObject({
+      CommandBody: text,
+      BodyForCommands: text,
+      CommandTurn: { kind: "normal", source: "message", body: text },
+    });
+  });
+
+  it.each([
     "/status",
     "/btw progress?",
     "/btw why?\n  first frame\n\n    second frame",

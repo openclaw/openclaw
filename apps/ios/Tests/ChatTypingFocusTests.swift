@@ -82,7 +82,7 @@ private struct ChatTypingRenderBoundary: UIViewRepresentable {
 private struct ChatTypingRenderedOwner: View {
     var body: some View {
         NavigationStack {
-            ChatProTab(headerSidebarAction: nil, openSettings: {})
+            ChatProTab(headerSidebarAction: nil, openSettings: {}, startFirstGatewaySetup: nil)
         }
     }
 }

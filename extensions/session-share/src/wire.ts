@@ -5,6 +5,7 @@ import {
 import {
   sessionCatalogPaging,
   type SessionCatalogSession,
+  type SessionCatalogSourceProfileRelation,
   type SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -76,38 +77,50 @@ const actor = {
     avatarUrl: shortString,
   },
 };
-const sessionPageSchema: JsonSchemaObject = {
-  type: "object",
-  additionalProperties: false,
-  required: ["sessions"],
-  properties: {
-    nextCursor: cursor,
-    sessions: {
-      type: "array",
-      maxItems: 100,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["threadId", "status", "archived", "canContinue", "canArchive"],
-        properties: {
-          threadId: shortString,
-          name: text,
-          color: shortString,
-          cwd: text,
-          status: { enum: ["live", "idle", "archived"] },
-          createdAt: { type: "number" },
-          updatedAt: { type: "number" },
-          recencyAt: { type: "number" },
-          gitBranch: text,
-          archived: { type: "boolean" },
-          createdActor: actor,
-          canContinue: { const: false },
-          canArchive: { const: false },
-          canOpenTerminal: { const: false },
+function sessionPageSchema(includeLinks: boolean, relationScoped: boolean): JsonSchemaObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["sessions"],
+    properties: {
+      nextCursor: cursor,
+      ...(relationScoped ? { relationUnresolved: { const: true } } : {}),
+      sessions: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["threadId", "status", "archived", "canContinue", "canArchive"],
+          properties: {
+            threadId: shortString,
+            ...(includeLinks
+              ? { originalPath: { type: "string", minLength: 1, maxLength: 2048 } }
+              : {}),
+            name: text,
+            color: shortString,
+            cwd: text,
+            status: { enum: ["live", "idle", "archived"] },
+            createdAt: { type: "number" },
+            updatedAt: { type: "number" },
+            recencyAt: { type: "number" },
+            gitBranch: text,
+            archived: { type: "boolean" },
+            createdActor: actor,
+            canContinue: { const: false },
+            canArchive: { const: false },
+            canOpenTerminal: { const: false },
+          },
         },
       },
     },
-  },
+  };
+}
+const sessionPageSchemas = {
+  plain: sessionPageSchema(false, false),
+  plainScoped: sessionPageSchema(false, true),
+  linked: sessionPageSchema(true, false),
+  linkedScoped: sessionPageSchema(true, true),
 };
 const transcriptPageSchema: JsonSchemaObject = {
   type: "object",
@@ -138,19 +151,34 @@ const transcriptPageSchema: JsonSchemaObject = {
     },
   },
 };
-type SessionSharePage = { sessions: SessionCatalogSession[]; nextCursor?: string };
+export type SessionShareSession = SessionCatalogSession & { originalPath?: string };
+type SessionSharePage = {
+  sessions: SessionShareSession[];
+  nextCursor?: string;
+  /** The source could not resolve the requested relation target; the receiver filters client-side. */
+  relationUnresolved?: true;
+};
 type SessionShareTranscriptPage = {
   threadId: string;
   items: SessionCatalogTranscriptItem[];
   nextCursor?: string;
 };
 
-function isSessionPage(value: unknown): value is SessionSharePage {
-  return validateJsonSchemaValue({
-    schema: sessionPageSchema,
-    cacheKey: "session-share.sessions.v1",
-    value,
-  }).ok;
+function isSessionPage(
+  value: unknown,
+  includeLinks: boolean,
+  relationScoped: boolean,
+): value is SessionSharePage {
+  const name = `${includeLinks ? "linked" : "plain"}${relationScoped ? "-scoped" : ""}`;
+  const schema = includeLinks
+    ? relationScoped
+      ? sessionPageSchemas.linkedScoped
+      : sessionPageSchemas.linked
+    : relationScoped
+      ? sessionPageSchemas.plainScoped
+      : sessionPageSchemas.plain;
+  return validateJsonSchemaValue({ schema, cacheKey: `session-share.sessions.${name}.v1`, value })
+    .ok;
 }
 
 function isTranscriptPage(value: unknown): value is SessionShareTranscriptPage {
@@ -173,11 +201,15 @@ function unwrapPayload(value: unknown): unknown {
 
 // The wire vocabulary deliberately excludes profile identities and local sessionKey.
 // Only the receiver's explicit binding may turn a paired node claim into local attribution.
-export function parseSessionSharePage(raw: unknown): SessionSharePage {
+export function parseSessionSharePage(
+  raw: unknown,
+  includeLinks = false,
+  query?: SessionCatalogSourceProfileRelation,
+): SessionSharePage {
   const value = unwrapPayload(raw);
   if (
-    !isSessionPage(value) ||
-    (value.nextCursor !== undefined && !sessionCatalogPaging.isExactCursor(value.nextCursor))
+    !isSessionPage(value, includeLinks, query !== undefined) ||
+    (value.nextCursor !== undefined && !sessionCatalogPaging.isExactCursor(value.nextCursor, query))
   ) {
     throw new Error("Invalid OpenClaw session page from paired node");
   }

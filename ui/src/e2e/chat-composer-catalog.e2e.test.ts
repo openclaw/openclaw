@@ -313,7 +313,10 @@ suite.define(() => {
             otherModel,
             [
               sessionRow(workModel, { key: "agent:work:main" }),
-              sessionRow(otherModel, { key: "agent:other:main" }),
+              sessionRow(otherModel, {
+                key: "agent:other:main",
+                modelDisplayName: otherModel.name,
+              }),
             ],
             200_000,
           ),
@@ -337,7 +340,7 @@ suite.define(() => {
       await navigateToControlUiSession(page, "agent:other:main");
       await gateway.waitForRequest("chat.startup", { after: 1 });
       const targetModelTrigger = activeComposer().locator('[data-chat-model-select="true"]');
-      await expectText(targetModelTrigger, "other-model");
+      await expect.poll(() => targetModelTrigger.textContent()).toBe(otherModel.name);
       expect(await targetModelTrigger.getAttribute("aria-busy")).toBe("false");
       expect(
         await targetModelTrigger.locator(".chat-controls__model-trigger-skeleton").count(),
@@ -360,6 +363,7 @@ suite.define(() => {
         ),
       ).toHaveLength(1);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await expect.poll(() => targetModelTrigger.textContent()).toBe(otherModel.name);
       await targetModelTrigger.click();
       await expect
         .poll(() => modelOption(activeComposer(), "anthropic/other-model").count())
@@ -428,7 +432,7 @@ suite.define(() => {
     });
   });
 
-  it("retires an empty picker snapshot when the Gateway reconnects", async () => {
+  it("retires an empty catalog snapshot when the Gateway reconnects", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const routedModel = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
       const gateway = await installMockGateway(page, {
@@ -453,10 +457,9 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
-      await pickerTrigger.click();
       await gateway.waitForRequest("models.list");
-      await expectText(composer.locator("[data-chat-model-catalog-state]"), "No models available");
-      await pickerTrigger.click();
+      await expectVisible(composer.getByRole("button", { name: "Set up a model", exact: true }));
+      await expectCount(pickerTrigger, 0);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setOnline(false);

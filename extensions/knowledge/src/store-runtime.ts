@@ -1,3 +1,4 @@
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import type { StoreConfig } from "./real-vault.js";
 import { KnowledgeRestartError } from "./restart-error.js";
 import { StorageClient } from "./storage-client.js";
@@ -16,9 +17,10 @@ export class StoreRuntime {
   readonly client: StorageClient;
   private pending: Promise<void> = Promise.resolve();
   private retiredAt?: Promise<void>;
+  private idleTimer?: NodeJS.Timeout;
   constructor(
     readonly config: StoreConfig,
-    changed?: () => void,
+    private readonly changed?: () => void,
   ) {
     this.client = new StorageClient(config, changed);
   }
@@ -37,6 +39,7 @@ export class StoreRuntime {
     if (this.retiredAt) {
       return Promise.reject(retired());
     }
+    clearTimeout(this.idleTimer);
     const result = this.pending.then(() => {
       if (this.retiredAt) {
         throw retired();
@@ -45,10 +48,28 @@ export class StoreRuntime {
       return operation();
     });
     // A rejected operation must not poison subsequent reads, writes or recovery.
-    this.pending = result.then(
+    const settled = result.then(
       () => undefined,
       () => undefined,
     );
+    this.pending = settled;
+    if (getResourceProfile() === "lean" && !this.changed) {
+      void settled.then(() => {
+        if (this.pending !== settled || this.retiredAt) {
+          return;
+        }
+        this.idleTimer = setTimeout(() => {
+          if (this.pending !== settled || this.retiredAt) {
+            return;
+          }
+          // Reopening joins termination in the same lane; a multi-RPC operation
+          // owns that lane even while no worker reply is outstanding.
+          this.pending = this.client.close();
+          // Preserve a failed close for the next operation or lifecycle drain.
+          void this.pending.catch(() => {});
+        }, 60_000).unref();
+      });
+    }
     return result;
   }
   /** Settles once every operation queued so far has finished or failed. */
@@ -59,6 +80,7 @@ export class StoreRuntime {
   /** Stop accepting work, let queued work settle, then release the worker.
    * Resolves once the worker has exited. */
   retire(): Promise<void> {
+    clearTimeout(this.idleTimer);
     this.retiredAt ??= this.pending.then(() => this.client.close());
     return this.retiredAt;
   }

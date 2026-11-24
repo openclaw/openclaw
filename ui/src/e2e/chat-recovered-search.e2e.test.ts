@@ -47,7 +47,7 @@ suite.define(() => {
         ],
       });
       // Search recovery uses the settled roster's message scope, independent of boot ordering.
-      await page.goto(`${suite.server.baseUrl}activity`);
+      await page.goto(`${suite.server.baseUrl}sessions`);
       await page
         .locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
@@ -154,7 +154,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}activity`);
+      await page.goto(`${suite.server.baseUrl}sessions`);
       await page
         .locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,

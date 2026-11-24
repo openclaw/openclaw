@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PushTestResult } from "../../packages/gateway-protocol/src/index.js";
 import { ExitError } from "../runtime.js";
 import {
+  formatCliFailureLines,
+  formatCliJsonFailure,
+  ReportedCliCommandError,
+} from "./failure-output.js";
+import {
   createNodesProgram,
   gatewayRequests,
   getRuntimeOutput,
@@ -287,14 +292,23 @@ describe("cli program (nodes push)", () => {
       mockPushResult(pushResult());
       const invalidEnvironment = "invalid --environment (use sandbox|production)";
       if (json) {
-        // The JSON failure owner only takes over from the exit the real runtime throws.
-        runtime.exit.mockImplementationOnce((code) => {
-          throw new ExitError(code as number);
+        // Match the real runtime exit that the shared JSON failure owner catches.
+        runtime.exit.mockImplementationOnce(() => {
+          throw new ExitError(1);
         });
       }
-      await expect(
-        runPush(["--environment", environment, ...(json ? ["--json"] : [])]),
-      ).rejects.toThrow(json ? invalidEnvironment : "exit");
+      const rejected = runPush(["--environment", environment, ...(json ? ["--json"] : [])]);
+      if (json) {
+        const error = await rejected.catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(ReportedCliCommandError);
+        expect(formatCliJsonFailure(error)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: invalidEnvironment },
+        });
+        expect(formatCliFailureLines({ title: "failed", error })).toEqual([]);
+      } else {
+        await expect(rejected).rejects.toThrow("exit");
+      }
       expect(programGatewayCallMock).not.toHaveBeenCalled();
       expect(getRuntimeOutput()).toBe("");
       expect(runtime.error).toHaveBeenCalledExactlyOnceWith(

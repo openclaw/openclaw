@@ -334,7 +334,9 @@ it("releases the reserved effort slot only after empty model discovery finishes"
     state.request.mockResolvedValue({ models: [] });
     state.emitCatalogChanged();
     await waitForSolid(() => {
-      expect(view.container.querySelector('[data-chat-model-empty="true"]')).not.toBeNull();
+      expect(view.container.querySelector("button[data-chat-model-setup]")?.textContent).toBe(
+        "Set up a model",
+      );
       expect(reserved()).toBeNull();
       expect(view.container.querySelector(".chat-controls__effort-picker")).toBeNull();
     });

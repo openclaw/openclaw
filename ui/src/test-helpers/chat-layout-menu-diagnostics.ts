@@ -15,6 +15,7 @@ export function observeChatLayoutMenu(scope: Element) {
   let identity = 0;
   let sequence = 0;
   let dropped = 0;
+  let beforeClick: ControlUiE2eFailureFact = null;
   const started = performance.now();
   const events: Record<string, ControlUiE2eFailureFact>[] = [];
   const safe = (value: string | null) =>
@@ -39,6 +40,21 @@ export function observeChatLayoutMenu(scope: Element) {
     }
     return {
       node: nodeId(part ?? node),
+      element: nodeId(node),
+      tag: [
+        "html",
+        "body",
+        "div",
+        "span",
+        "button",
+        "a",
+        "svg",
+        "path",
+        "iframe",
+        "dialog",
+      ].includes(node.localName)
+        ? node.localName
+        : "other",
       host: host ? nodeId(host) : null,
       connected: node.isConnected,
       kind: !host
@@ -144,6 +160,26 @@ export function observeChatLayoutMenu(scope: Element) {
       target: describe(event.target),
       active: describe(document.activeElement),
       prevented: event.defaultPrevented,
+      eventPhase: event.eventPhase,
+      trusted: event.isTrusted,
+      pathLength: event.composedPath().length,
+      path: event
+        .composedPath()
+        .slice(0, 16)
+        .map((target) =>
+          target instanceof Element
+            ? describe(target)
+            : {
+                kind:
+                  target === document
+                    ? "document"
+                    : target instanceof Window
+                      ? "window"
+                      : target instanceof ShadowRoot
+                        ? "shadow-root"
+                        : "other",
+              },
+        ),
       ...(event instanceof MouseEvent
         ? { x: event.clientX, y: event.clientY, button: event.button }
         : {}),
@@ -168,9 +204,36 @@ export function observeChatLayoutMenu(scope: Element) {
   };
   record({ type: "start", nodes: snapshot() });
   return {
+    captureBeforeClick(item: Element) {
+      const box = item.getBoundingClientRect();
+      const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      const surface = item.closest(".oc-menu");
+      const style = surface ? getComputedStyle(surface) : null;
+      // Keep this outside the event ring so later input cannot evict the geometry.
+      beforeClick = {
+        ms: Math.round(performance.now() - started),
+        item: describe(item),
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        center,
+        hit: describe(document.elementFromPoint(center.x, center.y)),
+        itemInert: item.closest("[inert]") !== null,
+        itemPointerEvents: getComputedStyle(item).pointerEvents,
+        surface:
+          surface && style
+            ? {
+                ...describe(surface),
+                transform: style.transform,
+                scale: style.scale,
+                translate: style.translate,
+                pointerEvents: style.pointerEvents,
+                inert: surface.hasAttribute("inert"),
+              }
+            : null,
+      };
+    },
     read() {
       mutations(observer.takeRecords());
-      return { dropped, events, current: snapshot(), original: describe(scope) };
+      return { dropped, events, beforeClick, current: snapshot(), original: describe(scope) };
     },
     stop() {
       observer.disconnect();

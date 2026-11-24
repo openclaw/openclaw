@@ -5,6 +5,7 @@ type ClaudeSessionSource = "claude-cli" | "claude-desktop";
 
 export type ClaudeSessionCatalogSession = {
   threadId: string;
+  sourceHomeId?: string;
   name?: string | null;
   color?: string;
   cwd?: string;

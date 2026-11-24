@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as runtimeConfig from "../config/config.js";
@@ -76,6 +78,44 @@ describe("node command service identity", () => {
           expect(process.env).toMatchObject(serviceEnv);
         },
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects shell startup files assigned through env -S before spawning",
+    async () => {
+      const dir = tempDirs.make("node-env-split-");
+      const marker = path.join(dir, "sourced");
+      const payload = path.join(dir, "payload.sh");
+      fs.writeFileSync(payload, `echo sourced > '${marker}'\n`);
+      const config = vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue({
+        tools: { exec: { security: "full", ask: "off" } },
+      });
+      onTestFinished(() => config.mockRestore());
+      for (const command of [
+        ["env", `-SBASH_ENV=${payload}`, "bash", "-c", "echo main"],
+        ["env", `--split-string=ENV=${payload} sh`, "-c", "echo main"],
+      ]) {
+        const sendInvokeResult = vi.fn<
+          Parameters<typeof handleSystemRunInvoke>[0]["sendInvokeResult"]
+        >(async () => {});
+        await withEnvAsync({ OPENCLAW_HOME: stateDir, OPENCLAW_STATE_DIR: stateDir }, () =>
+          handleSystemRunInvoke({
+            params: { command },
+            skillBins: { current: async () => [] },
+            runCommand,
+            sendInvokeResult,
+            preferMacAppExecHost: false,
+          }),
+        );
+        expect(sendInvokeResult.mock.calls[0]?.[0], command[1]).toMatchObject({
+          ok: false,
+          error: {
+            message: expect.stringContaining("SYSTEM_RUN_DENIED: command env assignment rejected"),
+          },
+        });
+      }
+      expect(fs.existsSync(marker)).toBe(false);
     },
   );
 });

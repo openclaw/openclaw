@@ -11,6 +11,7 @@ import type { Message } from "@openclaw/llm-core";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/preparation.types.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
 import type { UsageLike } from "../usage.js";
@@ -111,9 +112,9 @@ export async function attemptServerEndpointCompaction(params: {
       );
       return undefined;
     }
-    const owner = params.sessionManager
-      .getBranch()
-      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const owner = params.sessionManager[sessionManagerReadTranscriptBranch]().findLast(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
     if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
       throw new Error("Responses compact endpoint requires a persisted assistant owner");
     }

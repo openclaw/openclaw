@@ -103,8 +103,9 @@ openclaw_resolve_frozen_upgrade_skill_library_contract() {
 }
 
 openclaw_resolve_frozen_update_channel_switch_contract() {
-  local source_root="${1:?missing selected source root}" legacy current normalized
+  local source_root="${1:?missing selected source root}" legacy current normalized in_place detached
   export OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=MAIN
+  export OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE=detached
   [ -n "${OPENCLAW_SELECTED_SHA:-}" ] || return 0
   openclaw_frozen_target_source validate "$source_root" || return 2
   legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/cli/update-cli/update-command-target.ts 'updateInstallKind === "package" && explicitTag === "main"')" || return 2
@@ -115,6 +116,14 @@ openclaw_resolve_frozen_update_channel_switch_contract() {
     1:0:0) export OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=main ;;
     0:1:1) ;;
     *) echo "unsupported selected update main-target contract" >&2; return 2 ;;
+  esac
+  local git_route=src/cli/update-cli/update-command-git.ts
+  in_place="$(openclaw_frozen_target_source_flag contains "$source_root" "$git_route" 'updateGitCheckout({')" || return 2
+  detached="$(openclaw_frozen_target_source_flag contains "$source_root" "$git_route" 'await updateGitRelease({')" || return 2
+  case "$in_place:$detached" in
+    1:0) export OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE=in-place ;;
+    0:1) ;;
+    *) echo "unsupported selected package-to-Git updater contract" >&2; return 2 ;;
   esac
 }
 
@@ -357,7 +366,7 @@ openclaw_resolve_frozen_session_cold_storage_contract() {
 
   # Stable cuts before cold navigation restore archives on reads. Bind that dialect
   # to its committed archive writer, never infer it from missing or empty SQL rows.
-  has_navigation="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'retainSessionColdNavigationInTransaction(database, sessionId)')" || return 2
+  has_navigation="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'retainSessionColdNavigationInTransaction(')" || return 2
   has_legacy_archival="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'db.deleteFrom("transcript_events").where("session_id", "=", sessionId)')" || return 2
   case "$has_navigation:$has_legacy_archival" in
     1:0) ;;

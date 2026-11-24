@@ -24,7 +24,7 @@ suite.define(() => {
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1`);
       const discover = page.locator("[data-models-login-discover]");
-      expect((await discover.textContent())?.trim()).toBe("On this Gateway");
+      expect((await discover.textContent())?.trim()).toBe("Find local models");
       await discover.click();
       await held.request;
       await expect

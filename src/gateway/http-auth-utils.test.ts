@@ -32,11 +32,15 @@ import {
 } from "./http-auth-utils.js";
 import { bindHttpOperatorAccessAuthority } from "./http-operator-access.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
-const { authorize, ensureOwner } = vi.hoisted(() => ({ authorize: vi.fn(), ensureOwner: vi.fn() }));
+const { authorize, ensureOwner, ensureMember } = vi.hoisted(() => ({
+  authorize: vi.fn(),
+  ensureOwner: vi.fn(),
+  ensureMember: vi.fn(),
+}));
 vi.mock("./auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./auth.js")>()),
   authorizeHttpGatewayConnect: authorize,
@@ -48,7 +52,12 @@ vi.mock("../infra/host-account-name.js", () => ({
 vi.mock("../state/user-profile-writes.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/user-profile-writes.js")>();
   ensureOwner.mockImplementation(actual.ensureCanonicalGatewayOwnerProfile);
-  return { ...actual, ensureCanonicalGatewayOwnerProfile: ensureOwner };
+  ensureMember.mockImplementation(actual.ensureCanonicalUserProfileForOpenClawIdIdentity);
+  return {
+    ...actual,
+    ensureCanonicalGatewayOwnerProfile: ensureOwner,
+    ensureCanonicalUserProfileForOpenClawIdIdentity: ensureMember,
+  };
 });
 
 const roles = {
@@ -284,7 +293,7 @@ describe("HTTP gateway owner profiles", () => {
   );
 
   it(
-    "binds revocation to an active response and releases completed keep-alive responses",
+    "ends active HTTP responses on revocation without cancelling retained admitted work",
     inState(async () => {
       const { cfg, email, person, access } = await registerPersonAccessFixture();
       setRuntimeConfigSnapshot(cfg);
@@ -327,7 +336,7 @@ describe("HTTP gateway owner profiles", () => {
 
         await admitResponse(aliasStreaming, email);
         // The child keeps its source after the parent releases it and its response disconnects.
-        const captured = await captureGatewayOperatorRunAuthority({
+        const captured = await prepareGatewayOperatorRunAuthority({
           client: {
             connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
             internal: { operatorRoleActor: { kind: "operator", profileId: person.id } },
@@ -343,16 +352,16 @@ describe("HTTP gateway owner profiles", () => {
         next.res.destroy();
         await disconnected;
         expect(nextAuthority.signal.aborted).toBe(false);
-        expect(captured.authority.signal?.aborted).toBe(false);
+        expect(captured.authority.signal?.aborted).not.toBe(true);
         setDisplayName(person.id, "Updated during retained work");
         await linkCanonicalUserProfileEmail("added@example.test", person.id);
         expect(aliasStreaming.res.destroyed).toBe(false);
-        expect(captured.authority.signal?.aborted).toBe(false);
+        expect(captured.authority.signal?.aborted).not.toBe(true);
 
         await linkCanonicalUserProfileEmail(email, replacement.id);
         await linkCanonicalUserProfileEmail(email, person.id);
         expect(aliasStreaming.res.destroyed).toBe(true);
-        expect(captured.authority.signal?.aborted).toBe(true);
+        expect(captured.authority.signal?.aborted).not.toBe(true);
         expect(nextAuthority.signal.aborted).toBe(true);
         expect(access.grant.signal.aborted).toBe(false);
         expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);
@@ -395,6 +404,30 @@ describe("HTTP gateway owner profiles", () => {
         }
         expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
       }
+    }),
+  );
+
+  it(
+    "refuses member HTTP profile failures even without a role catalog",
+    inState(async () => {
+      const cfg = { gateway: { openclawId: { enabled: true } } };
+      setRuntimeConfigSnapshot(cfg);
+      authorize.mockResolvedValueOnce({
+        ok: true,
+        method: "trusted-proxy",
+        user: "member@example.test",
+        openclawId: {
+          kind: "member",
+          peerKey: `iroh:${"ab".repeat(32)}`,
+          accountId: "member",
+          role: "operator",
+        },
+      });
+      ensureMember.mockRejectedValueOnce(new Error("profile storage unavailable"));
+      expect(await checkAuth(cfg)).toEqual({
+        ok: false,
+        authResult: { ok: false, reason: "user_profile_unavailable" },
+      });
     }),
   );
 

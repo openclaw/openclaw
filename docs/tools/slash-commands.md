@@ -8,7 +8,14 @@ read_when:
   - Understanding how skill commands are registered
 ---
 
-The Gateway handles commands sent as standalone messages starting with `/`.
+The Gateway recognizes text slash commands, directives, and inline shortcuts only
+when the sender text starts with `/` (leading whitespace and channel-owned bot
+addressing are allowed). Ordinary prose and quotations such as
+`Send /model to choose another model.` stay unchanged.
+A leading directive can still be followed by a task or chained with other directives,
+for example `/think high /verbose on explain this code`. Once a message starts
+with `/`, existing chained directive parsing remains; this is not Markdown-aware
+quote parsing.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
 The bang must start the command text, after any required group mention. Bang
 commands still require command authorization and elevated access; text such as
@@ -47,8 +54,13 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
-    - Ordinary prose such as `How does /queue work?` stays unchanged. Native
-      `/queue` commands and explicit `/queue:` syntax still validate their arguments;
+    - Integrations that wrap sender text in envelopes or sender labels must supply
+      clean command text as `CommandBody` or `BodyForCommands`. A wrapped `Body`
+      alone no longer exposes a command; a plain slash-leading `Body` still works.
+    - Ordinary prose such as `How does /queue work?` or `Use /model openai/gpt-5.4`
+      stays unchanged, even when the model or directive argument is valid. A slash
+      on a later line does not turn a prose message into a command. Native
+      `/queue` commands and leading `/queue:` syntax still validate their arguments;
       a mistyped mode such as `/queue backlog` still produces an error.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
@@ -58,7 +70,7 @@ command handling is enabled for the surface.
       to the current message and never change later turns. Include them with
       the task. Use [session permission modes](/gateway/permission-modes) for
       session-wide policy. `/exec host=... node=...` still persists placement.
-    - In **normal chat** messages with other text, they act as inline hints and
+    - In **messages starting with a slash** that include task text, directives act as inline hints and
       do **not** persist session settings.
       Model selection is the exception: an authorized inline `/model` or
       configured `/<alias>` persists the session selection. Owner/admin `-a`
@@ -75,7 +87,9 @@ on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
 These exchanges appear in session history and later model context, except read-only
 `/status` replies: their command and reply remain visible in history but do not enter
-model context or interrupt an active turn.
+model context or interrupt an active turn. An exchange delivered while a turn is running
+is recorded after that turn settles, so the running answer is kept and the exchange still
+enters later model context.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.
@@ -211,9 +225,10 @@ Channel plugins can enforce owner-only command access through their
 
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
-  **only** authorization source for commands and directives. Use `"*"` for a
-  global default. Provider-specific keys override it. Discord sender entries
-  accept bare user IDs or `user:<id>` and `discord:<id>` aliases.
+  **only** authorization source for commands and directives, except for Gateway
+  clients admitted with `operator.admin`. Use `"*"` for a global default.
+  Provider-specific keys override it. Discord sender entries accept bare user
+  IDs or `user:<id>` and `discord:<id>` aliases.
 </ParamField>
 
 When `commands.allowFrom` is not configured, command authorization follows
@@ -223,10 +238,24 @@ access-group toggle.
 
 For Gateway users with verified login identity, both command allowlists can
 match the user's profile ID. A shared owner profile used only for attribution
-does not grant this access. Internal synthetic callers cannot borrow a human's
-profile. Non-UI Gateway clients also retain application-ID matches such as
-`cli`; operator UI clients do not receive application-ID matches. Existing
-operator scopes and command enablement still apply.
+is not a sender entry and never matches; the client's admitted scopes decide
+instead. Internal synthetic callers cannot borrow a human's profile. Non-UI
+Gateway clients also retain application-ID matches such as `cli`; operator UI
+clients do not receive application-ID matches. Existing operator scopes and
+command enablement still apply.
+
+Chat turns from Control UI and WebChat admitted with `operator.admin` pass
+`commands.allowFrom` without a matching entry. Such a client can already edit
+`commands.allowFrom`, so gating its commands protects nothing. Gateway
+admission decides this once, when the turn starts.
+
+Other Gateway clients that sign in with the shared token or password have no
+user identity, so no sender entry under the `"*"` key matches them. To keep
+their commands available, grant `operator.admin`, or list your channel senders
+under per-channel keys (for example `commands.allowFrom.telegram`) and omit the
+`"*"` key: Gateway clients then use their operator scopes. A denied Gateway
+client gets a refusal that names this policy, a denied native command gets a
+refusal, and a denied text command from a channel sender gets no reply.
 
 Session commands `/new` and `/reset` (including `/reset soft`) remain available
 to channel-authorized senders on channels that do not enforce owner-only
@@ -706,7 +735,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Accordion>
   <Accordion title="Fast path and inline shortcuts">
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
-    - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
+    - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) can accompany task text in messages starting with `/`, and are stripped before the model sees the remaining text. Mid-sentence mentions such as `Please explain /status` do not run a shortcut.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - A later slash token at the caret keeps its completion menu even when the draft starts with another command. Enter or clicking a command runs only that invocation; Tab completes without sending. Active freeform argument collection still owns slash-like argument text.
     - A slash token at the start of the draft is the draft's own command even when text follows it, such as `/loop` typed in front of a pasted prompt. Its menu offers every command, selecting completes the token in place and keeps the text as arguments, and selecting `/goal` opens Goal mode with that text as the objective.

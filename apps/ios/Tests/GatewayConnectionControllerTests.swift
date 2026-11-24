@@ -1307,9 +1307,10 @@ private func pendingHandoffDiagnostic(
             role: "node",
             token: "legacy-share-token",
             profile: .shareExtension)
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "unproven-field-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
         saveActiveManualGateway(
             host: "gateway.example.com",
             port: 443,
@@ -1374,9 +1375,10 @@ private func pendingHandoffDiagnostic(
             deviceId: primaryIdentity.deviceId,
             role: "operator",
             token: "legacy-operator-without-shared-auth")
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "unproven-field-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
         saveActiveManualGateway(
             host: "pair-again.example.com",
             port: 443,
@@ -3516,7 +3518,7 @@ private func pendingHandoffDiagnostic(
         #expect(SessionStatusScope.available(isConnected: appModel.isOperatorGatewayConnected).contains(.snoozed))
         let snoozed = roster.sessions.filter { SessionStatusScope.snoozed.includes($0, at: now) }
         #expect(snoozed == [session])
-        #expect(CommandCenterTab.sessionDetail(session, now: now).hasPrefix("Wakes "))
+        #expect(SessionPresentation.detail(session, now: now).hasPrefix("Wakes "))
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }

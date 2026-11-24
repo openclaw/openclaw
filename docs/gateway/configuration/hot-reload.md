@@ -39,6 +39,13 @@ UI preferences remain in `ui.prefs`. Changing them preserves prepared model
 catalogs, provider authentication, and plugin registrations. Display changes
 still publish the updated config to consumers that read those settings.
 
+Presentation and browser settings preserve prepared model catalogs and session
+snapshots. Connected Control UI conversations keep their model, membership,
+process, and session details when `ui`, `browser`, logging, diagnostics, telemetry,
+or update settings change. Config editors still receive the saved revision.
+Model, provider, authentication, and agent-model settings retain their invalidation.
+Settings with unknown reader dependencies conservatively refresh derived views.
+
 The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
 for runtime application before reporting success. A successful response lets
 clients immediately create sessions or read the updated agent roster. If the

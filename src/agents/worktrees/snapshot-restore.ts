@@ -9,7 +9,11 @@ import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from 
 import { materializeManagedWorktree } from "./checkout-materialize.js";
 import { usesSourceOnlyWorktreeGit } from "./checkout-policy.js";
 import { addManagedWorktree } from "./checkout.js";
-import { hasWorktreeUnknownOutcome, WorktreeRecordNotFoundError } from "./errors.js";
+import {
+  hasWorktreeUnknownOutcome,
+  WorktreeRecordNotFoundError,
+  WorktreeRestoreError,
+} from "./errors.js";
 import {
   requireGit,
   worktreePathExists,
@@ -22,10 +26,10 @@ import { releasePendingWorktree, reservePendingWorktree } from "./pending-slots.
 import { restoreProvisionedFiles } from "./provisioned-files.js";
 import { SNAPSHOT_CHUNK_BYTES } from "./provisioned-snapshot.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
+import { retireMissingRegistryWorktree } from "./registry-retirement.js";
 import {
   createWorktreeRemovalClaimsGuard,
   getRegistryWorktreeProvisionedState,
-  updateRegistryWorktree,
 } from "./registry.js";
 import {
   assertExactStateOwner,
@@ -35,11 +39,7 @@ import {
 } from "./removal-git.js";
 import { resolveRepository, type ResolvedRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
-import {
-  abortWorktreeRemoval,
-  claimWorktreeRemoval,
-  finalizeWorktreeRemoval,
-} from "./run-lease.js";
+import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { removeFailedWorktree, withWorktreeSources } from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
@@ -52,13 +52,14 @@ import {
   readExactRestoreReceipt,
   restoreExactSnapshotFallback,
 } from "./snapshot-restore-exact.js";
+import { finishRestoredSnapshot, settleRestoredProjection } from "./snapshot-restore-settlement.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
-export function requireManagedWorktreeRestoreRecord(
+function requireManagedWorktreeRestoreRecord(
   id: string,
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
-  if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
+  if (!record) {
     throw new WorktreeRecordNotFoundError(`worktree ${id} is not restorable`);
   }
   return record;
@@ -82,21 +83,6 @@ type RestoreContext = Omit<RestoreDependencies, "admitCapacity"> & {
   pendingId?: string;
 };
 
-async function settleRestoredProjection(
-  worktree: ManagedWorktreeRecord,
-  env: NodeJS.ProcessEnv,
-  assertCurrent: WorktreeAllocationGuard["commitGuard"],
-  workerAuthority: WorktreeAllocationGuard["workerAuthority"],
-  phase: "restoreSnapshot" | "finishRestore" = "restoreSnapshot",
-) {
-  const { withSettledLocalWorkspace } =
-    await import("../../gateway/worker-environments/local-workspace-projection.js");
-  await withSettledLocalWorkspace(
-    { worktree, env, assertCurrent, workerAuthority, [phase]: true },
-    async () => {},
-  );
-}
-
 /** Restore retains its canonical source and borrowed Git objects through native settlement. */
 export async function restoreManagedWorktreeSnapshot(
   input: RestoreInput,
@@ -106,12 +92,38 @@ export async function restoreManagedWorktreeSnapshot(
   const registryContext = captureWorktreeRunEndContext(env);
   const accept = captureWorktreeRegistryReadGuard(registryContext, "exact-owner");
   // Queued removal can rebind the record before checkout custody admits us.
-  const preparedRecord = requireManagedWorktreeRestoreRecord(
+  let preparedRecord = requireManagedWorktreeRestoreRecord(
     input.id,
     await readRegistryWorktree(registryContext, input.id),
   );
-  const assertRecordCurrent = accept(preparedRecord);
+  let assertRecordCurrent = accept(preparedRecord);
   input.commitGuard();
+  if (
+    preparedRecord.removedAt === undefined &&
+    !input.recoverExactState &&
+    !preparedRecord.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-")
+  ) {
+    // A queued restore consumes its predecessor's checkout under the mutation lease.
+    if (await worktreePathExists(preparedRecord.path)) {
+      return preparedRecord;
+    }
+    preparedRecord = requireManagedWorktreeRestoreRecord(
+      input.id,
+      (await retireMissingRegistryWorktree(env, preparedRecord, Date.now(), input.commitGuard))
+        .record,
+    );
+    if (preparedRecord.removedAt === undefined) {
+      throw new WorktreeRestoreError(
+        "conflict",
+        "Worktree recovery is held by its local workspace projection; snapshot preserved",
+      );
+    }
+    assertRecordCurrent = captureWorktreeRegistryReadGuard(
+      registryContext,
+      "exact-owner",
+      preparedRecord,
+    )(preparedRecord);
+  }
   if (!(await worktreePathExists(preparedRecord.repoRoot))) {
     throw new Error(`source repository no longer exists: ${preparedRecord.repoRoot}`);
   }
@@ -338,7 +350,7 @@ async function restoreSnapshot(
       record = { ...record, removedAt: Date.now() };
     }
   }
-  if (!record?.snapshotRef || record.removedAt === undefined) {
+  if (record.removedAt === undefined) {
     throw new Error(`worktree ${params.id} is not restorable`);
   }
   const admitCapacity = async (requiredPaths: readonly string[]) => {
@@ -349,7 +361,9 @@ async function restoreSnapshot(
     capacityAdmitted = true;
   };
   await requireSpace(record.path, repository);
-  const provisionedState = await getRegistryWorktreeProvisionedState(env, record.id);
+  const provisionedState = record.snapshotRef
+    ? await getRegistryWorktreeProvisionedState(env, record.id)
+    : [];
   params.commitGuard?.();
   if (provisionedState === undefined) {
     throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
@@ -374,17 +388,35 @@ async function restoreSnapshot(
     signal: params.signal,
     rollbackGuard: params.rollbackGuard,
   };
-  const snapshot = await requireGit(
+  // Missing snapshots explicitly restore a fresh checkout; invalid saved snapshots never fall back.
+  const branchRef = `refs/heads/${record.branch}`;
+  const retainedBranch =
+    !record.snapshotRef &&
+    (await runGit(record.repoRoot, ["show-ref", "--verify", "--quiet", branchRef], gitOptions));
+  if (retainedBranch && retainedBranch.code !== 0 && retainedBranch.code !== 1) {
+    throw commandError("git show-ref retained worktree branch", retainedBranch);
+  }
+  const targetRef =
+    record.snapshotRef ??
+    (retainedBranch && retainedBranch.code === 0 ? branchRef : record.baseRef);
+  const snapshotResult = await runGit(
     record.repoRoot,
-    ["rev-parse", "--verify", `${record.snapshotRef}^{commit}`],
+    ["rev-parse", "--verify", `${targetRef}^{commit}`],
     gitOptions,
   );
-  const exact = await readExactStateSnapshot(
-    record.repoRoot,
-    snapshot,
-    record.snapshotRef,
-    gitOptions,
-  );
+  if (snapshotResult.code !== 0) {
+    throw new WorktreeRestoreError(
+      record.snapshotRef ? "snapshot-invalid" : "base-invalid",
+      record.snapshotRef
+        ? "Worktree snapshot is missing or invalid; restore the source repository snapshot before retrying"
+        : "Recorded branch and base are unavailable; restore the source repository or start a new conversation",
+      { cause: commandError("git rev-parse restore target", snapshotResult) },
+    );
+  }
+  const snapshot = snapshotResult.stdout.trim();
+  const exact = record.snapshotRef
+    ? await readExactStateSnapshot(record.repoRoot, snapshot, record.snapshotRef, gitOptions)
+    : undefined;
   if (
     exact &&
     (exact.branch !== record.branch ||
@@ -394,7 +426,10 @@ async function restoreSnapshot(
         gitOptions,
       )) !== exact.branchHead)
   ) {
-    throw new Error("Recorded branch changed after exact-state retirement; snapshot preserved");
+    throw new WorktreeRestoreError(
+      "conflict",
+      "Recorded branch changed after exact-state retirement; snapshot preserved",
+    );
   }
   if (exact) {
     const restoreRecord = record;
@@ -482,7 +517,10 @@ async function restoreSnapshot(
   try {
     parent = await requireGit(
       record.repoRoot,
-      ["rev-parse", worktreeSnapshotBase(record.snapshotRef!, snapshot)],
+      [
+        "rev-parse",
+        record.snapshotRef ? worktreeSnapshotBase(record.snapshotRef, snapshot) : snapshot,
+      ],
       gitOptions,
     );
   } catch (error) {
@@ -506,14 +544,27 @@ async function restoreSnapshot(
       assertCurrent: params.commitGuard,
     });
   const target = await lstatIfExists(record.path, "ENOENT");
-  const registrations = await listGitWorktrees(record.repoRoot, gitOptions);
+  let registrations = await listGitWorktrees(record.repoRoot, gitOptions);
+  const missingRegistration = registrations.find((entry) => entry.path === record.path);
+  if (
+    !target &&
+    missingRegistration &&
+    !missingRegistration.lockedReason &&
+    missingRegistration.branch === `refs/heads/${record.branch}`
+  ) {
+    // Manual directory deletion leaves Git's registration behind. Remove only this missing
+    // checkout, without force, so Git still refuses locks or newly reappeared user files.
+    await requireGit(record.repoRoot, ["worktree", "remove", "--", record.path], gitOptions);
+    registrations = registrations.filter((entry) => entry !== missingRegistration);
+  }
   if (
     (target && (!target.isDirectory() || (await fs.readdir(record.path)).length > 0)) ||
     registrations.some(
       (entry) => entry.path === record.path || entry.branch === `refs/heads/${record.branch}`,
     )
   ) {
-    throw new Error(
+    throw new WorktreeRestoreError(
+      "conflict",
       "Worktree restore destination or branch is occupied; existing checkouts preserved",
     );
   }
@@ -533,7 +584,8 @@ async function restoreSnapshot(
           gitOptions,
         )) !== parent
       ) {
-        throw new Error(
+        throw new WorktreeRestoreError(
+          "conflict",
           "Recorded branch moved after worktree removal; branch and existing checkouts preserved",
         );
       }
@@ -634,87 +686,4 @@ async function restoreSnapshot(
     restoredProvisionedPaths,
     onFinalized,
   );
-}
-
-async function finishRestoredSnapshot(
-  params: { id: string } & WorktreeAllocationGuard,
-  context: Pick<RestoreContext, "env" | "recoveryClaim" | "pendingId">,
-  record: ManagedWorktreeRecord,
-  restoredProvisionedPaths: string[],
-  onFinalized: () => void,
-  exact = false,
-) {
-  const { env } = context;
-  const gitOptions = {
-    signal: params.signal,
-    beforeRun: params.commitGuard,
-    killProcessTree: true,
-  };
-  params.commitGuard?.();
-  // Advance past the stored stamp even within the same millisecond: stale
-  // cleanup writes fence on the activity stamp they observed, so a restore
-  // must never revive the row with an identical value.
-  const lastActiveAt = Math.max(Date.now(), record.lastActiveAt + 1);
-  const restored = { ...record, lastActiveAt };
-  delete restored.removedAt;
-  delete restored.runEndCleanup;
-  const finishRecovery = async () => {
-    params.commitGuard?.();
-    await requireGit(
-      record.repoRoot,
-      ["update-ref", "-d", `refs/openclaw/removals/${record.id}`],
-      gitOptions,
-    );
-    await settleRestoredProjection(
-      restored,
-      env,
-      params.commitGuard,
-      params.workerAuthority,
-      "finishRestore",
-    );
-  };
-  // Settle old leases while the row still refuses new runs. Revival must not race this await.
-  if (!context.recoveryClaim) {
-    await finalizeWorktreeRemoval(
-      env,
-      { worktreeId: params.id, lastActiveAt: record.lastActiveAt, removedAt: record.removedAt },
-      params.workerAuthority,
-    );
-  }
-  // Exact recovery keeps the row removed until every idempotent cleanup step
-  // completes. A live-row retry must never delete leases from a newly admitted run.
-  if (exact) {
-    await finishRecovery();
-  }
-  await updateRegistryWorktree(
-    env,
-    params.id,
-    {
-      removedAt: undefined,
-      lastActiveAt,
-      provisionedPaths: restoredProvisionedPaths,
-      // The recorded cleanup outcome described the removed lifecycle; a restored
-      // checkout starts a new one, so a stale removed-lossless must not show on
-      // a live row until the next run-end cleanup records fresh truth.
-      runEndCleanup: undefined,
-    },
-    {
-      assertCurrent: params.commitGuard,
-      workerAuthority: exact
-        ? params.workerAuthority
-        : {
-            ...params.workerAuthority,
-            predicates: [
-              ...(params.workerAuthority.predicates ?? []),
-              { kind: "exact-snapshot", record },
-            ],
-          },
-      pendingId: context.pendingId,
-    },
-  );
-  onFinalized();
-  if (!exact) {
-    await finishRecovery();
-  }
-  return restored;
 }

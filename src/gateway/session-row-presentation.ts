@@ -28,7 +28,8 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
 import {
-  reuseSessionRowFields,
+  definedSessionRowFields,
+  freezeSessionRow,
   sessionRowId,
   sessionRowsRevision,
   type SessionRowGeneration,
@@ -159,6 +160,7 @@ export function prepareSessionRowPublication(
 ) {
   const view = prepareSessionRowPublicationView(projection);
   let activeRuns: Map<VisibleActiveSessionRunProjector, ActiveRunStates> | undefined;
+  let subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"] | undefined;
   return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
     const recipient = prepareSessionRowRecipient(read, client, view);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
@@ -169,6 +171,9 @@ export function prepareSessionRowPublication(
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
+        if (subagentRuns?.revision !== recipient.rowContext.subagentRuns.revision) {
+          subagentRuns = recipient.rowContext.subagentRuns.atTime(now);
+        }
         let runStates = projectRun && activeRuns?.get(projectRun);
         if (projectRun && !runStates) {
           runStates = new Map();
@@ -181,6 +186,7 @@ export function prepareSessionRowPublication(
           projectRun,
           recipient,
           runStates,
+          subagentRuns,
         ));
       },
     };
@@ -218,6 +224,7 @@ export function prepareProjectedSessionPresentation(
   projectRun?: VisibleActiveSessionRunProjector,
   recipient = prepareSessionRowRecipient(projection, client),
   sharedActiveRuns?: ActiveRunStates,
+  subagentRuns = recipient.rowContext.subagentRuns.atTime(now),
 ) {
   let activeRuns = sharedActiveRuns;
   const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
@@ -227,7 +234,6 @@ export function prepareProjectedSessionPresentation(
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationRows = publicationState?.rows;
-  const subagentRuns = rowContext.subagentRuns.atTime(now);
   const countBackgroundProcesses = prepareRunningBackgroundProcessCount();
   const preparedRowContext = { ...rowContext, subagentRuns };
   const runState = (
@@ -452,12 +458,11 @@ export function prepareProjectedSessionPresentation(
       facts[15] = run?.active;
       facts[16] = run?.status;
       facts[17] = preparedFacts;
-      facts[18] =
-        sessionTitleRequests.get({
-          storePath: record.storeTarget.storePath,
-          sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-        }) !== undefined;
+      facts[18] = sessionTitleRequests.isPending({
+        storePath: record.storeTarget.storePath,
+        sessionKey: record.key,
+        sessionId: record.entry.sessionId,
+      });
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
       facts[20] =
@@ -596,7 +601,7 @@ export function prepareProjectedSessionPresentation(
     }
     if (signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
-      const snapshot = freezeTrustedJsonSnapshot(reuseSessionRowFields(row, previous?.row));
+      const snapshot = freezeSessionRow(definedSessionRowFields(row), previous?.row);
       const view = { facts: recipientFacts, row: snapshot };
       if (variants) {
         variants.push(view);
@@ -622,11 +627,14 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      select: (
+        retained?: Map<object, SessionListFilteredEntries>,
+        invited?: boolean,
+      ) => SessionEntrySelection,
     ) {
-      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      // Clocks and transient runs are not owned by metadata or membership publications.
       const live = opts.activeOnly || opts.activityPulseBoundaries;
-      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
+      if (opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);
@@ -639,8 +647,10 @@ export function prepareProjectedSessionPresentation(
         view.partitions = undefined;
       }
       if (!view.selection) {
+        view.invited = entryFilter !== undefined && sharing.sessionCap === "invited";
         const { entries, ownerSessionProfiles, ...facets } = select(
           publicationState?.lists.partitions(view),
+          view.invited,
         );
         Object.freeze(entries);
         view.selection = Object.freeze({

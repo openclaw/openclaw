@@ -5,6 +5,7 @@ import { assert, expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent as refreshUsage } from "./session-cost-usage-aggregation.js";
+import { loadSessionCostSummariesFromCache } from "./session-cost-usage-cache-runtime.js";
 import {
   acquireUsageLock,
   createUsageCacheWrite as rollup,
@@ -22,8 +23,53 @@ import {
 } from "./session-cost-usage-partitions.js";
 import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
-import { withUsageWorkerPreload } from "./session-cost-usage-worker-io.test-support.js";
+import {
+  observeUsageWorkerReads,
+  withUsageWorkerPreload,
+} from "./session-cost-usage-worker-io.test-support.js";
 import { loadSessionUsageOverviewFromCache } from "./session-cost-usage.js";
+
+it("reads selected usage months through the index after outgrowing sparse statistics", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-indexed-months";
+    const files = ["first", "second"].map((name) =>
+      path.join(state.sessionsDir(agentId), `${name}.jsonl`),
+    );
+    const observer = await observeUsageWorkerReads(state.stateDir, files);
+    await observer.run(async () => {
+      await fs.mkdir(path.dirname(files[0]!), { recursive: true });
+      const transcript =
+        ["2026-01-01", "2026-09-01", "2026-10-01"]
+          .map((date) =>
+            JSON.stringify(
+              createUsageTranscriptEntry(3, { timestamp: `${date}T00:00:00Z`, cost: 3 }),
+            ),
+          )
+          .join("\n") + "\n";
+      await Promise.all(files.map((file) => fs.writeFile(file, transcript)));
+      const { db } = openOpenClawAgentDatabase({ agentId });
+      db.exec(
+        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('other', 'seed', '{}', 1); ANALYZE cache_entries; DELETE FROM cache_entries",
+      );
+      await refreshUsage({ config: {}, agentId, sessionFiles: files });
+      await observer.clear();
+      const result = await loadSessionCostSummariesFromCache({
+        config: {},
+        agentId,
+        sessions: files.map((sessionFile) => ({ sessionFile })),
+        startMs: Date.UTC(2026, 8, 1),
+        endMs: Date.UTC(2026, 9, 1) - 1,
+        requestRefresh: false,
+      });
+      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([3, 3]);
+      const reads = await observer.read();
+      const plans = reads.flatMap((read) => (read.kind === "partitions" ? read.plan : []));
+      expect(plans.length).toBeGreaterThan(0);
+      expect(plans.filter((detail) => detail.startsWith("SCAN cache_entries"))).toEqual([]);
+      expect(reads.filter((read) => read.kind === "transcript")).toEqual([]);
+    });
+  });
+});
 
 it("rebuilds retired usage partitions even when the transcript is unchanged", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

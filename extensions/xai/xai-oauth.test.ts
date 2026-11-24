@@ -14,7 +14,7 @@ import { fetch as undiciFetch, MockAgent, type Dispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyXaiConfig } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
-import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
+import { createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
 
 const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
@@ -692,10 +692,7 @@ describe("xAI OAuth", () => {
     expect(message).toContain("\nCode: ABCD-1234\n");
     expect(openUrl).toHaveBeenCalledWith(VERIFY_URL);
   });
-  function startLogin(
-    tokenResponse: (init: RequestInit) => Response | Promise<Response>,
-    alias = false,
-  ) {
+  function startLogin(tokenResponse: (init: RequestInit) => Response | Promise<Response>) {
     vi.useFakeTimers();
     fetchImpl.mockReset();
     const controller = new AbortController();
@@ -719,7 +716,7 @@ describe("xAI OAuth", () => {
       responses.push(response);
       return response;
     });
-    const outcome = (alias ? createXaiDeviceCodeAuthMethod() : createXaiOAuthAuthMethod())
+    const outcome = createXaiOAuthAuthMethod()
       .run(loginContext({ credentialOnly: true, signal: controller.signal }))
       .then(
         (value) => ({ value }),
@@ -752,28 +749,24 @@ describe("xAI OAuth", () => {
       name: `invalid token schema ${JSON.stringify(value)}`,
       bytes: Buffer.from(JSON.stringify(value)),
     })),
-  ])("decodes $name across byte boundaries through both public choices", async ({ bytes }) => {
-    for (const alias of [false, true]) {
-      const login = startLogin(
-        () =>
-          streamResponse({
-            start(stream) {
-              for (const byte of bytes) {
-                stream.enqueue(Uint8Array.of(byte));
-              }
-              stream.close();
-            },
-          }),
-        alias,
-      );
-      await expectRejected(
-        login,
-        3,
-        expect.objectContaining({
-          message: expect.stringContaining("token response is missing"),
-        }),
-      );
-    }
+  ])("decodes $name across byte boundaries", async ({ bytes }) => {
+    const login = startLogin(() =>
+      streamResponse({
+        start(stream) {
+          for (const byte of bytes) {
+            stream.enqueue(Uint8Array.of(byte));
+          }
+          stream.close();
+        },
+      }),
+    );
+    await expectRejected(
+      login,
+      3,
+      expect.objectContaining({
+        message: expect.stringContaining("token response is missing"),
+      }),
+    );
   });
 
   it("cancels a streamed response above the byte cap before accepting credentials", async () => {
@@ -814,7 +807,31 @@ describe("xAI OAuth", () => {
     } else {
       await vi.advanceTimersByTimeAsync(stalled ? 30_000 : 8_000);
     }
-    await expectRejected(login, stalled || cancel ? 3 : 10);
+    // A cancel reaches core as the caller's cancellation, not as a wrapped sign-in failure.
+    await expectRejected(
+      login,
+      stalled || cancel ? 3 : 10,
+      // A body that fails mid-read reaches the token parser (ledger E84), so only the
+      // cancelled poll wait shows the caller's cancellation directly.
+      stalled
+        ? expect.any(Error)
+        : cancel
+          ? new Error("cancelled by user")
+          : expect.objectContaining({ reason: "device_code_expired" }),
+    );
+  });
+
+  it.each([
+    ["access_denied", "device_code_denied"],
+    ["authorization_denied", "device_code_denied"],
+    ["expired_token", "device_code_expired"],
+  ])("ends device-code sign-in on %s as %s", async (error, reason) => {
+    const login = startLogin(() => jsonResponse({ error }, 400));
+    await expectRejected(
+      login,
+      3,
+      expect.objectContaining({ name: "ProviderAuthFailure", reason }),
+    );
   });
 
   it("preserves authorization_pending and slow_down pacing before valid tokens", async () => {

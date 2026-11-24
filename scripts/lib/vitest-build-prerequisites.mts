@@ -164,7 +164,6 @@ const runtimeConsumers = [
     // Compiled catalog workers load the fixture's public SDK through built host artifacts.
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
@@ -221,7 +220,10 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  ...startupCorpusTestFiles.map((file) => ({
+  ...[
+    ...startupCorpusTestFiles,
+    "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+  ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.runtime-config.config.ts"],
     mode: "runtime" as const,

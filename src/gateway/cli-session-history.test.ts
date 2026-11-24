@@ -424,7 +424,10 @@ describe("cli session history", () => {
     expect(messages.map(readRecord).map(({ role, content }) => ({ role, content }))).toEqual([
       { role: "user", content: "current recovered ask" },
       { role: "user", content: "summary" },
-      { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }] },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done", is_error: false }],
+      },
       { role: "assistant", content: "response" },
       { role: "user", content: syntheticPrompt },
     ]);
@@ -543,21 +546,45 @@ describe("cli session history", () => {
     },
   );
 
-  it("does not reuse a text-consumed local row for image deduplication", () => {
+  it("does not claim a native media turn with only a positional placeholder", () => {
+    const id = "text-row";
+    const local = user("text only", 1, { id, media: [null] });
+    const imported = user(imagePrompt(id), 2, cliMeta("actual-image"));
+    for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+      expect(
+        mergeImportedChatHistoryMessages(
+          { localMessages: [local], importedMessages: [imported] },
+          new Index(),
+        ),
+      ).toEqual([local, imported]);
+    }
+  });
+
+  it("keeps the earlier native caption separate from the image turn that owns the upload", () => {
     const localEntryId = "local-image-row";
     const timestamp = Date.parse("2026-09-01T10:00:00Z");
     const localMessage = imageTurn(localEntryId, "look at this", timestamp, "a");
-    const textImport = user("look at this", timestamp, cliMeta("text-import"));
+    const textImport = user("look at this", timestamp - 15_000, cliMeta("text-import"));
     const imageImport = user(
       `look at this\n\n${imagePrompt(localEntryId)}`,
       timestamp + 1,
       cliMeta("image-import"),
     );
 
-    expect(merge([localMessage], [textImport, imageImport])).toMatchObject([
-      { __openclaw: { externalId: "text-import" } },
-      { __openclaw: { externalId: "image-import" } },
-    ]);
+    for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+      expect(
+        mergeImportedChatHistoryMessages(
+          { localMessages: [localMessage], importedMessages: [textImport, imageImport] },
+          new Index(),
+        ),
+      ).toEqual([
+        textImport,
+        {
+          ...localMessage,
+          __openclaw: { ...localMessage["__openclaw"], ...imageImport["__openclaw"] },
+        },
+      ]);
+    }
   });
 
   it.each([

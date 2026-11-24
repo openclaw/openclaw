@@ -109,6 +109,9 @@ The Wear OS companion uses the paired Android phone's authenticated Gateway conn
 
 ## Install outside Google Play
 
+Current Android releases are independent of Gateway releases. Historical
+GitHub releases may include APKs; check the listed assets before downloading.
+
 Selected GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance. Android assets may be attached after a release becomes public. Select a release by its listed assets, not by the latest Gateway release tag.
 
 List published releases that contain both required assets:

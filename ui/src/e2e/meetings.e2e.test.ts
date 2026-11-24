@@ -130,7 +130,16 @@ suite.define(() => {
         const captureUrl = `${suite.server.baseUrl}${capturePath}`;
         await page.goto(meetingUrl);
         const view = page.locator("openclaw-meetings-page");
-        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        const title = view.getByRole("heading", { name: "Design review", exact: true });
+        await expect
+          .poll(() => title.evaluate((heading) => heading === document.activeElement))
+          .toBe(true);
+        const excessFocusWidth = await title.evaluate((heading) => {
+          const text = document.createRange();
+          text.selectNodeContents(heading);
+          return heading.getBoundingClientRect().width - text.getBoundingClientRect().width;
+        });
+        expect(Math.abs(excessFocusWidth)).toBeLessThan(1);
         const capture = view.getByRole("link", { name: "Meeting capture", exact: true });
         expect(await capture.getAttribute("href")).toBe(`/${capturePath}`);
         await capture.click();

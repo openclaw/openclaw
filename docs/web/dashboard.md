@@ -37,9 +37,11 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 - Re-open or repair a browser anytime: `openclaw dashboard`. It copies/opens a single-use pairing link
   that grants administrator access to that exact signed browser, including recovery from a previously
   limited credential, without granting blanket remote auto-approval.
-- If clipboard and browser delivery both fail, `openclaw dashboard` either gives a safe manual-token
-  hint or tells you to run `openclaw dashboard --json` and open its short-lived `browserUrl`; it never
-  prints the shared token value in interactive logs.
+- If clipboard and browser delivery both fail, run `openclaw dashboard --json` on the Gateway host
+  and open its short-lived `browserUrl` within ten minutes. Treat the URL and JSON output as credentials;
+  do not share them in logs or support requests. Interactive logs print only the clean dashboard URL.
+- A clean URL or SSH tunnel gives network access, not browser pairing or Gateway authentication.
+  The one-time `browserUrl` carries the owner pairing handoff; shared-secret entry is a separate auth path.
 - If the UI prompts for shared-secret auth, paste the configured token or type the password into **Gateway secret** on the login screen or in **Settings → Gateway**.
 
 ## Auth basics (local vs remote)

@@ -14,9 +14,14 @@ const enPreferences = {
       modelPolicy: "Model policy",
       thinkingLevels: {
         off: "Off",
+        minimal: "Minimal",
         low: "Low",
         medium: "Medium",
         high: "High",
+        xhigh: "Extra high",
+        adaptive: "Adaptive",
+        max: "Maximum",
+        ultra: "Ultra",
       },
       fastModes: {
         auto: "Auto",
@@ -44,7 +49,6 @@ const enPreferences = {
       lobsterdexFirstVisited: "{name} · first visited {date}",
       lobsterdexCardFirstVisited: "First visited {date}",
       lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
-      lobsterdexCardCopyLink: "Copy link",
       lobsterdexOpen: "Open Lobsterdex",
       lobsterdexThemeHidden:
         "This theme hides Lobsterdex. Your collection and preferences are preserved.",

@@ -241,8 +241,7 @@ describe("QA suite runtime parity result projection", () => {
         openclaw: {
           status: "skip",
           cell: runtimeCell("openclaw"),
-          details:
-            "implementation unavailable\nRUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
+          details: "implementation unavailable",
         },
         codex: {
           status: "pass",
@@ -252,9 +251,7 @@ describe("QA suite runtime parity result projection", () => {
     );
     expect(failed.status).toBe("fail");
     expect(failed.steps?.map((step) => step.status)).toEqual(["skip", "fail", "fail"]);
-    expect(failed.steps?.[0]?.details).toContain(
-      "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
-    );
+    expect(failed.steps?.[0]?.details).toContain("implementation unavailable");
   });
 
   it.each([

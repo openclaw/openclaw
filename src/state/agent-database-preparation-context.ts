@@ -12,13 +12,16 @@ export type AgentDatabasePreparedIntegrity = {
   integrityVerifiedAt?: number;
 };
 
+export type AgentInputRecoveryAdmission = {
+  sessions: ReadonlyMap<string, Promise<void>>;
+  completion: Promise<void>;
+  deferred?: ReadonlyMap<string, () => Promise<void>>;
+};
+
 export type AgentDatabasePreparation = {
   observePreparedIntegrity?: (prepared: AgentDatabasePreparedIntegrity) => void;
   readonly hasPendingAgents: boolean;
-  registerInputRecovery(
-    agentId: string,
-    recovery: { sessions: ReadonlyMap<string, Promise<void>>; completion: Promise<void> },
-  ): void;
+  registerInputRecovery(agentId: string, recovery: AgentInputRecoveryAdmission): void;
   isAgentInputRecoveryPending(agentId: string): boolean;
   waitForAgentPreparation(
     this: void,

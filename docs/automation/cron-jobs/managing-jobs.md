@@ -13,6 +13,8 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
 
 In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
 
+When an agent or Template creates an automation in chat, the card appears as soon as the save is confirmed, even if the assistant is still working. Plans and failed attempts do not show a card. A saved automation says **Created** until its settings load, then shows the link and current on/off switch. You can pause or resume a saved automation from the conversation if you have permission to edit it. If the automation is removed or you lose access to it, the card keeps its name but no longer offers any actions.
+
 Deleting a conversation does not remove its linked automations. Command automations can continue running after their creating conversation is deleted. The conversation's deletion confirmation warns that automations may continue; disable or remove them separately to stop future runs.
 
 Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
@@ -290,7 +292,7 @@ To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
-    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) retry up to three times after 30 seconds, 60 seconds, and 5 minutes. Watchdog stalls and caller aborts use the same bounded policy; rate-limited model fallback exhaustion retains its provider classification. Explicit user cancellation, revoked authentication, invalid configuration, and missing targets do not retry. Permanent failures and exhausted retries disable the job with a visible notice. Gateway restart/drain interruptions retain the [restart recovery policy](/automation/cron-jobs/how-it-works#task-reconciliation).
+    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) retry up to three times after 30 seconds, 60 seconds, and 5 minutes. Watchdog stalls and caller aborts use the same bounded policy; rate-limited model fallback exhaustion retains its provider classification. Explicit user cancellation, revoked authentication, invalid configuration, and missing targets do not retry. After a permanent failure or the last retry, the job ends and its owner is notified. Gateway restart/drain interruptions retain the [restart recovery policy](/automation/cron-jobs/how-it-works#task-reconciliation).
 
     **Recurring retry**: consecutive execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
 

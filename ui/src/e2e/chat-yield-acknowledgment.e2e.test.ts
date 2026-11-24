@@ -241,7 +241,7 @@ suite.define(() => {
       await capture(page, "one-waiting", pane, [prompt, ack]);
       await thread.locator(".chat-group.assistant .chat-text").getByText(SHORT_ACK).waitFor();
       expect(await thread.locator(".chat-notice").count()).toBe(0);
-      await expect.poll(async () => squash(await wait.textContent())).toBe("Wait for subagents");
+      await expect.poll(async () => squash(await wait.textContent())).toBe("Waiting for subagents");
       expect(await wait.locator("button[aria-expanded]").count()).toBe(0);
       const rows = await childDetails(pane);
       await rows.getByText(FIRST, { exact: true }).waitFor();
@@ -258,7 +258,7 @@ suite.define(() => {
       await ack.waitFor();
       await wait.waitFor();
       await capture(page, "background-job", pane, [prompt, ack, wait]);
-      await expect.poll(async () => squash(await wait.textContent())).toBe("Wait for subagents");
+      await expect.poll(async () => squash(await wait.textContent())).toBe("Waiting for subagents");
       const rows = await childDetails(pane);
       await rows.getByText(FIRST, { exact: true }).waitFor();
     });
@@ -279,7 +279,7 @@ suite.define(() => {
         .waitFor();
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       const wait = thread.locator(".chat-working-indicator__status");
-      await wait.getByText("Wait for subagents", { exact: true }).waitFor();
+      await wait.getByText("Waiting for subagents", { exact: true }).waitFor();
       const rows = await childDetails(pane);
       for (const name of [FIRST, SECOND, THIRD]) {
         await rows.getByText(name, { exact: true }).waitFor();
@@ -316,7 +316,7 @@ suite.define(() => {
         `${SECOND} Done`,
       ]);
       // A remaining paused child does not keep an already resumed parent waiting.
-      expect(await thread.getByText("Wait for subagents", { exact: true }).count()).toBe(0);
+      expect(await thread.getByText("Waiting for subagents", { exact: true }).count()).toBe(0);
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain(PRIVATE);
       // A listed child opens its own session in place.

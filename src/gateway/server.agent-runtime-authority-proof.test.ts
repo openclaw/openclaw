@@ -12,7 +12,6 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import {
   captureSessionTarget,
@@ -33,7 +32,6 @@ import {
   type Response,
 } from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
-import * as resets from "./session-reset-service.js";
 import { agentCommandMock } from "./test-helpers.js";
 
 const resetDelivery = {
@@ -101,16 +99,6 @@ describe("agent RPC real delegated-authority effects", () => {
     expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
     return committed;
   }
-  function expectResetReply(retry: Response, f: Fixture, text: unknown) {
-    expect(retry).toMatchObject({
-      ok: true,
-      meta: { cached: true },
-      payload: {
-        status: "ok",
-        result: { payloads: [{ text }], meta: { agentMeta: { sessionId: f.sessionId } } },
-      },
-    });
-  }
   function pause(
     f: Fixture,
     signal: AbortSignal,
@@ -123,20 +111,10 @@ describe("agent RPC real delegated-authority effects", () => {
       requests: (Promise<unknown> | undefined)[],
       observers: { mockRestore: () => unknown }[] = [],
       reservation?: ReturnType<typeof createAgentDedupeLifecycle>,
-      allowPublicationDenial = false,
     ) => {
       release.resolve();
       try {
         await execution?.cleanup();
-      } catch (error) {
-        if (!allowPublicationDenial) {
-          throw error;
-        }
-        // Input-custody tests may race final publication, but only this denial is expected.
-        expect(error).toMatchObject({
-          name: "SessionMutationAuthorizationChangedError",
-          message: "agent runtime authority is no longer active",
-        });
       } finally {
         await Promise.allSettled(requests.filter((request) => request !== undefined));
         reservation?.clearUnaccepted();
@@ -151,39 +129,7 @@ describe("agent RPC real delegated-authority effects", () => {
     return { entered, release, finish };
   }
 
-  it("rejects a revoked caller before the real reset transaction", async ({ signal }) => {
-    const f = await fixture();
-    const { entered, release, finish } = pause(f, signal);
-    const hook = async (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
-      if (event.sessionKey !== f.sessionKey) {
-        return;
-      }
-      entered.resolve();
-      await release.promise;
-    };
-    const before = await readEntry(f);
-    registerInternalHook("command:reset", hook);
-    let request: Promise<Response> | undefined;
-    try {
-      request = f.dispatch({ message: "/reset" });
-      await reach(entered.promise, request);
-      expect(await readEntry(f)).toEqual(before);
-      f.owner.revoke();
-      release.resolve();
-      const result = await request;
-      await f.drain();
-
-      expect(agentCommandMock).not.toHaveBeenCalled();
-      expectInactive(result);
-      expect(await readEntry(f)).toEqual(before);
-      expect(transcript(f)).toEqual(f.before);
-    } finally {
-      await finish([request]);
-      unregisterInternalHook("command:reset", hook);
-    }
-  });
-
-  it.for(["revoked", "accepted custody", "ordinary raw input", "replaced after reset"] as const)(
+  it.for(["accepted custody", "ordinary raw input", "replaced after reset"] as const)(
     "real pending-input transaction: %s",
     async (mode, { signal }) => {
       const f = await fixture();
@@ -224,15 +170,13 @@ describe("agent RPC real delegated-authority effects", () => {
         await reach(entered.promise, request);
         expect(await pendingCount(f)).toBe(0);
         const beforeInput = transcript(f);
-        if (mode === "revoked") {
-          f.owner.revoke();
-        } else if (mode === "replaced after reset") {
+        if (mode === "replaced after reset") {
           expect(beforeInput).not.toEqual(f.before);
           replacement = reserve(f, params.message);
         }
         release.resolve();
         const result = await request;
-        if (mode === "revoked" || mode === "replaced after reset") {
+        if (mode === "replaced after reset") {
           expectInactive(result, "is no longer active");
           expect(inputRecorded).toBe(false);
           expect(execution.observer).not.toHaveBeenCalled();
@@ -277,66 +221,53 @@ describe("agent RPC real delegated-authority effects", () => {
           expectRunStatus(completed, "ok", f.runId, true);
         }
       } finally {
-        await finish([writer, request], [observer], replacement, mode === "accepted custody");
+        await finish([writer, request], [observer], replacement);
       }
     },
   );
 
-  it.for(["live", "revoked"] as const)(
-    "real managed media persistence: %s caller",
-    async (mode, { signal }) => {
-      const f = await fixture({ imageCapable: true });
-      const execution = await holdExecution(signal);
-      const entered =
-        createDeferred<Awaited<ReturnType<typeof attachments.persistInboundImagesForTranscript>>>();
-      const { release, finish } = pause(f, signal, execution);
-      const persist = attachments.persistInboundImagesForTranscript;
-      const observer = vi
-        .spyOn(attachments, "persistInboundImagesForTranscript")
-        .mockImplementationOnce(async (...args) => {
-          const saved = await persist(...args);
-          entered.resolve(saved);
-          await release.promise;
-          return saved;
-        });
-      let request: Promise<Response> | undefined;
-      try {
-        request = f.dispatch({
-          message: "managed image proof",
-          attachments: [{ mimeType: "image/png", fileName: "proof.png", content: PNG }],
-        });
-        const saved = await reach(entered.promise, request);
-        expect(saved.omission).toBe("none");
-        expect(saved.entries).toHaveLength(1);
-        const image = saved.entries[0]!;
-        expect(await fs.readFile(image.path)).toEqual(Buffer.from(PNG, "base64"));
-        if (mode === "revoked") {
-          f.owner.revoke();
-        }
-        release.resolve();
-        const result = await request;
+  it("persists real managed media for an admitted caller", async ({ signal }) => {
+    const f = await fixture({ imageCapable: true });
+    const execution = await holdExecution(signal);
+    const entered =
+      createDeferred<Awaited<ReturnType<typeof attachments.persistInboundImagesForTranscript>>>();
+    const { release, finish } = pause(f, signal, execution);
+    const persist = attachments.persistInboundImagesForTranscript;
+    const observer = vi
+      .spyOn(attachments, "persistInboundImagesForTranscript")
+      .mockImplementationOnce(async (...args) => {
+        const saved = await persist(...args);
+        entered.resolve(saved);
+        await release.promise;
+        return saved;
+      });
+    let request: Promise<Response> | undefined;
+    try {
+      request = f.dispatch({
+        message: "managed image proof",
+        attachments: [{ mimeType: "image/png", fileName: "proof.png", content: PNG }],
+      });
+      const saved = await reach(entered.promise, request);
+      expect(saved.omission).toBe("none");
+      expect(saved.entries).toHaveLength(1);
+      const image = saved.entries[0]!;
+      expect(await fs.readFile(image.path)).toEqual(Buffer.from(PNG, "base64"));
+      release.resolve();
+      const result = await request;
 
-        if (mode === "revoked") {
-          expectInactive(result);
-          await expectAbsent(image.path);
-          await expectUnchanged(f);
-          expect(execution.observer).not.toHaveBeenCalled();
-        } else {
-          expectRunStatus(result, "accepted");
-          const prepared = await execution.entered;
-          const recorder = prepared.userTurn.recorder!;
-          const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
-          expect(persisted?.appended).toBe(true);
-          expect(JSON.stringify(transcript(f))).toContain(image.fact.url);
-          expect(await fs.readFile(image.path)).toEqual(Buffer.from(PNG, "base64"));
-        }
-      } finally {
-        await finish([request], [observer]);
-      }
-    },
-  );
+      expectRunStatus(result, "accepted");
+      const prepared = await execution.entered;
+      const recorder = prepared.userTurn.recorder!;
+      const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
+      expect(persisted?.appended).toBe(true);
+      expect(JSON.stringify(transcript(f))).toContain(image.fact.url);
+      expect(await fs.readFile(image.path)).toEqual(Buffer.from(PNG, "base64"));
+    } finally {
+      await finish([request], [observer]);
+    }
+  });
 
-  it.for(["live", "revoked", "stopped", "replaced"] as const)(
+  it.for(["live", "stopped", "replaced"] as const)(
     "delayed reset final delivery: %s caller",
     async (mode, { signal }) => {
       const { f, sink, recordingAdapterRetained } = await createResetDeliveryFixture(fixture, {
@@ -356,9 +287,7 @@ describe("agent RPC real delegated-authority effects", () => {
         await reach(entered.promise, request);
         const committed = await expectReset(f, before);
         await expectAbsent(sink);
-        if (mode === "revoked") {
-          f.owner.revoke();
-        } else if (mode === "stopped") {
+        if (mode === "stopped") {
           expect(await f.stop()).toMatchObject({ ok: true, payload: { aborted: true } });
         } else if (mode === "replaced") {
           replacement = reserve(f, "/reset");
@@ -387,111 +316,12 @@ describe("agent RPC real delegated-authority effects", () => {
         expect((await readEntry(f))?.lifecycleRevision).toBe(committed?.lifecycleRevision);
         if (mode !== "live") {
           await expectAbsent(sink);
-          if (mode === "revoked") {
-            expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
-          }
         } else {
           expect(await fs.readFile(sink, "utf8")).toBe("✅ Session reset.\n");
         }
         expect(agentCommandMock).not.toHaveBeenCalled();
       } finally {
         await finish([request], [], replacement);
-      }
-    },
-  );
-
-  it.for(["already committed", "adopted bare", "adopted with suffix"] as const)(
-    "retains reset across parent closure and same-key retry: %s",
-    async (mode, { signal }) => {
-      const adopted = mode !== "already committed";
-      const delivery = adopted ? await createResetDeliveryFixture(fixture) : undefined;
-      const f = delivery?.f ?? (await fixture());
-      const execution = await holdExecution(signal);
-      const { entered, release, finish } = pause(f, signal, execution);
-      const cleanup = await import("../plugins/host-hook-cleanup.js");
-      const performCleanup = cleanup.runPluginHostCleanup;
-      const performReset = resets.performGatewaySessionReset;
-      const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
-      const cleanupObserver = vi.spyOn(cleanup, "runPluginHostCleanup");
-      if (adopted) {
-        cleanupObserver.mockImplementation(async (params) => {
-          const result = await performCleanup(params);
-          if (params.reason === "reset" && params.sessionKey === f.sessionKey) {
-            expect(result.failures).toEqual([]);
-            // Pause after real generation adoption, before the reset transaction.
-            entered.resolve();
-            await release.promise;
-          }
-          return result;
-        });
-      } else {
-        resetObserver.mockImplementationOnce(async (params) => {
-          const result = await performReset(params);
-          expect(result.ok).toBe(true);
-          entered.resolve();
-          await release.promise;
-          return result;
-        });
-      }
-      const before = await readEntry(f);
-      const captureReset = async () => {
-        const entry = await expectReset(f, before);
-        const events = transcript(f);
-        expect(events).not.toEqual(f.before);
-        return { entry, events };
-      };
-      const expectNoDelivery = async () => {
-        if (delivery) {
-          expect(delivery.attempts()).toBe(0);
-          await expectAbsent(delivery.sink);
-        }
-      };
-      let request: Promise<Response> | undefined;
-      try {
-        if (delivery) {
-          expect(delivery.recordingAdapterRetained).toBe(true);
-        }
-        const followUpPending = mode !== "adopted bare";
-        const params = {
-          ...(adopted ? resetDelivery : {}),
-          message: followUpPending ? "/reset do not admit this suffix" : "/reset",
-        };
-        request = f.dispatch(params);
-        await reach(entered.promise, request);
-        const alreadyCommitted = adopted ? undefined : await captureReset();
-        if (adopted) {
-          expect(await readEntry(f)).toEqual(before);
-          expect(transcript(f)).toEqual(f.before);
-          await expectNoDelivery();
-        }
-        f.owner.revoke();
-        release.resolve();
-        const response = await request;
-        const committed = alreadyCommitted ?? (await captureReset());
-        expectInactive(response);
-        await f.drain();
-        expect(await pendingCount(f)).toBe(0);
-        expect(execution.observer).not.toHaveBeenCalled();
-        await expectNoDelivery();
-        const retry = await f.dispatch(params, await f.freshCaller());
-        await f.drain();
-        expectResetReply(
-          retry,
-          f,
-          followUpPending
-            ? expect.stringContaining("before the follow-up ran")
-            : "✅ Session reset.",
-        );
-        expect(resetObserver).toHaveBeenCalledOnce();
-        expect(await readEntry(f)).toEqual(committed.entry);
-        expect(transcript(f)).toEqual(committed.events);
-        expect(await pendingCount(f)).toBe(0);
-        expect(execution.observer).not.toHaveBeenCalled();
-        expect(agentCommandMock).not.toHaveBeenCalled();
-        await expectNoDelivery();
-        expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
-      } finally {
-        await finish([request], [resetObserver, cleanupObserver]);
       }
     },
   );

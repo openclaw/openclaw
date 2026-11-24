@@ -4,6 +4,7 @@ import type {
   SessionApprovalEvent,
   SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -25,12 +26,19 @@ import {
 } from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import {
+  canAccessInvitedApprovalSession,
+  prepareProjectedApprovalSessionAccess,
+  readOperatorApprovalRequestSource,
+} from "./server-methods/approval-record-lookup.js";
 import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-methods/types.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
 const MAX_IDLE_REPLAY_SCOPES = 64;
 type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release"> & {
   reusable: boolean;
+  records: OperatorApprovalRecord[];
 };
 type ApprovalReplayScope = {
   sessionKey: string;
@@ -64,6 +72,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
   reconcileTerminal?: (record: OperatorApprovalRecord) => boolean | Promise<boolean>;
   getLiveManager?: (
     kind: OperatorApprovalRecord["kind"],
@@ -89,6 +98,16 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         !client.invalidated &&
         connId &&
         subscribed.has(connId) &&
+        canAccessInvitedApprovalSession({
+          cfg: getRuntimeConfig(),
+          client,
+          ...readOperatorApprovalRequestSource(record),
+          prepared: prepareProjectedApprovalSessionAccess({
+            cfg: getRuntimeConfig(),
+            client,
+            projection: params.getSessionRowProjection?.(),
+          }),
+        }) &&
         canAccessOperatorApproval({ client, binding: record })
       ) {
         recipients.add(connId);
@@ -201,7 +220,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       }
     }
     if (params.isCurrent?.() === false) {
-      throw new Error("Operator approval replay authority is no longer current");
+      throw new Error("Approval replay runtime ended. Start a new request.");
     }
     const revision = prepared.outcome === "expired" ? scope.revision : readRevision;
     const records =
@@ -229,7 +248,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       approvals,
       truncated,
     };
-    return { replay, isCurrent, reusable: storeIsCurrent !== undefined };
+    return { replay, records, isCurrent, reusable: storeIsCurrent !== undefined };
   };
 
   return {
@@ -243,22 +262,20 @@ export function createOperatorApprovalSessionEventRuntime(params: {
             approvals: [],
             truncated: false,
           },
-          isCurrent: () => !canReviewOperatorApproval(client),
+          isCurrent: () => true,
           release: () => {},
         };
       }
-      const scopes = [...(client?.connect.scopes ?? [])];
+      const admin = client?.connect.scopes?.includes(ADMIN_SCOPE) === true;
       const deviceId = client?.connect.device?.id;
-      const reviewerDeviceId = scopes.includes(ADMIN_SCOPE) ? undefined : deviceId?.trim();
+      const reviewerDeviceId = admin ? undefined : deviceId?.trim();
       const assertCurrent = () => {
         if (
           params.isCurrent?.() === false ||
           client?.invalidated ||
-          !canReviewOperatorApproval(client) ||
-          scopes.join("\0") !== client?.connect.scopes?.join("\0") ||
-          (!scopes.includes(ADMIN_SCOPE) && deviceId !== client?.connect.device?.id)
+          (!admin && deviceId !== client?.connect.device?.id)
         ) {
-          throw new Error("Operator approval replay authority is no longer current");
+          throw new Error("Approval replay connection or device changed. Start a new request.");
         }
       };
       assertCurrent();
@@ -325,11 +342,27 @@ export function createOperatorApprovalSessionEventRuntime(params: {
           prepared = await preparation;
         }
         assertCurrent();
+        const visible = (record: OperatorApprovalRecord) =>
+          canAccessInvitedApprovalSession({
+            cfg: getRuntimeConfig(),
+            client,
+            ...readOperatorApprovalRequestSource(record),
+            prepared: prepareProjectedApprovalSessionAccess({
+              cfg: getRuntimeConfig(),
+              client,
+              projection: params.getSessionRowProjection?.(),
+            }),
+          }) && canAccessOperatorApproval({ client, binding: record });
+        const visibleRecords = prepared.records.filter(visible);
+        const visibleIds = new Set(visibleRecords.map((record) => record.id));
         return {
-          replay: prepared.replay,
+          replay: {
+            ...prepared.replay,
+            approvals: prepared.replay.approvals.filter((approval) => visibleIds.has(approval.id)),
+          },
           isCurrent: () => {
             assertCurrent();
-            return !released && prepared.isCurrent();
+            return !released && prepared.isCurrent() && visibleRecords.every(visible);
           },
           release,
         };

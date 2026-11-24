@@ -46,6 +46,8 @@ export type BackgroundPayloadsCommitParams = {
   payloads: readonly ReplyPayload[];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
+  /** See `commitBackgroundResultToSession`. */
+  displayOnly?: true;
   config: OpenClawConfig;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -87,6 +89,7 @@ export async function commitBackgroundPayloadsToSession(
       },
       idempotencyKey: params.idempotencyKey,
       provenance: params.provenance,
+      displayOnly: params.displayOnly,
       config: params.config,
       signal: params.signal,
       assertCurrent: params.assertCurrent,

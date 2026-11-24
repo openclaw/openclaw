@@ -8,8 +8,8 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
-  captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
@@ -19,7 +19,10 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
@@ -316,7 +319,7 @@ it("keeps an admitted tool caller's source preparation through in-process Stop a
     );
     await withGatewayToolCallerIdentity(caller, async () => {
       const assertCallerCurrent = expectDefined(
-        captureGatewayToolCallerAssertion("sessions.abort"),
+        composePreparedOnlySessionSource(getGatewayToolCallerIdentity()),
         "captured Stop caller",
       );
       const context = createDirectChatContext();

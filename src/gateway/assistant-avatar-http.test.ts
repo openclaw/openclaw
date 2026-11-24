@@ -11,8 +11,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import * as imageOps from "../media/image-ops.js";
-import { readImageMetadataFromHeader } from "../media/image-ops.js";
 import { encodePngRgba } from "../media/png-encode.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-limits.js";
 import {

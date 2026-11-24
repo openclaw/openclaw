@@ -5,6 +5,7 @@ import type {
   StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import type { HostedWorkerEndpoint } from "./shared-worker-host.js";
 import type { SqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import type {
   SqliteWorkerRequest,
@@ -73,7 +74,7 @@ export type Slot = {
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
-  worker: Worker;
+  worker: Worker | HostedWorkerEndpoint;
   receiveReply(reply: SqliteWorkerReply): void;
   actors: Set<Actor>;
   queue: Job[];

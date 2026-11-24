@@ -9,6 +9,7 @@ import {
   listAgentIds,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -49,7 +50,6 @@ export {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
-  checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
   resolveOpenAiCompatibleHttpSenderIsOwner,
@@ -169,7 +169,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
 
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
-  const defaultProvider = defaultModelRef.provider;
+  const defaultProvider = defaultModelRef?.provider ?? DEFAULT_PROVIDER;
   const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   const manifestMetadataSnapshot = getCurrentPluginMetadataSnapshot({
     config: cfg,
