@@ -205,11 +205,12 @@ export async function loadAgentPortDescriptor(
     // Schema 41 adds active event facts; predecessors retain their unknown-row fallback.
     // Schema 42 adds usage counters; predecessors retain their counter-free catalog.
     // Schema 43 adds pending-input endings and reserved provenance columns.
+    // Schema 44 adds the standing-intents location columns and their index.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 43 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 44 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,

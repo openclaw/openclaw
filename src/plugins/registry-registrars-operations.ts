@@ -35,6 +35,7 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeEventSubscription,
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
@@ -42,6 +43,7 @@ import type {
   OpenClawPluginServiceV2,
   OpenClawPluginServiceV3,
 } from "./types.js";
+import { NODE_EVENT_CONSUMER_EVENTS } from "./types.node-events.js";
 
 function isOfficialCodexPluginRecord(
   record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
@@ -272,6 +274,52 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       createRegistration(record, {
         policy: { ...policy, commands },
         pluginConfig,
+      }),
+    );
+  };
+
+  const registerNodeEventConsumer = (
+    record: PluginRecord,
+    subscription: OpenClawPluginNodeEventSubscription,
+  ) => {
+    const events = Array.isArray(subscription.events) ? subscription.events : [];
+    if (
+      events.length === 0 ||
+      !events.every((event) => typeof event === "string" && event.trim())
+    ) {
+      reportRegistrationError(record, "node event subscription missing event names");
+      return;
+    }
+    if (typeof subscription.handle !== "function") {
+      reportRegistrationError(record, "node event subscription missing handler");
+      return;
+    }
+    const normalizedEvents = [...new Set(events.map((event) => event.trim()))];
+    const unsupported = normalizedEvents.find(
+      (event) => !(NODE_EVENT_CONSUMER_EVENTS as readonly string[]).includes(event),
+    );
+    if (unsupported) {
+      reportRegistrationError(
+        record,
+        `node event subscription unsupported event: ${unsupported} (supported: ${NODE_EVENT_CONSUMER_EVENTS.join(", ")})`,
+      );
+      return;
+    }
+    for (const event of normalizedEvents) {
+      const existing = registry.nodeEventConsumers.find((entry) =>
+        entry.subscription.events.includes(event),
+      );
+      if (existing) {
+        reportRegistrationError(
+          record,
+          `node event already consumed: ${event} (${existing.pluginId})`,
+        );
+        return;
+      }
+    }
+    registry.nodeEventConsumers.push(
+      createRegistration(record, {
+        subscription: { ...subscription, events: normalizedEvents as [string, ...string[]] },
       }),
     );
   };
@@ -521,6 +569,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerCli,
     registerReload,
     registerNodeHostCommand,
+    registerNodeEventConsumer,
     registerNodeInvokePolicy,
     registerGatewayAccessPolicy,
     registerRepositoryIntegration,

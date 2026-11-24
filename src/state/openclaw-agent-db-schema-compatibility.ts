@@ -50,6 +50,15 @@ export const AGENT_SCHEMA_COMPATIBILITY = {
       ({ columnName, tableName }) => `${tableName}.${columnName}`,
     ),
     "standing_intents.creator_sender",
+    // Additive location-intent columns: an existing standing_intents table
+    // predates them, and the standing-intents schema ensure adds them (and
+    // their index) lazily. Admission must let the pre-location database
+    // through so the ensure can repair it; requiring them here would reject
+    // the database before the repair path ever runs.
+    "standing_intents.trigger_kind",
+    "standing_intents.location_trigger",
+    "standing_intents.delivery_target",
+    "standing_intents.last_inside",
     ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
       ({ columnName, tableName }) => `${tableName}.${columnName}`,
     ),
@@ -65,6 +74,11 @@ export const AGENT_SCHEMA_COMPATIBILITY = {
     "idx_agent_session_nodes_entry_not_valid",
     "idx_agent_session_input_completions_session_key",
     "idx_agent_conversation_deliveries_source_session",
+    // Additive with the location columns above: the standing-intents schema
+    // ensure creates it lazily, so admission (and pre-migration witnesses
+    // validating a historical database) must tolerate its absence the same
+    // way they tolerate the columns it references.
+    "idx_standing_intents_location",
   ],
   optionalCanonicalTriggerGroups: [
     {

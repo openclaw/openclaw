@@ -204,6 +204,17 @@ The private official-plugin runtime `node-crypto-runtime` exposes `sha256Hex`
 for hashing strings or bytes without loading memory indexing helpers. It is a
 JavaScript-only host runtime export, not a typed public Plugin SDK entrypoint.
 
+The official-plugin runtime `node-push-runtime` exposes `sendNodeIntentAlert`
+so bundled plugins can push a local notification to a paired node's device
+without a session turn. The payload is `{ nodeId: string; title: string; body:
+string }`; the body is truncated to a 256-character UTF-16-safe budget. The
+result is `{ attempted: boolean; ok: boolean; status?: string; reason?:
+string; error?: string }`: `attempted` is false with `error` set when the node
+has no push registration, and `ok` is false with `status`/`reason` on a failed
+delivery. A stale registration is cleared only on the provider's definitive
+410/BadDeviceToken for that exact registration. Callers own failure handling:
+push errors are theirs to log or act on; the runtime never retries.
+
 ### Bundled plugin helper subpaths
 
 Bundled-only helper modules are private-local after the July 2026 sweep.

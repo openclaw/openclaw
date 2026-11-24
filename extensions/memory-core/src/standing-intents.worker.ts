@@ -16,6 +16,7 @@ import {
   type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
+  fireLocationStandingIntentsInDatabase,
   cancelStandingIntentInDatabase,
   createStandingIntentInDatabase,
   getStandingIntentLifecycleDeadline,
@@ -95,6 +96,9 @@ export function bindSqliteWorkerBackend(
         }
         if (command.type === "cancel") {
           return result(cancelStandingIntentInDatabase(db, command.input));
+        }
+        if (command.type === "locationFire") {
+          return result(fireLocationStandingIntentsInDatabase(db, command.input));
         }
         return result(matchStandingIntentsInDatabase(db, command.input));
       });

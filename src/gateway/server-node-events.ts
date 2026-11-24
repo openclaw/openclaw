@@ -50,7 +50,9 @@ import {
 } from "./server-node-event-source.js";
 import { admitNodeAgentRequest } from "./server-node-events-agent-admission.js";
 import { registerNodeApnsEvent } from "./server-node-events-apns.js";
+import { handleNodeChatSubscriptionEvent } from "./server-node-events-chat-subscription.js";
 import { handleNodeExecEvent } from "./server-node-events-exec-notice.js";
+import { handleNodeLocationEvent } from "./server-node-events-location.js";
 import { handleNodeNotificationEvent } from "./server-node-events-notifications.js";
 import type {
   NodeEvent,
@@ -58,7 +60,6 @@ import type {
   NodeEventHandlerOptions,
   NodeEventHandleResult,
 } from "./server-node-events-types.js";
-import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -662,22 +663,8 @@ async function handlePreparedNodeEvent(
     case "notifications.changed":
       return handleNodeNotificationEvent(ctx, nodeId, evt, opts, source);
     case "chat.subscribe":
-    case "chat.unsubscribe": {
-      const sessionKey = normalizeOptionalString(
-        parseNodeEventPayload(evt.payloadJSON)?.sessionKey,
-      );
-      if (!sessionKey) {
-        return undefined;
-      }
-      const { canonicalKey } = resolveSessionStoreIdentity({ cfg: getRuntimeConfig(), sessionKey });
-      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
-      if (evt.event === "chat.subscribe") {
-        await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
-      } else {
-        await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
-      }
-      return undefined;
-    }
+    case "chat.unsubscribe":
+      return handleNodeChatSubscriptionEvent(ctx, nodeId, evt, opts);
     case "exec.started":
     case "exec.finished":
     case "exec.denied":
@@ -787,6 +774,8 @@ async function handlePreparedNodeEvent(
         return { ok: true, event: evt.event, handled: false, reason: "persist_failed" };
       }
     }
+    case "location.update":
+      return handleNodeLocationEvent(ctx, nodeId, evt, opts);
     default:
       return { ok: true, event: evt.event, handled: false, reason: "unsupported_event" };
   }

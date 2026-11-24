@@ -789,6 +789,10 @@
     "./plugin-sdk/node-crypto-runtime": {
       "default": "./dist/plugin-sdk/node-crypto-runtime.js"
     },
+    "./plugin-sdk/node-push-runtime": {
+      "types": "./dist/plugin-sdk/node-push-runtime.d.ts",
+      "default": "./dist/plugin-sdk/node-push-runtime.js"
+    },
     "./plugin-sdk/node-selection-runtime": {
       "default": "./dist/plugin-sdk/node-selection-runtime.js"
     },

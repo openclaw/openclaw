@@ -39,6 +39,7 @@ export const pluginArrays = [
   "cliRegistrars",
   "reloads",
   "nodeHostCommands",
+  "nodeEventConsumers",
   "nodeInvokePolicies",
   "gatewayAccessPolicies",
   "repositoryIntegrations",

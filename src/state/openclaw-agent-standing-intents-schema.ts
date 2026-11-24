@@ -20,6 +20,22 @@ export const STANDING_INTENTS_FTS_SHADOW_TABLES = [
 
 const creatorColumnSql =
   "creator_sender TEXT CHECK (creator_sender IS NULL OR length(trim(creator_sender)) > 0)";
+/** Additive standing-intents columns introduced after the keywords-only schema. */
+const locationColumns: Array<{ name: string; sql: string }> = [
+  {
+    name: "trigger_kind",
+    sql: "trigger_kind TEXT CHECK (trigger_kind IS NULL OR trigger_kind IN ('keywords', 'location'))",
+  },
+  { name: "location_trigger", sql: "location_trigger TEXT" },
+  {
+    name: "delivery_target",
+    sql: "delivery_target TEXT CHECK (delivery_target IS NULL OR length(trim(delivery_target)) > 0)",
+  },
+  {
+    name: "last_inside",
+    sql: "last_inside INTEGER CHECK (last_inside IS NULL OR last_inside IN (0, 1))",
+  },
+];
 const admittedSchemas = new WeakSet<SqliteSchemaFacts>();
 
 function hasCurrentStandingIntentsSchema(db: DatabaseSync): boolean {
@@ -48,7 +64,14 @@ function hasCurrentStandingIntentsSchema(db: DatabaseSync): boolean {
       parseSqliteTableDefinition(
         facts.tableSql.get(STANDING_INTENTS_TABLE) ?? null,
         STANDING_INTENTS_TABLE,
-      ).columns.get("creator_sender") !== creatorColumnSql
+      ).columns.get("creator_sender") !== creatorColumnSql ||
+      !locationColumns.every((column) =>
+        parseSqliteTableDefinition(
+          facts.tableSql.get(STANDING_INTENTS_TABLE) ?? null,
+          STANDING_INTENTS_TABLE,
+        ).columns.has(column.name),
+      ) ||
+      !facts.indexes.has("idx_standing_intents_location")
     ) {
       return false;
     }
@@ -84,6 +107,30 @@ export function ensureOpenClawAgentStandingIntentsSchema(
         },
       );
       // TEMP objects must not redirect installation away from the canonical agent schema.
+      // Add the additive columns BEFORE executing the canonical section:
+      // that section contains idx_standing_intents_location, which references
+      // trigger_kind and location_trigger. On a pre-location table those
+      // columns do not exist yet, so the canonical exec would throw "no such
+      // column" — on exactly the databases this ensure exists to repair —
+      // before the ALTER loop below could ever run. Columns first, then the
+      // canonical DDL installs cleanly.
+      const columns =
+        /* sqlite-allow-raw -- Native inspection preserves generated-column behavior during repair. */ db
+          .prepare("PRAGMA main.table_info(standing_intents)")
+          .all();
+      if (columns.length > 0) {
+        if (!columns.some((column) => column.name === "creator_sender")) {
+          // sqlite-allow-raw -- Canonical additive column migration.
+          db.exec(`ALTER TABLE main.standing_intents ADD COLUMN ${creatorColumnSql}`);
+        }
+        const presentColumns = new Set(columns.map((column) => (column as { name: string }).name));
+        for (const column of locationColumns) {
+          if (!presentColumns.has(column.name)) {
+            // sqlite-allow-raw -- Canonical additive column migration.
+            db.exec(`ALTER TABLE main.standing_intents ADD COLUMN ${column.sql}`);
+          }
+        }
+      }
       // sqlite-allow-raw -- Canonical additive DDL only.
       db.exec(
         schemaSql.replaceAll(
@@ -91,14 +138,10 @@ export function ensureOpenClawAgentStandingIntentsSchema(
           "CREATE $1 IF NOT EXISTS main.",
         ),
       );
-      const columns =
-        /* sqlite-allow-raw -- Native inspection preserves generated-column behavior during repair. */ db
-          .prepare("PRAGMA main.table_info(standing_intents)")
-          .all();
-      if (!columns.some((column) => column.name === "creator_sender")) {
-        // sqlite-allow-raw -- Canonical additive column migration.
-        db.exec(`ALTER TABLE main.standing_intents ADD COLUMN ${creatorColumnSql}`);
-      }
+      // sqlite-allow-raw -- Canonical additive index migration.
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS main.idx_standing_intents_location ON standing_intents(status, trigger_kind, location_trigger)",
+      );
     };
     if (db.isTransaction) {
       ensure();

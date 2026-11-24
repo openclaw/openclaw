@@ -49,6 +49,7 @@ export type {
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeHostCommandAvailabilityContext,
+  OpenClawPluginNodeEventSubscription,
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,

@@ -6,6 +6,7 @@ import {
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import {
   cancelStandingIntent,
+  createLocationStandingIntent,
   createStandingIntent,
   DEFAULT_INTENT_COOLDOWN_SECONDS,
   DEFAULT_INTENT_EXPIRY_MS,
@@ -24,6 +25,51 @@ const STANDING_INTENT_AUTOMATION_GUIDANCE =
   "The system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks.";
 
 type IntentSenderScope = "sender" | "anyone";
+
+function parseLocationCreateParams(value: unknown):
+  | {
+      nodeId: string;
+      direction: "enter" | "exit";
+      centerLat: number;
+      centerLon: number;
+      radiusMeters: number;
+    }
+  | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("location must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const direction = record.direction;
+  if (direction !== "enter" && direction !== "exit") {
+    throw new Error("location.direction must be enter or exit");
+  }
+  return {
+    nodeId: trimRequiredString(record.nodeId, "location.nodeId", 200),
+    direction,
+    centerLat: readBoundedNumber(record.centerLat, "location.centerLat", -90, 90),
+    centerLon: readBoundedNumber(record.centerLon, "location.centerLon", -180, 180),
+    radiusMeters: readBoundedNumber(record.radiusMeters, "location.radiusMeters", 1),
+  };
+}
+
+function readBoundedNumber(value: unknown, field: string, min: number, max?: number): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < min ||
+    (max !== undefined && value > max)
+  ) {
+    throw new Error(
+      max !== undefined
+        ? `${field} must be a finite number between ${min} and ${max}`
+        : `${field} must be a finite number >= ${min}`,
+    );
+  }
+  return value;
+}
 function trimRequiredString(value: unknown, field: string, maxChars: number): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${field} is required`);
@@ -97,6 +143,8 @@ export function createStandingIntentExecutor(options: {
   provider?: string;
   accountId?: string;
   senderId?: string;
+  /** Creating turn's session key; the only accepted location delivery target. */
+  sessionKey?: string;
 }): AnyAgentTool["execute"] {
   return async (_toolCallId, rawParams) => {
     const params = (rawParams ?? {}) as Record<string, unknown>;
@@ -112,6 +160,36 @@ export function createStandingIntentExecutor(options: {
         );
       }
       const nowMs = Date.now();
+      const locationParams = parseLocationCreateParams(params.location);
+      if (locationParams) {
+        if (params.triggerKeywords !== undefined) {
+          throw new Error("combine either triggerKeywords or location, not both");
+        }
+        // Delivery binds to the authenticated creating turn's session; the
+        // model cannot redirect a location reminder to an arbitrary target.
+        const deliveryTarget = options.sessionKey?.trim();
+        if (!deliveryTarget) {
+          throw new Error(
+            "location intent delivery is unavailable for this turn; retry from a conversation session",
+          );
+        }
+        const intent = await createLocationStandingIntent({
+          agentId: options.agentId,
+          assertCurrent: options.assertCurrent,
+          description: trimRequiredString(
+            params.description,
+            "description",
+            INTENT_DESCRIPTION_MAX_CHARS,
+          ),
+          ...locationParams,
+          deliveryTarget,
+          creatorSender: senderId,
+          expiresAt: parseExpiry(params.expiresAt, nowMs),
+          sourceSessionId: options.sourceSessionId,
+          nowMs,
+        });
+        return jsonResult({ intent, message: renderArmedIntentMessage("channel") });
+      }
       const scope = parseChoice<IntentScope>(
         params.scope,
         "scope",

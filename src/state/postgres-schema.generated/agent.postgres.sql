@@ -645,12 +645,19 @@ CREATE TABLE "standing_intents" (
   "last_fired_at" bigint,
   "created_at" bigint NOT NULL,
   "source_session_id" text COLLATE "C",
+  "trigger_kind" text COLLATE "C",
+  "location_trigger" text COLLATE "C",
+  "delivery_target" text COLLATE "C",
+  "last_inside" bigint,
   PRIMARY KEY ("intent_key"),
   CHECK ("creator_sender" IS NULL OR (char_length(btrim("creator_sender")) > 0)),
   CHECK (("status" IN ('pending', 'armed', 'fired', 'done', 'cancelled', 'expired'))),
   CHECK (("max_fires" > 0)),
   CHECK (("fire_count" >= 0)),
   CHECK (("cooldown_seconds" >= 0)),
+  CHECK ("trigger_kind" IS NULL OR ("trigger_kind" IN ('keywords', 'location'))),
+  CHECK ("delivery_target" IS NULL OR (char_length(btrim("delivery_target")) > 0)),
+  CHECK ("last_inside" IS NULL OR ("last_inside" IN (0, 1))),
   UNIQUE ("id")
 );
 
@@ -800,6 +807,8 @@ CREATE INDEX "idx_agent_session_windows_session_key" ON "session_windows" (("ses
 CREATE INDEX "idx_agent_session_windows_updated_at" ON "session_windows" (("updated_at") DESC, ("session_id") ASC);
 
 CREATE INDEX "idx_standing_intents_lifecycle" ON "standing_intents" (("status") ASC, ("expires_at") ASC, ("last_fired_at") ASC NULLS FIRST);
+
+CREATE INDEX "idx_standing_intents_location" ON "standing_intents" (("status") ASC, ("trigger_kind") ASC NULLS FIRST, ("location_trigger") ASC NULLS FIRST);
 
 CREATE INDEX "idx_standing_intents_scope" ON "standing_intents" (("status") ASC, ("channel_scope") ASC NULLS FIRST, ("sender_scope") ASC NULLS FIRST);
 

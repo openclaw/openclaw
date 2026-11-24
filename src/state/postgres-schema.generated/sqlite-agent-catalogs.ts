@@ -129,7 +129,14 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_agent_session_windows_updated_at",
     ],
   ],
-  ["standing_intents", ["idx_standing_intents_lifecycle", "idx_standing_intents_scope"]],
+  [
+    "standing_intents",
+    [
+      "idx_standing_intents_lifecycle",
+      "idx_standing_intents_location",
+      "idx_standing_intents_scope",
+    ],
+  ],
   ["standing_intents_fts", []],
   ["standing_intents_fts_config", []],
   ["standing_intents_fts_data", []],
@@ -284,10 +291,10 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["state_leases", []],
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
-  // agent, agent-version-43
-  dbfb977f921cbd823f4c51fd2d33f1d5bca0d09e35dfaf3f148b0ac6e11a38cb: [
+  // agent, agent-version-43, agent-version-44
+  "6acd0658d79f0f098cbaa6e2a901796f0162f07b2bfa6404ceae9bb6aad2714e": [
     "agent",
-    "ae963123e7fcc3059134c666528fae3f891d1adcf3d6d34688e75a04b2e77467",
+    "45b4248fdae7e8fbc46efd63320193e0ca52c49d07867fffefb26924d895ab24",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
@@ -296,9 +303,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-1, agent-version-2, agent-version-3, agent-version-4, agent-version-5, agent-version-6, agent-version-7, agent-version-8, agent-version-9, agent-version-10, agent-version-11, agent-version-12, agent-version-13, agent-version-14, agent-version-15, agent-version-16, agent-version-17
-  "0d8863d033ed867b9e5410fbf5653fff5668cde5bc9933efdc54a948ef28b3a7": [
+  c7560fbad37f7cc8c013a9734172f8ea2295e6543e8a963567267549fc252308: [
     "agent-version-1",
-    "0ac0c6eca2bd401dba88942343f73a31b0c1fa320b4ef72672a421775667f341",
+    "2a45a6f7ba4b940fcc92d29bea0cf2f803761e8ac2b089dc37a17e16d26f039f",
     [
       0, 2, 3, 4, 5, 6, 60, 61, 9, 10, 62, 63, 13, 14, 64, 16, 65, 18, 19, 20, 21, 23, 26, 66, 28,
       29, 67, 68, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 48, 71, 50, 51, 52, 53, 54,
@@ -307,9 +314,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-18, agent-version-19, agent-version-20
-  "987c7895f0acfaa27bdd4af5532a6a9d7364cbbefe8fe63fa9775b9520b25f85": [
+  "6c7fbe371ec433ed3846700816e195a2c21b8ae7dd08d9e4e9f1d216d3040687": [
     "agent-version-18",
-    "516c6a0cbc9a63134e84a65c3af806fbc6b526292c614c84109f4a2b2c106afc",
+    "40383e82ea0c0568c1dd4ec0453c488105d5556cbd1f598c4a2526577db1a6ba",
     [
       0, 2, 3, 4, 5, 6, 60, 61, 9, 10, 62, 63, 13, 14, 64, 16, 65, 18, 19, 20, 21, 23, 26, 66, 28,
       29, 67, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 48, 71, 50, 51, 52, 53, 54,
@@ -318,9 +325,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-21
-  "7a92498057481f996a0c0716dd078ea69694645fbdb3a011dadaee411478b7ad": [
+  "2d181f7362508ee1836b815abbc2ac82e496398d84bbe8e0c3701e0f5f2f2435": [
     "agent-version-21",
-    "fd83bd56e757e27046bc16f16e0dfd056a4bdb4c187672807f9286089fd4c130",
+    "796028beb0e81a3e91c291e3bfea17fcc3ad0e0723df101e94c1bf1c10d51f7d",
     [
       0, 2, 3, 4, 5, 6, 60, 61, 9, 10, 62, 63, 13, 14, 64, 16, 65, 18, 19, 20, 21, 22, 23, 26, 66,
       75, 29, 76, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 48, 77, 50, 51, 52, 53,
@@ -329,9 +336,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-22
-  "789a67b22bc47d0b58acb19a6041b3ba55bd68c7e7271a4043573739edae02d1": [
+  faf5849dade40d9dafb7c5983e2fac77c42b6b720087ca807bf1236114c10db6: [
     "agent-version-22",
-    "1571750d60d036d5b09e53c9d062396551d72f79642ee52ae104e9213da8592c",
+    "22d9267241094316a9321175b379916f59e1d29ce123ae2cb28ddd5e919874f2",
     [
       0, 2, 3, 4, 5, 6, 60, 61, 9, 10, 62, 63, 13, 14, 64, 16, 65, 18, 19, 20, 21, 22, 23, 26, 66,
       75, 29, 76, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 78, 79, 77, 50, 51, 52,
@@ -340,9 +347,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-23
-  dd91f9df477a6b80f156003269b951f0d4e55d62e6dec37ad23dc909ed61f71f: [
+  "157cd8703f2d0cdba5c0bf440b0984a74e15fc87fa9aa61f9504c3b935c9cf8d": [
     "agent-version-23",
-    "4cd5cf45ce55fd199d3025021381ad10187c3a5db5340aec56aa108c5a315611",
+    "e736bc50b3eda96505b9418dda4ec0e116e4084e1f7c7453fb4aa94851a6e824",
     [
       0, 2, 3, 4, 5, 6, 60, 61, 9, 10, 11, 63, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 26, 66,
       75, 29, 76, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 77, 50, 51, 52,
@@ -351,9 +358,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-24
-  "9b51fb6f3b7692ed5b1d114c9123184aacb35d5c8450f896b5d289fd46f0ae60": [
+  "09e415e702adf8869dfd66b677fc63f6d28a6246dabbd10a42b36a0eeae1744e": [
     "agent-version-24",
-    "7ba969c7ed61eb3596c809150d7c46676bfb3d8310052ca5f07141762b345e9b",
+    "31e8e076972e30fd01480bc314134eb81657a60086529a8aa30aae3595607293",
     [
       0, 2, 3, 4, 5, 6, 60, 61, 9, 10, 11, 63, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 75, 29, 82, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 77, 50, 51,
@@ -362,9 +369,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-25
-  "17cbb50319db12e22248e0397cb068ce670687a96328f502ce3577e4798ae299": [
+  "1c0d6e4200a63dc88fac4b40837a8811f6924f9a1215875e30e9bc01851f89ba": [
     "agent-version-25",
-    "f4118fc6b09e2d36542335eec66c82e9846b7f50e69e56076814dea6e1244aeb",
+    "1cdd3761a5ca62855c31a2c4b7762fb0b039be35adafd8e1d8b47f2634942ef7",
     [
       0, 2, 3, 4, 5, 6, 60, 61, 9, 10, 11, 63, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 83, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 71, 50, 51,
@@ -373,9 +380,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-26
-  ff21eb3fb5a5836d520af3ea0777944cbcfa61aff52a64d0726a4d6b527823c3: [
+  "9cd76715fb14a7addcd8c2054de9b03e7f38834b3f152b85098960dba507b3f7": [
     "agent-version-26",
-    "86dbc086643d83045d9397da12e5e7a5d197b08a10a8aea4942ee7473f03d9ee",
+    "174f421a2d22d2064878aa9400fedc4a8f7d91738119c2883a27d6ed3bc49adf",
     [
       0, 2, 3, 4, 5, 6, 84, 61, 9, 10, 11, 63, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 85, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 71, 50, 51,
@@ -384,9 +391,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-27
-  "227fcd299f5dfd3012abd0f110cd028ba6add9155bc74e2e558aadeae2761349": [
+  "2929da7110ff913e6dab65b1aafa65033419dd4f89ad98d5e6e07c6045bfa7b6": [
     "agent-version-27",
-    "40d0b84e2467b65ff57c4e8171af1a6b0cc54e0e1b5602b6abbe53fc8c10e151",
+    "3faa8efef4639bd8621eaee785014f132190d869fa9f8f4ec5f05dfd3e35bb73",
     [
       0, 2, 3, 4, 5, 6, 7, 61, 9, 10, 11, 63, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 85, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 71, 50, 51,
@@ -395,9 +402,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-28
-  b2e17ebad450773253e5dddaeb87e6baef26b1c20a48982ed9df7ffea4210511: [
+  "4dfdd2bbdeaa1aa695fa880f9d5b3858776e96931c903b06df79589379047d94": [
     "agent-version-28",
-    "a48c6c4d7bc63bb0c14eb2010893f31aa216e4a0ee135e40c81598a39c64b61f",
+    "3561460828144b25d2feeb8c4dea2f6d06bdd59f39d9c96404877f3d67060f1b",
     [
       0, 2, 3, 4, 5, 6, 7, 61, 9, 10, 11, 12, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 85, 31, 69, 33, 70, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
@@ -406,9 +413,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-29
-  abf65b8c18ccb84f0e65b8e4faa6fef6abc23b6bab5e93086339f640d2146082: [
+  b84f0a955bdb1dc1557a5a5f415a9fd1d89a817cccb6ac03eaf64e3881e3501e: [
     "agent-version-29",
-    "ede47c9558c7c22dfd89ed56f0bc28a9d22e512aa69af0ae3acacc989337dc0e",
+    "fa5932bbefc278054c1c658134d8f1855daec57a702254363f002f647ecf53bf",
     [
       0, 2, 3, 4, 5, 6, 7, 61, 9, 10, 11, 12, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 30, 31, 69, 33, 34, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
@@ -417,9 +424,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-30
-  dbab54723ad6be5e0146085df0789ef92d03b867c53bed915d804fb4c60b3068: [
+  "86f40f5825cb479ab35c3f871601e4b615ea6291bd536603c740cc1b7ebc6674": [
     "agent-version-30",
-    "afa4044fdeabdb3042002c27a39be73d1f2edf8c4135515266cf6613adc7f0ba",
+    "cfe27728be9c300a13edfc1bad4bf81f1aa479afc4f8f585548cf6d85a6eecc1",
     [
       0, 2, 3, 4, 5, 6, 7, 61, 9, 10, 11, 12, 13, 14, 80, 16, 65, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 30, 31, 69, 33, 34, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
@@ -428,9 +435,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-31, agent-version-32, agent-version-33, agent-version-34, agent-version-35, agent-version-36
-  "57f4523156caf6b8446afbd95e0fede01f1c917771242cd05c61c1b48b7e157e": [
+  d448dc3857b75168131737f22b1bbeb5662952ee358f694e7b0bfdea248c98a1: [
     "agent-version-31",
-    "4ac0d88399760668d6021213299ff6897bcfd672d2373d5c47b6f0afa31e04a1",
+    "6032dae32b251872b168d2632d24c678985d84cbbb93f99e88776aee7f3fda0a",
     [
       0, 2, 3, 4, 5, 6, 7, 61, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 30, 31, 69, 33, 34, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
@@ -439,9 +446,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-37, agent-version-38
-  "9ffa671518cafee606f88dd17bfdfa9792d9deece5f6773e3cae4de2c10fc84b": [
+  "257630db2b5db1f0f9555bb505f1c21ea96dfacac3431edef1e964c1ab158c2e": [
     "agent-version-37",
-    "08f828422ad38a4ad92a46abdd793fd45ce6c9e09e72d83177130079588ea41e",
+    "e0992b8cd82270bb4d0f8dd01ae41647644bb4ffb3251cbec020256a4c6276bc",
     [
       0, 2, 3, 4, 5, 6, 7, 61, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26,
       66, 28, 29, 30, 31, 69, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
@@ -450,9 +457,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-39
-  a67326c9ddb50583c3b76b9854324d6a42a4d94b87b6aa2285cefb42a9ff1f27: [
+  "0faad7d2c484afd0d587d7c96a1db40c24f839b5fe46f44db88bff8a8fb498a8": [
     "agent-version-39",
-    "4a73468ea8dc4b374449c5a8455df0b5b161d9028d4e8a925763d6805dee8664",
+    "27e69f12f1524059e6aa8ab3cd23d6f157e129c83752ce249ac8d6fdf1fa394b",
     [
       0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27,
       28, 29, 30, 31, 69, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
@@ -461,9 +468,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-40
-  "4000b93c887a95d954a139e5d78b74e06586e65f8e9dda9d8ffab73b61ee5568": [
+  f666f336681edf684b1456f3f10d8261eefe91e839d0c516a9981dd836cb04dd: [
     "agent-version-40",
-    "d84ecca0d1e44048fac7058389b356bb26e83c05c99631f5f2cbf5d442cf04f4",
+    "6a5f08795b710baeb364ac43e03e2e757f6334aa4b0d210f24bf61acc168e71a",
     [
       0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
       27, 28, 29, 30, 31, 69, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
@@ -472,9 +479,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-41
-  "91916d079ab20e9e5fd2380d0ec99561d144fed2d0eeca7324d370f295a7205a": [
+  "7e0cc7c8036cb1a2cdc784cefc58813cffdc15527ea11b0dec47c443d61a6424": [
     "agent-version-41",
-    "6b80dff64cad8216687329ec4a9685348b511986ca622623406f44a8164b118b",
+    "3ea8de0403405d4f01b066f080895c734dd0bb2d35546a2034d4b71f9859ee1c",
     [
       0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
       27, 28, 29, 30, 31, 69, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
@@ -483,9 +490,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-version-42
-  afcfcf93ca60eab84c0b9c33cd6d8d342d42ad526e10371f9f43a3d201a5a28e: [
+  d35de36793016476ea93f958edce566e479f4a2edfb6fb54f52e4283ab4c5d2e: [
     "agent-version-42",
-    "8e70873f6fddd58ffc765c3786c293164dfe8ad7754ae73272875acbae360fc7",
+    "daf6805bb563c8435782b10ada23737ddd8e585110c34b63a49a75e477353221",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 69, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
@@ -494,9 +501,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // agent-v14-core
-  "067f95cffb76737d9084b726b640bc79b266b19279e6b1a3d2322d0e298c6ab6": [
+  d99e8932b7364473271cf54ac431cf452884a28c27caac2da7b042eea853af62: [
     "agent-v14-core",
-    "14b30834a4c01ee92da4b3390aebbd49d9a8f4d0fb3a40fb517b8093ffb11c76",
+    "d5daea16b6c69fc8d707e81e60412496d201c8474993de4bd9a06c57ed8f7dd2",
     [
       0, 2, 3, 6, 60, 61, 9, 10, 62, 63, 13, 14, 64, 16, 65, 18, 19, 20, 21, 23, 26, 66, 28, 67, 68,
       69, 37, 38, 40, 41, 42, 43, 44, 45, 46, 48, 71, 50, 51, 52, 53, 54, 55, 72, 73, 74, 59,

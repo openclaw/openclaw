@@ -179,6 +179,8 @@ type ApnsPushResult = {
 
 const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
 const PLUGIN_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.plugin-approval";
+const LOCATION_INTENT_NOTIFICATION_CATEGORY = "openclaw.location-intent";
+const LOCATION_INTENT_ALERT_BODY_MAX_LENGTH = 256;
 
 type ApnsPushType = "alert" | "background";
 
@@ -646,6 +648,30 @@ export async function sendApnsExecApprovalAlert(
     },
     { isCurrent: params.isCurrent },
   );
+}
+
+export async function sendApnsIntentAlert(params: ApnsAlertParams): Promise<ApnsPushResult> {
+  const body = truncateUtf16Safe(
+    params.body.trim(),
+    LOCATION_INTENT_ALERT_BODY_MAX_LENGTH - 1,
+  ).trimEnd();
+  return await sendApnsPush({
+    transport: params,
+    payload: {
+      aps: {
+        alert: { title: params.title, body },
+        sound: "default",
+        category: LOCATION_INTENT_NOTIFICATION_CATEGORY,
+        "content-available": 1,
+      },
+      openclaw: {
+        kind: "location.intent.fired",
+        nodeId: params.nodeId,
+        ts: Date.now(),
+      },
+    },
+    pushType: "alert",
+  });
 }
 
 export async function sendApnsPluginApprovalAlert(

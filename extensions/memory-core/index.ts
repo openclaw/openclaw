@@ -23,6 +23,7 @@ import { registerMemoryCoreCli } from "./cli-metadata.js";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import { registerLocationIntentConsumer } from "./src/location-intent-consumer.js";
 import {
   buildMemoryPromptSection,
   buildProjectMemoryWriteInstruction,
@@ -107,6 +108,19 @@ const StandingIntentSchema = {
       type: "string",
       enum: ["pending", "armed", "fired", "done", "cancelled", "expired"],
     },
+    /** Location trigger (one-shot). The delivery session is bound to this conversation. */
+    location: {
+      type: "object",
+      properties: {
+        nodeId: { type: "string", minLength: 1 },
+        direction: { type: "string", enum: ["enter", "exit"] },
+        centerLat: { type: "number", minimum: -90, maximum: 90 },
+        centerLon: { type: "number", minimum: -180, maximum: 180 },
+        radiusMeters: { type: "number", minimum: 1 },
+      },
+      required: ["nodeId", "direction", "centerLat", "centerLon", "radiusMeters"],
+      additionalProperties: false,
+    },
   },
   required: ["action"],
   additionalProperties: false,
@@ -153,6 +167,7 @@ function createLazyStandingIntentTool(
           ...(provider ? { provider } : {}),
           ...(ctx.agentAccountId ? { accountId: ctx.agentAccountId } : {}),
           ...(senderId ? { senderId } : {}),
+          ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
         }),
       );
       const execute = await executorPromise;
@@ -311,6 +326,9 @@ export default definePluginEntry({
       },
     });
     registerSessionBackfillGatewayMethods(api);
+    if (memorySlotSelected) {
+      registerLocationIntentConsumer(api);
+    }
     api.registerMemoryCapability({
       recallToolNames: ["memory_search", "memory_get"],
       deterministicRecallToolName: "memory_search",

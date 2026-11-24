@@ -1150,6 +1150,19 @@ Beyond `api.runtime`, the API object also provides:
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.
 </ParamField>
+<ParamField path="api.registerNodeEventConsumer(subscription)" type="(subscription: { events: string[]; handle: (delivery: { nodeId: string; payload: unknown }) => void }) => void">
+  Subscribe to gateway-validated node events. The allowlist currently
+  accepts only `location.update`, whose validated payload is
+  `{ lat: number; lon: number; accuracyMeters: number; source: string }`
+  — a paired node's significant-location fix. Exactly one consumer may
+  subscribe per event: a second registration is rejected at registration
+  time. Subscriptions live on the active plugin registry, so a plugin
+  reload or rollback retires them with the registry generation; the
+  gateway re-reads the registry at each event, and an unsubscribed event
+  is validated and dropped (`no_consumer`) rather than held. Consumer
+  handler errors are isolated per event — they are logged and never break
+  the node's response.
+</ParamField>
 
 ## Where each section moved
 
