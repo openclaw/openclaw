@@ -589,15 +589,16 @@ it(
           expect(outputs.get(id)).toContain("Other actions need the owner's authority");
         }
         expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
+        const endedTurn = "TypeError: The message turn has ended. Start a new turn to retry.";
         // Removal revokes the notice source during the read: no response or history escapes.
         expect(removedOutcome).toEqual({
           id: jobs.owned.id,
-          threw: expect.stringContaining("agent runtime authority is no longer active"),
+          threw: endedTurn,
         });
         // Closed during the awaited read: the handler responds with nothing at all.
         expect(closedOutcome).toEqual({
           id: jobs.closing.id,
-          threw: expect.stringContaining("agent runtime authority is no longer active"),
+          threw: endedTurn,
         });
         expect(lateNoticeRequest ?? "").not.toContain('"entries"');
         // Asserted scheduler provenance on a non-owner client turn unlocks nothing.
