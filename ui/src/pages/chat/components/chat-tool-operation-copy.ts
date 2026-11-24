@@ -254,17 +254,27 @@ export function catalogToolLabel(
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
-  if (phase === "done" && knowledgePublicationTools.has(name)) {
+  const remember = name === "knowledge_remember";
+  if (phase === "done" && (remember || knowledgePublicationTools.has(name))) {
     // The dispatcher retains the called tool's structured result even when history omits its text.
     const details = asNullableRecord(card.details);
     const structured = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
-    const receipt =
-      structured && ("state" in structured || "revision" in structured)
+    const result =
+      structured &&
+      (remember ? "receipt" in structured : "state" in structured || "revision" in structured)
         ? structured
         : safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? ""));
+    const receipt = remember ? asNullableRecord(result?.receipt) : result;
+    // All duplicates need no publication. An "inserted" item alone does not prove a save.
+    const allDuplicates =
+      remember &&
+      result?.receipt === null &&
+      Array.isArray(result.items) &&
+      result.items.length > 0 &&
+      result.items.every((item: unknown) => asNullableRecord(item)?.status === "duplicate");
     if (name === "knowledge_reconcile_evidence" && receipt?.state === "preview") {
       operation = "preview";
-    } else {
+    } else if (!allDuplicates) {
       qualifier =
         operation === "preview" ? "operationUnknown" : knowledgePublicationQualifier(receipt);
       if (qualifier) {

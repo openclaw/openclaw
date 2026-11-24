@@ -210,6 +210,65 @@ it("distinguishes a page edit's outcome from inspecting its receipt", async () =
   }
 });
 
+it("uses remember's nested publication receipt rather than its planned item status", async () => {
+  const name = "knowledge_remember";
+  const tool = { id: "openclaw:knowledge:knowledge_remember", name };
+  const excerpt = "The synthetic logbook uses metric units.";
+  const args = {
+    requestId: request.requestId,
+    attribution: "Field notes",
+    excerpt,
+    items: [{ text: excerpt, kind: "fact" }],
+  };
+  const inserted = { id: saved.id, subject: "none", status: "inserted" };
+  const items = [inserted];
+  const duplicates = [{ ...inserted, status: "duplicate" }];
+  const lean = {
+    ...saved,
+    items: [{ key: "i0", ...saved }],
+    ontologyFingerprint: reconcile.expectedOntologyFingerprint,
+  };
+  const done = "Remembered knowledge";
+  const notApplied = "Remember knowledge · not applied";
+  const unknown = "Remember knowledge · outcome unknown";
+  for (const [result, label] of [
+    [{ items, receipt: { ...lean, state: "conflict", message: conflictMessage } }, notApplied],
+    [{ items, receipt: lean }, done],
+    [{ items: duplicates, receipt: null }, done],
+  ] as const) {
+    const output = JSON.stringify(result);
+    const wrapped = {
+      tool,
+      result: { content: [{ type: "text", text: output }], details: result },
+    };
+    const dispatched = { id: tool.id, args };
+    for (const card of [
+      recordedCard(name, args, undefined, result),
+      recordedCard(name, args, output),
+      recordedCard("dispatch_action", dispatched, undefined, wrapped),
+      recordedCard("dispatch_action", dispatched, JSON.stringify(wrapped)),
+    ]) {
+      expect(
+        text(await mountCard(card, { expanded: false }), ".chat-tool-disclosure__content"),
+      ).toBe(label);
+    }
+  }
+  // Other receipt-contract states and incomplete history, not observed tool returns.
+  for (const [details, label] of [
+    [{ items, receipt: { ...lean, state: "published" } }, done],
+    [
+      { items, receipt: { ...lean, state: "accepted" } },
+      "Remember knowledge · pending publication",
+    ],
+    [{ items, receipt: { ...lean, state: "rejected" } }, notApplied],
+    [{ items: duplicates }, unknown],
+    [{ items, receipt: "unreadable" }, unknown],
+    [{ items, receipt: null }, unknown],
+  ] as const) {
+    expect(catalogToolLabel({ id: name, name, args, details }, "succeeded")).toBe(label);
+  }
+});
+
 it.each([
   ["knowledge_supersede", supersede, "Supersede claims", "Superseded claims"],
   [
