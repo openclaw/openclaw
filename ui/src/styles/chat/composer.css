@@ -1147,7 +1147,7 @@
     margin-block: -8px;
   }
 
-  .agent-chat__composer-actions:has(> .chat-talk-control:not(.chat-talk-control--active)) {
+  .agent-chat__composer-actions:has(> .chat-talk-control) {
     flex-direction: row;
   }
 

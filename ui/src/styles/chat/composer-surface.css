@@ -799,7 +799,7 @@
 }
 
 .agent-chat__input
-  :is(.chat-send-btn--send, .chat-send-btn--talk-mode, .new-session-page__start-submit)
+  :is(.chat-send-btn--send, .new-session-page__start-submit)
   > svg {
   width: var(--chat-composer-primary-icon-size);
   height: var(--chat-composer-primary-icon-size);
@@ -1039,7 +1039,7 @@
   box-shadow: none;
 }
 
-.chat-talk-control:not(.chat-talk-control--active) .chat-send-btn--voice:disabled {
+.chat-talk-control .chat-send-btn--voice:disabled {
   opacity: 0.4;
 }
 
@@ -1062,8 +1062,6 @@
   background: color-mix(in srgb, var(--text-strong) 7%, transparent);
 }
 
-.chat-mobile-dictation-action,
-.chat-mobile-talk-action,
 .chat-mobile-primary-action {
   display: none;
 }
@@ -1437,8 +1435,6 @@
     --chat-mobile-row-target-size: 32px;
     --chat-mobile-row-icon-size: 20px;
     --chat-mobile-row-permission-stroke: var(--chat-composer-icon-stroke);
-    --chat-mobile-row-mic-stroke: var(--chat-composer-icon-stroke);
-    --chat-mobile-row-mic-opacity: 1;
     --chat-mobile-row-icon-padding: 0px;
     --chat-mobile-row-muted-opacity: 1;
     --chat-mobile-row-plus-target-size: 36px;
@@ -1515,8 +1511,7 @@
   .agent-chat__input--mobile-toolbar .chat-controls__effort-trigger,
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice,
   .agent-chat__input--mobile-toolbar .chat-send-btn--stop,
-  .agent-chat__input--mobile-toolbar .chat-send-btn--send,
-  .agent-chat__input--mobile-toolbar .chat-send-btn--talk-mode {
+  .agent-chat__input--mobile-toolbar .chat-send-btn--send {
     position: relative;
     display: inline-flex;
     align-items: center;

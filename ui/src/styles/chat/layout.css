@@ -3033,25 +3033,12 @@ openclaw-chat-ci-details {
     margin-inline-start: var(--chat-mobile-row-action-gap);
   }
 
-  .agent-chat__input--chat :is(.chat-mobile-dictation-action, .chat-mobile-primary-action),
-  .agent-chat__input--chat .chat-mobile-primary-action > .chat-mobile-talk-action {
+  .agent-chat__input--chat .chat-mobile-primary-action {
     display: inline-flex;
   }
 
   .agent-chat__input--chat .chat-desktop-primary-action:not(.chat-mobile-primary-action) {
     display: none;
-  }
-
-  .agent-chat__input--chat .chat-mobile-dictation-action .chat-talk-control {
-    flex-direction: row;
-  }
-
-  .agent-chat__input--chat .chat-send-btn--talk-mode {
-    width: var(--chat-composer-send-size);
-    min-width: var(--chat-composer-send-size);
-    height: var(--chat-composer-send-size);
-    background: var(--chat-send-bg);
-    color: var(--chat-send-foreground);
   }
 
   .agent-chat__input--chat .chat-mobile-primary-action .chat-send-btn {
@@ -3067,7 +3054,7 @@ openclaw-chat-ci-details {
   }
 
   .agent-chat__input--chat
-    :is(.chat-send-btn--send, .chat-send-btn--stop, .chat-send-btn--talk-mode)
+    :is(.chat-send-btn--send, .chat-send-btn--stop)
     > svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
@@ -3088,25 +3075,6 @@ openclaw-chat-ci-details {
     color: inherit;
     fill: currentColor;
     stroke: none;
-  }
-
-  .agent-chat__input--chat .chat-mobile-dictation-action .chat-send-btn--voice > svg {
-    width: var(--chat-mobile-row-icon-size);
-    height: var(--chat-mobile-row-icon-size);
-    color: var(--muted);
-    opacity: var(--chat-mobile-row-mic-opacity);
-    stroke-width: var(--chat-mobile-row-mic-stroke);
-  }
-
-  .agent-chat__input--chat
-    .chat-mobile-dictation-action
-    .chat-send-btn--voice:not(:disabled, [aria-disabled="true"])
-    > svg {
-    color: inherit;
-  }
-
-  .agent-chat__input--chat .chat-mobile-dictation-action .chat-send-btn--voice {
-    padding: var(--chat-mobile-row-icon-padding);
   }
 }
 
