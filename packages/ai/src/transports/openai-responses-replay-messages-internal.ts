@@ -634,7 +634,7 @@ function convertResponsesMessagesWithStyle(
   // endpoints, including xAI /responses/compact, keep the prompt first.
   if (systemPromptItem && supportsNativeOpenAIResponsesEndpoint(model)) {
     const lastCompaction = messages.findLastIndex(
-      (item) => !("role" in item) && (item as { type?: unknown }).type === "compaction",
+      (item) => !("role" in item) && "type" in item && item.type === "compaction",
     );
     if (lastCompaction > 0 && messages[0] === systemPromptItem) {
       messages.splice(0, 1);
