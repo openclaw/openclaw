@@ -140,7 +140,7 @@ export async function restoreCronScriptOperatorSource(
   };
   try {
     signal?.addEventListener("abort", onRevoked, { once: true });
-    operator.authority.assertCurrent();
+    signal?.throwIfAborted();
     return { ...operator, release, [Symbol.dispose]: release };
   } catch (error) {
     release();
@@ -160,7 +160,7 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
   patch: CronJobPatch;
   capture: T;
   context: GatewayRequestContext;
-}): T {
+}): T & Pick<CronSourceCapture, "assertOperatorSourceCurrent"> {
   const previous = params.job.operatorSource;
   const fresh = params.capture.operatorSource;
   if (
@@ -217,7 +217,6 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
         },
       }),
       assertOperatorSourceCurrent: () => {
-        params.capture.assertOperatorSourceCurrent?.();
         if (
           !isDeepStrictEqual(params.context.cron.getJob(params.job.id)?.operatorSource, previous)
         ) {
@@ -236,7 +235,6 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
     ...params.capture,
     operatorSource: previous.source,
     assertOperatorSourceCurrent: () => {
-      params.capture.assertOperatorSourceCurrent?.();
       if (!isDeepStrictEqual(params.context.cron.getJob(params.job.id)?.operatorSource, previous)) {
         throw new Error("The automation's original source changed during the control edit.");
       }

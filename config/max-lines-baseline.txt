@@ -328,7 +328,6 @@ src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic.ts
 src/logging/redact.ts
-src/media-understanding/runner.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts

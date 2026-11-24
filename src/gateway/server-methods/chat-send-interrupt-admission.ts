@@ -41,7 +41,6 @@ export async function prepareChatSendInterruptAdmission(params: {
     const assertCurrent = () => {
       params.assertCurrent?.();
       params.abortSignal.throwIfAborted();
-      operator.authority?.assertCurrent();
       if (params.interruptCapture) {
         params.assertSessionTargetCurrent();
       }

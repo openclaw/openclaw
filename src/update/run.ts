@@ -18,10 +18,13 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
+import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
   finishUpdateRunAsync,
@@ -30,6 +33,7 @@ import {
 } from "../infra/update-run-write.async.js";
 import { SystemPackageOwnershipError } from "../infra/update-system-package-ownership.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { VERSION } from "../version.js";
 import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
 import { writeLauncher } from "./launcher.js";
@@ -100,8 +104,7 @@ export async function prepareUpdate(params: {
   // Already current: plugins are still maintained, by the running core; the caller restarts
   // a running Gateway only when they changed.
   const current = async (version: string): Promise<UpdateRunOutcome> => {
-    const pluginsChanged = await maintainPlugins({
-      runId: params.runId,
+    const { plugins, step } = await runPluginMaintenance({
       root: params.runningRoot,
       node,
       env,
@@ -109,12 +112,13 @@ export async function prepareUpdate(params: {
       timeoutMs: Math.max(1, deadline - Date.now()),
       acceptCapabilities: params.acceptCapabilities,
     });
+    await recordUpdateRunStepAsync(params.runId, step, { env });
     await finishUpdateRunAsync(
       params.runId,
       { status: "skipped", reason: "already-current" },
       { env },
     );
-    return { status: "current", version, pluginsChanged };
+    return { status: "current", version, pluginsChanged: plugins?.changed === true };
   };
   const fail = async (
     reason: string,
@@ -313,6 +317,16 @@ export async function prepareUpdate(params: {
         prepared.stderrTail,
       );
     }
+    // An explicit artifact can be rebuilt at the same version: only the same known build
+    // identity is current. Missing identity is not equality.
+    if (
+      target.kind === "package" &&
+      prepared.buildId &&
+      prepared.version === params.runningVersion &&
+      prepared.buildId === (await readBuiltGatewayBuildId(params.runningRoot))
+    ) {
+      return await current(prepared.version);
+    }
     await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
     // Missing modules identify an unsupported old target; command failures never bypass checks.
     if (target.kind === "package") {
@@ -381,16 +395,19 @@ export async function prepareUpdate(params: {
       }
     }
     await markForwarding(params.runningRoot, launcher, prefix);
-    // Last before the trial: the restart loads the new core and its plugins together.
-    await maintainPlugins({
-      runId: params.runId,
-      root: releaseRoot,
-      node,
-      env,
-      channel: params.channel,
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      acceptCapabilities: params.acceptCapabilities,
-    });
+    // Older releases do not have post-ready maintenance. A downgrade does not migrate
+    // state forward, so retain their pre-trial maintenance and warning recording.
+    if ((compareSemverStrings(VERSION, prepared.version) ?? 0) > 0) {
+      const { step } = await runPluginMaintenance({
+        root: releaseRoot,
+        node,
+        env,
+        channel: params.channel,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        acceptCapabilities: params.acceptCapabilities,
+      });
+      await recordUpdateRunStepAsync(params.runId, step, { env });
+    }
     await createTrialPending(
       {
         runId: params.runId,
@@ -398,6 +415,9 @@ export async function prepareUpdate(params: {
         previous,
         version: prepared.version,
         buildId: prepared.buildId,
+        ...(params.acceptCapabilities !== undefined
+          ? { acceptCapabilities: params.acceptCapabilities }
+          : {}),
       },
       prefix,
     );
@@ -478,15 +498,14 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
  * Plugins follow the core that will serve, so that core's own code maintains them. A plugin
  * problem, or a release without `update plugins`, is a recorded warning, never a failed update.
  */
-async function maintainPlugins(params: {
-  runId: string;
+export async function runPluginMaintenance(params: {
   root: string;
   node: string;
   env: NodeJS.ProcessEnv;
   channel: UpdateChannel;
   timeoutMs: number;
   acceptCapabilities?: boolean;
-}): Promise<boolean> {
+}): Promise<{ plugins: PostCorePluginUpdateResult | undefined; step: UpdateRunStep }> {
   const startedAtMs = Date.now();
   const args = [
     "plugins",
@@ -506,16 +525,26 @@ async function maintainPlugins(params: {
   );
   // SAFETY: the child is this release's own `update plugins --json`, which writes updatePluginsAfterCoreUpdate's result.
   const plugins = result.parsed as PostCorePluginUpdateResult | undefined;
-  // As the existing updater: only an error result fails the step; warnings are notes.
-  const failed = result.code !== 0 || !plugins || plugins.status === "error";
+  if (plugins) {
+    // A later convergence repair supersedes an earlier failure for the same plugin.
+    plugins.npm.outcomes = [
+      ...new Map(plugins.npm.outcomes.map((outcome) => [outcome.pluginId, outcome])).values(),
+    ];
+  }
+  const failures = plugins?.npm.outcomes.filter((outcome) => outcome.status === "error") ?? [];
+  // Plugin failures are warnings for the core update, but remain failed plugin steps.
+  const failed =
+    result.code !== 0 ||
+    !plugins ||
+    plugins.status === "error" ||
+    plugins.sync.errors.length > 0 ||
+    failures.length > 0;
   const messages = plugins
     ? [
         ...(plugins.warnings ?? []).map((warning) => warning.message),
         ...plugins.sync.warnings,
         ...plugins.sync.errors,
-        ...plugins.npm.outcomes
-          .filter((outcome) => outcome.status === "error")
-          .map((outcome) => outcome.message),
+        ...failures.map((outcome) => outcome.message),
         ...(plugins.reason ? [plugins.reason] : []),
       ]
     : [];
@@ -532,22 +561,20 @@ async function maintainPlugins(params: {
         (result.code === null ? "timed out" : `exited ${result.code}`),
     );
   }
-  await recordUpdateRunStepAsync(
-    params.runId,
-    {
+  if (failed && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
+    const ids = failures.map((outcome) => outcome.pluginId).join(" ");
+    messages.push(`Run \`openclaw plugins update ${ids || "--all"}\` to retry.`);
+  }
+  return {
+    plugins,
+    step: {
       step: "plugins",
       status: failed ? "failed" : "completed",
       startedAtMs,
       endedAtMs: Date.now(),
-      ...(failed
-        ? { detail: [...messages, "Run `openclaw plugins update` to retry."].join("\n") }
-        : messages.length > 0
-          ? { detail: messages.join("\n") }
-          : {}),
+      ...(messages.length > 0 ? { detail: messages.join("\n") } : {}),
     },
-    { env: params.env },
-  );
-  return plugins?.changed === true;
+  };
 }
 
 /** Runs one of the release's own `openclaw update` subcommands; its JSON is the last stdout line. */

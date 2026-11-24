@@ -2,7 +2,7 @@ import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { maybeWakeRequesterAfterAllChildrenSettled as runRequesterSettleWake } from "../announce/subagent-announce.requester-settle-wake.js";
 import type {
-  blockSubagentCompletionDelivery,
+  settleSubagentCompletionInHistory,
   mutateRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
 import type { SubagentCompletionMutationResult } from "../completion/subagent-completion-mutation.types.js";
@@ -69,26 +69,19 @@ function policyReceipt(
   };
 }
 
-function blockedPolicyDraft(
-  entry: SubagentRunRecord,
-  params: Parameters<typeof blockSubagentCompletionDelivery>[0],
-) {
-  entry.delivery ??= { status: "pending" };
-  entry.delivery.lastError = params.reason;
-  entry.delivery.deliveredAt = undefined;
-  entry.delivery.announcedAt = undefined;
-  if (params.suspendedReason) {
-    entry.delivery.status = "suspended";
-    entry.delivery.suspendedReason = params.suspendedReason;
-    entry.delivery.suspendedAt = Date.now();
-    entry.cleanupHandled = false;
-    entry.requesterSettleWake ??= { status: "pending", attemptCount: 0 };
-  } else {
-    entry.delivery.status = "failed";
-    entry.delivery.disposition =
-      params.disposition ?? entry.delivery.disposition ?? "permanent_failure";
-    entry.suppressCompletionDelivery = true;
-  }
+function historySettledPolicyDraft(entry: SubagentRunRecord) {
+  const deliveredAt = Date.now();
+  entry.delivery = {
+    ...entry.delivery,
+    status: "delivered",
+    disposition: "delivered",
+    deliveredAt,
+    announcedAt: deliveredAt,
+    lastDropReason: undefined,
+    queueId: undefined,
+  };
+  clearSubagentPendingDelivery(entry);
+  entry.wakeOnDescendantSettle = undefined;
 }
 
 function createRequesterSettleWakeMutationFixture(
@@ -173,8 +166,8 @@ export async function mockRegistryRequesterWakeMutation() {
   };
 }
 
-export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
-  blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
+export function mockHistoryCompletionSettlementOwner(completionDeliveryMocks: {
+  settleSubagentCompletionInHistory: Mock<typeof settleSubagentCompletionInHistory>;
   mutateRequesterCompletionBatch: Mock<typeof mutateRequesterCompletionBatch>;
   ownersByEntry: CompletionPolicyOwners;
 }): void {
@@ -187,44 +180,39 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
       return mutateWake(params);
     }
     const { outcome } = params.operation;
-    return mutatePolicyBatch(completionDeliveryMocks.ownersByEntry, params, (next, current) => {
+    return mutatePolicyBatch(completionDeliveryMocks.ownersByEntry, params, (next) => {
       if (
         next.pauseReason !== "sessions_yield" &&
         next.expectsCompletionMessage &&
-        ["pending", "in_progress"].includes(next.delivery?.status ?? "pending")
+        ["pending", "in_progress", "failed", "suspended"].includes(
+          next.delivery?.status ?? "pending",
+        )
       ) {
-        if (outcome.delivered) {
-          const deliveredAt = outcome.deliveredAt ?? Date.now();
-          next.delivery = {
-            ...next.delivery,
-            status: "delivered",
-            disposition: "delivered",
-            deliveredAt,
-            announcedAt: deliveredAt,
-          };
-          clearSubagentPendingDelivery(next);
-        } else {
-          blockedPolicyDraft(next, {
-            subagent: current,
-            reason: outcome.error ?? outcome.reason ?? "requester settle wake failed",
-            disposition: outcome.disposition,
-          });
+        // A missed wake already appended the children's status to requester history.
+        historySettledPolicyDraft(next);
+        if (outcome.delivered && outcome.deliveredAt !== undefined) {
+          next.delivery!.deliveredAt = outcome.deliveredAt;
+          next.delivery!.announcedAt = outcome.deliveredAt;
         }
       }
       return completeRequesterSettleWakeState(next) ? null : next;
     });
   });
-  completionDeliveryMocks.blockSubagentCompletionDelivery.mockImplementation(async (params) => {
+  completionDeliveryMocks.settleSubagentCompletionInHistory.mockImplementation(async (params) => {
     const owner = policyOwner(completionDeliveryMocks.ownersByEntry, [params.subagent]);
     return mutateSubagentRuns(
       [params.subagent.runId],
       (rows) => {
         const current = rows.get(params.subagent.runId);
-        if (!current || !isSameSubagentRunOwner(current, params.subagent)) {
+        if (
+          !current ||
+          !isSameSubagentRunOwner(current, params.subagent) ||
+          current.delivery?.status === "delivered"
+        ) {
           return { value: false };
         }
         const next = structuredClone(current);
-        blockedPolicyDraft(next, params);
+        historySettledPolicyDraft(next);
         return { value: true, postimages: new Map([[next.runId, next]]) };
       },
       { runs: owner.runs, context: params.context, assertCurrent: params.assertCurrent },
@@ -239,7 +227,7 @@ export function registerPrivateCompletionSettlementTests({
   completionDeliveryMocks,
 }: LifecycleTestDrivers & {
   completionDeliveryMocks: {
-    blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
+    settleSubagentCompletionInHistory: Mock<typeof settleSubagentCompletionInHistory>;
   };
 }): void {
   it.each([false, true])(
@@ -267,11 +255,9 @@ export function registerPrivateCompletionSettlementTests({
         async (params) => {
           if (params.signal?.aborted) {
             await params.onDeliveryResult?.({ delivered: false, path: "none" });
-            return "retryable";
+            return "undelivered";
           }
-          return params.isCompletionOwnedByRequesterYield?.()
-            ? "intentional_non_delivery"
-            : "delivered";
+          return params.isCompletionOwnedByRequesterYield?.() ? "session_queued" : "delivered";
         },
       );
       const runs = new Map([
@@ -323,7 +309,7 @@ export function registerPrivateCompletionSettlementTests({
           requesterYielded ? true : undefined,
         );
         expect(readLifecycleRun(sibling).execution.endedAt).toBeUndefined();
-        expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+        expect(completionDeliveryMocks.settleSubagentCompletionInHistory).not.toHaveBeenCalled();
       } finally {
         requesterTurn.restore();
         controller.clearRuntimeState();

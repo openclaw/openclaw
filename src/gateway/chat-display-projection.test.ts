@@ -500,11 +500,36 @@ it("restores widgets from Claude CLI results coalesced into the tool-call messag
   const call = { type: "toolcall", id: "toolu_1", name: "mcp__openclaw__show_widget" };
   const messages = [
     assistant([call, { type: "tool_result", tool_use_id: "toolu_1", content: [text(result)] }], {}),
+    assistant([{ type: "thinking", thinking: "", signature: "sig" }], {}),
     assistant([text("Done.")], {}),
   ];
-  expect(augmentChatHistoryWithCanvasBlocks(messages)[1]).toMatchObject({
+  expect(augmentChatHistoryWithCanvasBlocks(messages)[2]).toMatchObject({
     content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli", url: "/cv_cli" } }],
   });
+  // Parallel tool results stay separate user rows in Claude history; they are not a new prompt.
+  const parallelResult = { type: "tool_result", tool_use_id: "toolu_2", content: [text("ok")] };
+  const parallel = [...messages.slice(0, 2), { role: "user", content: [parallelResult] }];
+  expect(augmentChatHistoryWithCanvasBlocks([...parallel, messages[2]])[3]).toMatchObject({
+    content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli" } }],
+  });
+  // A turn that ends before its visible reply keeps the widget off the previous answer.
+  const earlier = assistant([text("Earlier answer.")], {});
+  const unanswered = augmentChatHistoryWithCanvasBlocks([earlier, ...messages.slice(0, 2)]);
+  expect(unanswered[0]).toBe(earlier);
+  expect(unanswered[2]).toMatchObject({
+    content: [{ type: "thinking" }, { type: "canvas", preview: { viewId: "cv_cli" } }],
+  });
+  // An interrupted turn keeps its widget instead of handing it to the next prompt's answer.
+  const nextAnswer = assistant([text("Next answer.")], {});
+  const interrupted = augmentChatHistoryWithCanvasBlocks([
+    ...messages.slice(0, 2),
+    { role: "user", content: "Next question." },
+    nextAnswer,
+  ]);
+  expect(interrupted[1]).toMatchObject({
+    content: [{ type: "thinking" }, { type: "canvas", preview: { viewId: "cv_cli" } }],
+  });
+  expect(interrupted[3]).toBe(nextAnswer);
 });
 
 const hostTab = { targetId: "tab-1", target: "host", profile: "work" };

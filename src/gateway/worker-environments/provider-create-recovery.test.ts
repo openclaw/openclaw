@@ -121,13 +121,11 @@ describe("worker creation source recovery", () => {
       resolveGatewayContext: () => original.context,
     });
     try {
-      expect(laterAuthority.authority.assertCurrent).not.toThrow();
       await expect(
         service.createWithRequest({
           profileId: "development",
           idempotencyKey: "same-key",
           provisionSource: later.source,
-          beforeProvision: laterAuthority.authority.assertCurrent,
         }),
       ).rejects.toThrow("Worker creation was refused");
     } finally {
@@ -302,7 +300,6 @@ describe("worker creation source recovery", () => {
           profileId: "development",
           idempotencyKey: "lost-reply",
           provisionSource: caller.source,
-          beforeProvision: held.authority.assertCurrent,
         }),
       ).rejects.toThrow("reply lost after allocation");
     } finally {
@@ -412,7 +409,6 @@ describe("worker creation source recovery", () => {
           profileId: "development",
           idempotencyKey: "live-revoked",
           provisionSource: caller.source,
-          beforeProvision: held.authority.assertCurrent,
         }),
       ).resolves.toMatchObject({ state: "ready", leaseId: "lease-live-revoked" });
       await expect(

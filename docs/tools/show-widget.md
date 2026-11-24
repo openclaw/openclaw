@@ -298,6 +298,17 @@ encoding, the surrounding HTML, and OpenClaw's wrapper. The same document limit
 applies to inline widgets and pinned dashboards. For larger clips, use a direct
 HTTPS URL or a normal media attachment instead of base64.
 
+## Comment on a widget element
+
+Hover an inline widget and select **Annotate widget** beside Pin and More.
+Hover a live element to see its outline, then select it to open the same
+**Add to chat** comment input used for selected chat text. Press Enter to
+add the comment to your existing draft without sending it or activating the
+widget element. On touch devices, tap the pen and then the element.
+
+Strict embeds do not support element comments. If the saved widget predates
+this feature, ask the agent to re-render it.
+
 ## Interactive widgets
 
 In the Control UI, widget scripts can drive the conversation. The wrapper document defines a global `sendPrompt(text)` function. Calling it submits `text` to the chat as if the user had typed and sent the message. Wire it to buttons or other controls to build interactive flows such as pickers, quizzes, or drill-down dashboards. Native apps render interactive widget code but do not expose this chat prompt bridge.

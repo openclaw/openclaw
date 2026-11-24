@@ -62,7 +62,7 @@ const enModelControls = {
       daybreakBlue: "Daybreak Blue",
       daybreakRed: "Daybreak Red",
       access: "Access",
-      accessUnavailable: "{program} (unavailable)",
+      daybreakRequired: "Required by this model",
       fast: "Fast",
       ultrafast: "Ultrafast",
       ultrafastUnavailable: "Ultrafast isn’t available for this model.",

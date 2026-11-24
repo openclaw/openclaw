@@ -39,7 +39,6 @@ export function CronModelControls(
     const agent = props.models.agent;
     const {
       defaultTarget: _defaultTarget,
-      accessProgramDefault: _accessProgramDefault,
       contextWindowTarget: _contextWindowTarget,
       fastModeTarget: _fastModeTarget,
       ...draft

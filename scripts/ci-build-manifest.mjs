@@ -244,8 +244,6 @@ const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-st
 // Stable tags also ship the macOS app, and its post-tag validation is too late
 // to block the tag, so only beta defers macOS Swift proof.
 const deferMacosSwift = releaseScope === "npm-beta";
-const fullNativeValidation =
-  eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
 if (releaseScope !== "full" && !npmQualification) {
   throw new Error("release_scope must be full, npm-beta, or npm-stable");
 }
@@ -449,6 +447,7 @@ const runMacosSwift =
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
+  (eventName !== "workflow_dispatch" || releaseGate || mainValidation) &&
   !nativeGeneratedOnly &&
   scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
@@ -458,6 +457,7 @@ const iosBuildScope =
   (!frozenTarget || supportsCurrentIosCi || (releaseCandidateTarget && supportsIosBuild));
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
+  (eventName !== "workflow_dispatch" || releaseGate || mainValidation) &&
   !nativeGeneratedOnly &&
   scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
@@ -569,7 +569,7 @@ const supportsPublishedDriverUpdate = targetWorkflow.includes(
   "published-driver-update-contract-v1",
 );
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
-const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+const androidTestTier = !useCompatibleAndroidCi;
 // Wear production strings feed the phone generator; only its test/debug inputs
 // are independent. Shared modules, build inputs and missing paths keep all rows.
 const narrowAndroidUnitTests =
@@ -1982,7 +1982,9 @@ const manifest = {
   run_macos: runMacos,
   run_android: runAndroid,
   run_android_screenshots:
-    !ordinaryPullRequest && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
+    (eventName !== "workflow_dispatch" || releaseGate) &&
+    !ordinaryPullRequest &&
+    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
@@ -2187,15 +2189,12 @@ const manifest = {
             ? [
                 {
                   check_name: "android-build-play",
-                  task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                  task: "build-play-compat",
                 },
               ]
             : []),
           ...(!useCompatibleAndroidCi
             ? [
-                ...(!androidTestTier
-                  ? [{ check_name: "android-build-wear", task: "build-wear" }]
-                  : []),
                 {
                   check_name: "android-ktlint",
                   task: "ktlint",
@@ -2308,8 +2307,15 @@ if (hybridHostedEligible) {
     // and release rows require a different dispatch admission.
     "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
-    "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
+    "ios-screenshot-capture": count(
+      (eventName !== "workflow_dispatch" || releaseGate) &&
+        parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+      1,
+    ),
+    "ios-screenshot-evidence": count(
+      (eventName !== "workflow_dispatch" || releaseGate) &&
+        parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+    ),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
     "docker-seed-e2e": count(

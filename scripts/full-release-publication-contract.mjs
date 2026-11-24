@@ -13,6 +13,7 @@ import {
   publicationPackageNamePattern as packageName,
   publicationIntentInputs,
   publicationSourceJson,
+  validatePublicationArtifactSelection,
 } from "./lib/full-release-publication-inputs.mjs";
 import corePackages from "./lib/npm-core-release-packages.json" with { type: "json" };
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
@@ -77,6 +78,7 @@ const coverageInputs = {
   plugin_prerelease_node_exclude_patterns_json: "pluginPrereleaseNodeExcludePatternsJson",
   extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
   qualification_baselines_json: "qualificationBaselinesJson",
+  publication_artifact_source_json: "publicationArtifactSourceJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
 };
@@ -233,25 +235,12 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  // Pre-cutover evidence binds this empty field into its original digest.
-  // Retire with those release lines and their retained publication recovery.
+  // Pre-cutover evidence can bind these empty legacy fields into its digest.
   object(
     value.coverage,
-    [
-      ...coverageKeys,
-      "known_flaky_jobs_json",
-      "telegram_waiver",
-      "publication_artifact_source_json",
-    ],
+    [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
     "source admission coverage",
   );
-  // beta.3 Q seals this empty field; retain its digest without enabling historical artifact reuse.
-  if (
-    Object.hasOwn(value.coverage, "publication_artifact_source_json") &&
-    value.coverage.publication_artifact_source_json !== ""
-  ) {
-    throw new Error("source admission publication_artifact_source_json must be empty");
-  }
   if (Object.hasOwn(value.coverage, "telegram_waiver") && value.coverage.telegram_waiver !== "") {
     throw new Error("source admission telegram_waiver must be empty");
   }
@@ -264,14 +253,25 @@ function validatePublicationSourceFact(value, expected = {}) {
   if (
     coverageKeys.some(
       (key) =>
-        !["extension_test_exclude_patterns_json", "qualification_baselines_json"].includes(key) &&
-        !Object.hasOwn(value.coverage, key),
+        ![
+          "extension_test_exclude_patterns_json",
+          "qualification_baselines_json",
+          "publication_artifact_source_json",
+        ].includes(key) && !Object.hasOwn(value.coverage, key),
     )
   ) {
     throw new Error("source admission coverage is incomplete");
   }
   for (const entry of Object.values(value.coverage)) {
     text(entry, "source admission coverage");
+  }
+  const artifactSource = value.coverage.publication_artifact_source_json;
+  if (
+    artifactSource &&
+    JSON.stringify(validatePublicationArtifactSelection(JSON.parse(artifactSource))) !==
+      artifactSource
+  ) {
+    throw new Error("source admission publication artifact source is not canonical");
   }
   if (value.validationPurpose === "publish") {
     if (value.status !== "source-admitted" || !digest.test(value.inventoryDigest)) {
@@ -439,11 +439,6 @@ export function validatePublicationSourceBinding(record, expected = {}) {
       ) {
         throw new Error(`source admission coverage ${key} differs from manifest`);
       }
-    }
-    if ((record.validationInputs.publicationArtifactSourceJson ?? "") !== "") {
-      throw new Error(
-        "source admission coverage publicationArtifactSourceJson differs from manifest",
-      );
     }
     if ((record.validationInputs.coveragePolicy ?? "") !== fact.coverage.coverage_policy) {
       throw new Error("source admission coverage policy differs from manifest");
@@ -1074,7 +1069,8 @@ if (invokedAsMain) {
       );
       appendFileSync(
         process.env.GITHUB_OUTPUT,
-        `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n`,
+        `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n` +
+          `publication_artifact_source_json=${envelope.laneInputs?.publication_artifact_source_json ?? ""}\n`,
       );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);
