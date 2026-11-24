@@ -1008,6 +1008,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-creation-operations-migration.test.ts",
   "src/state/openclaw-agent-active-event-facts-migration.test.ts",
   "src/state/openclaw-agent-tool-usage-migration.test.ts",
+  "src/state/openclaw-agent-member-access-migration.test.ts",
   "src/state/openclaw-agent-tool-usage-migration.postgres.test.ts",
   "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
