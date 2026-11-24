@@ -14,6 +14,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { chatRef } from "../sessions/chat-ref.js";
+import { shouldWake } from "../sessions/owed.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
@@ -211,6 +213,8 @@ it.for([
             delivered: false,
           });
           await execCompletion.promise;
+          // A cancelled wake withholds its owed row asynchronously; the sweep reads stored rows.
+          await vi.waitFor(async () => expect(await shouldWake(chatRef(target))).toBe(false));
           await clock.advanceBy(60_000);
           expect(loadExactSessionEntry(target)!.entry.status).toBe("failed");
         }
