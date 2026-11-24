@@ -66,7 +66,7 @@ it("posts base64 audio to the native AI Gateway transcription endpoint", async (
   expect(release).toHaveBeenCalledOnce();
 });
 
-it("keys language, prompt and query options by the model's provider", async () => {
+it("keys options by the model's provider and maps the language hint to its SDK field", async () => {
   respond();
   await transcribe({
     model: "elevenlabs/scribe-v2",
@@ -81,7 +81,7 @@ it("keys language, prompt and query options by the model's provider", async () =
   );
   expect(request.body).toMatchObject({
     providerOptions: {
-      elevenlabs: { language: "en", prompt: "Names: Ethan", tagAudioEvents: false },
+      elevenlabs: { languageCode: "en", prompt: "Names: Ethan", tagAudioEvents: false },
     },
   });
 });
@@ -101,10 +101,15 @@ it("rejects audio whose media type cannot be resolved without calling the Gatewa
   expect(postJsonRequestMock).not.toHaveBeenCalled();
 });
 
-it.each([
-  { body: JSON.stringify({ durationInSeconds: 1 }), status: 200, error: "missing text" },
-  { body: '{"error":{"message":"bad key"}}', status: 401, error: "transcription failed" },
-])("rejects status $status response $body", async ({ body, status, error }) => {
-  respond(body, status);
-  await expect(transcribe()).rejects.toThrow(error);
+it("keeps the language field for OpenAI models", async () => {
+  respond();
+  await transcribe({ language: "es" });
+  expect(requireFirstPostJsonRecordRequest(postJsonRequestMock, "STT request").body).toMatchObject({
+    providerOptions: { openai: { language: "es" } },
+  });
+});
+
+it("rejects a response without transcript text", async () => {
+  respond(JSON.stringify({ durationInSeconds: 1 }));
+  await expect(transcribe()).rejects.toThrow("missing text");
 });

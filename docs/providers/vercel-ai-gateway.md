@@ -139,9 +139,16 @@ Use either form in your configuration; OpenClaw resolves the full
     }
     ```
 
-    `language`, `prompt`, and per-entry provider options are sent as AI SDK
-    `providerOptions` under the model's provider prefix (`elevenlabs/scribe-v2`
-    &rarr; `elevenlabs`), so option names follow that provider's AI SDK options.
+    `prompt` and per-entry provider options are sent as AI SDK `providerOptions`
+    under the model's provider prefix (`elevenlabs/scribe-v2` &rarr; `elevenlabs`),
+    so option names follow that provider's AI SDK options. The standard `language`
+    hint is translated to the provider's field (`languageCode` for ElevenLabs,
+    `language` otherwise).
+
+    Before uploading audio, OpenClaw checks that the transcription model appears in
+    the key's own model list. Token Pass and other scoped keys exclude audio models,
+    so they are skipped before upload and automatic selection moves on to the next
+    available transcriber.
 
   </Accordion>
   <Accordion title="Thinking levels">
