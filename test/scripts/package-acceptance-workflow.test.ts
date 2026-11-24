@@ -9376,12 +9376,8 @@ test "$package_manager" = "pnpm@12.1.0"
         "boat",
       ] as const) {
         for (const releaseRunnerGroup of ["", "release-runners"]) {
-          const label =
-            hosted === "true" || runnerBackend === "github"
-              ? "ubuntu-24.04"
-              : runnerBackend === "boat"
-                ? "boat-xlarge"
-                : "blacksmith-8vcpu-ubuntu-2404";
+          // This release branch pins Linux release lanes to Blacksmith for every backend.
+          const label = hosted === "true" ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404";
           for (const jobName of [
             "check_openclaw_npm_stage",
             "prepare_openclaw_npm",
@@ -11009,12 +11005,8 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain('bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"');
     expect(workflow).toContain("use_github_hosted_runners:");
-    const expectRuntimeRunner = (
-      selector: unknown,
-      legacy: string,
-      boat: string,
-      githubHosted = false,
-    ) => {
+    // This release branch pins Linux release lanes to Blacksmith for every backend.
+    const expectRuntimeRunner = (selector: unknown, legacy: string) => {
       for (const runnerBackend of [
         "",
         "blacksmith",
@@ -11025,12 +11017,7 @@ describe("package artifact reuse", () => {
       ] as const) {
         for (const runnerGroup of ["", "release-runners"]) {
           for (const useGithubHostedRunners of [false, true]) {
-            const label =
-              useGithubHostedRunners || (githubHosted && runnerBackend === "github")
-                ? "ubuntu-24.04"
-                : runnerBackend === "boat"
-                  ? boat
-                  : legacy;
+            const label = useGithubHostedRunners ? "ubuntu-24.04" : legacy;
             expect(
               evaluateWorkflowRunner(selector, {
                 runnerBackend,
@@ -11051,7 +11038,6 @@ describe("package artifact reuse", () => {
       expectRuntimeRunner(
         workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
         "blacksmith-2vcpu-ubuntu-2404",
-        "boat",
       );
     }
     for (const jobName of [
@@ -11068,15 +11054,12 @@ describe("package artifact reuse", () => {
       expectRuntimeRunner(
         workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
         "blacksmith-8vcpu-ubuntu-2404",
-        "boat-xlarge",
-        jobName === "validate_docker_openwebui",
       );
     }
     for (const jobName of ["build", "test"]) {
       expectRuntimeRunner(
         workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)["runs-on"],
         "blacksmith-8vcpu-ubuntu-2404",
-        "boat-xlarge",
       );
     }
     const repoE2eHarnessCheckout = workflowStep(
@@ -11926,12 +11909,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         ["workflow_dispatch", "full-release-validation-1", "", "release-runners"],
         ["workflow_dispatch", "full-release-validation-1", "explicit-group", "explicit-group"],
       ] as const) {
-        const label =
-          runnerBackend === "github"
-            ? "ubuntu-24.04"
-            : runnerBackend === "boat"
-              ? "boat-large"
-              : "blacksmith-8vcpu-ubuntu-2404";
+        // This release branch pins the package Telegram lane to Blacksmith for every backend.
+        const label = "blacksmith-8vcpu-ubuntu-2404";
         expect(
           evaluateWorkflowRunner(telegramJob["runs-on"], {
             runnerBackend,
@@ -13641,7 +13620,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson", "boat"] as const) {
       for (const releaseRunnerGroup of ["", "release-runners"]) {
-        const label = runnerBackend === "boat" ? "boat" : "blacksmith-2vcpu-ubuntu-2404";
+        // This release branch pins runtime-pair lanes to Blacksmith for every backend.
+        const label = "blacksmith-2vcpu-ubuntu-2404";
         expect(
           evaluateWorkflowRunner(laneJob["runs-on"], { runnerBackend, releaseRunnerGroup }),
         ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: label } : label);
