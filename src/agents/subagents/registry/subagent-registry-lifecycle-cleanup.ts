@@ -10,10 +10,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
-import {
-  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-  resolveAnnounceRetryDelayMs,
-} from "./subagent-registry-helpers.js";
+import { resolveAnnounceRetryDelayMs } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleAnnounceCleanupContext,
   SubagentLifecycleCleanupContext,
@@ -231,11 +228,7 @@ export function runDetachedCleanupAttempt(
         const requiredDeliveryPending =
           current.expectsCompletionMessage === true && current.delivery?.status === "pending";
         const remainingDeliveryMs = requiredDeliveryPending
-          ? resolveAnnounceDeliveryDeadline(
-              current,
-              Date.now(),
-              ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-            ) - Date.now()
+          ? resolveAnnounceDeliveryDeadline(current, Date.now()) - Date.now()
           : 0;
         // Expiry closes sending, not the pending obligation to record its disposition.
         if (requiredDeliveryPending || failureCount <= MAX_DETACHED_CLEANUP_RETRIES) {

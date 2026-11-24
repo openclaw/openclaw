@@ -425,7 +425,6 @@ src/agents/sessions/transcript-turn-error.ts	2
 src/agents/subagents/announce/subagent-announce-delivery-retry.ts	1
 src/agents/subagents/announce/subagent-announce-delivery.ts	2
 src/agents/subagents/announce/subagent-announce-descendant-wake.ts	3
-src/agents/subagents/announce/subagent-announce-dispatch.ts	1
 src/agents/subagents/announce/subagent-announce-handoff.ts	4
 src/agents/subagents/announce/subagent-announce-output.ts	2
 src/agents/subagents/announce/subagent-announce-result.ts	1
@@ -458,7 +457,7 @@ src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	3
-src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	2
+src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle.ts	5

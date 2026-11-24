@@ -149,7 +149,7 @@ export function createSubagentRegistryMockState() {
     getSubagentRunsSnapshotForChildSession: vi.fn(snapshotRuns),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
+    runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "undelivered"> => "delivered"),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
     loadAgentRuntimePluginRegistryHandle,
