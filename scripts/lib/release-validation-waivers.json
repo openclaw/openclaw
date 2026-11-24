@@ -902,6 +902,21 @@
       "jobName": "Kova mock provider performance",
       "reason": "Operator risk acceptance on 2026-11-24 for 2026.11.10 Kova mock-provider threshold failures (stale RSS caps and CPU evidence gaps); artifact provenance, candidate identity and all other gates are not waived.",
       "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "reason": "Operator risk acceptance on 2026-11-24 (Dallin Romney) for 2026.11.10: decision-index live coverage gap for four unavailable provider credentials, same as 2026.11.10-beta.2; no passing provider proof asserted. Other harness failures in this job are not intended to be accepted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
     }
   ]
 }
