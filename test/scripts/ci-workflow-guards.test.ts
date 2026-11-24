@@ -25,29 +25,20 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { isAlias, isScalar, parse, parseDocument, visit } from "yaml";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { SOURCE_CHANNEL_TEST_POLICY } from "../../scripts/lib/ci-node-test-plan.mts";
-import {
-  createUiRealGatewayTestShards,
-  createUiTestShardGroups,
-} from "../../scripts/lib/ci-ui-test-plan.mts";
+import { createUiTestShardGroups } from "../../scripts/lib/ci-ui-test-plan.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
-import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";
-import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
 import {
   exportPreflightHarness,
   runDependencyFreePreflight,
 } from "./ci-preflight-dependencies.test-support.js";
-import {
-  assertControlUiE2eOwnership,
-  frozenRealGatewayFiles,
-} from "./ci-ui-e2e-ownership.test-support.js";
+import { registerControlUiE2eWorkflowTests } from "./ci-ui-e2e-workflow.test-support.js";
 import {
   CACHE_SAVE_V5,
   CACHE_V5,
@@ -6420,190 +6411,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
-  it("keeps private Control UI servers and resource-sensitive files under one serial owner", () => {
-    assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
-  });
-
-  it("restores shared build content while retaining private real-Gateway preparation", () => {
-    const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
-    const setup = requiredWorkflowStep(job.steps, "Setup Node environment");
-    const build = requiredWorkflowStep(
-      job.steps,
-      "Build runtime and Control UI artifacts for real-Gateway tests",
-    );
-    expect(setup.with?.["build-all-cache-scope"]).toBe("full");
-    expect(job.needs).toEqual(["preflight"]);
-    expect(build.run).toBe("pnpm build");
-    expect(build.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-    expect(build.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
-    expect(job.steps.some((step: WorkflowStep) => step.name === "Save build-all cache")).toBe(
-      false,
-    );
-  });
-
-  it.each([
-    { frozen: false, prebuilt: true, childExit: 0, releaseTier: false },
-    { frozen: false, prebuilt: true, childExit: 0, releaseTier: true },
-    { frozen: false, prebuilt: true, childExit: 0, releaseTier: false, sharded: false },
-    { frozen: true, prebuilt: true, childExit: 0 },
-    { frozen: true, prebuilt: false, childExit: 0 },
-    { frozen: false, prebuilt: false, childExit: 0 },
-  ])(
-    "selects the real-Gateway tier without retrying failures: %j",
-    ({ frozen, prebuilt, childExit, releaseTier, sharded }) => {
-      const step = requiredWorkflowStep(
-        readCiWorkflow().jobs["checks-ui-e2e-real-gateway"].steps,
-        "Test Control UI suites with a real Gateway",
-      );
-      const directory = tempDirs.make("openclaw-real-gateway-command-");
-      const bin = path.join(directory, "bin");
-      const prebuiltConfig = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
-      const serialConfig = "test/vitest/vitest.ui-e2e.config.ts";
-      mkdirSync(bin);
-      mkdirSync(path.join(directory, "test/vitest"), { recursive: true });
-      writeFileSync(path.join(directory, serialConfig), "export default {};\n");
-      if (prebuilt) {
-        writeFileSync(path.join(directory, prebuiltConfig), "export default {};\n");
-      }
-      mkdirSync(path.join(directory, "scripts/lib"), { recursive: true });
-      copyFileSync(
-        "scripts/lib/ci-node-test-groups-codec.mts",
-        path.join(directory, "scripts/lib/ci-node-test-groups-codec.mts"),
-      );
-      writeExecutable(path.join(bin, "node"), [
-        "#!/bin/sh",
-        'if [ "$1" = "--import" ]; then shift; shift; if [ "$1" != "scripts/test-ui-real-gateway.mts" ]; then exec "$REAL_GATEWAY_NODE" "$@"; fi; fi',
-        'printf "%s\\n" "$@" > "$REAL_GATEWAY_COMMAND_ARGS"',
-        'printf "%s" "${OPENCLAW_VITEST_INCLUDE_FILE:-}" > "$REAL_GATEWAY_INCLUDE_PATH"',
-        'printf "called\\n" >> "$REAL_GATEWAY_COMMAND_CALLS"',
-        'exit "$REAL_GATEWAY_COMMAND_EXIT"',
-      ]);
-      const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
-      const groups =
-        releaseTier === undefined
-          ? undefined
-          : createUiTestShardGroups({ includeReleaseOnlyTests: releaseTier }).e2e;
-      const rows =
-        groups && !frozen && sharded !== false
-          ? createUiRealGatewayTestShards(groups)
-          : [{ shard: 1, shard_count: 1, run_desktop: true, groups }];
-      const selectedFiles: string[] = [];
-      for (const row of rows) {
-        const rowDirectory = path.join(directory, String(row.shard));
-        mkdirSync(rowDirectory);
-        const argsPath = path.join(rowDirectory, "args");
-        const callsPath = path.join(rowDirectory, "calls");
-        const includePath = path.join(rowDirectory, "include-path");
-        const context = {
-          eventName: "push" as const,
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          matrix: {
-            ...row,
-            test_groups_gzip_base64: row.groups ? encodeNodeTestGroups(row.groups) : "",
-          },
-          preflightOutputs: {
-            frozen_target: String(frozen),
-            ui_e2e_test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
-          },
-        };
-        const result = runWorkflowShellScript(expectDefined(step.run, "real-Gateway script"), {
-          linuxWorkflow: true,
-          cwd: directory,
-          env: {
-            ...process.env,
-            FROZEN_TARGET: String(evaluateWorkflowExpression(step.env.FROZEN_TARGET, context)),
-            RUNNER_TEMP: rowDirectory,
-            REAL_GATEWAY_NODE: testNodeExecPath,
-            OPENCLAW_VITEST_INCLUDE_FILE: "",
-            REAL_GATEWAY_INCLUDE_PATH: includePath,
-            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: String(
-              evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, context),
-            ),
-            REAL_GATEWAY_COMMAND_ARGS: argsPath,
-            REAL_GATEWAY_COMMAND_CALLS: callsPath,
-            REAL_GATEWAY_COMMAND_EXIT: String(childExit),
-            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-          },
-        });
-        const missingCurrentConfig = !prebuilt && !frozen;
-        expect(result.status, result.stdout + result.stderr).toBe(
-          missingCurrentConfig ? 1 : childExit,
-        );
-        if (missingCurrentConfig) {
-          expect(result.stderr).toContain(`Current target is missing ${prebuiltConfig}`);
-          expect(existsSync(callsPath)).toBe(false);
-          return;
-        }
-        expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual(["called"]);
-        const args = readFileSync(argsPath, "utf8").trim().split("\n");
-        const reporterArgs = frozen
-          ? []
-          : [
-              "--reporter",
-              "verbose",
-              "--reporter",
-              "github-actions",
-              "--reporter",
-              "default",
-              "--reporter",
-              "./scripts/lib/vitest-resource-reporter.mts",
-            ];
-        if (frozen) {
-          expect(args.slice(0, 6)).toEqual([
-            "scripts/run-vitest.mjs",
-            "run",
-            "--config",
-            prebuilt ? prebuiltConfig : serialConfig,
-            "--configLoader",
-            "runner",
-          ]);
-          expect(args.slice(6).toSorted()).toEqual(
-            prebuilt ? ["--exclude", desktop] : frozenRealGatewayFiles.toSorted(),
-          );
-        } else {
-          expect(args).toEqual(["scripts/test-ui-real-gateway.mts", ...reporterArgs]);
-        }
-        const selectedConfig = createPrebuiltUiE2eVitestConfig(
-          { OPENCLAW_VITEST_INCLUDE_FILE: readFileSync(includePath, "utf8") },
-          [testNodeExecPath, ...args],
-        );
-        selectedFiles.push(
-          ...(selectedConfig.test?.include ?? []).filter((file) => file !== desktop),
-        );
-        if (frozen) {
-          expect(
-            resolveRunVitestSpawnEnv(
-              { CI: "true", OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000" },
-              args.slice(1),
-            ).OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
-          ).toBe("300000");
-        }
-      }
-      expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
-      expect(selectedFiles.toSorted()).toEqual(
-        (prebuilt ? uiE2eRealGatewayTestFiles : frozenRealGatewayFiles)
-          .filter(
-            (file) =>
-              file !== desktop &&
-              (!groups ||
-                groups.some(
-                  (group) => !group.includePatterns || group.includePatterns.includes(file),
-                )),
-          )
-          .toSorted(),
-      );
-      if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 13);
-        expectExcludes(selectedFiles, [
-          "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-          "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-          "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
-          "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-        ]);
-      }
-    },
-  );
+  registerControlUiE2eWorkflowTests((prefix) => tempDirs.make(prefix), parser);
 
   it("measures startup memory before the built artifact-check wave", () => {
     const steps = readCiWorkflow().jobs["build-artifacts"].steps;
