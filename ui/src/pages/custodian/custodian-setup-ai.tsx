@@ -279,8 +279,8 @@ export function ConnectAi(props: {
     return current ? setupPicker(current) : null;
   });
   const openRows = () => {
-    const row = picker()?.rows.find((row) => row.id === openId());
-    return row ? [row] : [];
+    const openRow = picker()?.rows.find((row) => row.id === openId());
+    return openRow ? [openRow] : [];
   };
   const mark = () => {
     if (props.setup().testing === null) {
