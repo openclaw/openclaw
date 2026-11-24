@@ -31,7 +31,12 @@ import {
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
-import { deleteSession, getFinishedSession } from "./bash-process-registry.js";
+import {
+  deleteSession,
+  getFinishedSession,
+  getSession,
+  processSessionInstanceId,
+} from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { fullGatewayExec, runningSession } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -133,9 +138,9 @@ async function createInvocation(runId: string) {
 
 type Invocation = Awaited<ReturnType<typeof createInvocation>>;
 
-function hasExitEvent(sessionId: string): boolean {
+function hasExitEvent(instanceId: string): boolean {
   return peekSystemEventEntries(sessionKey).some(
-    (event) => event.contextKey === `exec:${sessionId}`,
+    (event) => event.contextKey === `exec:${instanceId}`,
   );
 }
 
@@ -159,9 +164,11 @@ async function startWatcher(owner: Invocation, label: string, timeoutSeconds = 3
   });
   const { sessionId } = runningSession(result.details);
   processIds.push(sessionId);
+  const instanceId = processSessionInstanceId(expectDefined(getSession(sessionId), "running exec"));
   await waitForOutput(owner, sessionId, "READY");
   return {
     sessionId,
+    instanceId,
     grant: await fs.readFile(grantPath, "utf8"),
     request: async (observer: Invocation, marker: string) => {
       await fs.writeFile(controlPath, marker);
@@ -314,12 +321,12 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
       { timeout: 10_000 },
     );
     // Observe settlement before polling can acknowledge an unwanted notification.
-    expect(hasExitEvent(killed.sessionId)).toBe(false);
+    expect(hasExitEvent(killed.instanceId)).toBe(false);
     const running = await later.process({ action: "poll", sessionId: survivor.sessionId });
     expect(running.details).toMatchObject({ status: "running" });
-    expect(hasExitEvent(survivor.sessionId)).toBe(false);
+    expect(hasExitEvent(survivor.instanceId)).toBe(false);
     await survivor.exit();
-    await vi.waitFor(() => expect(hasExitEvent(survivor.sessionId)).toBe(true), {
+    await vi.waitFor(() => expect(hasExitEvent(survivor.instanceId)).toBe(true), {
       timeout: 10_000,
     });
     const exited = await later.process({ action: "poll", sessionId: survivor.sessionId });
@@ -331,7 +338,7 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     const owner = await createInvocation("egress-timeout");
     const watcher = await startWatcher(owner, "timeout", 3);
     await watcher.request(owner, "before-timeout");
-    await vi.waitFor(() => expect(hasExitEvent(watcher.sessionId)).toBe(true), {
+    await vi.waitFor(() => expect(hasExitEvent(watcher.instanceId)).toBe(true), {
       timeout: 10_000,
     });
     const result = await owner.process({ action: "poll", sessionId: watcher.sessionId });

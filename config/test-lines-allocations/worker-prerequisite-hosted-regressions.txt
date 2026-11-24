@@ -5,4 +5,5 @@
 # completion before a fresh requester turn. Includes synthetic exec notification
 # storage so cleanup and timeout assertions still exercise the real handoff.
 # Channel merge retains the upstream suppression hook and the wire/receipt proof.
-186
+# Egress checks observe the exact process instance before checking grant revocation.
+193
