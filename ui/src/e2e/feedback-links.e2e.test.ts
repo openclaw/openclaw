@@ -1,7 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -39,42 +39,34 @@ suite.define(() => {
         const description = notice.locator(".app-toast__description");
         const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
         const report = notice.getByRole("link", { name: "Report a bug", exact: true });
-        await report.waitFor();
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          notice,
-          [title, description, refresh, report],
-          {
-            elements: [notice, title, description, refresh, report],
-            animations: "disabled",
-          },
-        );
-        const bounds = frame.elements.map((element) => element.bounds);
-        const [cardBox, titleBox, descriptionBox] = bounds;
-        const fontSize = await report.evaluate((element) => getComputedStyle(element).fontSize);
-        await writeFile(path.join(suite.artifactDir, `layout-${width}.png`), frame.png);
-        await writeFile(
-          path.join(suite.artifactDir, `layout-${width}.json`),
-          JSON.stringify(
-            {
-              viewport: page.viewportSize(),
-              bounds,
-              fontSize,
-              gap: descriptionBox!.y - titleBox!.y - titleBox!.height,
-            },
-            null,
-            2,
-          ),
-        );
-        const gap = descriptionBox!.y - titleBox!.y - titleBox!.height;
-        expect.soft(gap).toBeGreaterThanOrEqual(2);
-        expect.soft(gap).toBeLessThanOrEqual(6);
-        expect
-          .soft(fontSize)
-          .toBe(await description.evaluate((element) => getComputedStyle(element).fontSize));
+        await waitForControlUiProofSurface(notice, [title, description, refresh]);
+        const collapsed = await notice.evaluate((element) => {
+          const titleNode = element.querySelector(".app-toast__message")!;
+          const descriptionNode = element.querySelector(".app-toast__description")!;
+          return {
+            height: element.getBoundingClientRect().height,
+            gap:
+              descriptionNode.getBoundingClientRect().top -
+              titleNode.getBoundingClientRect().bottom,
+            fontSize: getComputedStyle(descriptionNode).fontSize,
+          };
+        });
+        expect.soft(collapsed.gap).toBeGreaterThanOrEqual(2);
+        expect.soft(collapsed.gap).toBeLessThanOrEqual(6);
         if (width === 1280) {
-          expect.soft(cardBox!.height).toBeLessThanOrEqual(104);
+          expect.soft(collapsed.height).toBeLessThanOrEqual(104);
         }
+        expect(await report.isVisible()).toBe(false);
+        const toggle = notice.getByRole("button", { name: "Show details", exact: true });
+        expect(await toggle.count()).toBe(1);
+        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+        await toggle.press("Enter");
+        await notice.getByLabel("Error details", { exact: true }).waitFor();
+        await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+        await report.waitFor();
+        expect(await report.evaluate((element) => getComputedStyle(element).fontSize)).toBe(
+          collapsed.fontSize,
+        );
         await context.route("https://github.com/**", (route) =>
           route.fulfill({ body: "Issue form destination verified" }),
         );
@@ -84,9 +76,7 @@ suite.define(() => {
         await popup.waitForLoadState();
         expect(new URL(popup.url()).pathname).toBe("/openclaw/openclaw/issues/new");
         await popup.close();
-        await notice.locator("summary").press("Enter");
-        await notice.getByLabel("Error details", { exact: true }).waitFor();
-        expect(await notice.locator("details").getAttribute("open")).not.toBeNull();
+        expect(await toggle.getAttribute("aria-expanded")).toBe("true");
         const reads = (await gateway.getRequests("chat.history")).length;
         await refresh.click();
         await gateway.waitForRequest("chat.history", { after: reads });
