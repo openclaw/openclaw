@@ -4,7 +4,6 @@ openclaw-custodian-setup-card {
 
 /* Follows the macOS welcome window; rows and panels reuse option-card and callout. */
 .custodian-setup {
-  position: relative;
   display: grid;
   gap: 20px;
   width: min(100%, 640px);
@@ -21,9 +20,6 @@ openclaw-custodian-setup-card {
 }
 
 .custodian-setup__page {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
   text-align: center;
 }
 
@@ -31,22 +27,11 @@ openclaw-custodian-setup-card {
   font-size: 28px;
 }
 
-.custodian-setup__stack {
-  display: grid;
-  gap: 8px;
-  width: 100%;
-  text-align: left;
-}
-
-.custodian-setup__row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.custodian-setup .callout {
   text-align: left;
 }
 
 .custodian-setup .option-card__choice {
-  width: 100%;
   min-height: 0;
   align-items: center;
 }
@@ -55,7 +40,7 @@ openclaw-custodian-setup-card {
   flex: 1;
 }
 
-.custodian-setup :is(.custodian-setup__row, .option-card__choice) > :is(svg, .provider-brand-icon) {
+.custodian-setup :is(.row, .option-card__choice) > svg {
   flex: none;
   width: 20px;
   height: 20px;
@@ -79,56 +64,21 @@ openclaw-custodian-setup-card {
   background: var(--accent);
 }
 
-.custodian-setup__badge {
-  margin-left: 2px;
-  padding: 1px 6px;
-  font-size: 11px;
-}
-
 .custodian-setup__heading {
-  display: flex;
-  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
 }
 
 .custodian-setup > .btn {
   justify-self: start;
 }
 
-.custodian-setup__progress,
-.custodian-setup__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.custodian-setup__actions {
-  flex-wrap: wrap;
-}
-
-.custodian-setup__actions .btn {
+.custodian-setup .filters .btn {
   max-width: 100%;
   white-space: normal;
 }
 
-.custodian-setup__alternatives,
-.custodian-setup__wizard {
-  display: grid;
-  gap: 10px;
-}
-
 .custodian-setup__error {
   color: var(--danger);
-}
-
-.custodian-setup__error .btn {
-  justify-self: start;
-}
-
-.custodian-setup__native-actions {
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 .custodian-setup details pre {

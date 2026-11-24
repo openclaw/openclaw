@@ -17,7 +17,7 @@ const STEPS: SetupStep[] = ["welcome", "where", "ai"];
 
 function ErrorDetails(props: { text: string }) {
   return (
-    <details class="custodian-setup__stack">
+    <details class="stack">
       <summary>{t("custodian.autoSetup.showDetails")}</summary>
       <pre>{props.text}</pre>
       <button
@@ -48,7 +48,7 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: Custodi
       </Show>
       <Show when={error()}>
         {(message) => (
-          <div class="callout warn custodian-setup__stack" role="alert">
+          <div class="callout warn stack" role="alert">
             <Show when={state().phase === "error"} fallback={message()}>
               <strong>{t("custodian.autoSetup.signInFailedTitle")}</strong>
               <ErrorDetails text={message()} />
@@ -58,7 +58,7 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: Custodi
       </Show>
       <Show when={step()}>
         {(current) => (
-          <div class="custodian-setup__wizard">
+          <div class="stack">
             <Show when={current().step.title}>
               {(title) => <h3>{formatUiExternalText(title())}</h3>}
             </Show>
@@ -178,12 +178,12 @@ export function CustodianSetupCard(props: {
   const go = (step: SetupStep) => setup().setStep(step);
   function Welcome() {
     return (
-      <div class="custodian-setup__page">
+      <div class="stack custodian-setup__page">
         <Show when={setup().step === "welcome"}>
           <h2>{t("custodian.autoSetup.welcomeTitle")}</h2>
           <p class="muted">{t("custodian.autoSetup.welcomeSubtitle")}</p>
           <p class="muted">{t("custodian.autoSetup.welcomeBody")}</p>
-          <div class="callout custodian-setup__stack">
+          <div class="callout stack">
             <For
               each={
                 [
@@ -194,7 +194,7 @@ export function CustodianSetupCard(props: {
               }
             >
               {(feature) => (
-                <div class="custodian-setup__row">
+                <div class="row">
                   <Icon name={feature[0]} />
                   <div class="option-card__choice-copy">
                     <strong>{t(`custodian.autoSetup.${feature[1]}`)}</strong>
@@ -206,7 +206,7 @@ export function CustodianSetupCard(props: {
               )}
             </For>
           </div>
-          <p class="muted custodian-setup__row">
+          <p class="muted row">
             <Icon name="info" />
             <span>{t("custodian.autoSetup.safety")}</span>
           </p>
@@ -214,7 +214,7 @@ export function CustodianSetupCard(props: {
         <Show when={setup().step === "where"}>
           <h2>{t("custodian.autoSetup.whereTitle")}</h2>
           <p class="muted">{t("custodian.autoSetup.whereBody")}</p>
-          <div class="callout custodian-setup__stack">
+          <div class="callout stack">
             <For each={[true, false]}>
               {(here) => (
                 <button
@@ -234,9 +234,7 @@ export function CustodianSetupCard(props: {
                       )}
                       <Show when={here}>
                         {" "}
-                        <span class="chip custodian-setup__badge">
-                          {t("custodian.autoSetup.recommended")}
-                        </span>
+                        <span class="chip">{t("custodian.autoSetup.recommended")}</span>
                       </Show>
                     </strong>
                     <span class="option-card__description">
@@ -264,7 +262,7 @@ export function CustodianSetupCard(props: {
       <Show when={setup().supported && !setup().dismissed}>
         <section class="custodian-setup" aria-label={t("custodian.autoSetup.title")}>
           <Show when={setup().step === "ai"} fallback={<Welcome />}>
-            <div class="custodian-setup__heading">
+            <div class="row custodian-setup__heading">
               <h2>{title()}</h2>
               <button
                 class="custodian__nudge-dismiss"
@@ -277,7 +275,7 @@ export function CustodianSetupCard(props: {
             </div>
             <Show when={summary()}>{(value) => <p class="muted">{value()}</p>}</Show>
             <Show when={props.actions.verifying || setup().pending}>
-              <p class="custodian-setup__progress" role="status">
+              <p class="row custodian-setup__progress" role="status">
                 <span class="btn__spinner" aria-hidden="true" />
                 {t("custodian.autoSetup.verifying")}
               </p>
@@ -319,9 +317,9 @@ export function CustodianSetupCard(props: {
               </Show>
             </Show>
             <Show when={result()?.alternatives.length}>
-              <div class="custodian-setup__alternatives">
+              <div class="stack custodian-setup__alternatives">
                 <h3>{t("custodian.autoSetup.alternatives")}</h3>
-                <div class="custodian-setup__actions">
+                <div class="filters">
                   <For each={result()?.alternatives}>
                     {(candidate) => (
                       <button
@@ -341,7 +339,7 @@ export function CustodianSetupCard(props: {
             <SignInWizard setup={setup} actions={props.actions} />
             <Show when={setup().error}>
               {(error) => (
-                <div class="callout warn custodian-setup__stack" role="alert">
+                <div class="callout warn stack" role="alert">
                   <strong>{t("custodian.autoSetup.failedTitle")}</strong>
                   <ErrorDetails text={error()} />
                   <button
@@ -356,7 +354,7 @@ export function CustodianSetupCard(props: {
               )}
             </Show>
             <Show when={native()?.openGateways || native()?.reviewPermissions}>
-              <div class="custodian-setup__actions custodian-setup__native-actions">
+              <div class="filters">
                 <Show when={native()?.openGateways}>
                   <button
                     class="btn btn--ghost"
@@ -383,7 +381,7 @@ export function CustodianSetupCard(props: {
           </Show>
           <Show when={setup().step !== "ai"}>
             <footer style={{ display: "grid", "grid-template-columns": "1fr auto 1fr" }}>
-              <div class="custodian-setup__row">
+              <div class="row">
                 <Show when={stepIndex() > 0}>
                   <button
                     class="btn btn--ghost"

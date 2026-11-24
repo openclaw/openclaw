@@ -50,10 +50,11 @@ function unavailable(attempts: SetupAutoResult["attempts"] = []): SetupAutoResul
 }
 const setupContext = (request: Request) =>
   createContext(
-    (...args) =>
+    vi.fn((...args) =>
       args[0] === "openclaw.setup.options"
         ? Promise.resolve({ setupComplete: true })
         : request(...args),
+    ),
     methods,
     { agentsList },
   );
