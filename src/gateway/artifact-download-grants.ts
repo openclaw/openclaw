@@ -49,7 +49,16 @@ function removeDownload(grants: Map<string, Download>, ticket: string) {
   if (grant && grants.delete(ticket)) {
     grant.retired = true;
     if (grant.readers === 0) {
-      grant.release();
+      // A throwing release must not abort the sweep that owns this ticket:
+      // the grant is already deregistered here, so remaining tickets on the
+      // connection still get their release, and the failure cannot escape
+      // abort listeners, expiry sweeps, or teardown as an uncaught exception.
+      try {
+        grant.release();
+      } catch {
+        // The owner's cleanup failure is not recoverable at this boundary;
+        // the deregistered ticket leaves no path for a caller to retry it.
+      }
     }
   }
 }

@@ -16,6 +16,7 @@ import {
   createManagedArtifactDownload,
   clearArtifactDownloads,
   pruneExpiredArtifactDownloads,
+  resolveArtifactDownloadGrant,
 } from "./artifact-download-grants.js";
 import {
   prepareArtifactDownload,
@@ -460,6 +461,43 @@ it("releases retained sharing facts on unused expiry, eviction, and disconnect",
       }
     }
   });
+});
+
+it("isolates a throwing release so abort cleanup retires every grant on the connection", () => {
+  const controller = new AbortController();
+  const client = createClient(controller.signal);
+  const prepared = prepareArtifactDownload(fileArtifact("isolation"))!;
+  const read = async () => undefined;
+  const calls: string[] = [];
+  const releaseFor = (label: string) => () => {
+    calls.push(label);
+    if (label === "first") {
+      throw new Error("release boom");
+    }
+  };
+  const first = createArtifactDownload({
+    client,
+    assertCurrent() {},
+    read,
+    release: releaseFor("first"),
+    prepared,
+  });
+  const second = createArtifactDownload({
+    client,
+    assertCurrent() {},
+    read,
+    release: releaseFor("second"),
+    prepared,
+  });
+  const locatorOf = (url: string) => url.split("/").slice(-2).join("/");
+  expect(resolveArtifactDownloadGrant(new Set([client]), locatorOf(first.url))).toBeDefined();
+  expect(resolveArtifactDownloadGrant(new Set([client]), locatorOf(second.url))).toBeDefined();
+
+  controller.abort();
+
+  expect(calls).toEqual(["first", "second"]);
+  expect(resolveArtifactDownloadGrant(new Set([client]), locatorOf(first.url))).toBeUndefined();
+  expect(resolveArtifactDownloadGrant(new Set([client]), locatorOf(second.url))).toBeUndefined();
 });
 
 it("backpressures HTTP streams across URL expiry and closes their source on browser abort", async () => {
