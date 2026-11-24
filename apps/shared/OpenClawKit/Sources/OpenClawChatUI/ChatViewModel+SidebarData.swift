@@ -17,6 +17,21 @@ extension OpenClawChatViewModel {
         }
     }
 
+    var sidebarRosterClock: OpenClawChatSessionSnooze.RosterClock {
+        self.sidebarData?.queryState?.rosterClock ?? self.rosterClock
+    }
+
+    /// A new metadata generation also retires the previous connection's Gateway clock.
+    func invalidateSessionMetadataReadiness() {
+        self.rosterClock = .init()
+        self.sessionMetadataGeneration &+= 1
+        self.readySessionMetadataGeneration = nil
+    }
+
+    var hasCurrentSessionMetadata: Bool {
+        self.readySessionMetadataGeneration == self.sessionMetadataGeneration
+    }
+
     public func enableSidebarData() {
         guard self.sidebarData == nil else { return }
         let owner = OpenClawChatSessionSidebarData()
@@ -57,9 +72,9 @@ extension OpenClawChatViewModel {
         self.refreshSidebarData(debounce: search != nil)
     }
 
-    func refreshSidebarData(debounce: Bool = false, coalescing: Bool = false) {
+    func refreshSidebarData(debounce: Bool = false, coalescing: Bool = false, afterRosterExpiry: Bool = false) {
         guard !self.isTransportDetached, self.healthOK, self.sidebarData?.isQueryEnabled == true else { return }
-        self.sidebarData?.scheduleLoad(debounce: debounce, coalescing: coalescing)
+        self.sidebarData?.scheduleLoad(debounce: debounce, coalescing: coalescing, afterRosterExpiry: afterRosterExpiry)
     }
 
     func rosterEntry(key: String, agentID: String?) -> OpenClawChatSessionEntry? {
@@ -79,6 +94,10 @@ extension OpenClawChatViewModel {
             sidebarData.invalidate()
             self.refreshSidebarData()
         case .health(false): sidebarData.invalidate()
+        case .personalPinsChanged:
+            // Only the Mac sidebar owner negotiates personal pins; other clients ignore the preference event.
+            self.refreshSessions(limit: Self.sessionListFetchLimit)
+            self.refreshSidebarData(coalescing: true)
         case .health(true):
             if !self.healthOK, sidebarData.isQueryEnabled { sidebarData.scheduleLoad() }
         case let .sessionObserver(digest): sidebarData.applyObserver(digest)

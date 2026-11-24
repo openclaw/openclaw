@@ -94,6 +94,7 @@ import {
   AGENT_WRITE_LAYOUT_POSTGRES_MIGRATION_SQL,
   withLegacyAgentPostgresWriteLayout,
 } from "./openclaw-agent-write-layout-migration.js";
+import { AGENT_ARCHIVE_UNDO_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { agentPostgresRuntime } from "./postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "./postgres-schema.generated/agent-search-runtime.js";
 
@@ -133,9 +134,14 @@ export function admitAgentEngineSearchExtensions(
   );
 }
 
+export function withoutAgentPostgresArchiveUndo(schema: string): string {
+  return schema.replace('  "archive_undo_marker" text COLLATE "C",\n', "");
+}
+
 function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
   const agentPostgresSql = agentEngineSchema.postgres;
-  const agentPostgresV43Sql = withoutAgentPostgresMemberAccess(agentPostgresSql);
+  const agentPostgresV44Sql = withoutAgentPostgresArchiveUndo(agentPostgresSql);
+  const agentPostgresV43Sql = withoutAgentPostgresMemberAccess(agentPostgresV44Sql);
   const agentPostgresV42Sql = withoutAgentPostgresPendingInputEndings(agentPostgresV43Sql);
   const agentPostgresV41Sql = withoutAgentPostgresToolUsage(agentPostgresV42Sql);
   const agentPostgresV40Sql = withoutAgentPostgresActiveEventFacts(agentPostgresV41Sql);
@@ -434,13 +440,33 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
         postgresTextSearchVersion: 2,
       },
       schema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV44Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
       },
       sql: `${AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL}
         UPDATE schema_meta SET schema_version = ${AGENT_MEMBER_ACCESS_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_ARCHIVE_UNDO_SCHEMA_VERSION,
+      fromSchema: {
+        postgres: agentPostgresV44Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `ALTER TABLE session_nodes ADD COLUMN archive_undo_marker TEXT COLLATE "C";
+        UPDATE schema_meta SET schema_version = ${AGENT_ARCHIVE_UNDO_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

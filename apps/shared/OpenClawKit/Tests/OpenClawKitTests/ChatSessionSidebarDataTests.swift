@@ -211,16 +211,18 @@ struct ChatSessionSidebarDataTests {
     }
 
     @Test(arguments: [ChatSessionBatchAction.archive, .pin])
-    func `archive and pin clear snooze optimistically and on acknowledgement`(action: ChatSessionBatchAction) throws {
+    func `only archive clears snooze optimistically and on acknowledgement`(action: ChatSessionBatchAction) throws {
         let owner = OpenClawChatSessionSidebarData()
         let initial = try self.rows(#"""
         {"key":"agent:main:thread","sessionId":"thread","snoozedUntil":101000,"snoozedAt":100000,"updatedAt":10}
         """#)
         let ids = owner.receive(initial, read: owner.beginRead(), replacingAgent: "main")
         let target = try #require(owner.project(ids).first)
+        let expectedUntil: Double? = action == .archive ? nil : 101_000
+        let expectedAt: Double? = action == .archive ? nil : 100_000
         let failed = owner.beginBatchMutation(target: target, action: action)
-        #expect(owner.project(ids).first?.snoozedUntil == nil)
-        #expect(owner.project(ids).first?.snoozedAt == nil)
+        #expect(owner.project(ids).first?.snoozedUntil == expectedUntil)
+        #expect(owner.project(ids).first?.snoozedAt == expectedAt)
         owner.finishMutation(failed, receipt: nil)
         #expect(owner.project(ids).first?.snoozedUntil == 101_000)
         #expect(owner.project(ids).first?.snoozedAt == 100_000)
@@ -233,13 +235,13 @@ struct ChatSessionSidebarDataTests {
         """#))
         owner.receive(initial, read: delayedRead)
         let current = try #require(owner.project(ids).first)
-        #expect(current.snoozedUntil == nil)
-        #expect(current.snoozedAt == nil)
+        #expect(current.snoozedUntil == expectedUntil)
+        #expect(current.snoozedAt == expectedAt)
         #expect(action == .archive ? current.isArchived : current.pinned == true)
     }
 
     @Test(arguments: [false, true], [false, true])
-    func `pin and snooze reconcile overlapping fields in either acknowledgement order`(
+    func `pin and snooze keep independent fields in either acknowledgement order`(
         snoozeFirst: Bool, newerAckFirst: Bool) throws
     {
         let owner = OpenClawChatSessionSidebarData()
@@ -271,8 +273,8 @@ struct ChatSessionSidebarDataTests {
         """#)
         let firstReceipt = snoozeFirst ? snoozeReceipt : pinReceipt
         let secondReceipt = snoozeFirst ? pinReceipt : snoozeReceipt
-        let expectedUntil: Double? = snoozeFirst ? nil : 101_000
-        let expectedAt: Double? = snoozeFirst ? nil : 100_000
+        let expectedUntil: Double = 101_000
+        let expectedAt: Double = 100_000
         #expect(owner.project(ids).first?.snoozedUntil == expectedUntil)
         #expect(owner.project(ids).first?.pinned == true)
 

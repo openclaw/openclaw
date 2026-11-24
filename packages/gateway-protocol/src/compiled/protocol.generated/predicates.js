@@ -1439,7 +1439,7 @@ var External = [
     /(^key$|^agentId$|^subscriptionId$)/u,
     /(^agentId$|^sessionKeys$)/u,
     /(^key$|^runId$|^agentId$|^clearQueued$|^userInitiated$)/u,
-    /(^key$|^agentId$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedPermissionMode$|^expectedSandboxMode$|^expectedNativeRuntimeConsent$|^expectedToolOverrides$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
+    /(^key$|^agentId$|^archiveUndoToken$|^expectedArchivedAt$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedPermissionMode$|^expectedSandboxMode$|^expectedNativeRuntimeConsent$|^expectedToolOverrides$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^requestArchiveUndo$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
     /(^key$|^agentId$|^expectedSessionId$|^expectedSidebarRoot$|^expectedCategory$)/u,
     /(^send$|^receive$)/u,
     /(^sessionKey$|^agentId$|^sessionId$|^goalId$|^operationId$|^issuedAtMs$|^action$|^objective$|^expectedGoalUpdatedAt$|^expectedRunId$)/u,
@@ -1449,7 +1449,7 @@ var External = [
     /(^sessionKey$|^agentId$|^sessionId$|^reviewId$|^idempotencyKey$)/u,
     /(^targets$|^patch$)/u,
     /(^key$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^agentId$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedSandboxMode$|^expectedPermissionMode$|^expectedNativeRuntimeConsent$)/u,
-    /(^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
+    /(^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^requestArchiveUndo$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
     /(^key$|^agentId$|^pluginId$|^namespace$|^value$|^unset$)/u,
     /(^key$|^agentId$|^reason$|^expectedSessionId$)/u,
     /(^key$|^agentId$|^deleteTranscript$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedSessionUpdatedAt$|^emitLifecycleHooks$|^archivedOnly$)/u,
@@ -16242,6 +16242,12 @@ var External = [
     ) &&
     check_6(value.key) &&
     (value.agentId === void 0 || !("agentId" in value) || check_65(value.agentId)) &&
+    (value.archiveUndoToken === void 0 ||
+      !("archiveUndoToken" in value) ||
+      check_264(value.archiveUndoToken)) &&
+    (value.expectedArchivedAt === void 0 ||
+      !("expectedArchivedAt" in value) ||
+      check_431(value.expectedArchivedAt)) &&
     (value.expectedSessionId === void 0 ||
       !("expectedSessionId" in value) ||
       check_65(value.expectedSessionId)) &&
@@ -16288,6 +16294,9 @@ var External = [
     (value.attention === void 0 || !("attention" in value) || check_2440(value.attention)) &&
     (value.ttlMinutes === void 0 || !("ttlMinutes" in value) || check_2442(value.ttlMinutes)) &&
     (value.archived === void 0 || !("archived" in value) || check_64(value.archived)) &&
+    (value.requestArchiveUndo === void 0 ||
+      !("requestArchiveUndo" in value) ||
+      check_331(value.requestArchiveUndo)) &&
     (value.pinned === void 0 || !("pinned" in value) || check_64(value.pinned)) &&
     (value.sidebarRoot === void 0 || !("sidebarRoot" in value) || check_64(value.sidebarRoot)) &&
     (value.snoozedUntil === void 0 ||
@@ -16608,6 +16617,9 @@ var External = [
     (value.attention === void 0 || !("attention" in value) || check_2440(value.attention)) &&
     (value.ttlMinutes === void 0 || !("ttlMinutes" in value) || check_2442(value.ttlMinutes)) &&
     (value.archived === void 0 || !("archived" in value) || check_64(value.archived)) &&
+    (value.requestArchiveUndo === void 0 ||
+      !("requestArchiveUndo" in value) ||
+      check_331(value.requestArchiveUndo)) &&
     (value.pinned === void 0 || !("pinned" in value) || check_64(value.pinned)) &&
     (value.sidebarRoot === void 0 || !("sidebarRoot" in value) || check_64(value.sidebarRoot)) &&
     (value.snoozedUntil === void 0 ||

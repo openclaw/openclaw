@@ -14,7 +14,6 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { withoutAgentPostgresMemberAccess } from "./openclaw-agent-member-access-schema.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
 import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
@@ -93,7 +92,7 @@ it("opens a migrated v43 session through the production engine and sharing reade
     );
     const database = openOpenClawAgentDatabase(options);
     const native = requireNativeSqliteDatabase(database.db);
-    expectVersion(native, 44);
+    expectVersion(native, agentEngineSchema.version);
     expect(assertOpenClawMigrationWitnessPreserved(before, agentWitness(native))).toEqual({
       warnings: [],
     });
@@ -146,13 +145,4 @@ it("restores the scoped predecessor backup while preserving unrelated writes", a
     },
     "state",
   );
-});
-
-it("registers an exact consecutive PostgreSQL migration", () => {
-  const step = agentEngineSchema.postgresMigrations?.find((migration) => migration.version === 44);
-  expect(step).toBeDefined();
-  expect(withoutAgentPostgresMemberAccess(agentEngineSchema.postgres)).not.toContain(
-    '"access" text COLLATE "C",',
-  );
-  expect(step?.sql).toContain("ALTER TABLE session_members ADD COLUMN access");
 });

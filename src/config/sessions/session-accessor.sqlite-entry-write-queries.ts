@@ -1,6 +1,7 @@
 import { sql, type InsertObject, type OperandExpression } from "kysely";
 import {
   createSqliteQueryCache,
+  executeSqliteQuerySync,
   prepareSqliteQuerySync,
   prepareSqliteTerminalWrite,
 } from "../../infra/kysely-sync.js";
@@ -14,16 +15,19 @@ import {
 } from "./session-entry-snapshots.js";
 
 type QueryParameter<P> = Parameters<Parameters<typeof prepareSqliteQuerySync<P>>[1]>[0];
-type SessionNodeWriteRow = ReturnType<typeof bindSessionNode> & {
+export type SessionNodeWriteRow = ReturnType<typeof bindSessionNode> & {
   legacy_acp_migration_json?: string | null;
 };
 
-type SessionWindowWriteRow = Omit<ReturnType<typeof bindSessionRoot>, "primary_conversation_id"> & {
+export type SessionWindowWriteRow = Omit<
+  ReturnType<typeof bindSessionRoot>,
+  "primary_conversation_id"
+> & {
   primary_conversation_id: string | null;
   transcript_observed_at: number;
 };
 
-export function buildSessionEntryWindowUpsert(
+function buildSessionEntryWindowUpsert(
   database: EngineConnection,
   rows: readonly InsertObject<DB, "session_windows">[],
   retainOwner: boolean,
@@ -62,7 +66,7 @@ export function buildSessionEntryWindowUpsert(
     );
 }
 
-export function buildSessionEntryNodeUpsert(
+function buildSessionEntryNodeUpsert(
   database: EngineConnection,
   rows: readonly InsertObject<DB, "session_nodes">[],
   withLegacySources = false,
@@ -103,6 +107,31 @@ export function buildSessionEntryNodeUpsert(
           : {}),
       })),
     );
+}
+
+export function writeSessionEntryBatchRows(
+  database: EngineConnection,
+  nodes: readonly SessionNodeWriteRow[],
+  windows: readonly SessionWindowWriteRow[],
+): void {
+  if (nodes.length > 0) {
+    executeSqliteQuerySync(
+      database,
+      buildSessionEntryNodeUpsert(
+        database,
+        nodes.map((node) =>
+          Object.assign({}, node, {
+            session_started_at: /* kysely-allow-raw: exact int64 bind matches the single-entry writer. */ sql<
+              number | null
+            >`${node.session_started_at}`,
+          }),
+        ),
+      ),
+    );
+  }
+  if (windows.length > 0) {
+    executeSqliteQuerySync(database, buildSessionEntryWindowUpsert(database, windows, true));
+  }
 }
 
 // Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.

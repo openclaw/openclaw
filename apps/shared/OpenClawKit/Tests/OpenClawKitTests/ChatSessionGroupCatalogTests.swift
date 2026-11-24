@@ -58,7 +58,12 @@ struct ChatSessionGroupCatalogTests {
         #expect(!connection.allows("sessions.groups.update"))
         current = false
         #expect(!connection.allows("sessions.groups.list", scope: "operator.read"))
-        await #expect(throws: CancellationError.self) { try await connection.request(.init(
+        #if os(macOS)
+        let unsent = OpenClawChatTransportSendError.self
+        #else
+        let unsent = CancellationError.self
+        #endif
+        await #expect(throws: unsent) { try await connection.request(.init(
             method: "sessions.groups.list",
             timeoutMs: 15000)) }
     }

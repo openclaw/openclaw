@@ -194,6 +194,10 @@ have no recorded pinner and are not copied into anyone's profile. Calls without 
 verified person can still list visible sessions without a pin filter; sign in to
 filter by pins or change them. Admitted session tools always use their requester’s pins. Direct integrations
 opt in on their connection and verify Gateway support before writing a personal pin.
+Updated macOS clients show legacy pins read-only when an older Gateway does not
+advertise `personal-session-pins`; update the Gateway to edit personal pins. A Mac
+undoing an archive on an older Gateway can restore the legacy pin that the same
+archive just cleared.
 
 The Control UI ships with its Gateway. For a writable signed-in profile, the
 Sessions table and sidebar use each list response's Gateway time to decide when

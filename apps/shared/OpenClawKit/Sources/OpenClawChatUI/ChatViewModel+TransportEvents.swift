@@ -23,17 +23,10 @@ extension OpenClawChatViewModel {
             return nil
         }
         switch evt {
+        case .personalPinsChanged:
+            break // The Mac sidebar owner refreshes in handleSidebarEvent.
         case let .health(ok):
-            let reconnected = ok && !self.healthOK
-            applyTransportHealth(ok)
-            if reconnected {
-                self.refreshAfterHealthRecovery()
-            } else if !ok {
-                self.sourcePreviewState.invalidate()
-                self.invalidateAgentCatalog()
-                self.modelAvailabilityIsSessionScoped = false
-                self.invalidateComposerCapabilities()
-            }
+            self.handleTransportHealth(ok)
         case .tick:
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
@@ -105,6 +98,19 @@ extension OpenClawChatViewModel {
             }
         }
         return nil
+    }
+
+    private func handleTransportHealth(_ ok: Bool) {
+        let reconnected = ok && !self.healthOK
+        applyTransportHealth(ok)
+        if reconnected {
+            self.refreshAfterHealthRecovery()
+        } else if !ok {
+            self.sourcePreviewState.invalidate()
+            self.invalidateAgentCatalog()
+            self.modelAvailabilityIsSessionScoped = false
+            self.invalidateComposerCapabilities()
+        }
     }
 
     /// Transcript recovery gets the first round trip. A newer reconnect replaces
@@ -345,9 +351,14 @@ extension OpenClawChatViewModel {
         }
         var updated = self.sessions
         updated[index] = merged
-        self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
+        if self.sidebarData != nil {
+            self.sessions = updated // Preserve live membership order across this field-only write.
+            updated = self.sessions // Only cache rows accepted by the roster owner.
+        }
+        let organized = OpenClawChatSessionListOrganizer.organize(updated)
+        if self.sidebarData == nil { self.sessions = organized }
         self.persistSessionsToCache(
-            self.sessions,
+            organized,
             agentID: self.currentSessionSnapshot().deliveryAgentID)
         return true
     }

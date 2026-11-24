@@ -22,6 +22,7 @@ struct ChatGatewayEventSubscriptionTests {
                 "metadata:research:false"),
             ("chat.metadata.changed", #"{"modelSelectionChanged":true}"#, "modelSelection"),
             ("config.changed", "null", "modelSelection"),
+            ("users.prefs.changed", #"{"profileId":"me","keys":["ui.railShortcuts"]}"#, "personalPins"),
             (
                 "sessions.changed",
                 #"""
@@ -177,15 +178,19 @@ struct ChatGatewayEventSubscriptionTests {
             if OpenClawChatGatewayPayloadCodec.event(from: frame) != nil { allMapped += 1 }
         }
         #expect(mapped == fixtures.map(\.expected))
-        #expect(chatMappingAttempts == 16)
-        #expect(allMappingAttempts == 266)
-        #expect(allMapped == 16)
+        #expect(chatMappingAttempts == fixtures.count)
+        #expect(allMappingAttempts == fixtures.count + 250)
+        #expect(allMapped == fixtures.count)
+        let theme = #"{"type":"event","event":"users.prefs.changed","payload":{"profileId":"me","keys":["ui.theme"]}}"#
+        let unrelated = try JSONDecoder().decode(EventFrame.self, from: Data(theme.utf8))
+        #expect(OpenClawChatGatewayPayloadCodec.event(from: unrelated) == nil)
     }
 
     private static func effect(_ event: OpenClawChatTransportEvent) -> String {
         switch event {
         case .tick: "tick"
         case let .chatMetadataChanged(catalog, agent): "metadata:\(agent ?? ""):\(catalog)"
+        case .personalPinsChanged: "personalPins"
         case .modelSelectionChanged: "modelSelection"
         case let .sessionsChanged(change):
             "session:\(change.agentId ?? ""):\(change.sessionKey ?? ""):\(change.reason)"

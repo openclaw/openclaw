@@ -6,6 +6,42 @@ public enum OpenClawChatSnoozePatch: Sendable {
 }
 
 public enum OpenClawChatSessionSnooze: Sendable {
+    /// The roster's timestamp is the same sample the Gateway used for pin eligibility.
+    struct RosterClock {
+        let offset: TimeInterval
+        let activityWake: (expiresAt: Double, local: Date)?
+
+        init(timestamp: Double? = nil, activityExpiresAt: Double? = nil, receivedAt: Date = .now) {
+            guard let timestamp, timestamp.isFinite, timestamp > 0 else {
+                self.offset = 0
+                self.activityWake = nil
+                return
+            }
+            self.offset = timestamp / 1000 - receivedAt.timeIntervalSince1970
+            // The server's last valid millisecond can describe a pin outside this page.
+            self.activityWake = activityExpiresAt.flatMap { end in
+                guard end >= timestamp, end < Double(Int64.max) else { return nil }
+                return (end, receivedAt.addingTimeInterval((end - timestamp + 1) / 1000))
+            }
+        }
+
+        func gatewayDate(at local: Date = .now) -> Date {
+            local.addingTimeInterval(self.offset)
+        }
+
+        func localWake(
+            in entries: [OpenClawChatSessionEntry],
+            at local: Date,
+            ignoringExpiry consumed: Double? = nil) -> Date?
+        {
+            let rowWake = OpenClawChatSessionSnooze.nextWake(in: entries, now: self.gatewayDate(at: local))?
+                .addingTimeInterval(-self.offset)
+            // Keep an overdue hint until the sidebar actually refreshes; never re-arm the consumed one.
+            guard let activityWake, activityWake.expiresAt != consumed else { return rowWake }
+            return rowWake.map { min($0, activityWake.local) } ?? activityWake.local
+        }
+    }
+
     public struct Preset: Sendable {
         public let id: String
         public let title: String

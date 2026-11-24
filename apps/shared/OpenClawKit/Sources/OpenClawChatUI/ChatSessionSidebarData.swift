@@ -76,8 +76,9 @@ public final class OpenClawChatSessionSidebarData {
 
     func conversationRows(agentID: String?) -> [OpenClawChatSessionEntry] {
         self.cachedProjection(.conversation(agentID ?? "")) {
-            OpenClawChatSessionListOrganizer
-                .organize(self.project(self.rosters[agentID ?? ""] ?? []).filter { !$0.isArchived })
+            OpenClawChatSessionListOrganizer.organize(
+                self.project(self.rosters[agentID ?? ""] ?? []).filter { !$0.isArchived },
+                preservingPersonalPinOrder: true)
         }
     }
 
@@ -216,9 +217,8 @@ public final class OpenClawChatSessionSidebarData {
               current.sessionId == target.sessionId else { return nil }
         var proposed = self.project(current)
         update(&proposed)
-        // Pin and archive also own a wake; fence each field even when it was already clear.
+        // Archive also owns pin and snooze. A personal pin never owns a shared wake.
         let fields: [Field] = switch field {
-        case .pinned where proposed.pinned == true: [.pinned, .snoozed]
         case .archived where proposed.isArchived: [.archived, .pinned, .snoozed]
         default: [field]
         }
@@ -238,12 +238,10 @@ public final class OpenClawChatSessionSidebarData {
                 $0.archived = true
                 $0.pinned = false
                 $0.pinnedAt = nil
-            } else {
-                $0.pinned = action == .pin
-            }
-            if action == .archive || action == .pin {
                 $0.snoozedUntil = nil
                 $0.snoozedAt = nil
+            } else {
+                $0.pinned = action == .pin
             }
         }
     }

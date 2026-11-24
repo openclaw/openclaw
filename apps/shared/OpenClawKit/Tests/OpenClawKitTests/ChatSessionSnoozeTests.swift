@@ -110,6 +110,74 @@ struct ChatSessionSnoozeTests {
         #expect(OpenClawChatSessionSnooze.nextWake(in: [], now: now) == nil)
     }
 
+    @Test(arguments: [300.0, -300.0])
+    func `remote snooze becomes eligible at the local refresh deadline despite clock skew`(skew: Double) throws {
+        let server = Date(timeIntervalSince1970: 1000)
+        let received = server.addingTimeInterval(skew)
+        let clock = OpenClawChatSessionSnooze.RosterClock(timestamp: 1_000_000, receivedAt: received)
+        let row = Self.entry(snoozedUntil: 1_005_000)
+        let deadline = try #require(clock.localWake(in: [row], at: received))
+        #expect(deadline == received.addingTimeInterval(5))
+        #expect(row.isSnoozed(at: clock.gatewayDate(at: deadline.addingTimeInterval(-0.01))))
+        #expect(!row.isSnoozed(at: clock.gatewayDate(at: deadline)))
+        #expect(clock.localWake(in: [row], at: deadline) == nil)
+    }
+
+    @MainActor @Test func `off-window pin schedules a roster refresh after the inclusive server boundary`() async throws {
+        let page = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(Data(#"""
+        {"ts":1000000,"activityExpiresAt":1004999,"hasMore":true,"sessions":[{"key":"agent:main:visible"}]}
+        """#.utf8), agentID: "main")
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: TestChatTransport(historyResponses: [], sessionsResponses: [page]))
+        defer { model.detachTransport() }
+        await model.fetchSessions(limit: 1)
+        let clock = model.rosterClock
+        let deadline = try #require(clock.localWake(in: model.sessions, at: .now))
+        #expect(abs(clock.gatewayDate(at: deadline).timeIntervalSince1970 - 1005) < 0.0001)
+        // A render delayed past the boundary must still fetch exactly once.
+        let overdue = deadline.addingTimeInterval(30)
+        #expect(clock.localWake(in: model.sessions, at: overdue) == deadline)
+        #expect(clock.localWake(in: model.sessions, at: overdue, ignoringExpiry: 1_004_999) == nil)
+        // Even replaying the same page later cannot start a new immediate-refresh loop.
+        await model.fetchSessions(limit: 1)
+        #expect(model.rosterClock.localWake(in: model.sessions, at: overdue, ignoringExpiry: 1_004_999) == nil)
+    }
+
+    @MainActor @Test func `filtered roster keeps its first-page wake through append and clears it on scope change`() async throws {
+        let transport = SidebarQueryTransport()
+        let owner = OpenClawChatSessionSidebarData()
+        owner.configureQueries(transport: transport, query: .init(agentID: "research"))
+        await transport.replyAutomatically(with: Data(#"{"ts":1000050,"sessions":[]}"#.utf8), after: [Data(#"""
+        {"ts":1000000,"activityExpiresAt":1000099,"hasMore":true,"nextOffset":1,"sessions":[{"key":"agent:research:a"}]}
+        """#.utf8)])
+        await owner.load()
+        await owner.load(append: true)
+        let clock = try #require(owner.queryState?.rosterClock)
+        let wake = try #require(clock.localWake(in: owner.queryRows, at: .now))
+        #expect(abs(clock.gatewayDate(at: wake).timeIntervalSince1970 - 1000.100) < 0.0001)
+        owner.setQuery(.init(agentID: "another"))
+        #expect(owner.queryState?.rosterClock == nil)
+    }
+
+    @Test func `stale or uncalibrated expiry cannot rearm a timer and an earlier row wakes first`() {
+        let local = Date(timeIntervalSince1970: 700)
+        for (ts, cutoff) in [(nil, 1_100_000.0), (1_000_000.0, 999_999.0)] as [(Double?, Double)] {
+            let clock = OpenClawChatSessionSnooze.RosterClock(
+                timestamp: ts,
+                activityExpiresAt: cutoff,
+                receivedAt: local)
+            #expect(clock.localWake(in: [], at: local) == nil)
+        }
+        let clock = OpenClawChatSessionSnooze.RosterClock(
+            timestamp: 1_000_000,
+            activityExpiresAt: 1_002_999,
+            receivedAt: local)
+        let row = Self.entry(snoozedUntil: 1_001_000)
+        let first = local.addingTimeInterval(1)
+        #expect(clock.localWake(in: [row], at: local) == first)
+        #expect(clock.localWake(in: [row], at: first) == local.addingTimeInterval(3))
+    }
+
     @Test func `session list decoding preserves snooze facts and omitted fields`() throws {
         let response = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(Data(#"""
         {"sessions":[

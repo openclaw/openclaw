@@ -409,6 +409,7 @@ CREATE TABLE "session_nodes" (
   "last_read_at" bigint,
   "last_interaction_at" bigint,
   "last_activity_at" bigint,
+  "archive_undo_marker" text COLLATE "C",
   PRIMARY KEY ("session_key"),
   CHECK (("entry_valid" IN (-1, 0, 1))),
   CHECK ("status" IS NULL OR ("status" IN ('running', 'done', 'failed', 'killed', 'timeout'))),

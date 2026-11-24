@@ -1,11 +1,23 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 @MainActor
 public struct OpenClawSessionMenuConnection {
+    #if os(macOS)
+    let pinProfile = ChatSidebarPinProfile()
+    #endif
     public let hello: HelloOk
     private let methods: Set<String>
     private let scopes: Set<String>
+    public var supportsPersonalPins: Bool {
+        self.hello.supportsServerCapability(.personalSessionPins)
+    }
+
+    var supportsArchiveUndo: Bool {
+        self.supportsPersonalPins && self.hello.supportsServerCapability(.sessionArchiveUndo)
+    }
+
     public let local: Bool
     public var groupDefaultsBrowser: OpenClawGroupDefaultsBrowser?
     public let selfProfileID: String?
@@ -81,7 +93,14 @@ public struct OpenClawSessionMenuConnection {
 
     @discardableResult
     public func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
-        guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
+        guard self.isCurrent(), !Task.isCancelled else {
+            #if os(macOS)
+            // Mac Restore and Undo distinguish a request that was never sent from an unconfirmed one.
+            throw OpenClawChatTransportSendError.notDispatched
+            #else
+            throw CancellationError()
+            #endif
+        }
         let data = try await self.sendRequest(request)
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
         return data
