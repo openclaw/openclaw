@@ -10,8 +10,8 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 ## Fast-track approval boundary
 
 Agents MUST NOT approve fast-track exceptions, even with a release manager's
-available token. Require explicit approval from another human in the normal
-release-managers group for the exact request/digest and skip or incomplete-FRV
+available token. Require explicit approval from a human in the normal
+release-managers group, which may be the requesting release manager, for the exact request/digest and skip or incomplete-FRV
 action; retain its permalink and original FRV results. Generic release authority
 is insufficient. Use the normal environment approval/receipt, not a separate
 Google/Firebase service. These request contracts do not yet enable a publisher
