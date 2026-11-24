@@ -92,4 +92,12 @@ it("notifies scoped catalog readers without sending the global plugin update", (
   expect(staff.frames()).toHaveLength(2);
   broadcast(GATEWAY_EVENT_CATALOG_ROUTES_CHANGED, { generation: 5, plugins: ["private"] });
   expect(visitor.frames()).toHaveLength(1);
+  broadcastPluginRegistryChanged(broadcast, undefined);
+  expect(visitor.frames().at(-1)).toEqual({
+    type: "event",
+    event: GATEWAY_EVENT_CATALOG_ROUTES_CHANGED,
+    seq: 2,
+    payload: {},
+  });
+  expect(pairing.frames()).toEqual([]);
 });

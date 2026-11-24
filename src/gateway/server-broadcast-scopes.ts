@@ -225,6 +225,9 @@ export function metadataInvalidationFragment(
     return null;
   }
   const keys = Reflect.ownKeys(payload);
+  if (keys.length === 0) {
+    return ',"payload":{}';
+  }
   if (event === GATEWAY_EVENT_CATALOG_ROUTES_CHANGED) {
     const field = Object.getOwnPropertyDescriptor(payload, "generation");
     return keys.length === 1 &&
@@ -234,9 +237,6 @@ export function metadataInvalidationFragment(
       field.value >= 0
       ? `,"payload":{"generation":${field.value}}`
       : null;
-  }
-  if (keys.length === 0) {
-    return ',"payload":{}';
   }
   const fields: Record<string, boolean> = {};
   for (const key of keys) {

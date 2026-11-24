@@ -23,9 +23,10 @@ export const GATEWAY_EVENT_CATALOG_ROUTES_CHANGED = "sessions.catalog.routes.cha
 /** Scoped catalog readers refresh their own route; the global plugin refresh requires operator.read. */
 export function broadcastPluginRegistryChanged(
   broadcast: GatewayBroadcastFn | undefined,
-  generation: number,
+  generation: number | undefined,
 ) {
-  const payload = { generation };
+  // An unversioned registry still invalidates the caller's cached route.
+  const payload = generation === undefined ? {} : { generation };
   const options = { dropIfSlow: true };
   broadcast?.("plugins.changed", payload, options);
   broadcast?.(GATEWAY_EVENT_CATALOG_ROUTES_CHANGED, payload, options);
