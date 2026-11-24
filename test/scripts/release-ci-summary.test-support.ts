@@ -219,6 +219,8 @@ export function trustedMainPackageFixture({
   };
   const client = {
     validateChildReuse: unsupported,
+    selectPublicationArtifactSource: unsupported,
+    verifyReleaseRecoveryProducer: unsupported,
     getRunAttempt: unsupported,
     getRunAttemptJobs: unsupported,
     loadExecutionPlan: unsupported,

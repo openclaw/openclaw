@@ -160,11 +160,10 @@ describe("cron creator authority grants", () => {
   });
 
   it("records a channel owner's external origin without granting runtime authority", () => {
-    let current = true;
     const scope = createScope(
       "telegram-owner",
       { kind: "external", channel: "telegram" },
-      { source: "channel-owner", isCurrent: () => current },
+      { source: "channel-owner" },
     );
     const grant = mint(scope, undefined, undefined, undefined, "requester");
     expect(provenance(grant, scope.runId)).toEqual({
@@ -172,10 +171,6 @@ describe("cron creator authority grants", () => {
       callerOrigin: { kind: "external", channel: "telegram" },
     });
     expect(consume(grant).authority).toBeUndefined();
-    current = false;
-    expect(() => mint(scope, undefined, undefined, undefined, "requester")).toThrow(
-      "access has ended",
-    );
   });
 
   it("rejects run substitution and transports private runtime authority only once", () => {
@@ -195,21 +190,14 @@ describe("cron creator authority grants", () => {
     expect(() => consume(grant)).toThrow("This run's MCP cron access has ended");
   });
 
-  it.each([
-    "issuer",
-    "scope",
-    "scope abort",
-    "run settlement",
-    "operation",
-    "channel owner",
-  ] as const)(
+  it.each(["issuer", "scope", "scope abort", "run settlement", "operation"] as const)(
     "rejects retained creator authority when its original %s is revoked after consumption",
     async (revoked) => {
-      const current = { issuer: true, scope: true, channel: true };
+      const current = { issuer: true, scope: true };
       const scope = createScope(
         "retained-creator",
         { kind: "local" },
-        { source: "channel-owner", isCurrent: () => current.channel },
+        { source: "channel-owner" },
         () => current.scope,
       );
       const operation = new AbortController();
@@ -224,8 +212,6 @@ describe("cron creator authority grants", () => {
       await Promise.resolve();
       if (revoked === "issuer" || revoked === "scope") {
         current[revoked] = false;
-      } else if (revoked === "channel owner") {
-        current.channel = false;
       } else if (revoked === "run settlement") {
         revokeScope(scope);
         expect(scope.signal.aborted).toBe(true);

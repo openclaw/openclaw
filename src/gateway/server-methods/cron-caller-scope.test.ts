@@ -148,7 +148,7 @@ it.each([
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
         turnOrigin,
-        { source: "channel-owner", isCurrent: () => true },
+        { source: "channel-owner" },
       );
       try {
         const grant = mintCronCreatorAuthorityGrant(scope, undefined, undefined, {
