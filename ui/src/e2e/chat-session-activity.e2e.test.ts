@@ -216,25 +216,31 @@ suite.define(() => {
             page,
             key,
             [row(key, "Reader"), row(sourceKey, label)],
-            [1, 2, 3].map((seq) =>
-              delivery(
+            [
+              "Receipt 1 includes a description with multiple paragraphs.\n" +
+                "Verification notes.\n".repeat(9),
+              "Receipt 2 verified",
+              Array.from({ length: 5 }, (_, index) => `Line ${index + 1}`).join("\n".repeat(60)),
+            ].map((sourceSummary, index) => {
+              const seq = index + 1;
+              return delivery(
                 sourceKey,
                 "Receipt " + seq + ": Verification detail. End of receipt " + seq,
                 seq,
                 {
                   kind: "inter_session",
                   sourceTool: "sessions_send",
-                  sourceSummary: "Receipt " + seq + " verified",
+                  sourceSummary,
                 },
                 label,
-              ),
-            ),
+              );
+            }),
           );
           const group = page.locator(".chat-group--inter-session");
           const source = group.locator(".chat-group-messages > .chat-reply-attribution");
           const link = source.locator("a[data-session-key]");
           await link.getByText(label, { exact: true }).waitFor();
-          const activity = group.locator(".chat-session-activity");
+          const activity = group.locator(".chat-message-disclosure--description");
           expect(await group.count()).toBe(1);
           expect(await activity.count()).toBe(3);
           expect(await activity.locator("a[data-session-key]").count()).toBe(0);
@@ -262,23 +268,63 @@ suite.define(() => {
           expect(Math.abs(collapsed.sourceLeft - collapsed.bubbleLeft)).toBeLessThan(1);
           expect(collapsed.sourceBottom).toBeLessThanOrEqual(collapsed.bubbleTop);
           const first = activity.first();
-          const summary = first.locator("summary");
-          expect(await summary.textContent()).toBe("Receipt 1 verified");
-          await summary.focus();
-          await summary.press("Enter");
+          const preview = first.locator(".chat-message-disclosure__content");
+          const shortPreview = activity.nth(1).locator(".chat-message-disclosure__content");
+          const toggle = first.locator(".chat-message-disclosure__toggle");
+          await preview.and(first.locator("[data-preview-overflow]")).waitFor();
+          expect(await preview.evaluate((node) => getComputedStyle(node).maskImage)).toContain(
+            "linear-gradient",
+          );
+          expect(await shortPreview.evaluate((node) => getComputedStyle(node).maskImage)).toBe(
+            "none",
+          );
+          expect(await activity.nth(1).getByRole("button", { name: "Show more" }).isVisible()).toBe(
+            true,
+          );
+          expect(await first.locator("summary, .chat-session-activity__chevron").count()).toBe(0);
+          const sparse = activity.nth(2).locator(".chat-message-disclosure__content");
+          await sparse.and(activity.nth(2).locator("[data-preview-overflow]")).waitFor();
+          expect(await sparse.evaluate((node) => node.clientHeight)).toBeLessThanOrEqual(
+            (await preview.evaluate((node) => node.clientHeight)) + 1,
+          );
+          expect(await toggle.textContent()).toBe("Show more");
+          expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+          const placement = await first.evaluate((node) => {
+            const button = node.querySelector("button")!.getBoundingClientRect();
+            const content = node
+              .querySelector(".chat-message-disclosure__content")!
+              .getBoundingClientRect();
+            return {
+              underneath: button.top >= content.bottom,
+              alignedLeft: Math.abs(button.left - content.left) < 1,
+            };
+          });
+          expect(placement).toEqual({ underneath: true, alignedLeft: true });
+          await toggle.focus();
+          await toggle.press("Enter");
           await first.getByText(/End of receipt 1$/).waitFor();
-          expect(await activity.nth(1).getAttribute("open")).toBeNull();
-          const expanded = await geometry();
-          expect(expanded.bubbleLeft).toBeCloseTo(collapsed.bubbleLeft, 0);
+          expect(await toggle.textContent()).toBe("Show less");
+          expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+          expect(await activity.nth(1).locator("button").getAttribute("aria-expanded")).toBe(
+            "false",
+          );
           expect(
-            await first.locator(".chat-session-activity__body").evaluate((body) => {
+            await preview.evaluate((node) => ({
+              mask: getComputedStyle(node).maskImage,
+              clipped: node.scrollHeight > node.clientHeight + 1,
+            })),
+          ).toEqual({ mask: "none", clipped: false });
+          expect((await geometry()).bubbleLeft).toBeCloseTo(collapsed.bubbleLeft, 0);
+          expect(
+            await first.locator(".chat-message-disclosure__original").evaluate((body) => {
               const css = getComputedStyle(body);
               return [css.borderTopWidth, css.borderLeftWidth];
             }),
           ).toEqual(["0px", "0px"]);
           expect(await first.locator(".chat-reply-attribution, .chat-bubble").count()).toBe(0);
-          await summary.press("Space");
+          await toggle.press("Space");
           await first.getByText(/End of receipt 1$/).waitFor({ state: "detached" });
+          expect(await toggle.textContent()).toBe("Show more");
           await link.click();
           await page.waitForURL((url) => url.pathname.includes("activity-source"));
         },

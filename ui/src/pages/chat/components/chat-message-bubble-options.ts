@@ -78,7 +78,7 @@ export type MessageRenderOptions = {
 export type GroupedMessageOptions = MessageRenderOptions & {
   isStreaming: boolean;
   isForwarded?: boolean;
-  forwardedSummary?: { text: string; disclosureId: string };
+  forwardedDescription?: { text: string; disclosureId: string };
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
   transcriptVisible?: PresentationValue;

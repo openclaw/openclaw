@@ -2,19 +2,21 @@ import { Type } from "typebox";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
 
+export const SESSIONS_SEND_DESCRIPTION_MAX_LENGTH = 280;
+
 export const SessionsSendToolSchema = Type.Object({
   user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
-  summary: Type.Optional(
+  description: Type.Optional(
     Type.String({
       minLength: 1,
-      maxLength: 280,
-      pattern: "^[^\\r\\n\\u2028\\u2029]+$",
+      maxLength: SESSIONS_SEND_DESCRIPTION_MAX_LENGTH,
+      pattern: "\\S",
       description:
-        "Optional one-line sender summary for the receiving chat; the full message remains expandable.",
+        "Optional sender-written preview (up to 280 characters, may include line breaks). The full message remains expandable.",
     }),
   ),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),

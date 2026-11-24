@@ -49,7 +49,12 @@ function scheduleOverflowMeasurement(measurement: MessageOverflowMeasurement): v
 }
 
 export function messageOverflowRef(
-  readOptions: () => { expanded: boolean; forwarded: boolean; connected: boolean },
+  readOptions: () => {
+    expanded: boolean;
+    forwarded: boolean;
+    connected: boolean;
+    plainTextPreview?: boolean;
+  },
   getNodes: () => { toggle?: HTMLButtonElement; text?: HTMLElement },
 ) {
   let current: HTMLElement | undefined;
@@ -83,7 +88,7 @@ export function messageOverflowRef(
     }
     current = element;
     const read = () => {
-      const { expanded, forwarded, connected } = readOptions();
+      const { expanded, forwarded, connected, plainTextPreview } = readOptions();
       if (!connected) {
         return undefined;
       }
@@ -96,6 +101,11 @@ export function messageOverflowRef(
       // Test the full preview before a partial-line cut can create its own overflow.
       const scrollHeight = element.scrollHeight;
       const overflows = scrollHeight > element.clientHeight + 1;
+      if (plainTextPreview) {
+        // The native CSS height counts empty lines too. Keep the toggle even
+        // when this separate description fits and doesn’t need a fade.
+        return () => element.toggleAttribute("data-preview-overflow", !expanded && overflows);
+      }
       if (!forwarded && !expanded && overflows && text && element.clientWidth > 0) {
         const origin = element.getBoundingClientRect().top - element.scrollTop;
         const defaultLineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);

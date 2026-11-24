@@ -65,7 +65,7 @@ import {
 } from "./sessions-send-tool.delivery.js";
 import {
   readSessionsSendMessage,
-  readSessionsSendSummary,
+  readSessionsSendDescription,
   readSessionsSendMode,
   readSessionsSendTarget,
   readSessionsSendTimeout,
@@ -87,7 +87,7 @@ export async function executeSessionsSend(
   const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   const sendGatewayCall = opts?.callGateway ?? callSessionsSendGateway;
   const message = readSessionsSendMessage(params);
-  const summary = readSessionsSendSummary(params);
+  const description = readSessionsSendDescription(params);
   const mode = readSessionsSendMode(params);
   const resumeCaller =
     mode === undefined || mode === "resume"
@@ -446,7 +446,7 @@ export async function executeSessionsSend(
         sourceSessionKey: requesterSessionKey,
         sourceChannel: opts?.agentChannel,
         sourceTool: "sessions_send",
-        ...(summary ? { sourceSummary: summary } : {}),
+        ...(description ? { sourceSummary: description } : {}),
         ...(requesterIsSubagent ? { sourceRole: "subagent" as const } : {}),
       };
       let dispatchMessage = annotateInterSessionPromptText(message, inputProvenance);
@@ -480,7 +480,7 @@ export async function executeSessionsSend(
         sessionKey: resolvedKey,
         targetAgentId,
         requesterParentOwned: requesterIsSubagent,
-        args: { message, summary, timeoutSeconds, watch: params.watch === true },
+        args: { message, description, timeoutSeconds, watch: params.watch === true },
         readTarget: targetEndpoint,
         toolCallId,
       });

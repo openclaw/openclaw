@@ -1,6 +1,7 @@
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import { SESSIONS_SEND_DESCRIPTION_MAX_LENGTH } from "./sessions-send-tool.schema.js";
 
 export function readSessionsSendTarget(params: Record<string, unknown>) {
   const sessionKeyParam = readToolStringParam(params, "sessionKey");
@@ -31,15 +32,22 @@ export function readSessionsSendMessage(params: Record<string, unknown>): string
   return message;
 }
 
-export function readSessionsSendSummary(params: Record<string, unknown>): string | undefined {
-  if (params.summary === undefined) {
+export function readSessionsSendDescription(params: Record<string, unknown>): string | undefined {
+  if (params.description === undefined) {
     return undefined;
   }
-  const summary = readToolStringParam(params, "summary", { required: true });
-  if (summary.length > 280 || /[\r\n\u2028\u2029]/u.test(summary)) {
-    throw new ToolInputError("summary must be one line of at most 280 characters");
+  const description = readToolStringParam(params, "description", { required: true, trim: false });
+  const trimmed = description.trim();
+  if (
+    !trimmed ||
+    (description.length > SESSIONS_SEND_DESCRIPTION_MAX_LENGTH &&
+      Array.from(description).length > SESSIONS_SEND_DESCRIPTION_MAX_LENGTH)
+  ) {
+    throw new ToolInputError(
+      `description must be non-blank and at most ${SESSIONS_SEND_DESCRIPTION_MAX_LENGTH} characters`,
+    );
   }
-  return summary;
+  return trimmed;
 }
 
 export function readSessionsSendTimeout(

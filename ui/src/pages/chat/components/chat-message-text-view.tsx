@@ -3,6 +3,7 @@ import {
   children,
   createMemo,
   createSignal,
+  createUniqueId,
   createRoot,
   getOwner,
   latest,
@@ -186,20 +187,107 @@ function TextDisclosure(props: {
         >
           {content()}
         </DisclosureContent>
-        <button
-          class="chat-message-disclosure__toggle"
-          ref={(element) => {
+        <DisclosureToggle
+          expanded={expanded()}
+          buttonRef={(element) => {
             toggle = element;
           }}
-          type="button"
-          aria-expanded={expanded() ? "true" : "false"}
-          onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
-        >
-          {t(expanded() ? "chat.messages.showLess" : "chat.messages.showMore")}
-          <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
-        </button>
+          onToggle={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
+        />
       </div>
     </Show>
+  );
+}
+
+function DisclosureToggle(props: {
+  expanded: boolean;
+  controls?: string;
+  buttonRef: (element: HTMLButtonElement) => void;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      class="chat-message-disclosure__toggle"
+      ref={(element) => props.buttonRef(element)}
+      type="button"
+      aria-expanded={props.expanded ? "true" : "false"}
+      aria-controls={props.controls}
+      onClick={() => props.onToggle()}
+    >
+      {t(props.expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
+      <Icon name={props.expanded ? "chevronUp" : "chevronDown"} aria-hidden="true" />
+    </button>
+  );
+}
+
+/** A sender description previews a separate message, even when the preview fits. */
+export function ForwardedDescriptionDisclosure(props: {
+  description: string;
+  expanded?: boolean;
+  searchResult?: boolean;
+  onToggle?: (wasExpanded: boolean) => void;
+  children: JSX.Element;
+}) {
+  const [localExpanded, setLocalExpanded] = createSignal(false);
+  const expanded = () =>
+    props.searchResult ||
+    (props.onToggle ? props.expanded : (props.expanded ?? localExpanded())) ||
+    false;
+  const originalId = createUniqueId();
+  const presented = useContext(ContentPresentation);
+  let text: HTMLDivElement | undefined;
+  let toggle: HTMLButtonElement | undefined;
+  return (
+    <div
+      class={[
+        "chat-message-disclosure chat-message-disclosure--description",
+        { "is-expanded": expanded() },
+      ]}
+    >
+      <div
+        class="chat-message-disclosure__content"
+        ref={messageOverflowRef(
+          () => ({
+            expanded: expanded(),
+            forwarded: false,
+            connected: presented(),
+            plainTextPreview: true,
+          }),
+          () => ({ text, toggle }),
+        )}
+      >
+        <div
+          class="chat-text chat-message-disclosure__description"
+          dir="auto"
+          ref={(element) => {
+            text = element;
+          }}
+        >
+          {props.description}
+        </div>
+      </div>
+      <Show when={!props.searchResult}>
+        <DisclosureToggle
+          expanded={expanded()}
+          controls={originalId}
+          buttonRef={(element) => {
+            toggle = element;
+          }}
+          onToggle={() => {
+            if (props.onToggle) {
+              props.onToggle(expanded());
+            } else {
+              setLocalExpanded((open) => !open);
+            }
+          }}
+        />
+      </Show>
+      <div id={originalId} hidden={!expanded()}>
+        <Show when={expanded()}>
+          <div class="chat-message-disclosure__original">{props.children}</div>
+        </Show>
+      </div>
+    </div>
   );
 }
 

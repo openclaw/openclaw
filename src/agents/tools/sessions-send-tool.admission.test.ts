@@ -1,5 +1,6 @@
 import { validateAgentParams, formatValidationErrors } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -37,6 +38,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { stripInterSessionPromptPrefixForDisplay } from "../../sessions/input-provenance.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
@@ -56,11 +58,11 @@ import { attachActiveEmbeddedRun, detachActiveEmbeddedRun } from "../embedded-ag
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
+import "../test-helpers/fast-openclaw-tools-sessions.js";
 import {
   createSessionsSendTestCaller,
   setSessionsSendTestActiveRun,
 } from "../openclaw-tools.sessions-steering.test-support.js";
-import "../test-helpers/fast-openclaw-tools-sessions.js";
 import {
   readFollowupRequest,
   SessionFollowupCompletion,
@@ -72,6 +74,7 @@ import * as sessionsSendFollowup from "./sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import * as sessionsSendDelivery from "./sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
+import { SessionsSendToolSchema } from "./sessions-send-tool.schema.js";
 
 vi.mock("./sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(async () => {}),
@@ -257,7 +260,10 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
-  it("delivers a sender summary separately from the original peer message", async () => {
+  it("delivers a multiline 280-character sender description separately from the original peer message", async () => {
+    const description = "Verification is ready.\n🦞" + "x".repeat(256);
+    const message = "  Full original receipt, not a replacement.\n\nSecond paragraph.  ";
+    expect(Value.Check(SessionsSendToolSchema, { message, description })).toBe(true);
     const callGateway = mockAgentGateway(async (request) => {
       expect(
         validateAgentParams(request.params),
@@ -267,25 +273,29 @@ describe("sessions_send dispatch admission", () => {
         kind: "inter_session",
         sourceSessionKey: requesterSessionKey,
         sourceTool: "sessions_send",
-        sourceSummary: "Verification is ready.",
+        sourceSummary: description,
       });
-      expect(request.params.message).toContain("Full original receipt, not a replacement.");
-      expect(request.params.message).not.toContain("Verification is ready.");
+      const dispatched = request.params.message;
+      expect(typeof dispatched).toBe("string");
+      if (typeof dispatched === "string") {
+        expect(stripInterSessionPromptPrefixForDisplay(dispatched)).toBe(message);
+      }
       return { runId };
     });
-    const result = await execute(createTool({ callGateway }), "summary-peer", {
-      message: "Full original receipt, not a replacement.",
-      summary: "Verification is ready.",
+    const result = await execute(createTool({ callGateway }), "description-peer", {
+      message,
+      description,
     });
     expect(result.details, JSON.stringify(result.details)).toMatchObject({ status: "accepted" });
   });
 
-  it.each(["two\nlines", "x".repeat(281), "   ", 42])(
-    "rejects invalid summaries before sending: %j",
-    async (summary) => {
+  it.each(["x".repeat(281), "   ", 42])(
+    "rejects invalid descriptions before sending: %j",
+    async (description) => {
       const callGateway = vi.fn();
+      expect(Value.Check(SessionsSendToolSchema, { message: "Original", description })).toBe(false);
       await expect(
-        execute(createTool({ callGateway }), "invalid-summary", { summary }),
+        execute(createTool({ callGateway }), "invalid-description", { description }),
       ).rejects.toThrow();
       expect(callGateway).not.toHaveBeenCalled();
     },
@@ -298,7 +308,7 @@ describe("sessions_send dispatch admission", () => {
     const first = await tool.execute("notify-peer", {
       sessionKey: targetSessionKey,
       message: "accepted notice",
-      summary: "An optional passive preview.",
+      description: "An optional passive preview.",
       mode: "notify",
     });
     expect(first.details).toMatchObject({

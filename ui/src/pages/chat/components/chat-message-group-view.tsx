@@ -651,7 +651,7 @@ function SessionActivityGroup(props: {
                 ...options(),
                 isForwarded: true,
                 onToggleUserMessageExpanded: undefined,
-                forwardedSummary: readInterSessionSummary(item().message)
+                forwardedDescription: readInterSessionSummary(item().message)
                   ? {
                       text: readInterSessionSummary(item().message)!,
                       disclosureId: "session-activity:" + item().key,
