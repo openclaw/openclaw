@@ -100,10 +100,12 @@ instead of writing `auth-profiles.json` or modifying SQLite directly.
   `--non-interactive`; omit `--classic` for automated setup.
 - `--agent-name <name>`: names the first agent when no roster exists. Interactive
   onboarding asks **What should we call your first agent?** and suggests `main`;
-  non-interactive onboarding keeps `main` unless this flag is provided. The id
-  `main` is not reserved: if you later recreate it beside a named agent, run
-  `openclaw doctor --fix` first when creation reports legacy-session or
-  shared-auth ownership still attached to the old `main` installation.
+  non-interactive onboarding keeps `main` unless this flag is provided. An
+  explicitly empty `--agent-name` is invalid in every flow; omit the flag to keep
+  the default. The id `main` is not reserved: if you later recreate it beside a
+  named agent, run `openclaw doctor --fix` first when creation reports
+  legacy-session or shared-auth ownership still attached to the old `main`
+  installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   a generated Gateway secret by default, without asking you to choose token or
   password. Existing password and trusted-proxy configurations are preserved. Explicit local Gateway flags such as

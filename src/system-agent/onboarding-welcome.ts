@@ -120,7 +120,7 @@ export async function buildOnboardingWelcome(params: {
   params.engine.propose({
     kind: "setup",
     workspace,
-    ...(params.agentName ? { agentName: params.agentName } : {}),
+    ...(params.agentName !== undefined ? { agentName: params.agentName } : {}),
   });
   const welcome = [
     `## ${translate(overview.defaultModel ? "hatchIntro" : "setupIntro")}`,

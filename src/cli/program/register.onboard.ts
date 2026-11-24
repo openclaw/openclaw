@@ -382,12 +382,12 @@ export function registerOnboardCommand(program: Command): void {
             interactive: !opts.nonInteractive,
             welcomeVariant: "onboarding",
             ...(opts.workspace ? { setupWorkspace: opts.workspace as string } : {}),
-            ...(opts.agentName ? { setupAgentName: opts.agentName as string } : {}),
+            ...(opts.agentName !== undefined ? { setupAgentName: opts.agentName as string } : {}),
           },
           defaultRuntime,
           {
             ...(opts.workspace ? { workspace: opts.workspace as string } : {}),
-            ...(opts.agentName ? { agentName: opts.agentName as string } : {}),
+            ...(opts.agentName !== undefined ? { agentName: opts.agentName as string } : {}),
             ...(opts.acceptRisk ? { acceptRisk: true } : {}),
           },
         );

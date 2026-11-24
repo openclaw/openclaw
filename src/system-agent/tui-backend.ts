@@ -419,7 +419,9 @@ export async function runSystemAgentTui(
           engine,
           localRecovery: true,
           ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
-          ...(boundOpts.setupAgentName ? { agentName: boundOpts.setupAgentName } : {}),
+          ...(boundOpts.setupAgentName !== undefined
+            ? { agentName: boundOpts.setupAgentName }
+            : {}),
         })
       ).text;
     } else {

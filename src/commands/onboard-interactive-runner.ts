@@ -111,7 +111,7 @@ export async function runGuidedOnboardingHandoff(
     await runConversationalOnboarding(
       {
         workspace: handoff.workspace,
-        ...(handoff.agentName ? { agentName: handoff.agentName } : {}),
+        ...(handoff.agentName !== undefined ? { agentName: handoff.agentName } : {}),
         acceptRisk: true,
       },
       runtime,

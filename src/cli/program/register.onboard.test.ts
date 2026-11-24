@@ -83,7 +83,7 @@ function createProgram() {
   registerOnboardCommand(program);
   return program;
 }
-async function runCli(args: string[] | string, route: "onboard" | "setup" = "onboard") {
+async function runCli(args: readonly string[] | string, route: "onboard" | "setup" = "onboard") {
   const argv = typeof args === "string" ? args.split(" ") : args;
   const program = route === "onboard" ? createProgram() : new Command();
   if (route === "setup") {
@@ -181,6 +181,11 @@ it.each([
     "--modern --workspace /tmp/work --accept-risk",
     { json: false, interactive: true, setupWorkspace: "/tmp/work" },
     { workspace: "/tmp/work", acceptRisk: true },
+  ],
+  [
+    ["--modern", "--agent-name", ""],
+    { json: false, interactive: true, setupAgentName: "" },
+    { agentName: "" },
   ],
 ] as const)("routes inference-gated onboarding for %s", async (args, options, fallback) => {
   await runCli(args);

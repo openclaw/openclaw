@@ -55,7 +55,7 @@ export async function runConversationalOnboarding(
     {
       welcomeVariant: "onboarding",
       ...(opts.workspace ? { setupWorkspace: opts.workspace } : {}),
-      ...(opts.agentName ? { setupAgentName: opts.agentName } : {}),
+      ...(opts.agentName !== undefined ? { setupAgentName: opts.agentName } : {}),
       verifiedInference: inference.binding,
     },
     runtime,

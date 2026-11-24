@@ -501,7 +501,9 @@ export async function executeSetup(
         applySystemAgentSetup(
           {
             workspace,
-            ...(operation.agentName ? { firstAgent: { name: operation.agentName } } : {}),
+            ...(operation.agentName !== undefined
+              ? { firstAgent: { name: operation.agentName } }
+              : {}),
             expectedInferenceRoute: verified.route,
             ...recovery?.applyOptions,
             surface,
