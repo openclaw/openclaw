@@ -191,6 +191,14 @@ unchanged. Store size is not an update-admission rule.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
+The startup copy checks readability before budgeting or copying files. It skips
+unreadable optional files (such as old config backups or macOS `._*` metadata)
+and subdirectories (such as an ext4 volume's `lost+found`) with a warning, without
+changing their contents or permissions. An unreadable state root, other filesystem
+errors, or an uncopied required database still stops the upgrade. Unreadable
+required database files, including their WAL and rollback journals, are refused
+before copying; an optional SQLite family is skipped together rather than copied
+without its unreadable journal.
 
 A failed private preparation uses the existing configuration refusal (exit 78).
 There is no portable-export or in-place trial fallback; restore missing copy
@@ -450,6 +458,18 @@ files. Chain failure retains the generic rebuild and pins the previous files;
 invalid upgraded config still refuses publication. No live file is replaced or
 removed unless the upgrade copied it. If Doctor creates a template over an
 uncopied workspace file, startup leaves the original alone and reports a warning.
+
+The private copy also retains the root config’s referenced `$include` files, including
+siblings of an external config root and files inside an excluded workspace. It does
+not copy the rest of that workspace. Include files stay separate, and invalid
+includes still prevent publication. If a protected release trial needs to rewrite
+an include outside the launcher’s recovery paths, run `openclaw doctor --fix`
+first. This includes external includes, deeply nested workspace files, and files
+below excluded recovery directories such as `tmp` or `logs`. Ordinary first-start
+upgrades publish changed includes with the existing backed-up file swap. Changed
+config files and their Doctor backups are staged beside their destinations before
+the swap plan is published, including when an included file is on a separately
+mounted workspace and the root config is inside the state directory.
 
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on
