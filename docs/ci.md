@@ -274,7 +274,10 @@ Main-tier and selected manual/release CI run the [published-driver update cell](
 Relevant update, state, update CLI, daemon/launcher, and survivor-harness PRs
 also select `release-update-survivor` in the existing Docker seed job.
 It adds one source-built successor and one Linux npm update that commits
-a schema migration. Crash-after-migration enforcement belongs to the
+a schema migration. On these PRs, both packages use the checked runtime-only
+build: the installed JavaScript and generated schema are real, but the Docker
+trial does not consume SDK declarations. Main and release packaging are
+unchanged. Crash-after-migration enforcement belongs to the
 store-custody change that makes its rollback assertions pass.
 The lane has a 40-minute total budget; each container keeps its 20-minute
 limit. No new job, matrix row, runner class, or concurrency slot is added.

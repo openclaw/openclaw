@@ -6901,16 +6901,24 @@ jobs:
           console.log(`OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=${scenario}`);
           NODE
 
-      # Smoke packages include declarations for every public entrypoint.
       - name: Prepare Docker smoke package
         if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
+        env:
+          DOCKER_SEED_RUNTIME_ONLY: ${{ github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ') }}
         run: |
           set -euo pipefail
-          pnpm clean:dist
-          pnpm build:ci-artifacts
-          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
+          package_args=()
+          if [[ "$DOCKER_SEED_RUNTIME_ONLY" == true ]]; then
+            # The migration proof runs the installed JS; public declarations are not an input.
+            package_args+=(--runtime-only)
+          else
+            pnpm clean:dist
+            pnpm build:ci-artifacts
+            OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
+            package_args+=(--skip-build)
+          fi
           package_dir="${RUNNER_TEMP}/docker-seed-package"
-          node scripts/package-openclaw-for-docker.mjs --skip-build \
+          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}" \
             --allow-unreleased-changelog --output-dir "$package_dir" \
             --output-name openclaw-current.tgz
           printf 'OPENCLAW_CURRENT_PACKAGE_TGZ=%s/openclaw-current.tgz\n' "$package_dir" >> "$GITHUB_ENV"

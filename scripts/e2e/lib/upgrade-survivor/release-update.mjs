@@ -20,6 +20,7 @@ const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
 assert(artifacts, "missing artifact directory");
 const fixtureRoot = "/tmp/openclaw-release-fixtures";
 const fixture = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "fixture.json"), "utf8"));
+const containerStartedAt = performance.now();
 fixture.next.tarball = path.join(fixtureRoot, "next.tgz");
 const expected = fixture.next;
 fs.mkdirSync(artifacts, { recursive: true });
@@ -141,11 +142,13 @@ try {
       update: { channel: "stable", checkOnStart: false },
     }),
   );
+  const installStartedAt = performance.now();
   await command(
     "npm",
     ["install", "--global", sourceTarball, "--no-audit", "--no-fund"],
     "install.log",
   );
+  const initialInstallMs = Math.round(performance.now() - installStartedAt);
   await command("npm", ["view", "openclaw", "dist-tags", "--json"], "registry-dist-tags.json");
   await command(
     "npm",
@@ -186,7 +189,7 @@ try {
       .some((entry) => entry.startsWith("OPENCLAW_UPDATE_PACKAGE_SPEC=")),
     "Gateway target override present",
   );
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   await command("openclaw", ["update", "--yes", "--json"], "update-cli.json");
   const row = await waitFor(
     () => {
@@ -261,7 +264,10 @@ try {
     status: row.status,
     servingBuildId: verification.runningBuildId,
     previous,
-    wallMs: Date.now() - startedAt,
+    wallMs: Math.round(performance.now() - startedAt),
+    fixtureTimingsMs: fixture.timingsMs,
+    beforeUpdateMs: Math.round(startedAt - containerStartedAt),
+    initialInstallMs,
     migrationProof: true,
     servingSchema: expected.schema,
     rowCount: after.length,

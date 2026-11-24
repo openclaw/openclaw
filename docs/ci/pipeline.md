@@ -594,6 +594,14 @@ scheduler summaries and sanitized survivor reports. Failed reports include
 bounded, redacted baseline and candidate agent-turn output; private scenario
 state and raw logs remain outside the upload.
 
+On PRs selecting `release-update-survivor`, the Docker seed tier packs a private
+runtime-only baseline rather than rebuilding public declarations. The synthetic
+successor is compiled from the same source with the schema change and uses the
+same package profile. Both pass the normal tarball checker. The trial still
+requires the normal npm update, the committed trial, a distinct serving build,
+schema advancement, and migrated sentinel rows. Its success summary records
+successor preparation, initial npm install, and update timings separately.
+
 Full upstream `main` pushes run the operator config and prior-release state
 startup corpora once through the Node `runtime-config` owner. Upstream pull
 requests also omit the duplicate **Check startup corpus** step when preflight

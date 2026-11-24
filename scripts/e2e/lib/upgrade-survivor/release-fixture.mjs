@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const [repo, sourceTarball, directory] = process.argv.slice(2);
+const startedAt = performance.now();
 const readPacked = (file) =>
   JSON.parse(execFileSync("tar", ["-xOf", sourceTarball, `package/${file}`], { encoding: "utf8" }));
 const manifest = readPacked("package.json");
@@ -113,14 +114,28 @@ const env = {
   GIT_COMMIT: previous.commit,
   OPENCLAW_CONTROL_UI_BUILD_ID: `${previous.buildId}-schema-${schema}`,
 };
-const run = (program, args) => execFileSync(program, args, { cwd: tree, env, stdio: "inherit" });
-run("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"]);
-run("pnpm", ["db:postgres:gen"]);
-run("pnpm", ["build:ci-artifacts"]);
-run("node", ["--import", "./scripts/tsx.mjs", "scripts/write-unified-entry-dts.ts"]);
-run("node", [
+const timingsMs = { sourceSetup: Math.round(performance.now() - startedAt) };
+const run = (phase, program, args) => {
+  const start = performance.now();
+  execFileSync(program, args, { cwd: tree, env, stdio: "inherit" });
+  timingsMs[phase] = Math.round(performance.now() - start);
+};
+run("install", "pnpm", ["install", "--frozen-lockfile", "--prefer-offline"]);
+run("schemaGeneration", "pnpm", ["db:postgres:gen"]);
+// Match the baseline package profile. The private package is a runtime fixture;
+// declaration-complete package consumers still build a typed successor.
+const runtimeOnly = manifest.private === true;
+if (!runtimeOnly) {
+  run("build", "pnpm", ["build:ci-artifacts"]);
+  run("declarations", "node", [
+    "--import",
+    "./scripts/tsx.mjs",
+    "scripts/write-unified-entry-dts.ts",
+  ]);
+}
+run("package", "node", [
   "scripts/package-openclaw-for-docker.mjs",
-  "--skip-build",
+  runtimeOnly ? "--runtime-only" : "--skip-build",
   "--allow-unreleased-changelog",
   "--output-dir",
   directory,
@@ -136,6 +151,7 @@ fs.writeFileSync(
     {
       previous,
       next: { version: manifest.version, buildId: nextBuild.buildId, schema },
+      timingsMs,
     },
     null,
     2,

@@ -2023,9 +2023,8 @@ AFTER_CD
       prepareRun.indexOf(declarations),
     );
     expect(prepareRun.indexOf(declarations)).toBeLessThan(
-      prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+      prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs"),
     );
-    expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
     expect(prepareRun).not.toContain("--skip-check");
     expect(prepareRun).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
     expect(job.steps.indexOf(prepare)).toBeLessThan(job.steps.indexOf(run));
@@ -2079,6 +2078,47 @@ AFTER_CD
       expect(uploaded(file), file).toBe(false);
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "uses checked runtime packages only for the Docker seed tier on survivor PRs",
+    () => {
+      const prepare = requiredWorkflowStep(
+        readCiWorkflow().jobs["docker-seed-e2e"].steps,
+        "Prepare Docker smoke package",
+      );
+      const runtimeOnly = String(prepare.env?.DOCKER_SEED_RUNTIME_ONLY);
+      const run = expectDefined(prepare.run, "Docker smoke package preparation");
+      const root = tempDirs.make("openclaw-docker-seed-package-");
+      for (const [eventName, lanes, expectedRuntimeOnly] of [
+        ["pull_request", "release-update-survivor", true],
+        ["pull_request", "mcp-channels release-update-survivor", true],
+        ["pull_request", "mcp-channels", false],
+        ["workflow_dispatch", "release-update-survivor", false],
+        ["push", "published-upgrade-survivor", false],
+      ] as const) {
+        const selected = evaluateWorkflowExpression(runtimeOnly, {
+          eventName,
+          preflightOutputs: { docker_seed_lanes: lanes },
+        });
+        const { stdout } = runWorkflowShellScript(
+          'pnpm() { echo pnpm "$*"; }\nnode() { echo node "$*"; }\n' + run,
+          {
+            env: {
+              ...process.env,
+              DOCKER_SEED_RUNTIME_ONLY: String(selected),
+              GITHUB_ENV: path.join(root, "github-env"),
+              RUNNER_TEMP: root,
+            },
+          },
+        );
+        expect(stdout).toContain(
+          `node scripts/package-openclaw-for-docker.mjs ${expectedRuntimeOnly ? "--runtime-only" : "--skip-build"} --allow-unreleased-changelog`,
+        );
+        expect(stdout.includes("pnpm build:ci-artifacts")).toBe(!expectedRuntimeOnly);
+        expect(stdout.includes("scripts/write-unified-entry-dts.ts")).toBe(!expectedRuntimeOnly);
+      }
+    },
+  );
 
   it.each<{
     candidate: string;
