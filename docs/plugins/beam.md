@@ -153,6 +153,24 @@ The `Beam-Digest` response header covers the exact JSON bytes. Opening a link
 performs a read only. A link to a deleted generation cannot read a later
 publication with the same Beam ID.
 
+### Publish a portable packet
+
+Send the reviewed v2 JSON bytes unchanged with `PUT /api/v2/beam/snapshots/{beamId}`.
+Provide a fresh UUID in `Idempotency-Key`. Create with `If-None-Match: *`, or replace
+the selected revision with `If-Match`. The receipt returns the accepted digest and
+`applied` or `unchanged`. Keep the UUID and original bytes when retrying the same
+operation. A changed body or precondition with the same UUID returns a conflict.
+The receiver keeps up to 10,000 write receipts for seven days. A restricted Visitor
+can hold 400 receipts in that window. Replaying an accepted request uses its existing
+receipt. At the Visitor limit, the receiver returns the seconds until the earliest
+receipt expires in `Retry-After`. Keep the same operation UUID for that retry.
+Both API versions share the same per-IP upload limits.
+
+An accepted v1 write may supersede a v2 revision even at the same source timestamp.
+Inspect the current head on a precondition failure. Packet-local speaker labels
+identify participants only within the imported packet and confer no Gateway identity.
+The bundled receiver uses the [standalone Beam packet schema and validator](https://github.com/openclaw/beam/tree/a4272c5bde4e52cdf87a1534447a6b98f3fb4a7b/schema).
+
 ## Continue on the Team Gateway
 
 Publishing alone shares a read-only snapshot. To move the logical conversation, use the updated Beam skill's `handoff` command with the exact source session. The sender durably retires that Beam identity before network dispatch, obtains the receiver's `publicationId`, and explicitly releases that generation with `handoffId`. Release requires the original verified publisher; shared-token and older ownerless snapshots cannot be claimed through this route. A lost acknowledgment can retry the same generation but cannot recreate an expired publication.

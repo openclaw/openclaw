@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { PluginStateOperationHandler } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateOperationHandler,
+  PluginStateOperationTransaction,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { snapshotBytes } from "./src/packet-state.js";
 import {
   BEAM_MAX_GUEST_SESSIONS,
   BEAM_MAX_SESSIONS,
@@ -57,7 +61,15 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
     const { beamId, agentId, publisherProfileId, createdAt, handoffId } = command.input;
     const [value] = tx.lookupMany<BeamHandoff>([{ store: 1, key: beamId }]);
     const snapshot = tx.entries<BeamStoredSession>(0).find((entry) => entry.key === beamId);
-    const row = value ? { value: { ...value, items: snapshot?.value.items ?? [] } } : undefined;
+    const row = value
+      ? {
+          value: {
+            ...value,
+            items: snapshot?.value.items ?? [],
+            ...(snapshot?.value.packetText ? { packetText: snapshot.value.packetText } : {}),
+          },
+        }
+      : undefined;
     if (
       !row ||
       row.value.publisherProfileId !== publisherProfileId ||
@@ -109,7 +121,7 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
         : { id, agentId, sessionKey: `agent:${agentId}:dashboard:${id}` },
     };
     // Binding is metadata, not a new upload: preserve the publication's actual expiry.
-    const { items: _items, ...handoff } = session;
+    const { items: _items, packetText: _text, ...handoff } = session;
     tx.set(1, beamId, handoff);
     if (snapshot) {
       tx.set(
@@ -123,7 +135,16 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
     }
     return { session, reservedNow: true };
   }
-  const { upload, receivedAt, publisher } = command.input;
+  return persistBeamUpload(command.input, tx);
+};
+
+/** Both protocols share admission, quota, generation, and write ownership. V2
+ * compares a strong precondition in the caller's transaction instead of a source clock. */
+export function persistBeamUpload(
+  { upload, receivedAt, publisher }: BeamUploadOperations["upload"]["input"],
+  tx: PluginStateOperationTransaction,
+  wire?: { packetText: string },
+): BeamUploadResult {
   const [snapshot, handoff] = tx.lookupMany<BeamStoredSession | BeamHandoff>([
     { store: 0, key: upload.beamId },
     { store: 1, key: upload.beamId },
@@ -169,7 +190,7 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
   ) {
     return "handoff-conflict";
   }
-  if (existing) {
+  if (existing && !wire) {
     const incoming = beamTimestampEpochNanoseconds(upload.updatedAt);
     const current = beamTimestampEpochNanoseconds(existing.updatedAt);
     // Completion is monotonic within one source revision; a newer revision may reopen it.
@@ -187,6 +208,12 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
   const publicationId = existing?.publicationId ?? randomUUID().replaceAll("-", "");
   const session = {
     ...upload,
+    ...(wire
+      ? {
+          portable: true as const,
+          ...(snapshotBytes(upload) !== wire.packetText ? { packetText: wire.packetText } : {}),
+        }
+      : {}),
     publicationId,
     revision: randomUUID(),
     ...(existing?.continuation ? { continuation: existing.continuation } : {}),
@@ -199,10 +226,10 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
   tx.set(0, upload.beamId, session);
   if (upload.handoffId) {
     // Archive/expiry removes the snapshot, never this logical identity's release.
-    const { items: _items, ...ownership } = session;
+    const { items: _items, packetText: _text, ...ownership } = session;
     tx.set(1, upload.beamId, ownership);
   }
   return upload.handoffId
     ? { kind: "handoff", id: upload.handoffId, accepted: true }
     : { kind: "published", id: publicationId, applied: true };
-};
+}

@@ -21,6 +21,7 @@ import { createBeamMirrorRunner } from "./mirror.js";
 import { createBeamStore, type BeamStore } from "./store.js";
 import {
   BEAM_MAX_SESSIONS,
+  BEAM_MAX_WRITE_RECEIPTS,
   BEAM_RETENTION_MS,
   type BeamStoredSession,
   type BeamUpload,
@@ -79,10 +80,25 @@ export async function persistentBeamTestStore() {
     { namespace: "handoffs", retention: "retained", env },
     { assertCurrent() {} },
   );
+  const writeStore = createPluginStateKeyedStoreV2ForTests(
+    "beam",
+    {
+      namespace: "publication-requests",
+      maxEntries: BEAM_MAX_WRITE_RECEIPTS,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: BEAM_RETENTION_MS,
+      env,
+    },
+    { assertCurrent() {} },
+  );
   const store = createBeamStore({
     state: {
       openKeyedStoreV2: ({ namespace }: { namespace: string }) =>
-        namespace === "handoffs" ? handoffStore : keyedStore,
+        namespace === "handoffs"
+          ? handoffStore
+          : namespace === "publication-requests"
+            ? writeStore
+            : keyedStore,
     },
   } as unknown as PluginRuntime);
   const close = async () => {
@@ -90,7 +106,7 @@ export async function persistentBeamTestStore() {
     resetPluginStateStoreForTests();
     await state.cleanup();
   };
-  return { keyedStore, handoffStore, store, close };
+  return { keyedStore, handoffStore, writeStore, store, close };
 }
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
