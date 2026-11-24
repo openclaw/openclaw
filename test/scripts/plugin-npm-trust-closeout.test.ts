@@ -96,7 +96,7 @@ it("keeps required beta.1 trust closeout downstream of public activation on both
     assert(closeout, file);
     expect(closeout.needs).toContain(activation);
     expect(closeout.if).toContain("-beta.1");
-    expect(closeout.if).toContain("result == 'success'");
+    expect(closeout.if).toContain(`needs.${activation}.result == 'success'`);
     expect(closeout.uses).toBe("./.github/workflows/plugin-npm-trust-closeout.yml");
     expect(closeout["continue-on-error"]).not.toBe(true);
     for (const [name, job] of Object.entries(jobs)) {
