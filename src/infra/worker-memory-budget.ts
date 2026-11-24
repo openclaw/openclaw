@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
 import type { WorkerPoolMemoryBudget } from "@openclaw/worker-runtime";
 import type { GatewayConfig } from "../config/types.gateway.js";
@@ -5,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GatewayResourceProfile } from "./gateway-resource-profile.js";
 import { findCgroupV2MemoryLimitDirectory, readCgroupV2WorkingSetBytes } from "./host-memory.js";
+import { leanPrototype } from "./lean-prototype.js";
 import { forEachTrackedWorker, getWorkerPoolId } from "./worker-cpu.js";
 import { workerScriptName } from "./worker-diagnostic-script.js";
 import {
@@ -23,8 +25,11 @@ const HOST_BUDGET_SHARE = 0.4;
 const FLOOR_ONLY_KEY = "openclaw.workerMemoryBudget.floorOnly";
 const MiB = 1024 ** 2;
 const log = createSubsystemLogger("gateway/resources");
+// The channel every worker owner already retires idle workers on.
+const memoryPressure = channel("openclaw.memory.critical");
 const state = resolveGlobalSingleton<{
   budget?: ReturnType<typeof createWorkerMemoryBudget>;
+  governor?: NodeJS.Timeout;
   hosted: HostedSlotPredicate;
   hasSharedHost: () => boolean;
   floorOnlyPublished?: true;
@@ -34,6 +39,8 @@ const state = resolveGlobalSingleton<{
   (current) => {
     current.budget?.retire();
     current.budget = undefined;
+    clearInterval(current.governor);
+    current.governor = undefined;
     publishFloorOnly(current, false);
   },
 );
@@ -64,6 +71,8 @@ export function initializeWorkerMemoryBudget(
 ): void {
   state.budget?.retire();
   state.budget = undefined;
+  clearInterval(state.governor);
+  state.governor = undefined;
   // Workers created from here on inherit this Gateway's choice, never a previous one.
   publishFloorOnly(state, profile.profile === "lean");
   if (profile.profile !== "lean") {
@@ -109,7 +118,23 @@ export function initializeWorkerMemoryBudget(
     poolId: getWorkerPoolId,
     hosted: () => state.hosted,
     hasSharedHost: () => state.hasSharedHost(),
+    startWaitMs: leanPrototype.startWaitMs,
+    relievePressure: () => memoryPressure.publish(true),
   });
+  const pressurePercent = leanPrototype.pressurePercent;
+  if (pressurePercent !== undefined) {
+    // PROTOTYPE: the diagnostic sampler is too slow for a 1 GiB host, where memory fills within
+    // seconds. Publish pressure every second so idle workers leave before new ones start.
+    const warnBytes = (profile.memoryLimitBytes * pressurePercent) / 100;
+    const criticalBytes = (profile.memoryLimitBytes * (pressurePercent + 10)) / 100;
+    state.governor = setInterval(() => {
+      const usage = readUsageBytes();
+      if (usage !== undefined && usage >= warnBytes) {
+        memoryPressure.publish(usage >= criticalBytes);
+      }
+    }, 1_000);
+    state.governor.unref();
+  }
   log.info(
     `Lean worker memory budget: ${Math.round(state.budget.budgetBytes / MiB)} MiB (${basis}) of ${Math.round(profile.memoryLimitBytes / MiB)} MiB ${profile.memoryLimitSource}; growth beyond each worker floor waits when it would exceed the budget.`,
   );

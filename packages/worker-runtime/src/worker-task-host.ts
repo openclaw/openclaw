@@ -38,6 +38,11 @@ export type WorkerPoolMemoryBudget = {
   isCurrent(): boolean;
   /** Admit one ordinary worker beyond the floor. */
   admitGrowth(): boolean;
+  /**
+   * Whether a task that has waited this long may start a new worker now. A refusal is
+   * retried shortly; hosts bound the wait, so every task eventually starts.
+   */
+  admitStart?(waitedMs: number): boolean;
   releaseGrowth(count: number): void;
   /** The point-read lane is mandatory; reserve it once it is first used. */
   reservePointReadFloor(): void;

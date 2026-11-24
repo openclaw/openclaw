@@ -3,6 +3,7 @@ import {
   ensureSqliteLibrarySelected,
 } from "../../infra/bun-sqlite-library.js";
 import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { leanPrototype } from "../../infra/lean-prototype.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
@@ -42,7 +43,8 @@ export function createSessionTranscriptHistoryPool(
         workerUrl,
         workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
         maxWorkers: typeof maxWorkers === "number" ? maxWorkers : maxWorkers(),
-        idleTimeoutMs: 0,
+        idleTimeoutMs: leanPrototype.historyIdleMs ?? 0,
+        warmWindowMs: leanPrototype.historyIdleMs === undefined ? undefined : 0,
         burstIdleTimeoutMs: 30_000,
         onRotationComplete() {
           canCloseNativeResources = undefined;

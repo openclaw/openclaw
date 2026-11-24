@@ -112,6 +112,9 @@ export function createWorkerMemoryBudget(params: {
   poolId: (pool: object) => number;
   hosted: () => HostedSlotPredicate;
   hasSharedHost?: () => boolean;
+  /** PROTOTYPE: longest wait before a pool may start a worker over budget, and how to relieve. */
+  startWaitMs?: number;
+  relievePressure?: () => void;
 }) {
   const { budgetBytes } = params;
   const pools = new Set<PoolEntry>();
@@ -293,6 +296,23 @@ export function createWorkerMemoryBudget(params: {
           entry.family.growthAdmissions++;
           publish("growth", script, { projectedBytes });
           return true;
+        },
+        admitStart(waitedMs) {
+          if (params.startWaitMs === undefined) {
+            return true;
+          }
+          lastUsage = params.readUsageBytes() ?? null;
+          if (
+            lastUsage === null ||
+            lastUsage + entry.estimate < budgetBytes ||
+            waitedMs >= params.startWaitMs
+          ) {
+            return true;
+          }
+          entry.family.refusals++;
+          // Idle workers in every pool leave so this one can start.
+          params.relievePressure?.();
+          return false;
         },
         releaseGrowth(count) {
           // A released pool's reservations were already removed.

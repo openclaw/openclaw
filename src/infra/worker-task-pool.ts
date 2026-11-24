@@ -1,4 +1,5 @@
 import { WorkerTaskPoolCore, type WorkerRetirementReason } from "@openclaw/worker-runtime";
+import { leanPrototypeIdleOptions } from "./lean-prototype.js";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import type {
   WorkerTaskInput,
@@ -17,7 +18,7 @@ export class WorkerTaskPool<Input, Output> {
 
   constructor(options: WorkerTaskPoolOptions<Output>) {
     this.core = new WorkerTaskPoolCore<Input, Output>(
-      options,
+      leanPrototypeIdleOptions(options),
       createWorkerTaskHost(undefined, options.workerClass),
       {
         close: (error) => this.close(error),
@@ -57,7 +58,7 @@ export function createOwnedWorkerTaskPool<Input, Output>(
   ownerOptions?: WorkerTaskPoolOwnerOptions,
 ) {
   const core = new WorkerTaskPoolCore<Input, Output>(
-    options,
+    leanPrototypeIdleOptions(options),
     createWorkerTaskHost(ownerOptions, options.workerClass),
     undefined,
     ownerOptions,

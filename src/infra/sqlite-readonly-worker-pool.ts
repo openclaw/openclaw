@@ -6,6 +6,7 @@ import { createStateWorkerMemoryPressureSubscription } from "../state/openclaw-s
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { throwSettledAggregate } from "./error-graph-internal.js";
+import { leanPrototype } from "./lean-prototype.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { sqliteReadOnlyOperationRequiresProcessRetirement } from "./sqlite-readonly-operation-lifecycle.js";
 import {
@@ -53,7 +54,7 @@ export function createSqliteReadOnlyWorkerPool(
     quarantined?: { error: unknown };
   }> = [];
   const SCOPED_READ_WORKER_LIMIT = 4;
-  const SCOPED_READ_WORKER_IDLE_MS = 60_000;
+  const SCOPED_READ_WORKER_IDLE_MS = leanPrototype.carrierIdleMs ?? 60_000;
   const statefulReadWorkers = new WeakMap<
     SqliteReadOnlyWorkerScope,
     (typeof scopedReadWorkers)[number]

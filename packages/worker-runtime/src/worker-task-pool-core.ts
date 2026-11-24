@@ -108,6 +108,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     (task, error) => this.finish(task, error),
   );
   private readonly maxWorkers: number;
+  private memoryRetry?: NodeJS.Timeout;
   private readonly observeTask;
   private readonly admission: WorkerTaskAdmission;
   private readonly memory;
@@ -381,6 +382,17 @@ export class WorkerTaskPoolCore<Input, Output> {
           }
           return;
         }
+      }
+      if (!slot && !this.memory.admitStart(nextTask)) {
+        // The host bounds this wait; retry until it admits the worker.
+        if (!this.memoryRetry) {
+          this.memoryRetry = setTimeout(() => {
+            this.memoryRetry = undefined;
+            this.dispatch();
+          }, 100);
+          this.memoryRetry.unref();
+        }
+        return;
       }
       if (this.computeCapacity && !nextTask.options.pointRead) {
         const permit = this.computeCapacity.acquire(this.resumeCompute, () => {

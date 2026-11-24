@@ -24,6 +24,8 @@ export type WorkerTaskPoolOptions<Output> = {
   idleTimeoutMs?: number;
   /** Surplus idle timeout; one recently recreated burst can stay warm for three times this value. */
   burstIdleTimeoutMs?: number;
+  /** How long a recently recreated worker stays warm beyond its idle timeout; default 5 min. */
+  warmWindowMs?: number;
   restartOnError?: boolean;
   validateResult?: (value: Output) => void;
   /** Reports failed stops synchronously; returned rejections never delay retirement. */

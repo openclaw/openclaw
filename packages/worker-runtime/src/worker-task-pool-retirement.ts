@@ -405,13 +405,14 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
       }
     }
     // Primary and burst reuse have separate histories so neither extends the other's lifetime.
-    if (!burst && !warmSlot && now() - lastIdleRetirementAt < WORKER_WARM_WINDOW_MS) {
+    const warmWindowMs = options.warmWindowMs ?? WORKER_WARM_WINDOW_MS;
+    if (!burst && !warmSlot && now() - lastIdleRetirementAt < warmWindowMs) {
       warmSlot = slot;
     }
     if (
       burst &&
       (!warmBurstSlot || !isBurstSlot(warmBurstSlot)) &&
-      now() - lastBurstRetirementAt < WORKER_WARM_WINDOW_MS
+      now() - lastBurstRetirementAt < warmWindowMs
     ) {
       warmBurstSlot = slot;
     }
@@ -422,7 +423,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
         ? idleMs * 3
         : idleMs
       : warmSlot === slot
-        ? Math.max(idleMs, WORKER_WARM_WINDOW_MS)
+        ? Math.max(idleMs, warmWindowMs)
         : idleMs;
     idleTimers.arm(slot, Math.max(0, timeoutMs - elapsedIdleMs), () => {
       if (newestIdle() === slot) {

@@ -4,6 +4,7 @@ import { MessageChannel, type Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createWorkerIdleTimers, WorkerTaskError } from "@openclaw/worker-runtime";
+import { leanPrototype } from "../../infra/lean-prototype.js";
 import { markWorkerRetirement } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -376,7 +377,7 @@ class ArchiveSession {
         this.dispatched = undefined;
       }
       if (!connection.retiring && !connection.didExit && !connection.failure) {
-        connection.idle.arm(connection, 5 * 60_000, () => {
+        connection.idle.arm(connection, leanPrototype.carrierIdleMs ?? 5 * 60_000, () => {
           // An open scope remains usable after its idle carrier exits.
           markWorkerRetirement(connection.worker, "idle_timeout");
           void (this.released ? this.close() : this.retire()).catch((error: unknown) => {

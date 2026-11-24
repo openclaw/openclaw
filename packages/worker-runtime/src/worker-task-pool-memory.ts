@@ -52,6 +52,21 @@ export function createWorkerTaskPoolMemory(
       // One worker beyond the bulk limit stays reserved for point reads.
       return bulkLimit() + Number(pointRead);
     },
+    /** Whether the queue head may start a new worker; a refusal starts its memory wait. */
+    admitStart(task: QueuedTask): boolean {
+      if (!budget?.admitStart || task.options.pointRead === true) {
+        return true;
+      }
+      const startedAt = task.memoryWaitStartedAt;
+      if (budget.admitStart(startedAt === undefined ? 0 : performance.now() - startedAt)) {
+        return true;
+      }
+      if (startedAt === undefined) {
+        task.memoryWaitStartedAt = performance.now();
+        budget.waitStarted();
+      }
+      return false;
+    },
     dispatched(task: QueuedTask, slots: number): void {
       finishWorkerTaskWaits(task, budget);
       // A slot beyond floor and growth can only be the mandatory point-read lane.
