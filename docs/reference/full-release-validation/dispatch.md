@@ -127,6 +127,24 @@ pnpm ci:full-release \
   -f fail_fast=false
 ```
 
+For an explicitly selected historical qualification, add both inputs before the
+new request is admitted:
+
+- `-f qualification_baselines_json='<original-baseline-object>'` selects exact
+  published stable predecessors, validated against C and the release context.
+  Without this input, a fresh request resolves the current baseline policy.
+- `-f publication_artifact_source_json='{"runId":"<original-parent>","runAttempt":1}'`
+  selects original publication artifacts independently of the parent verdict.
+  It requires candidate admission, `rerun_group=all`, and `reuse_evidence=true`.
+  The original source admission, sealed candidate, producer receipts, and exact
+  package digest must agree. Missing or changed evidence fails closed instead
+  of rebuilding different bytes. Cross-Q selection retains the original tooling identity; workload evidence
+  is authenticated separately.
+
+Both selections are frozen in P admission and the execution plan. Resume keeps
+them unchanged even when npm advances. The new parent must pass its own gates;
+selecting a failed historical parent never adopts its aggregate verdict.
+
 The helper obtains P admission through `openclaw-release-prepare.yml`, then
 creates immutable `release-ci/*` at Q. Never create it or assemble admission
 manually. `--dry-run` previews the tuple, not hosted admission or success.
@@ -294,3 +312,13 @@ source manifest, trusted tooling, and child tuple must match.
 
 Final verification independently chooses newest available Decision/Drain artifacts;
 both bind the same plan/child tuple, retaining possibly different source attempts.
+
+### Historical artifact and workload identity
+
+Historical selection preserves the producer's original Q and verifies the
+original admission, plan, exact producer attempts, and package/image receipts.
+It does not relabel the publication bytes or inherit a prior aggregate verdict.
+Child-workload reuse is a separate decision: authenticate the producer tooling
+lineage, exact candidate and effective inputs, and live attempts, and apply the
+current admitted waiver policy. Set `reuse_evidence=false` to require fresh
+execution instead of selecting a historical publication source.

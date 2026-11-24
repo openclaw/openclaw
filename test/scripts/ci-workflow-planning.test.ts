@@ -14146,6 +14146,8 @@ describe("ci workflow guards", () => {
         const env = {
           ...process.env,
           ...normalEnv,
+          // Exercise the whole policy, not the runtime split of the enclosing CI job.
+          OPENCLAW_CI_TEST_RUNTIME: undefined,
           NODE_OPTIONS: "",
           OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(row.env ?? {}),
           OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(rowTargets),

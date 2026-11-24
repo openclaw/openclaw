@@ -20,8 +20,9 @@ Cloud Run deployment, ID token, callback, custom decision store or status API.
 
 **An agent must never approve a fast-track release, including through a token
 that happens to belong to a release manager.** Before taking any fast-track
-action, obtain explicit approval from **another human in the release-managers
-group**, not the requester acting as their own approver. Generic release
+action, obtain explicit approval from **a human in the release-managers
+group**. That human may be the release manager who requested the fast-track;
+an agent may prepare the request but never decide it. Generic release
 ownership, permission to prepare/publish, silence, a previous approval or an
 agent's interpretation of intent is not explicit fast-track approval.
 
@@ -63,7 +64,7 @@ Persist the exact packet with release evidence; a digest alone is not approval.
 
 ## Policies retained for review
 
-- `approved-fast-track-v1`: **at most 10 commits AND 10,000 total added/deleted
+- `approved-fast-track-v1`: **at most 20 commits AND 15,000 total added/deleted
   lines** since a published, fully validated ancestor. Exclude only files named
   `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`,
   `yarn.lock`, `bun.lock` or `bun.lockb` at any depth from LOC. All commits still

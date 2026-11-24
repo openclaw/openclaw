@@ -55,8 +55,9 @@ describe("release preparation", () => {
     expect(await fs.readFile(path.join(staging, "openclaw", "dist", "ui-built"), "utf8")).toBe(
       "ready",
     );
+    expect(await fs.readFile(path.join(staging, "openclaw", "ui-builds.txt"), "utf8")).toBe("ui\n");
     expect(await fs.readFile(path.join(staging, "openclaw", "steps.txt"), "utf8")).toBe(
-      "install --frozen-lockfile\nbuild\nui:build\n",
+      "install --frozen-lockfile\nbuild\n",
     );
     expect((await exec("git", ["-C", target.checkout, "status", "--porcelain"])).stdout).toBe("");
     expect(
@@ -94,7 +95,7 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
     expect(result).toMatchObject({ ok: true, version: "2026.11.21", buildId: "fixture-build" });
     expect(await fs.readFile(path.join(staging, "openclaw", "steps.txt"), "utf8")).toBe(
-      "install --frozen-lockfile\nbuild\nui:build\n",
+      "install --frozen-lockfile\nbuild\n",
     );
   });
 
@@ -507,12 +508,15 @@ describe("package release conversion", () => {
   });
 
   it.each([
-    { releaseAware: true, runtime: "node" },
-    { releaseAware: false, runtime: "node" },
-    { releaseAware: true, runtime: "bun" },
-  ])(
-    "prepares a $runtime package with release support $releaseAware",
-    async ({ releaseAware, runtime }) => {
+    { releaseAware: true, runtime: "node", build: undefined },
+    { releaseAware: false, runtime: "node", build: undefined },
+    { releaseAware: true, runtime: "bun", build: undefined },
+    // An explicit artifact rebuilt at the installed version is still a new release.
+    { releaseAware: true, runtime: "node", build: "rebuilt" },
+    { releaseAware: true, runtime: "node", build: "installed" },
+  ] as const)(
+    "prepares a $runtime package with release support $releaseAware (build: $build)",
+    async ({ releaseAware, runtime, build }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const runningRoot = path.join(root, "global", "node_modules", "openclaw");
       await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
@@ -537,6 +541,16 @@ if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) 
         for (const name of ["check-release", "gateway-trial"]) {
           await fs.writeFile(path.join(packedRoot, "dist", `${name}-fixture.mjs`), "");
         }
+      }
+      if (build) {
+        await fs.writeFile(
+          path.join(runningRoot, "dist", "build-info.json"),
+          '{"buildId":"2026.11.21-installed"}',
+        );
+        await fs.writeFile(
+          path.join(packedRoot, "dist", "build-info.json"),
+          JSON.stringify({ buildId: `2026.11.21-${build}` }),
+        );
       }
       await fs.writeFile(
         path.join(packedRoot, "package.json"),
@@ -638,6 +652,21 @@ if (process.argv[2] !== 'install') {
             {
               code: "ENOENT",
             },
+          );
+          expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
+          return;
+        }
+        if (build === "installed") {
+          // The installed build again: nothing is published and the serving install is untouched.
+          expect(outcome).toMatchObject({ status: "current", version: "2026.11.21" });
+          expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+            status: "skipped",
+            reason: "already-current",
+          });
+          expect(await readTrial(prefix)).toBeNull();
+          expect(await fs.readdir(path.join(prefix, "releases"))).toEqual([]);
+          await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject(
+            { code: "ENOENT" },
           );
           expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
           return;

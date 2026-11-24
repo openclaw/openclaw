@@ -20,6 +20,7 @@ import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-co
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
@@ -53,7 +54,7 @@ import {
 } from "./store.js";
 import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 
-/** Covers fetch, dependencies and both builds; a run past it is "interrupted". */
+/** Covers fetch, dependencies and the release build; a run past it is "interrupted". */
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
 const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
 
@@ -315,6 +316,16 @@ export async function prepareUpdate(params: {
         "The new version could not be built. The current version is still running.",
         prepared.stderrTail,
       );
+    }
+    // An explicit artifact can be rebuilt at the same version: only the same known build
+    // identity is current. Missing identity is not equality.
+    if (
+      target.kind === "package" &&
+      prepared.buildId &&
+      prepared.version === params.runningVersion &&
+      prepared.buildId === (await readBuiltGatewayBuildId(params.runningRoot))
+    ) {
+      return await current(prepared.version);
     }
     await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
     // Missing modules identify an unsupported old target; command failures never bypass checks.
