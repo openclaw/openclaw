@@ -358,7 +358,9 @@ describe("processDiscordMessage thread binding activity failure", () => {
 
 describe("processDiscordMessage reply session init conflict retry", () => {
   const conflictError = () =>
-    new Error("reply session initialization conflicted for agent:main:discord:channel:c1");
+    new Error(
+      "reply session initialization conflicted for agent:main:discord:channel:c1; please retry your message.",
+    );
 
   it.each([
     {

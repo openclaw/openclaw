@@ -51,6 +51,15 @@ containment. The same ID is advertised in Gateway `hello-ok.features.capabilitie
 - [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
 
+## Reply session initialization conflicts
+
+Use `isReplySessionInitConflictError(error)` from
+`openclaw/plugin-sdk/reply-runtime` to recognize an exhausted reply-session
+initialization conflict, including errors serialized across runtime boundaries.
+Channels can send a terminal busy notice or record intentional delivery-policy
+suppression. If notice delivery fails, keep the event retryable through the
+channel's durable ingress owner.
+
 ## Runtime namespaces
 
 Every `api.runtime` namespace and the page that documents it.

@@ -242,7 +242,12 @@ it("projects lifecycle removal without acquiring unrelated prompt payloads", asy
       sessionKey: "agent:main:selected",
       storePath: path.join(state.sessionsDir("main"), "sessions.json"),
     };
-    const current = { sessionId: "selected", updatedAt: Date.now(), label: "original" };
+    const current = {
+      sessionId: "selected",
+      updatedAt: Date.now(),
+      label: "original",
+      lastSubmittedModel: { provider: "synthetic", model: "fixture" },
+    };
     const unrelatedScope = { ...scope, sessionKey: "agent:main:unrelated" };
     const prompt = "unrelated lifecycle prompt ".repeat(4096);
     await upsertSessionEntryCore(scope, current);
@@ -275,7 +280,15 @@ it("projects lifecycle removal without acquiring unrelated prompt payloads", asy
       await applySessionEntryLifecycleMutation({
         ...scope,
         skipMaintenance: true,
-        removals: [{ sessionKey: scope.sessionKey, expectedEntry: persistedCurrent }],
+        removals: [
+          {
+            sessionKey: scope.sessionKey,
+            expectedEntry: {
+              ...persistedCurrent,
+              lastSubmittedModel: { model: "fixture", provider: "synthetic" },
+            },
+          },
+        ],
       });
     } finally {
       reads.mockRestore();
