@@ -42,7 +42,10 @@ export type SkillsPresentation = {
   /** The installed skill whose page is open, from the address. */
   skillsDetailKey: string | null;
   clawhubSearchQuery: string;
-  clawhubCategory: SkillsCategoriesResult["categories"][number] | null;
+  clawhubCategory:
+    | SkillsCategoriesResult["categories"][number]
+    | { slug: "featured"; label: string; featured: true }
+    | null;
 };
 
 export type SkillsProps = {

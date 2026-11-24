@@ -491,7 +491,7 @@ it.each([
   },
 );
 
-it("fills the remaining viewport with card-sized placeholders across resizes", async () => {
+it("keeps an 80-card loading page and card geometry across resizes", async () => {
   await renderCatalog({
     reads: { browse: Promise.withResolvers<null>().promise, categories: null, more: null },
   });
@@ -511,9 +511,8 @@ it("fills the remaining viewport with card-sized placeholders across resizes", a
           const grid = find(".plugin-catalog-grid--skeleton");
           const cards = [...grid.children].map((card) => card.getBoundingClientRect());
           const cardHeight = cards[0]!.height;
-          const row = cardHeight + Number.parseFloat(getComputedStyle(grid).rowGap);
           const bottom = cards.at(-1)!.bottom;
-          return bottom >= height && bottom < height + row && cardHeight < 200;
+          return cards.length === 80 && bottom >= height && cardHeight > 0 && cardHeight < 200;
         })
         .toBe(true);
     }

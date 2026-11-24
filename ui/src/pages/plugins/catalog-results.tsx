@@ -10,6 +10,7 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { CATALOG_INITIAL_PAGE_SIZE } from "../../lib/catalog-page-size.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
@@ -21,11 +22,7 @@ import type {
 import { t } from "../../lib/reactive/i18n.ts";
 import { categoryIcon } from "./catalog-category-icon.tsx";
 import { PluginCatalogGrid } from "./catalog-grid.tsx";
-import {
-  CatalogSkeletonCards,
-  PluginCatalogSkeleton,
-  renderCatalogGridSkeleton,
-} from "./catalog-skeleton.tsx";
+import { CatalogSkeletonCards, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -582,6 +579,8 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const grouped = () => !query() && intent() === "all" && category() === null;
   // Publisher headers must not repeat the virtualizer's scroll compensation.
   const windowed = () => !grouped() && listed().length > 60;
+  const rawPending = () =>
+    connected() && !grouped() && props.browsePending && !props.hasCurrentResult;
   const readCatalog = () => {
     // Same-selection refreshes must not hold live installation state or card controls.
     if (props.hasCurrentResult) {
@@ -635,7 +634,10 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
                   loading={true}
                 />
               ) : (
-                <PluginCatalogSkeleton label={t("pluginsPage.loadingDiscovery")} />
+                renderCatalogGridSkeleton({
+                  label: t("pluginsPage.loadingDiscovery"),
+                  cards: CATALOG_INITIAL_PAGE_SIZE,
+                })
               )}
             </div>
           }
@@ -644,7 +646,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             class="plugin-catalog-results__body"
             style={{ "overflow-anchor": windowed() ? "none" : undefined }}
           >
-            {connected() && (
+            {connected() && !rawPending() && (
               <Errored
                 fallback={(error, reset) =>
                   renderError(formatUiError(error()), () => {
@@ -669,6 +671,11 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
                 listed={listed()}
                 trending={trending()}
               />
+            ) : rawPending() ? (
+              renderCatalogGridSkeleton({
+                label: t("pluginsPage.loadingDiscovery"),
+                cards: CATALOG_INITIAL_PAGE_SIZE,
+              })
             ) : props.hasCurrentResult || !recordedError() ? (
               <RawResults
                 {...props}

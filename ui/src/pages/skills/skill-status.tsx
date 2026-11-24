@@ -18,6 +18,7 @@ export function SkillTile(props: {
   emoji?: string;
   imageUrl?: string;
   class?: JSX.HTMLAttributes<HTMLElement>["class"];
+  style?: JSX.CSSProperties;
 }) {
   return (
     <span
@@ -26,6 +27,7 @@ export function SkillTile(props: {
         props.class,
         { "skill-tile--default": !props.imageUrl && !props.emoji },
       ]}
+      style={props.style}
       aria-hidden="true"
     >
       <Show

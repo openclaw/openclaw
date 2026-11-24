@@ -396,6 +396,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       ],
     );
     await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
+    expect(
+      await page
+        .locator('[data-catalog-section="featured"]')
+        .getByRole("button", { name: "View all" })
+        .count(),
+    ).toBe(0);
     await page
       .locator('[data-templates-category="research"] [data-templates-entry]')
       .first()
@@ -449,17 +455,50 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     expect(await gateway.getRequests("templates.catalog.search")).toHaveLength(1);
 
-    await gateway.setMethodResponse("templates.catalog.search", {
-      entries: [researchTemplate, workflowOperator],
-    });
-    await page.getByRole("button", { name: "Research", exact: true }).click();
-    await gateway.waitForRequest("templates.catalog.search", { match: { category: "research" } });
-    await page.locator("[data-templates-results] [data-templates-entry]").first().waitFor();
-    expect(await page.locator("[data-templates-featured]").count()).toBe(0);
+    const initial = { category: "research", paged: true, limit: 80 };
+    await gateway.deferNext("templates.catalog.search");
+    await page
+      .locator('[data-catalog-section="research"]')
+      .getByRole("button", { name: "View all" })
+      .click();
+    const request = await gateway.waitForRequest("templates.catalog.search", { match: initial });
+    expect(request.params).toEqual(initial);
+    const loading = page.getByRole("status", { name: "Loading templates…" });
+    await expect
+      .poll(async () => ({
+        placeholders: await page.locator("[data-templates-placeholder]").count(),
+        loading: await loading.count(),
+        visibleRows: await page.locator("[data-templates-entry]").count(),
+        message: (await page.locator("[data-templates-explore]").innerText()).slice(-240),
+      }))
+      .toMatchObject({ placeholders: 80, loading: 1, visibleRows: 0 });
+    const entries = (first: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        ...workflowOperator,
+        packageName: "@maker/template-" + (first + index),
+        displayName: "Template " + (first + index),
+      }));
+    await gateway.resolveDeferred(
+      "templates.catalog.search",
+      {
+        entries: [researchTemplate, workflowOperator, ...entries(2, 78)],
+        nextCursor: "80",
+      },
+      { match: initial },
+    );
     const categoryCards = page.locator("[data-templates-results] [data-templates-entry]");
-    expect(await categoryCards.count()).toBe(2);
+    await expect.poll(() => categoryCards.count()).toBe(80);
+    expect(await page.locator("[data-templates-featured]").count()).toBe(0);
     expect(await categoryCards.first().textContent()).toContain("Release Scout");
     expect(await categoryCards.nth(1).textContent()).toContain("Workflow Operator");
+
+    await gateway.setMethodResponse("templates.catalog.search", { entries: entries(80, 40) });
+    await page.getByRole("button", { name: "Load more", exact: true }).click();
+    await gateway.waitForRequest("templates.catalog.search", {
+      match: { ...initial, limit: 40, cursor: "80" },
+    });
+    await expect.poll(() => categoryCards.count()).toBe(120);
+    expect(await page.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
   });
   it.each(viewports)(
     "shows the Template contents at $name width without empty sections",

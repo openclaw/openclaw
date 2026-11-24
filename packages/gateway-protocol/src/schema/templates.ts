@@ -22,6 +22,8 @@ export const TemplatesCatalogSearchParamsSchema = closedObject({
   query: Type.Optional(Type.String({ maxLength: 200 })),
   category: Type.Optional(Type.String({ maxLength: 40 })),
   featured: Type.Optional(Type.Boolean()),
+  paged: Type.Optional(Type.Boolean()),
+  cursor: Type.Optional(Type.String({ pattern: "^[1-9][0-9]{0,3}$" })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 });
 
@@ -42,6 +44,7 @@ export const TemplatesCatalogEntrySchema = closedObject({
 
 export const TemplatesCatalogSearchResultSchema = closedObject({
   entries: Type.Array(TemplatesCatalogEntrySchema),
+  nextCursor: Type.Optional(NonEmptyString),
   overview: Type.Optional(
     closedObject({
       featured: Type.Array(TemplatesCatalogEntrySchema),

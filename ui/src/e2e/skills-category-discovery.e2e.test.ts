@@ -52,7 +52,13 @@ function openCatalog(page: Page) {
   return installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "skills.categories", "skills.detail"],
     methodResponses: {
-      "skills.categories": { categories: taxonomy },
+      "skills.categories": {
+        featured: [listing("Focus Planner", "Prioritize the next steps for a project.")],
+        categories: taxonomy.map((item) => ({
+          ...item,
+          preview: overview.filter((skill) => skill.categories.includes(item.slug)),
+        })),
+      },
       "skills.status": createReport([installed]),
       "skills.search": { results: overview },
       "skills.detail": {
@@ -95,7 +101,7 @@ suite.define(() => {
       await button(page, "Expand sidebar").click();
       await page.getByRole("link", { name: "Skills", exact: true }).click();
       await gateway.waitForRequest("skills.categories");
-      await expectSearch(gateway, { limit: 20 });
+      await expectSearch(gateway, { limit: 80 });
       const failure = { code: "UNAVAILABLE", message: "Synthetic taxonomy unavailable" };
       await gateway.rejectDeferred("skills.categories", failure);
       const error = page.getByRole("alert").filter({ hasText: failure.message });
@@ -164,7 +170,7 @@ suite.define(() => {
     ["phone", { width: 400, height: 900 }],
     ["tablet", { width: 820, height: 900 }],
   ] as const) {
-    it(`groups the overview from one unfiltered page without horizontal overflow (${size})`, () =>
+    it(`renders curated shelves without a loading heading flash or horizontal overflow (${size})`, () =>
       suite.withPage({ viewport: dimensions, locale: "en-US" }, async ({ page }) => {
         const gateway = await openCatalog(page);
         await page.goto(suite.server.baseUrl + "plugins");
@@ -173,11 +179,12 @@ suite.define(() => {
           await button(page, "Expand sidebar").click();
         }
         await page.getByRole("link", { name: "Skills", exact: true }).click();
-        await expectSearch(gateway, { limit: 20 });
+        await expectSearch(gateway, { limit: 80 });
         const filters = page.locator(".plugin-catalog-chips");
         await filters.getByRole("button", { name: "Installed", exact: true }).waitFor();
         await page.getByRole("status", { name: "Searching…" }).waitFor();
         expect(await row(page, notebook.displayName).isVisible()).toBe(false);
+        expect(await row(page, "ClawHub").count()).toBe(0);
         const shifts = await observeLayoutShifts(page);
         await gateway.resolveDeferred("skills.categories");
         await row(page, notebook.displayName).waitFor();
@@ -185,6 +192,10 @@ suite.define(() => {
         // Include recent-input entries: fast navigation must not mask directory-arrival shifts.
         expect(await shifts.evaluate((probe) => probe.read().entries)).toEqual([]);
         await shifts.dispose();
+        await row(page, "Focus Planner").waitFor();
+        expect(await page.locator('[data-catalog-section^="category-"]').count()).toBe(
+          taxonomy.length,
+        );
         const research = button(page, "Research");
         await research.waitFor();
         expect(await research.evaluate((chip) => chip.scrollWidth <= chip.clientWidth)).toBe(true);
@@ -228,19 +239,30 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "skills");
       await row(page, index.displayName).waitFor();
       expect(await row(page, atlas.displayName).count()).toBe(0);
-      await gateway.setMethodResponse("skills.search", {
-        results: [atlas],
-        nextCursor: "research:page-2",
-      });
+      const category = { category: "research", limit: 80 };
+      await gateway.deferNext("skills.search", category, { exactParams: true });
       await shelf(page, "Research").getByRole("button", { name: "View all", exact: true }).click();
-      const category = { category: "research", limit: 20 };
       await expectSearch(gateway, category);
+      await expect.poll(() => page.locator(".plugin-catalog-card--skeleton").count()).toBe(80);
+      await gateway.resolveDeferred(
+        "skills.search",
+        {
+          results: [
+            atlas,
+            ...Array.from({ length: 79 }, (_, i) =>
+              listing("Research result " + i, "A research tool."),
+            ),
+          ],
+          nextCursor: "research:page-2",
+        },
+        { match: category },
+      );
       await row(page, atlas.displayName).waitFor();
       expect(await row(page, index.displayName).count()).toBe(0);
       await capture(page, "research-skills", atlas.displayName);
 
       const more = button(page, "Load more");
-      const next = { ...category, cursor: "research:page-2" };
+      const next = { ...category, limit: 40, cursor: "research:page-2" };
       await gateway.deferNext("skills.search", next);
       await more.click();
       await expectSearch(gateway, next);
@@ -267,7 +289,7 @@ suite.define(() => {
       const gateway = await openCatalog(page);
       await page.goto(suite.server.baseUrl + "skills");
       await row(page, index.displayName).waitFor();
-      const scoped = { category: "research", limit: 20 };
+      const scoped = { category: "research", limit: 80 };
       // Clearing text keeps the category, but returning to All retires its in-flight read.
       const search = page.getByRole("searchbox", { name: "Search skills" });
       await search.focus();

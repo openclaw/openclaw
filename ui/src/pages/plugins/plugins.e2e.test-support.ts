@@ -597,29 +597,29 @@ function pluginMethodResponses() {
     "plugins.catalog.browse": {
       cases: [
         {
-          match: { intent: "all", cursor: "catalog-page-2", pageSize: 100 },
+          match: { intent: "all", cursor: "catalog-page-2", pageSize: 40 },
           response: {
             items: secondDiscoveryPageItems,
             nextCursor: "catalog-page-3",
           },
         },
         {
-          match: { intent: "all", cursor: "catalog-page-3", pageSize: 100 },
+          match: { intent: "all", cursor: "catalog-page-3", pageSize: 40 },
           response: { items: finalDiscoveryPageItems },
         },
         {
-          match: { intent: "official", pageSize: 100 },
+          match: { intent: "official", pageSize: 80 },
           response: { items: [matrixDiscoveryPlugin] },
         },
         {
-          match: { intent: "all", category: "channels", pageSize: 100 },
+          match: { intent: "all", category: "channels", pageSize: 80 },
           response: { items: [matrixDiscoveryPlugin] },
         },
         {
-          match: { intent: "all", query: "matrix", pageSize: 100 },
+          match: { intent: "all", query: "matrix", pageSize: 80 },
           response: { items: [matrixDiscoveryPlugin] },
         },
-        { match: { intent: "all", pageSize: 100 }, response: discoveryResult },
+        { match: { intent: "all" }, response: discoveryResult },
       ],
     },
     "plugins.catalog.categories": discoveryCategories,

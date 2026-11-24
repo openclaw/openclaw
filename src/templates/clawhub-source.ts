@@ -77,6 +77,21 @@ export type ClawHubTemplateTrust = {
   trustRecord: AcceptedTrust["trustInstallRecordFields"];
 };
 
+// Page the same globally ranked list that older category reads and certified shelves use.
+// ClawHub's downloads order cannot establish the Template install ranking across pages.
+export async function browseClawHubTemplates(
+  params: ClawHubFetchOptions & { limit: number; category?: string; cursor?: string },
+): Promise<{ entries: ClawHubTemplateCatalogEntry[]; nextCursor?: string }> {
+  const { cursor, limit, ...catalog } = params;
+  const offset = cursor === undefined ? 0 : Number(cursor);
+  const end = offset + limit;
+  const entries = await listClawHubTemplates(catalog);
+  return {
+    entries: entries.slice(offset, end),
+    ...(end < entries.length ? { nextCursor: String(end) } : {}),
+  };
+}
+
 export async function listClawHubTemplates(
   params: ClawHubFetchOptions & { limit?: number; category?: string; featured?: boolean } = {},
 ): Promise<ClawHubTemplateCatalogEntry[]> {

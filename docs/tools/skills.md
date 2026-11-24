@@ -358,6 +358,11 @@ See [Skill Workshop](/tools/skill-workshop) for how agents learn skills and
 `openclaw skills` commands for install and update, or the `clawhub` CLI for
 publish and sync.
 
+In the Control UI, **Customize → Skills** shows Featured picks and previews for
+all ClawHub skill categories. Use **View all** for a full category. In Skills,
+Plugins, and Templates, the full browse view starts with up to 80 entries;
+**Load more** adds up to 40 at a time until the catalog runs out.
+
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
 | Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |

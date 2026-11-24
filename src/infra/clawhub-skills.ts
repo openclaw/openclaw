@@ -3,6 +3,7 @@ import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coe
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type {
+  SkillsCategoriesResult,
   SkillsSearchParams,
   SkillsSearchResult,
 } from "../../packages/gateway-protocol/src/schema/skills-search.js";
@@ -188,6 +189,10 @@ export async function searchClawHubSkillsPage(
 ): Promise<{ results: ClawHubSkillSearchResult[]; nextCursor?: string }> {
   const query = params.query?.trim();
   const request = { ...params, baseUrl: resolveClawHubBaseUrl(params.baseUrl) };
+  if (params.featured) {
+    const { items, nextCursor } = await fetchClawHubSkillCatalog(request);
+    return { results: items, ...(nextCursor ? { nextCursor } : {}) };
+  }
   if (params.category) {
     // Older registries ignore unknown list parameters and return an unfiltered page.
     // Require the same registry to advertise the filter before trusting its results.
@@ -210,40 +215,7 @@ export async function searchClawHubSkillsPage(
     });
     entries = result.results ?? [];
   } else if (params.category) {
-    const result = await fetchClawHubJson<unknown>({
-      ...request,
-      path: "/api/v1/skills",
-      search: {
-        category: params.category,
-        cursor: params.cursor,
-        limit: String(params.limit ?? 20),
-      },
-    });
-    if (!isRecord(result) || !Array.isArray(result.items)) {
-      throw new Error("Malformed ClawHub skill category page: expected an item array.");
-    }
-    nextCursor = readClawHubStringField(result, "nextCursor", "skill category page");
-    entries = result.items.map((row): ClawHubSkillSearchWireEntry => {
-      const context = "skill category listing";
-      if (!isRecord(row) || (row.latestVersion != null && !isRecord(row.latestVersion))) {
-        throw new Error(
-          "Malformed ClawHub skill category listing: invalid item or latest version.",
-        );
-      }
-      return {
-        source: CLAWHUB_NATIVE_SOURCE_KIND,
-        score: 0,
-        slug: readRequiredClawHubStringField(row, "slug", context),
-        ownerHandle: readClawHubStringField(row, "ownerHandle", context),
-        displayName: readRequiredClawHubStringField(row, "displayName", context),
-        summary: readClawHubStringField(row, "summary", context) ?? undefined,
-        icon: readClawHubStringField(row, "icon", context),
-        updatedAt: readRequiredClawHubNumberField(row, "updatedAt", context),
-        version: row.latestVersion
-          ? readRequiredClawHubStringField(row.latestVersion, "version", context)
-          : undefined,
-      };
-    });
+    return await browseClawHubSkillCategory({ ...request, category: params.category });
   } else {
     const result = await fetchClawHubJson<{
       items: ClawHubSkillTrendingWireEntry[];
@@ -276,11 +248,122 @@ export async function searchClawHubSkillsPage(
   return { results, ...(nextCursor ? { nextCursor } : {}) };
 }
 
+async function browseClawHubSkillCategory(
+  params: ClawHubFetchOptions & {
+    category: string;
+    limit?: number;
+    cursor?: string;
+    maxPages?: number;
+  },
+): Promise<SkillsSearchResult> {
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
+  const limit = params.limit ?? 20;
+  const results = new Map<string, ClawHubSkillSearchResult>();
+  let cursor = params.cursor;
+  const seen = new Set([cursor]);
+  // The registry can filter rows after taking a page. A short or empty page can still have more.
+  for (let page = 0; results.size < limit && page < (params.maxPages ?? 20); page += 1) {
+    const data = await fetchClawHubJson<unknown>({
+      ...params,
+      baseUrl: registry,
+      path: "/api/v1/skills",
+      search: {
+        category: params.category,
+        sort: "downloads",
+        cursor,
+        limit: String(limit - results.size),
+      },
+    });
+    if (!isRecord(data) || !Array.isArray(data.items)) {
+      throw new Error("Malformed ClawHub skill category page: expected an item array.");
+    }
+    for (const row of data.items) {
+      const context = "skill category listing";
+      if (!isRecord(row) || (row.latestVersion != null && !isRecord(row.latestVersion))) {
+        throw new Error(
+          "Malformed ClawHub skill category listing: invalid item or latest version.",
+        );
+      }
+      const skill = mapClawHubSkillSearchEntry(
+        {
+          source: CLAWHUB_NATIVE_SOURCE_KIND,
+          score: 0,
+          slug: readRequiredClawHubStringField(row, "slug", context),
+          ownerHandle: readClawHubStringField(row, "ownerHandle", context),
+          displayName: readRequiredClawHubStringField(row, "displayName", context),
+          summary: readClawHubStringField(row, "summary", context) ?? undefined,
+          icon: readClawHubStringField(row, "icon", context),
+          updatedAt: readRequiredClawHubNumberField(row, "updatedAt", context),
+          version: row.latestVersion
+            ? readRequiredClawHubStringField(row.latestVersion, "version", context)
+            : undefined,
+        },
+        registry,
+      );
+      if (!Array.isArray(skill)) {
+        results.set(skill.installRef, skill);
+      }
+    }
+    cursor = readClawHubStringField(data, "nextCursor", "skill category page") ?? undefined;
+    if (!cursor) {
+      break;
+    }
+    if (seen.has(cursor)) {
+      throw new Error("ClawHub returned a repeating skill category cursor.");
+    }
+    seen.add(cursor);
+  }
+  return { results: [...results.values()], ...(cursor ? { nextCursor: cursor } : {}) };
+}
+
+export async function readClawHubSkillOverview(
+  params: ClawHubFetchOptions = {},
+): Promise<SkillsCategoriesResult> {
+  const { categories } = await fetchClawHubSkillCategories(params);
+  const limit = 4;
+  // Previews are optional: a slow shelf must not set the catalog's request deadline.
+  const deadline = AbortSignal.timeout(3_500);
+  const signal = params.signal ? AbortSignal.any([params.signal, deadline]) : deadline;
+  const featuredRead = fetchClawHubSkillCatalog({ ...params, signal, featured: true, limit }).then(
+    ({ items }) => items,
+    () => undefined,
+  );
+  // Bound the fan-out; read the taxonomy once rather than once per shelf.
+  for (let offset = 0; offset < categories.length; offset += 8) {
+    await Promise.all(
+      categories.slice(offset, offset + 8).map(async (category) => {
+        try {
+          category.preview = (
+            await browseClawHubSkillCategory({
+              ...params,
+              category: category.slug,
+              signal,
+              // ClawHub filters unpublished rows after paging; give a shelf headroom
+              // without making it wait for cursor traversal. View all fills the full batch.
+              limit: 20,
+              maxPages: 1,
+            })
+          ).results.slice(0, limit);
+        } catch {
+          // One unavailable shelf must not hide the taxonomy or the other shelves.
+        }
+      }),
+    );
+  }
+  const featured = await featuredRead;
+  return {
+    categories,
+    featured,
+    previewsUnavailable: !featured || categories.some(({ preview }) => !preview),
+  };
+}
+
 export async function fetchClawHubSkillCatalog(
   params: ClawHubFetchOptions & {
     query?: string;
     feed?: "catalog" | "trending";
     officialOnly?: boolean;
+    featured?: boolean;
     cursor?: string;
     limit?: number;
   },
@@ -300,7 +383,11 @@ export async function fetchClawHubSkillCatalog(
         ? { kind: "skills" }
         : {
             family: "skill",
-            ...(query ? { q: query } : { sort: "downloads" }),
+            ...(query
+              ? { q: query }
+              : params.featured
+                ? { featured: "true" }
+                : { sort: "downloads" }),
             isOfficial: params.officialOnly ? "true" : undefined,
           }),
       limit: String(Math.min(params.limit ?? 100, 100)),
@@ -312,7 +399,7 @@ export async function fetchClawHubSkillCatalog(
     throw new Error("Malformed ClawHub skill catalog: expected a result array.");
   }
   const nextCursor = readClawHubStringField(result, "nextCursor", "skill catalog");
-  const entries = rows.map((row, index): ClawHubSkillSearchWireEntry => {
+  const entries = rows.flatMap((row, index): ClawHubSkillSearchWireEntry | [] => {
     const context = `skill catalog item ${index}`;
     if (!isRecord(row)) {
       throw new Error(`Malformed ClawHub ${context}: expected an object.`);
@@ -353,9 +440,13 @@ export async function fetchClawHubSkillCatalog(
     if (value.family !== "skill") {
       throw new Error(`Malformed ClawHub ${context}: expected skill family.`);
     }
+    if (params.featured && typeof value.featuredAt !== "number") {
+      return [];
+    }
     entry.score = query ? readRequiredClawHubNumberField(row, "score", context) : 0;
     return Object.assign(entry, {
       source: CLAWHUB_NATIVE_SOURCE_KIND,
+      categories: isStringArray(value.categories) ? value.categories : undefined,
       ownerHandle: readClawHubStringField(value, "ownerHandle", context),
       version: readClawHubStringField(value, "latestVersion", context) ?? undefined,
       updatedAt: readRequiredClawHubNumberField(value, "updatedAt", context),

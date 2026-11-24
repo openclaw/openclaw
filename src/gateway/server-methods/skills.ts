@@ -16,7 +16,11 @@ import {
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillCategories } from "../../infra/clawhub-skill-categories.js";
-import { fetchClawHubSkillDetail, searchClawHubSkillsPage } from "../../infra/clawhub-skills.js";
+import {
+  fetchClawHubSkillDetail,
+  readClawHubSkillOverview,
+  searchClawHubSkillsPage,
+} from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import {
@@ -137,13 +141,34 @@ export const skillsHandlers: GatewayRequestHandlers = {
   "skills.categories": defineValidatedGatewayHandler(
     "skills.categories",
     validateSkillsCategoriesParams,
-    async ({ respond }) => respond(true, await fetchClawHubSkillCategories(), undefined),
+    async ({ params, respond }) => {
+      if (!params.includePreviews) {
+        respond(true, await fetchClawHubSkillCategories(), undefined);
+        return;
+      }
+      const overview = await readClawHubSkillOverview();
+      registerClawHubCatalogIconUrls(
+        [
+          ...(overview.featured ?? []),
+          ...overview.categories.flatMap(({ preview }) => preview ?? []),
+        ].map(({ icon }) => icon ?? undefined),
+      );
+      respond(true, overview, undefined);
+    },
     (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
   ),
   "skills.search": defineValidatedGatewayHandler(
     "skills.search",
     validateSkillsSearchParams,
     async ({ params, respond }) => {
+      if (params.featured && (params.category || params.query?.trim())) {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Featured skills cannot be combined with category or text search.",
+        );
+        return;
+      }
       if (params.query?.trim() && params.cursor) {
         respondError(
           respond,

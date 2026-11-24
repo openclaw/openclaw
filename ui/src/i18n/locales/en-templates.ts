@@ -21,6 +21,8 @@ const enTemplates = {
     exploreDescription: "Ready-made Claws that get the job done",
     title: "Templates",
     featured: "Featured",
+    loadMore: "Load more",
+    loadingMore: "Loading more…",
     results: "Results",
     viewAll: "View all",
     categories: "Template categories",

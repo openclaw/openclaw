@@ -51,6 +51,7 @@ vi.mock("./reader.js", () => ({
 }));
 
 import {
+  browseClawHubTemplates,
   listClawHubTemplates,
   prefetchClawHubSource,
   readClawHubTemplateDetail,
@@ -286,6 +287,35 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
+  it("pages the same install-ranked category across short ClawHub pages", async () => {
+    const mostDownloaded = { ...officialPackage(), stats: { downloads: 100, installs: 10 } };
+    const mostInstalled = { ...communityPackage(), stats: { downloads: 10, installs: 100 } };
+    for (let i = 0; i < 2; i += 1) {
+      mocks.list
+        .mockResolvedValueOnce(listPage([mostDownloaded], "empty"))
+        .mockResolvedValueOnce(listPage([], "following"))
+        .mockResolvedValueOnce(listPage([mostInstalled]));
+    }
+    const first = await browseClawHubTemplates({ category: "research", limit: 1 });
+    expect(first.entries.map(({ packageName }) => packageName)).toEqual([personalPackageName]);
+    expect(first.nextCursor).toBe("1");
+    const next = await browseClawHubTemplates({
+      category: "research",
+      limit: 1,
+      cursor: first.nextCursor,
+    });
+    expect(next.entries.map(({ packageName }) => packageName)).toEqual([packageName]);
+    expect(next.nextCursor).toBeUndefined();
+    expect(mocks.list.mock.calls.map(([params]) => params.cursor)).toEqual([
+      undefined,
+      "empty",
+      "following",
+      undefined,
+      "empty",
+      "following",
+    ]);
+  });
+
   it.each([
     { optIn: undefined, marker: true }, // A plain overview ignores an unsolicited certificate.
     { optIn: false, marker: true },

@@ -229,6 +229,87 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
     },
   );
 
+  it("previews each advertised shelf without reading its continuation cursor", async () => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://registry.example");
+    const calls: string[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.pathname === "/api/v1/skills/-/categories") {
+        return Response.json({
+          categories: [
+            { slug: "security", label: "Security" },
+            { slug: "agents", label: "Agents" },
+          ],
+        });
+      }
+      const listing = { ownerHandle: "publisher", displayName: "Sample", updatedAt: 123 };
+      if (url.pathname === "/api/v1/packages") {
+        expect(url.searchParams.get("featured")).toBe("true");
+        return Response.json({
+          items: [{ ...listing, name: "curated", family: "skill", featuredAt: 3 }],
+        });
+      }
+      const category = url.searchParams.get("category")!;
+      calls.push(category);
+      expect(url.searchParams.get("limit")).toBe("20");
+      expect(url.searchParams.has("cursor")).toBe(false);
+      return Response.json({
+        items: Array.from({ length: 6 }, (_, i) => ({ ...listing, slug: category + "-" + i })),
+        nextCursor: "more",
+      });
+    });
+    const result = await callSkillsHandler("skills.categories", { includePreviews: true });
+    expect(result.response).toMatchObject({
+      categories: ["security", "agents"].map((slug) => ({
+        slug,
+        preview: Array.from({ length: 4 }, (_, i) => ({
+          installRef: "@publisher/" + slug + "-" + i,
+        })),
+      })),
+      featured: [{ installRef: "@publisher/curated" }],
+      previewsUnavailable: false,
+    });
+    expect(calls.toSorted()).toEqual(["agents", "security"]);
+  });
+
+  it("fills an 80-item category page and the next 40 even when ClawHub returns short pages", async () => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://registry.example");
+    const requestedLimits: number[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.pathname === "/api/v1/skills/-/categories") {
+        return Response.json({ categories: [{ slug: "security", label: "Security" }] });
+      }
+      expect(url.searchParams.get("sort")).toBe("downloads");
+      const limit = Number(url.searchParams.get("limit"));
+      requestedLimits.push(limit);
+      const offset = Number(url.searchParams.get("cursor"));
+      const items = Array.from({ length: Math.min(limit, 23, 120 - offset) }, (_, i) => ({
+        ownerHandle: "test-publisher",
+        slug: "example-" + (offset + i),
+        displayName: "Sample " + (offset + i),
+        updatedAt: 123,
+      }));
+      const next = offset + items.length;
+      return Response.json({ items, nextCursor: next < 120 ? String(next) : null });
+    });
+    const first = await callSkillsHandler("skills.search", { category: "security", limit: 80 });
+    expect(first.response).toMatchObject({ nextCursor: "80", results: expect.any(Array) });
+    const second = await callSkillsHandler("skills.search", {
+      category: "security",
+      limit: 40,
+      cursor: "80",
+    });
+    const refs = [first, second].flatMap(({ response }) =>
+      (response as { results: { installRef: string }[] }).results.map(
+        ({ installRef }) => installRef,
+      ),
+    );
+    expect(refs).toEqual(Array.from({ length: 120 }, (_, i) => "@test-publisher/example-" + i));
+    expect(second.response).not.toHaveProperty("nextCursor");
+    expect(requestedLimits).toEqual([80, 57, 34, 11, 40, 17]);
+  });
+
   it("browses a category by cursor and searches within the same registry category", async () => {
     const category = {
       slug: "communication",
@@ -282,8 +363,8 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
         .filter((url) => url.pathname !== "/api/v1/skills/-/categories")
         .map((url) => [url.pathname, Object.fromEntries(url.searchParams)]),
     ).toEqual([
-      ["/api/v1/skills", { category: category.slug, limit: "2" }],
-      ["/api/v1/skills", { category: category.slug, limit: "2", cursor }],
+      ["/api/v1/skills", { category: category.slug, sort: "downloads", limit: "2" }],
+      ["/api/v1/skills", { category: category.slug, sort: "downloads", limit: "2", cursor }],
       ["/api/v1/search", { category: category.slug, limit: "2", q: "email" }],
     ]);
   });
