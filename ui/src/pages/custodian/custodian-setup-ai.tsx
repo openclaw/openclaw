@@ -354,9 +354,9 @@ export function ConnectAi(props: {
     setOpenId(row.id);
     start(row);
   };
-  const back = () => {
-    if (working()) {
-      props.actions.cancel();
+  const back = async () => {
+    if (working() && !(await props.actions.cancel())) {
+      return;
     }
     setOpenedWith(() => props.setup().attempt);
     opening = false;

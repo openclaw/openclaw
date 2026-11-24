@@ -360,14 +360,15 @@ export class CustodianAutoSetup {
     }
   }
 
-  async cancelWizard(): Promise<void> {
+  async cancelWizard(): Promise<boolean> {
     const epoch = this.epoch;
     try {
-      await this.wizard.requestCancellation();
+      return (await this.wizard.requestCancellation()) === "cancelled";
     } catch (error) {
       if (epoch === this.epoch) {
         this.reportError(error);
       }
+      return false;
     }
   }
 

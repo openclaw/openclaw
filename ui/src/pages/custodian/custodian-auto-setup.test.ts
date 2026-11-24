@@ -609,6 +609,44 @@ it("keeps cancellation available during an answer and resumes after protected ca
   expect(findButton(page, "Yes").disabled).toBe(false);
 });
 
+it("keeps provider preparation visible after cancellation is declined", async () => {
+  const answer = createDeferred<unknown>();
+  const cancel = vi
+    .fn()
+    .mockReturnValueOnce({ status: "running" })
+    .mockReturnValue({ status: "cancelled" });
+  const request = setupRequest(() => detection([codex]), {
+    "openclaw.setup.prepare.start": () => ({ done: false, status: "running" }),
+    "wizard.next": (params) =>
+      params?.answer
+        ? answer.promise
+        : {
+            done: false,
+            step: { id: "connect", type: "confirm", message: "Connect to LM Studio?" },
+          },
+    "wizard.cancel": cancel,
+  });
+  const { page } = await mountSetup(request);
+  await openAiStep(page);
+  await click(page, "A model on your own computer");
+  await click(page, "LM StudioConnect server");
+  findButton(page, "Yes").click();
+  await waitForSolid(() => expect(findButton(page, "Yes").disabled).toBe(true));
+  findButton(page, "Choose another AI").click();
+  await waitForFast(() => expect(cancel).toHaveBeenCalledOnce());
+  answer.resolve({
+    done: false,
+    step: { id: "confirm-model", type: "confirm", message: "Use the loaded model?" },
+  });
+  await settled(page);
+  text(page).toContain("Use the loaded model?");
+  expect(findButton(page, "Yes").disabled).toBe(false);
+
+  await waitForSolid(() => expect(findButton(page, "Choose another AI").disabled).toBe(false));
+  findButton(page, "Choose another AI").click();
+  await waitForSolid(() => expect(findButton(page, "ChatGPT").disabled).toBe(false));
+});
+
 it("persists dismissal across a new custodian store", async () => {
   const request = setupRequest();
   const { context } = setupContext(request);

@@ -22,7 +22,7 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
   onSettled(() => retire);
 
   type Kind = "verification" | "wizard" | "cancellation" | "session";
-  const present = action(function* (kind: Kind, pending: Promise<unknown>, retired: Promise<void>) {
+  const present = action(function* (kind: Kind, pending: Promise<unknown>) {
     if (kind === "verification") {
       setVerifying(true);
     } else if (kind === "wizard") {
@@ -32,10 +32,10 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     } else {
       setSending(true);
     }
-    yield Promise.race([pending, retired]);
+    yield pending;
   });
 
-  async function run(kind: Kind, command: (source: CustodianSessionStore) => Promise<unknown>) {
+  async function run<T>(kind: Kind, command: (source: CustodianSessionStore) => Promise<T>) {
     const source = getStore();
     const setup = source.autoSetup;
     // Admission stays synchronous, including reserving the sign-in window in the user gesture.
@@ -49,13 +49,13 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
       if (kind === "session") {
         return source.sending;
       }
-      const phase = setup.wizard.state;
       if (kind === "verification") {
         return setup.pending;
       }
       if (kind === "cancellation") {
-        return phase.phase !== "idle";
+        return true;
       }
+      const phase = setup.wizard.state;
       return setup.pending || phase.phase === "starting" || (phase.phase === "step" && phase.busy);
     };
     const release = () => {
@@ -74,11 +74,12 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
         })
       : Promise.resolve());
     try {
+      const settled = Promise.race([pending, lifetime.promise]);
       if (isCurrent() && isWorking()) {
-        await present(kind, pending, lifetime.promise);
-      } else {
-        await Promise.race([pending, lifetime.promise]);
+        await present(kind, settled);
       }
+      const outcome = await settled;
+      return isCurrent() ? outcome : undefined;
     } catch (error) {
       if (isCurrent()) {
         if (kind === "session") {
@@ -114,7 +115,7 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
       void run("wizard", (source) => source.autoSetup.signIn(option, label)),
     answer: (value: unknown) =>
       void run("wizard", (source) => source.autoSetup.answerWizard(value)),
-    cancel: () => void run("cancellation", (source) => source.autoSetup.cancelWizard()),
+    cancel: () => run("cancellation", (source) => source.autoSetup.cancelWizard()),
   };
   const session = {
     get sending() {
