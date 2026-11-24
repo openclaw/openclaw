@@ -344,7 +344,7 @@ describe("resolveProviderHttpRequestConfig", () => {
       "x-default": "1",
       "user-agent": `openclaw/${VERSION}`,
       originator: "openclaw",
-      version: VERSION,
+      version: VERSION.split(/[-+]/u, 1)[0],
     });
   });
 

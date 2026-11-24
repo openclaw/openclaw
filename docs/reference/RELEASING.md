@@ -264,6 +264,9 @@ diagnostics. Local Parallels uses isolated Q harness/frozen dependencies against
 exact validated C tarballs when Q differs.
 
 Reuse preserves producer/consumer identities, inputs, coverage, and provenance.
+[Child evidence reuse](/reference/full-release-validation/stages) can cross Q with
+an authenticated producer and reevaluation under current Q grants. Tooling
+changes alone do not force fresh runs; whole-parent reuse still requires exact Q/P.
 [Root-request recovery](/reference/full-release-validation/dispatch#retain-and-reconcile-the-root-request)
 owns read-only reconciliation and explicit pre-POST resume: intended Q, empty
 uncertain-ref inventory, revalidated admission/signer, final ref verification.
