@@ -131,7 +131,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
   }
 
   private async speakReply(message: string): Promise<void> {
-    let output!: ReadableStreamDefaultController<string>;
+    let output!: ReadableStreamDefaultController<SpeechSegment>;
     const sentences = new ReadableStream<SpeechSegment>({
       start(controller) {
         output = controller;
