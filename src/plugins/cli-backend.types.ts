@@ -217,6 +217,7 @@ export type CliBackendMessageInjection = {
   /**
    * Ask the host to prepare current authority and invoke the synchronous native write.
    * Resolve only after the runtime acknowledges consumption, not after the write.
+   * A native transcript owner can return the accepted input and session IDs.
    */
   queueMessage(
     text: string,
@@ -226,7 +227,7 @@ export type CliBackendMessageInjection = {
       /** Prepared base64 images, in order; passed only when `acceptsImages` is true. */
       images?: readonly CliBackendInputImage[];
     },
-  ): Promise<void>;
+  ): Promise<void | { cliSessionId: string; externalId: string }>;
 };
 
 /** One prepared image for same-turn input. */
