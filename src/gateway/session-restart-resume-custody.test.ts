@@ -389,7 +389,7 @@ it.each([
     }),
 );
 
-it("still refuses a requester whose device was revoked, and settles its result once", () =>
+it("still refuses a requester whose device was revoked at every restart", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     setRuntimeConfigSnapshot({});
     const profile = ensureProfileForEmail("revoked-requester@example.test");
@@ -445,14 +445,15 @@ it("still refuses a requester whose device was revoked, and settles its result o
         const stores = await prepareRestartStores(restart, [target]);
         await prepareRestartCompletionCustody(restart, stores![0]!);
       }
+      // The real admission refuses the revoked device; that refusal carries no ended-grant
+      // cause, so the result is not delivered and stays pending.
       expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(true);
-      expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("discarded");
-      // Refused at the first recovery only; the settled row is not re-admitted.
+      expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("pending");
       expect(
         restart.log.warn.mock.calls.filter(([line]) =>
           String(line).includes("Restart completion recovery failed for revoked-completion"),
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
     } finally {
       subagentRuns.delete(child.runId);
     }

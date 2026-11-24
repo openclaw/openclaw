@@ -55,7 +55,12 @@ function openChat(name: string) {
 }
 
 /** A finished child whose result is still owed to its requesting chat. */
-function owedChild(chat: ReturnType<typeof openChat>, runId: string, endedAt: number) {
+function owedChild(
+  chat: ReturnType<typeof openChat>,
+  runId: string,
+  endedAt: number,
+  capturedAt?: number,
+) {
   const child = createSubagentRunRecord({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
@@ -73,6 +78,9 @@ function owedChild(chat: ReturnType<typeof openChat>, runId: string, endedAt: nu
     // The source value is opaque here; each child gets its own so attempts count per child.
     requesterOperatorSource: { kind: "unavailable", reason: runId } as never,
   });
+  if (capturedAt !== undefined) {
+    child.completion = { ...child.completion, required: true, capturedAt };
+  }
   subagentRuns.set(child.runId, child);
   subagentRuns.retireCompletionAuthority(child);
   saveSubagentRegistryChangesToSqlite(subagentRuns, [child.runId]);
@@ -141,7 +149,9 @@ it.for(["grant-revoked", "access-record-inactive"] as const)(
       expect(shown).toHaveLength(1);
       expect(await notices(other)).toEqual([]);
       for (const child of children) {
+        // No run, child or requester identity in the chat row, including its details.
         expect(JSON.stringify(shown[0])).not.toContain(child.childSessionKey);
+        expect(JSON.stringify(shown[0])).not.toContain(child.runId);
       }
     }),
 );
@@ -166,11 +176,32 @@ it("settles a refused result older than 7 days without a chat notice", () =>
     ]);
   }));
 
+it("notifies for an old row whose result was captured recently", () =>
+  withState(async () => {
+    const chat = openChat("recaptured");
+    // Created and ended a month ago, but its result was captured yesterday.
+    const child = owedChild(
+      chat,
+      "recaptured-child",
+      Date.now() - 30 * DAY_MS,
+      Date.now() - DAY_MS,
+    );
+    restore.mockRejectedValue(refusal("grant-revoked"));
+
+    const warnings = await restartRecovery();
+
+    expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("discarded");
+    expect(await notices(chat)).toHaveLength(1);
+    expect(warnings.some((line) => line.includes("older than 7 days"))).toBe(false);
+  }));
+
 it.for([
   ["thrown policy error", () => refusal("policy-check-failed")],
+  // A refusal without an ended-grant or deleted-profile cause, such as admission's refuse().
+  ["refusal without an ended-access cause", () => new GatewayOperatorRecoveryAuthorizationError()],
   ["unavailable owner", () => new GatewayOperatorAccessUnavailableError()],
   ["database error", () => new Error("database is locked")],
-] as const)("keeps a child pending after a transient %s", ([, failure]) =>
+] as const)("keeps a child pending after a %s", ([, failure]) =>
   withState(async () => {
     const chat = openChat("transient");
     const child = owedChild(chat, "transient-child", Date.now() - DAY_MS);

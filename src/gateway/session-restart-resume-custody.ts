@@ -1,3 +1,4 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
@@ -62,25 +63,20 @@ const REFUSED_NOTICE_SOURCE = "restart-completion-refused";
 const REFUSED_NOTICE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 /**
- * The closed list of refusals that end a restored completion for good. Any other
- * failure (thrown policy error, timeout, unavailable owner, busy database) stays
- * pending and retries at the next restart.
+ * The closed list of refusals that end a restored completion for good: the saved grant
+ * or access record ended, or the saved profile is gone. Every other failure stays pending
+ * and retries at the next restart, including refusals without such a cause (some compare
+ * facts, such as the shared session generation, that the new process may rebuild).
  */
 function isDefiniteRecoveryRefusal(error: unknown): boolean {
   if (!(error instanceof GatewayOperatorRecoveryAuthorizationError)) {
     return false;
   }
   const cause = error.cause;
-  if (cause === undefined) {
-    // Admission's own policy decision: role, scopes, device or principal no longer admit it.
-    return true;
-  }
-  if (cause instanceof UserProfileNotFoundError) {
-    return true;
-  }
   return (
-    cause instanceof GatewayOperatorAccessDeniedError &&
-    (cause.accessCause === "grant-revoked" || cause.accessCause === "access-record-inactive")
+    cause instanceof UserProfileNotFoundError ||
+    (cause instanceof GatewayOperatorAccessDeniedError &&
+      (cause.accessCause === "grant-revoked" || cause.accessCause === "access-record-inactive"))
   );
 }
 
@@ -307,6 +303,24 @@ async function recoverRequesterCompletionCustody(params: {
 }
 
 /**
+ * The newest time the row records for its result or its delivery. This errs toward
+ * notifying: creation time decides only when nothing later was recorded.
+ */
+function latestRecordedTime(child: SubagentRunRecord): number {
+  const times = [
+    child.completion?.capturedAt,
+    child.completion?.fallbackCapturedAt,
+    child.execution.endedAt,
+    child.delivery?.payload?.endedAt,
+    child.delivery?.createdAt,
+    child.delivery?.enqueuedAt,
+    child.delivery?.lastAttemptAt,
+    child.delivery?.suspendedAt,
+  ].filter((time): time is number => typeof time === "number" && Number.isFinite(time));
+  return times.length ? Math.max(...times) : child.createdAt;
+}
+
+/**
  * Ends refused obligations once, keeping each result in its run record. The original
  * requesting chat gets one fixed notice for its recent results, written before the rows
  * settle so a failed notice leaves them pending. Returns how many settled silently.
@@ -319,12 +333,17 @@ async function settleRefusedRestartCompletions(params: {
 }): Promise<number> {
   const { chat, refused, assertCurrent } = params;
   const now = Date.now();
-  // Production rows may lack an end time; their creation time then bounds the result's age.
   const recent = refused.filter(
-    (child) => now - (child.execution.endedAt ?? child.createdAt) <= REFUSED_NOTICE_MAX_AGE_MS,
+    (child) => now - latestRecordedTime(child) <= REFUSED_NOTICE_MAX_AGE_MS,
   );
   if (recent.length) {
-    const runIds = recent.map((child) => child.runId).toSorted();
+    // Only a digest of the settled results enters the chat row; it dedupes a repeated notice.
+    const resultsKey = sha256Hex(
+      recent
+        .map((child) => child.runId)
+        .toSorted()
+        .join("\n"),
+    );
     const result = await runWithoutOwnedSessionTranscriptWrites(() =>
       appendSessionTranscriptReport(
         { ...chat, expectedLifecycleRevision: params.lifecycleRevision },
@@ -335,13 +354,13 @@ async function settleRefusedRestartCompletions(params: {
           selectReport: (latest) => {
             return isRecord(latest?.details) &&
               latest.details.source === REFUSED_NOTICE_SOURCE &&
-              JSON.stringify(latest.details.runIds) === JSON.stringify(runIds)
+              latest.details.resultsKey === resultsKey
               ? undefined
               : {
                   customType: "openclaw.system-note",
                   content: RESTART_COMPLETION_REFUSED_NOTICE,
                   display: true,
-                  details: { source: REFUSED_NOTICE_SOURCE, runIds },
+                  details: { source: REFUSED_NOTICE_SOURCE, resultsKey },
                 };
           },
         },
