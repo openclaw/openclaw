@@ -32,6 +32,16 @@ const enChatToolOperations = {
             running: "Reacting to message",
             done: "Reacted to message",
           },
+          remove_reaction: {
+            action: "Remove reaction",
+            running: "Removing reaction",
+            done: "Removed reaction",
+          },
+          clear_reactions: {
+            action: "Clear reactions",
+            running: "Clearing reactions",
+            done: "Cleared reactions",
+          },
           reactions: {
             action: "Read reactions",
             running: "Reading reactions",
@@ -110,7 +120,7 @@ const enChatToolOperations = {
           "thread-reply": {
             action: "Reply to thread",
             running: "Replying to thread",
-            done: "Replyed to thread",
+            done: "Replied to thread",
           },
           search: {
             action: "Search messages",
@@ -492,7 +502,7 @@ const enChatToolOperations = {
           reply_comment: {
             action: "Reply to file comment",
             running: "Replying to file comment",
-            done: "Replyed to file comment",
+            done: "Replied to file comment",
           },
         },
         feishu_perm: {

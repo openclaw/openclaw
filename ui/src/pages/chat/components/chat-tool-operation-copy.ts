@@ -125,7 +125,14 @@ export function catalogToolLabel(
   if (!labels) {
     return undefined;
   }
-  const action = typeof args?.action === "string" ? args.action : undefined;
+  let action = typeof args?.action === "string" ? args.action : undefined;
+  if (name === "message" && action === "react") {
+    if (args?.remove === true) {
+      action = "remove_reaction";
+    } else if (typeof args?.emoji === "string" && !args.emoji.trim()) {
+      action = "clear_reactions";
+    }
+  }
   const key =
     name === "update_goal" && typeof args?.status === "string"
       ? `status_${args.status}`
