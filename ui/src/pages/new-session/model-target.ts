@@ -1,5 +1,6 @@
 import type { ChatAccountSelection } from "@openclaw/gateway-protocol";
 import type {
+  CyberAccessProgram,
   FastMode,
   GatewayAgentRow,
   ModelCatalogEntry,
@@ -9,6 +10,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { resolveDaybreakAccessProgram } from "../../lib/chat/daybreak-access-program.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
@@ -72,16 +74,18 @@ export function resolveDraftAccessProgram(
   params: Parameters<typeof resolveDraftDefaultModelTarget>[0] & {
     model: string;
     agentRuntime?: string;
+    requested?: CyberAccessProgram;
   },
 ) {
-  const selected = resolveDraftModelTarget(
-    params.model,
-    undefined,
-    params.catalog,
-    params.agentRuntime,
+  const target =
+    resolveDraftModelTarget(params.model, undefined, params.catalog, params.agentRuntime) ??
+    resolveDraftDefaultModelTarget(params);
+  const selected = params.requested ?? target?.entry?.cyberAccessProgramDefault;
+  const { locked, program } = resolveDaybreakAccessProgram(
+    target?.entry?.availableAccessPrograms?.cyber,
+    selected,
   );
-  return (selected?.entry ?? resolveDraftDefaultModelTarget(params)?.entry)
-    ?.cyberAccessProgramDefault;
+  return locked ? program : selected;
 }
 
 export function resolveDraftModelControls(params: {
@@ -127,7 +131,6 @@ export function resolveDraftModelControls(params: {
   };
   return {
     defaultTarget,
-    accessProgramDefault: entry?.cyberAccessProgramDefault,
     agentDefaultModel,
     modelCatalogState,
     contextWindowTarget:
