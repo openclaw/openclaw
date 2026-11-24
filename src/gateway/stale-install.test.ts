@@ -93,8 +93,15 @@ afterEach(() => {
 });
 
 describe("running installation replacement", () => {
-  it("owns readiness settlement until it completes and retries a failed write", async () => {
-    registerReplacement();
+  it("owns readiness settlement without blocking replacement after a failed write", async () => {
+    const handoff = registerReplacement();
+    const logging = await import("../logging/subsystem.js");
+    const createLogger = logging.createSubsystemLogger;
+    const warn = vi.fn();
+    vi.spyOn(logging, "createSubsystemLogger").mockImplementation((subsystem) => ({
+      ...createLogger(subsystem),
+      warn,
+    }));
     await writeIdentity("2026.9.4", "build-before");
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -118,9 +125,25 @@ describe("running installation replacement", () => {
     expect(completed).toBe(false);
     release.resolve();
     expect(await pending).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("maintenance will retry: history write failed"),
+    );
+    trial.ready.mockRejectedValueOnce(new Error("periodic history write failed"));
+    await writeIdentity();
+    await expect(owner.checkGatewayInstallationReplacement()).resolves.toBeUndefined();
+    expect(handoff).toHaveBeenCalledOnce();
+    expect(owner.getGatewayInstallationReplacement()).toMatchObject({
+      running: { version: "2026.9.4", buildId: "build-before" },
+      onDisk: { version: "2026.9.5", buildId: "build-after" },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("maintenance will retry: periodic history write failed"),
+    );
     await owner.checkGatewayInstallationReplacement();
-    expect(trial.ready).toHaveBeenCalledTimes(2);
+    await owner.checkGatewayInstallationReplacement();
+    expect(trial.ready).toHaveBeenCalledTimes(3);
     expect(trial.ready).toHaveBeenLastCalledWith("build-before", fixture.root);
+    expect(handoff).toHaveBeenCalledOnce();
   });
   it("rechecks core admission after an early startup observation was not ready", async () => {
     registerReplacement();

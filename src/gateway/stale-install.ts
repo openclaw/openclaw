@@ -225,7 +225,7 @@ function settleInstallationTrial(observer: InstallationObserver): Promise<void> 
 export async function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
   if (observer?.readiness) {
-    await settleInstallationTrial(observer);
+    await announceGatewayInstallationReady(observer.readiness);
   }
   const root = observer?.installationRoot;
   if (
