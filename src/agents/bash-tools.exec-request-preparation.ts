@@ -623,8 +623,26 @@ export function resolvePreparedExecEnvironment(params: {
   };
 }
 
+/** Both local process and host approval paths use the same credential envelope. */
+export function prepareLocalExecGitHubIdentity(
+  defaults: ExecToolDefaults | undefined,
+  host: ExecHost,
+  environment: ReturnType<typeof resolveExecPreparedRunEnvironment>,
+) {
+  const gateway = host === "gateway";
+  return {
+    githubProfileDir:
+      gateway && environment.managedLocalIdentity
+        ? environment.localIdentityEnv.GH_CONFIG_DIR
+        : undefined,
+    githubApp: gateway
+      ? prepareLocalGitHubAppExecution(defaults, environment.appInstallationProfileId)
+      : undefined,
+  };
+}
+
 /** Preserve the execution owner when approval policy comes from another agent. */
-export function prepareLocalGitHubAppExecution(
+function prepareLocalGitHubAppExecution(
   defaults: ExecToolDefaults | undefined,
   profileId: string | undefined,
 ): LocalGitHubAppExecution | undefined {

@@ -216,7 +216,9 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
     }
     const selectedIdentity = identity;
     const selection = { agentId: params.agentId, identity: selectedIdentity };
-    const renewalSelectionChanged = new Error("Selected GitHub account changed before renewal");
+    const renewalSelectionChanged = new Error(
+      "GitHub renewal requires the originally selected account",
+    );
     const assertRenewalCurrent = () => {
       assertCurrent();
       if (!matchesCurrentGitHubPublicationIdentity(selection)) {

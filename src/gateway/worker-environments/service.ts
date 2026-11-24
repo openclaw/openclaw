@@ -691,9 +691,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
     destroyUnattached: async (id: string, createAuthorization?: () => () => void) => {
-      const authorize = (await preparedPool.cancelPreparation(id, createAuthorization?.()))
-        ? undefined
-        : createAuthorization?.();
+      const cancelled = await preparedPool.cancelPreparation(id, createAuthorization?.());
+      const authorize = cancelled ? undefined : createAuthorization?.();
       return environmentAccess.project(
         await providerLifecycle.destroy(id, { requireUnattached: true, authorize }),
       );
