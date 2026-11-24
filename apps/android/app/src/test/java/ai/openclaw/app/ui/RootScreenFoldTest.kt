@@ -963,7 +963,7 @@ class RootScreenFoldTest {
         setPermanentSidebar(expandedWindow, visible = true)
         composeRule.runOnIdle { backDispatcher.dispatchOnBackCancelled() }
         val inactiveSheet = composeRule.onNodeWithTag("sidebar-drawer").assertIsNotDisplayed()
-        assertTrue("The inactive sheet must retain real measured anchors", windowBounds(inactiveSheet).width() > 0)
+        assertTrue("The inactive sheet must retain real measured anchors", inactiveSheet.fetchSemanticsNode().size.width > 0)
         composeRule.onNodeWithContentDescription("Close navigation menu").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Open profile").performTouchInput { click() }
         composeRule.onNodeWithText("Save Profile").assertIsDisplayed()

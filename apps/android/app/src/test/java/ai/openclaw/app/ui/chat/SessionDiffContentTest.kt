@@ -41,6 +41,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowToast
+import java.util.concurrent.CopyOnWriteArrayList
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
@@ -262,6 +263,8 @@ class SessionDiffContentTest {
     val snapshot = snapshot()
     val files = prepareSessionDiffFiles(snapshot)
     val references = mutableListOf<String>()
+    // TEMPORARY: bounded metadata-only trace; remove before final qualification.
+    val selectionDiagnostics = CopyOnWriteArrayList<String>()
     composeRule.setContent {
       ClawDesignTheme(dark = dark.value) {
         SessionDiffContent(
@@ -273,6 +276,9 @@ class SessionDiffContentTest {
           {},
           Modifier.fillMaxSize(),
           onReference = { references += it },
+          onSelectionDiagnostic = { event ->
+            if (selectionDiagnostics.size < 128) selectionDiagnostics.add(event)
+          },
         )
       }
     }
@@ -391,6 +397,9 @@ class SessionDiffContentTest {
         composeRule.onNodeWithText("To chat").performClick()
       }
       composeRule.runOnIdle { assertEquals(List(2) { "src/retry.ts:8-9 (After | Uncommitted)\n```ts\nconst retries = 3;\nexport { retries };\n```" }, references) }
+    } catch (failure: Throwable) {
+      runCatching { System.err.println("TEMPORARY_SESSION_DIFF_SELECTION\n" + selectionDiagnostics.joinToString("\n")) }
+      throw failure
     } finally {
       if (previousClip == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previousClip)
     }
