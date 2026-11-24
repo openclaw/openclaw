@@ -29,8 +29,6 @@ const COMMAND_TIMEOUT_MS = 60 * 60_000;
 /** A boot migration of a large agent database runs before the Gateway reports ready. */
 const READY_TIMEOUT_MS = 20 * 60_000;
 const MAX_RESTARTS = 2;
-/** Automatic restarts of the Gateway unit, while waiting, that mean it fails before serving. */
-const CRASH_RESTARTS = 3;
 
 export type RecoveryPlan = {
   unit: string;
@@ -238,6 +236,8 @@ export async function runEarlyGitReleaseRecovery(
     log(
       `stopped before changing the Gateway: ${why}.${moves} The next \`openclaw update\` tries again.`,
     );
+    // A failed install may still have enabled the service.
+    await keepEnablement();
     if (
       fs.existsSync(original) &&
       fs.readFileSync(original).equals(fs.readFileSync(plan.serviceFile))
@@ -251,8 +251,9 @@ export async function runEarlyGitReleaseRecovery(
   const fail = async (reason: string, detail: string, nextAction: string) => {
     log(`${detail} Next step: ${nextAction}`);
     await keepEnablement();
-    // Recording opens state through this release, which migrates it: only once it moved.
-    if (moved()) {
+    // Recording opens state through this release, which migrates it: only once it moved, or
+    // once this runner holds a run, whose opening already wrote state.
+    if (runId || moved()) {
       await deps.record({ plan, runId, status: "failed", reason, detail, nextAction });
     }
     return false;
@@ -276,11 +277,26 @@ export async function runEarlyGitReleaseRecovery(
         const back = await deps.ready(unitPort(), gateway);
         fs.rmSync(original);
         await removeRelease();
+        const next = back
+          ? `see \`journalctl --user -u ${gateway}\` and \`journalctl --user -u ${plan.unit}\` for why it stopped, fix that, then run \`openclaw update\` again`
+          : `run \`systemctl --user status ${gateway}\` and \`journalctl --user -u ${gateway}\` for why the previous build does not start`;
+        const detail = `${why}. Nothing was migrated, so the Gateway service starts the previous build again${back ? " and it serves" : ", which did not report ready either"}.`;
+        if (runId) {
+          await deps.record({
+            plan,
+            runId,
+            status: "failed",
+            reason: "early-release-recovery-put-back",
+            detail,
+            nextAction: next,
+          });
+        }
         log(
-          `${why}. Nothing was migrated, so the Gateway service starts the previous build again${back ? " and it serves" : ", which did not report ready either"}. This is not recorded for \`openclaw update status\`, because recording through the new release would migrate the databases the previous build uses. Next step: see \`journalctl --user -u ${gateway}\` for why the new release did not start, fix that, then run \`openclaw update\` again.`,
+          `${detail}${runId ? "" : " This is not recorded for `openclaw update status`, because recording through the new release would migrate the databases the previous build uses."} Next step: ${next}.`,
         );
         return false;
       }
+      await systemctl("reset-failed", gateway);
       await systemctl("start", gateway);
     }
     return fail(
@@ -324,6 +340,10 @@ export async function runEarlyGitReleaseRecovery(
       const merged = await git(run, plan.checkout, "merge", "--ff-only", "--quiet", plan.target);
       if (!ok(merged)) {
         return abandon(`the fast-forward failed (${commandTail(merged)})`);
+      }
+      // A pull past the target since the check leaves HEAD elsewhere; never build that.
+      if ((await git(run, plan.checkout, "rev-parse", "HEAD")).output.trim() !== plan.target) {
+        return abandon(`the checkout's branch moved past ${plan.target.slice(0, 11)}`);
       }
       fastForwarded = true;
     }
@@ -558,7 +578,9 @@ async function recordOutcome(outcome: RecoveryOutcome) {
     import("./update-run-write.async.js"),
     import("../update/store.js"),
   ]);
-  const runId = outcome.runId ?? (await openRun(outcome.plan));
+  // Without a held run, take the lock as `hold` does: that settles an interrupted runner's run.
+  const runId =
+    outcome.runId ?? (await holdUpdateLock(outcome.plan)) ?? (await openRun(outcome.plan));
   try {
     await recordUpdateRunStepAsync(runId, {
       step: "early-release-recovery",
@@ -682,20 +704,6 @@ function defaultRunnerDeps(): RunnerDeps {
         import("../cli/daemon-cli/restart-health-probe.js"),
       ]);
       const config = await readSourceConfigBestEffort().catch(() => ({}));
-      const service = async () => {
-        const shown = await runRecoveryCommand([
-          "systemctl",
-          "--user",
-          "show",
-          "--property=NRestarts,ActiveState",
-          unit,
-        ]);
-        return {
-          restarts: Number(/NRestarts=(\d+)/u.exec(shown.output)?.[1]) || 0,
-          failed: /ActiveState=failed/u.test(shown.output),
-        };
-      };
-      const first = await service();
       const until = Date.now() + READY_TIMEOUT_MS;
       while (Date.now() < until) {
         const readiness = await waitForGatewayHttpReadiness({
@@ -708,11 +716,19 @@ function defaultRunnerDeps(): RunnerDeps {
         if (readiness.readyz === 200) {
           return true;
         }
-        // A migrating Gateway stays up while it works; one that exits before serving is
-        // restarted by systemd, which counts it, and fails the unit at its start limit.
-        const now = await service();
-        if (now.failed || now.restarts - first.restarts >= CRASH_RESTARTS) {
-          log(`${unit} keeps failing before it serves (${now.restarts - first.restarts} restarts)`);
+        // A migrating Gateway stays up while it works. One that keeps exiting before it serves
+        // is restarted until the unit's own start limit fails it; that limit is sized for a
+        // Gateway waiting out a previous one, so it is the crash-loop signal.
+        const state = await runRecoveryCommand([
+          "systemctl",
+          "--user",
+          "show",
+          "--property=ActiveState",
+          "--value",
+          unit,
+        ]);
+        if (state.output.trim() === "failed") {
+          log(`${unit} failed at its start limit before it served`);
           return false;
         }
       }

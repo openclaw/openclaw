@@ -92,7 +92,8 @@ posix("keeps the built release and starts the runner as a transient user service
   expect(fs.existsSync(fx.root)).toBe(false);
   expect(sh(release, "git rev-parse HEAD")).toBe(fx.target);
   const argv = fx.systemd.find(([command]) => command === "systemd-run")!;
-  expect(argv).toContain("--property=Restart=on-abnormal");
+  const stateDir = `--setenv=OPENCLAW_STATE_DIR=${fx.change.stateDir}`;
+  expect(argv).toEqual(expect.arrayContaining(["--property=Restart=on-abnormal", stateDir]));
   // systemd turns `$$` back into `$` when it expands the command line.
   const [worker, flag, json] = argv.slice(-3).map((arg) => arg.replaceAll("$$", "$"));
   expect(worker).toBe(path.join(release, "dist", "infra", "update-migrated-finalize.worker.js"));
@@ -122,7 +123,7 @@ const refusals: Array<[string, (fx: Fx) => unknown]> = [
   ["4 GiB", (fx) => (fx.deps.freeBytes = () => 1)],
   ["not a managed systemd user service", (fx) => (fx.deps.readService = async () => null)],
   ["another state directory", (fx) => (fx.service.environment = { OPENCLAW_STATE_DIR: "/x" })],
-  [`PATH ${other}`, (fx) => writeCli(fx, fx.shim(fx.before))],
+  ["PATH could not be traced", (fx) => writeCli(fx, fx.shim(fx.before))],
   ["PATH runs another build", (fx) => writeCli(fx, fx.shim("fedcba9", "co"))],
   ["systemd-run failed", (fx) => (fx.state["systemd-run"] = 1)],
   ["pnpm is not on PATH", (fx) => (fx.state.pnpm = 1)],
@@ -184,6 +185,7 @@ type Opts = {
   resumed?: boolean;
   restarts?: number;
   migrates?: boolean;
+  late?: boolean;
 };
 function runner(opts: Opts) {
   const { fail = {}, resumed = false, restarts = 0 } = opts;
@@ -193,9 +195,14 @@ function runner(opts: Opts) {
   const serviceFile = path.join(base, "openclaw-gateway.service");
   const unit = (root: string) => `ExecStart=node ${root}/dist/index.js --port 1\n`;
   const original = `${unit(checkout)}Nice=5\n`;
-  const target = "b".repeat(40);
-  const planned = { state: 40, agents: {} };
-  const migrated = { state: 41, agents: {} };
+  const commit = `git -c user.name=T -c user.email=t@example.invalid commit -q --allow-empty -m`;
+  const target = sh(
+    base,
+    `git init -q -b main co && cd co && ${commit} a && ${commit} b && git rev-parse @`,
+  );
+  sh(checkout, resumed ? "true" : "git reset -q --hard @~1");
+  const planned = { state: 40, agents: { "/a": 1, "/b": 1 } };
+  const migrated = { state: 41, agents: { "/a": 2, "/b": 2 } };
   const where = { checkout, release, prefix, serviceFile, unit: "u", branch: "main", target };
   const plan = { ...where, driver: { pid: 1, start: "1" }, enabled: "disabled", schema: planned };
   const full = { ...plan, fromVersion: "1", plannedAt: 1 };
@@ -206,7 +213,7 @@ function runner(opts: Opts) {
   }
   let schema = opts.migrates && restarts > 2 ? migrated : planned;
   // A resumed runner can find the release still migrating; it holds state until ready.
-  let [migrating, alive] = [resumed, 2];
+  let [migrating, alive, running, enabled] = [resumed, 2, true, false];
   const [calls, records, finished] = [[] as string[], [] as RecoveryOutcome[], [] as FinishFacts[]];
   const serves = () => {
     const text = fs.readFileSync(serviceFile, "utf8");
@@ -215,19 +222,30 @@ function runner(opts: Opts) {
   const run: RunCommand = async (argv) => {
     const cli = argv[1]?.endsWith("openclaw.mjs") ? path.dirname(argv[1]) : "";
     const role = cli === release ? "release" : cli ? "checkout" : "";
-    const name = [role, ...argv.filter((arg) => !/^([/-]|\d+$)/u.test(arg))].join(" ").trim();
+    const words = argv.filter((arg) => !/^([/-]|\d+$|[0-9a-f]{40}$)/u.test(arg));
+    const name = [role, ...words].join(" ").trim();
     calls.push(name);
     if (name === "pnpm install" && fail.throw) {
       throw new Error("synthetic");
     }
+    if (argv[0] === "git" && !fail[name]) {
+      const result = spawnSync(argv[0], argv.slice(1), { encoding: "utf8" });
+      return { code: result.status, output: `${result.stdout}${result.stderr}` };
+    }
     if (name.endsWith("gateway install") && !fail[name]) {
       fs.writeFileSync(serviceFile, unit(cli));
+      [running, enabled] = [true, true];
       // A release that crashes part-way through its boot migration.
       schema = opts.migrates && cli === release ? migrated : schema;
     }
-    const head = resumed ? target : "a";
-    const output = { "git rev-parse HEAD": head, "git symbolic-ref HEAD": "main" }[name];
-    return { code: fail[name] ?? 0, output: output ?? "" };
+    const verb = words[2] === "openclaw-gateway.service" ? words[1] : "";
+    running = verb === "stop" ? false : verb === "start" ? true : running;
+    enabled = verb === "disable" ? false : enabled;
+    // One store the stopping release migrated after the first comparison.
+    if (opts.late && name.startsWith("systemctl stop")) {
+      schema = { ...planned, agents: { "/a": 1, "/b": 2 } };
+    }
+    return { code: fail[name] ?? 0, output: "" };
   };
   const deps: RunnerDeps = {
     run,
@@ -255,45 +273,28 @@ function runner(opts: Opts) {
     now: () => calls.length * 1000,
     sleep: async () => {},
   };
-  return { plan: full, calls, records, finished, deps, release, original, serves };
+  const state = () => ({ running, enabled });
+  return { plan: full, calls, records, finished, deps, release, original, serves, state };
 }
 
-const MERGE = `git merge ${"b".repeat(40)}`;
+const MERGE = "git merge";
 const f = (step: string, more = {}) => ({ fail: { [step]: 1 }, ...more });
-const [migrates, resumed] = [{ migrates: true }, { resumed: true }];
-const runs: Array<
-  [string, Parameters<typeof runner>[0], "original" | "release" | "checkout", string?]
-> = [
+const [migrates, resumed, late] = [{ migrates: true }, { resumed: true }, { late: true }];
+const gaveUp = { resumed: true, restarts: 3, migrates: true };
+type Run = [string, Opts, "original" | "release" | "checkout", string?];
+const runs: Run[] = [
   ["moves the service to the release, rebuilds, then serves the checkout", {}, "checkout"],
   ["resumes during the boot migration and waits for it", { ...resumed, restarts: 1 }, "checkout"],
   ["changes nothing when the fast-forward fails", f(MERGE), "original"],
   ["changes nothing when the service cannot move", f("release gateway install"), "original"],
-  [
-    "puts the previous build back when the release fails unmigrated",
-    f("release ready"),
-    "original",
-  ],
-  [
-    "never puts it back once the release migrated",
-    f("release ready", migrates),
-    "release",
-    "start-failed",
-  ],
+  ["puts the previous build back when unmigrated", f("release ready"), "original"],
+  ["never puts it back once migrated", f("release ready", migrates), "release", "start-failed"],
+  ["never puts it back when one store moved", f("release ready", late), "release", "start-failed"],
   ["keeps the release serving when the build fails", f("pnpm build"), "release", "build-failed"],
-  [
-    "returns to the release when the checkout fails",
-    f("checkout ready"),
-    "release",
-    "switch-failed",
-  ],
+  ["back to the release when the checkout fails", f("checkout ready"), "release", "switch-failed"],
   ["records that another update holds the lock", f("hold"), "release", "update-running"],
   ["records an unexpected error with its next step", f("throw"), "release", "error"],
-  [
-    "stops after repeated interruptions",
-    { ...resumed, restarts: 3, ...migrates },
-    "release",
-    "interrupted",
-  ],
+  ["stops after repeated interruptions", gaveUp, "release", "interrupted"],
 ];
 it.each(runs)("%s", async (_name, opts, serves, reason) => {
   const fx = runner(opts);
@@ -316,9 +317,8 @@ it.each(runs)("%s", async (_name, opts, serves, reason) => {
   expect(kept).toBe(serves !== "original" && fx.original);
   const timing = opts.resumed ? {} : { downtimeMs: expect.any(Number) };
   expect(fx.finished).toEqual(done ? [{ runId: "run-1", ...timing }] : []);
-  // A disabled autostart is disabled again after every install that serves.
-  const disabled = fx.calls.includes("systemctl disable openclaw-gateway.service");
-  expect(disabled).toBe(serves !== "original" || Boolean(opts.fail?.["release ready"]));
+  // A Gateway serves at the end, and a disabled autostart ends disabled.
+  expect(fx.state()).toEqual({ running: true, enabled: false });
 });
 
 it.each([0, 1])(

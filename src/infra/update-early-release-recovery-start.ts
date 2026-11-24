@@ -48,7 +48,7 @@ const PASSED_ENV = [
   "XDG_CONFIG_HOME",
   "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS",
-  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_HOME",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_PROFILE",
   "OPENCLAW_AGENT_DIR",
@@ -257,7 +257,10 @@ async function planRecovery(
   }
   const cli = findOnPath("openclaw", env);
   const cliRoot = cli ? traceCommand(cli) : null;
-  if (cli && (!cliRoot || (await toplevel(cliRoot)) !== realpath(checkout))) {
+  if (cli && !cliRoot) {
+    return { reason: "the `openclaw` command on PATH could not be traced to an installation" };
+  }
+  if (cliRoot && (await toplevel(cliRoot)) !== realpath(checkout)) {
     return { reason: "the `openclaw` command on PATH runs another installation" };
   }
   if (cli) {
@@ -358,7 +361,8 @@ function takeStartLock(lock: string): boolean {
     } catch {
       fs.rmSync(staged, { recursive: true, force: true });
     }
-    const [pid, start = ""] = readText(path.join(lock, "owner")).split(" ");
+    const seen = readText(path.join(lock, "owner"));
+    const [pid, start = ""] = seen.split(" ");
     try {
       if (Number(pid) > 0 && process.kill(Number(pid), 0)) {
         if ((processStart(Number(pid)) ?? "") === start) {
@@ -366,7 +370,21 @@ function takeStartLock(lock: string): boolean {
         }
       }
     } catch {}
-    fs.rmSync(lock, { recursive: true, force: true });
+    // Take the dead check's lock aside and confirm it is the one read: a concurrent check
+    // may have taken it over first and published its own live lock in its place.
+    const aside = `${lock}.stale-${process.pid}`;
+    try {
+      fs.renameSync(lock, aside);
+    } catch {
+      continue;
+    }
+    if (readText(path.join(aside, "owner")) !== seen) {
+      try {
+        fs.renameSync(aside, lock);
+      } catch {}
+      return false;
+    }
+    fs.rmSync(aside, { recursive: true, force: true });
   }
   return false;
 }
@@ -419,6 +437,8 @@ async function keepAndStart(
     "--property=RestartSec=15s",
     `--working-directory=${plan.checkout}`,
     ...PASSED_ENV.flatMap((key) => (deps.env[key] ? [`--setenv=${key}=${deps.env[key]}`] : [])),
+    // The state directory this check read, resolved: the runner's working directory differs.
+    `--setenv=OPENCLAW_STATE_DIR=${path.resolve(change.stateDir)}`,
     // systemd expands `$NAME` in a service's command line; `$$` passes a literal `$`.
     ...[
       process.execPath,
