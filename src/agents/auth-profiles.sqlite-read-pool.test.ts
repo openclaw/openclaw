@@ -245,6 +245,13 @@ it.each([
       expect(acquireAuthProfileReadDatabase(pathname, openReadonly, schema).status).toBe(
         raised ? "unreadable" : "readable",
       );
+      if (!raised) {
+        using reads = observeReads();
+        expect(acquireAuthProfileReadDatabase(pathname, openReadonly, schema).status).toBe(
+          "readable",
+        );
+        expect(reads.queries).toEqual([]);
+      }
     });
   },
 );

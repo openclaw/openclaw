@@ -31,6 +31,7 @@ type AuthProfileReadHandle = {
   db: DatabaseSync;
   identity: string | undefined;
   ready: boolean;
+  schemaVersion?: number;
   idleTimer?: ReturnType<typeof setTimeout>;
 };
 const authProfileReadDatabases = new Map<string, AuthProfileReadHandle>();
@@ -138,9 +139,13 @@ export function acquireAuthProfileReadDatabase(
     cached.db.isOpen &&
     (expectedIdentity === undefined || cached.identity === expectedIdentity)
   ) {
-    if (schema) {
+    if (schema && schema.userVersion !== cached.schemaVersion) {
       try {
-        assertSupportedAgentSchemaVersion(cached.db, resolvedPath, schema.userVersion);
+        cached.schemaVersion = assertSupportedAgentSchemaVersion(
+          cached.db,
+          resolvedPath,
+          schema.userVersion,
+        );
       } catch {
         closeAuthProfileReadDatabase(resolvedPath);
         return { status: "unreadable" };
@@ -180,11 +185,15 @@ export function acquireAuthProfileReadDatabase(
   try {
     enableNodeSqliteKyselyStatementCache(db);
     if (inspection || schema) {
-      assertSupportedAgentSchemaVersion(db, resolvedPath, schema?.userVersion);
-    } else {
-      admitSqliteSchema(db, (version) =>
-        assertSupportedAgentSchemaVersion(db, resolvedPath, version),
+      candidate.schemaVersion = assertSupportedAgentSchemaVersion(
+        db,
+        resolvedPath,
+        schema?.userVersion,
       );
+    } else {
+      candidate.schemaVersion = admitSqliteSchema(db, (version) =>
+        assertSupportedAgentSchemaVersion(db, resolvedPath, version),
+      ).userVersion;
     }
     readable = true;
   } catch {
