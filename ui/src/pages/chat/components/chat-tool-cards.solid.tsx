@@ -34,7 +34,7 @@ import { resolveToolOperationLabel, resolveToolRowVerb } from "./chat-tool-row-p
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
-export const ToolCardBody = lazy(() => import("./chat-tool-card-row.solid.tsx"), {
+const ToolCardBody = lazy(() => import("./chat-tool-card-row.solid.tsx"), {
   export: "ToolCardBody",
 });
 

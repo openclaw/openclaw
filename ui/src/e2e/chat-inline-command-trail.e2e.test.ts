@@ -686,7 +686,9 @@ suite.define(() => {
             await expect.poll(() => runningRow.getAttribute("aria-busy")).toBe("true");
             const composer = pane.locator("textarea");
             await composer.fill("Keep this unsent draft.");
-            await composer.evaluate((element) => element.setSelectionRange(5, 9));
+            await composer.evaluate((element: HTMLTextAreaElement) =>
+              element.setSelectionRange(5, 9),
+            );
             await waitForChatScrollIdle(page);
             const geometry = await trackInlineGeometry(preview);
             const before = await geometry.evaluate((capture) => capture.read());
@@ -765,7 +767,9 @@ suite.define(() => {
           await expect.poll(() => failedPreview.locator("pre").textContent()).toBe(newestOutput);
           const failedComposer = pane.locator("textarea");
           await failedComposer.focus();
-          await failedComposer.evaluate((element) => element.setSelectionRange(5, 9));
+          await failedComposer.evaluate((element: HTMLTextAreaElement) =>
+            element.setSelectionRange(5, 9),
+          );
           await expect.poll(() => failedComposer.inputValue()).toBe("Keep this unsent draft.");
           await waitForChatScrollIdle(page);
           const failedGeometry = await trackInlineGeometry(failedPreview);

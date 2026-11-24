@@ -4,6 +4,7 @@ import {
   accumulatedStreamText,
   trimAccumulatedStreamPrefix,
   type ChatItem,
+  type InlineCommandPresentation,
   type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
@@ -16,7 +17,6 @@ import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import type { InlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import {
   messageRecoveryKey,
   type AssistantMessageExpansionState,

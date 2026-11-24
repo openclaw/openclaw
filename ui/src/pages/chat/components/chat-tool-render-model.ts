@@ -1,9 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
-import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { InlineCommandPresentation, ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import type { ToolCardOutput } from "../../../lib/chat/tool-cards.ts";
-import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRowContext } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
