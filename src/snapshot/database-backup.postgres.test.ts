@@ -185,6 +185,14 @@ describe.skipIf(!connection)("protected PostgreSQL upgrade carrier", () => {
           assertCurrent() {},
         });
       }
+      // Real engine bootstrap adds these seal and extension fields beyond the transport metadata.
+      await runtimeClient.query(
+        `ALTER TABLE "${namespace}".openclaw_schema_meta
+           ADD COLUMN fingerprint TEXT,
+           ADD COLUMN ddl_hash TEXT,
+           ADD COLUMN server_major BIGINT,
+           ADD COLUMN search_extensions TEXT`,
+      );
       await runtimeClient.query(
         `GRANT USAGE ON SCHEMA "${namespace}" TO "${reader}", ${columnReaderIdentifier};
        GRANT SELECT ON "${namespace}".agent_deletion_journal TO "${reader}" WITH GRANT OPTION;

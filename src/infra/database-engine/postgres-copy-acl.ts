@@ -20,6 +20,8 @@ function objects(namespace: string) {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = ${namespace} AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
       AND a.attnum > 0 AND NOT a.attisdropped
+      -- Compare explicit column rights, not metadata shape; the port catalog owns shape.
+      AND a.attacl IS NOT NULL AND cardinality(a.attacl) > 0
     UNION ALL
     SELECT 'DEFAULT', CASE d.defaclobjtype
       WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES'
