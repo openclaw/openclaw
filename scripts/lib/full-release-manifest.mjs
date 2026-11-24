@@ -4,6 +4,7 @@ import {
   validatePublicationAdmissionBinding,
 } from "../full-release-publication-contract.mjs";
 import { serializeReleaseArtifact } from "./full-release-evidence.mjs";
+import { BETA_FINAL_EVIDENCE_REUSE_POLICY } from "./release-beta-promotion.mjs";
 
 export function releaseManifestChildEvidence(child) {
   return {
@@ -102,6 +103,16 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
     ? {
         ...root,
         ...current,
+        ...(plan.evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY
+          ? {
+              validationInputs: {
+                ...context.validationInputs,
+                targetVersion: plan.targetVersion,
+                ...publicationIntentInputs(plan.sourceAdmission),
+                ...(plan.coveragePolicy ? { coveragePolicy: plan.coveragePolicy } : {}),
+              },
+            }
+          : {}),
         evidenceReuse: {
           policy: plan.evidenceReuse.policy,
           runId: plan.evidenceReuse.rootRunId,

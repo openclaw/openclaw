@@ -68,7 +68,7 @@ export function candidatePublicationFixture(
     selectedProfile === "extended-stable"
       ? "stable"
       : (selectedProfile ?? (beta ? "beta" : "stable"));
-  const fixture = trustedMainNpmFixture(beta ? "beta" : "stable", {
+  const fixture = trustedMainNpmFixture(profile === "beta" ? "beta" : "stable", {
     targetVersion: extended ? "2026.8.28" : version,
   });
   const c = options.candidateSha ?? defaultQ;
@@ -123,7 +123,7 @@ export function candidatePublicationFixture(
     release_profile: profile,
     rerun_group: "all",
     mode: "both",
-    run_release_soak: String(!beta),
+    run_release_soak: String(profile !== "beta"),
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
   const admission = admissionFixture(options.protectedTag ?? true, {
@@ -159,8 +159,12 @@ export function candidatePublicationFixture(
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
       PUBLICATION_TARGET_SHA: c,
       PUBLICATION_COVERAGE_POLICY:
-        extended || profile === "full" ? "" : beta ? "npm-beta-v1" : "npm-stable-v1",
-      PUBLICATION_SKIP_TELEGRAM: String(beta),
+        extended || profile === "full" || (beta && profile !== "beta")
+          ? ""
+          : beta
+            ? "npm-beta-v1"
+            : "npm-stable-v1",
+      PUBLICATION_SKIP_TELEGRAM: String(profile === "beta"),
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
       GITHUB_SHA: q,
@@ -264,6 +268,9 @@ export function candidatePublicationFixture(
     candidate: candidateBinding,
     candidateRequest: candidate.request,
   });
+  if (plan.coveragePolicy === undefined) {
+    delete plan.coveragePolicy;
+  }
   plan.children = plan.children.filter((child) => child.selected);
   const qualificationSources = new Map<string, string>();
   const qualificationSource = (path: string) => {

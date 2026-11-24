@@ -242,6 +242,9 @@ export function trustedMainPackageFixture({
       throw new Error("historical fixture must not request candidate admission authority");
     },
     getCandidateFileNames: () => [],
+    getSourceFile: (_sha: string, _path: string): string => {
+      throw new Error("Fixture has no beta-to-final source delta");
+    },
     getWorkflowSource: (_sha: string, path?: string) =>
       path === "scripts/lib/release-validation-waivers.json"
         ? readFileSync(

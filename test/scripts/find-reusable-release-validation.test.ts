@@ -1,6 +1,7 @@
 // Covers policy selection layered on the strict normalized release evidence
 // produced by release-ci-summary.mjs. Topology validation belongs there.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -574,6 +575,22 @@ function runResolver(args: {
     );
   }
   if (args.compareBaseSha) {
+    if (args.compareFiles?.includes("package.json")) {
+      for (const sha of [args.compareBaseSha, args.targetSha]) {
+        const bytes = Buffer.from(git(args.repoDir, ["show", sha + ":package.json"]));
+        writeFileSync(
+          fixtureName(args.fixtures, `repos/${REPOSITORY}/contents/package.json?ref=${sha}`),
+          JSON.stringify({
+            type: "file",
+            path: "package.json",
+            encoding: "base64",
+            size: bytes.length,
+            content: bytes.toString("base64"),
+            sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+          }),
+        );
+      }
+    }
     writeFileSync(
       fixtureName(
         args.fixtures,
@@ -1102,6 +1119,36 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
+  it("discovers stable-profile beta product evidence for its final version", () => {
+    const { origin, priorSha } = createRepo({ version: "2026.7.1-beta.2" });
+    const targetSha = commitFile(
+      origin,
+      "package.json",
+      JSON.stringify({ name: "x", version: "2026.7.1" }),
+      "chore: final version",
+    );
+    const record = normalizedEvidence({
+      targetSha: priorSha,
+      releaseProfile: "stable",
+      validationInputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1-beta.2" },
+    });
+    const result = resolveEvidence(record, {
+      compareBaseSha: priorSha,
+      compareFiles: ["package.json"],
+      repoDir: cloneHead(origin),
+      targetSha,
+      releaseProfile: "stable",
+      inputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(parseOutput(result.stdout), result.stderr).toMatchObject({
+      evidence_policy: "stable-qualified-beta-final-v1",
+      evidence_sha: priorSha,
+      changed_paths: '["package.json"]',
+      reuse: "true",
+    });
+  });
+
   it("rejects cross-SHA reuse when the release delta includes code", () => {
     const { origin, priorSha } = createRepo();
     const targetSha = commitFile(origin, "index.ts", "export const value = 2;\n", "fix: code");
@@ -1117,7 +1164,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
+    expect(result.stderr).toContain("is not an eligible release-metadata descendant");
   });
 
   it("rejects a source-file rename to CHANGELOG.md", () => {
@@ -1135,7 +1182,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
+    expect(result.stderr).toContain("is not an eligible release-metadata descendant");
   });
 
   it("rejects target version metadata that is internally inconsistent", () => {

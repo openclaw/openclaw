@@ -29,12 +29,17 @@ describe("candidate-owned frozen qualification coverage", () => {
     readFileSync("scripts/lib/release-qualification-coverage.json", "utf8"),
   );
 
-  it.each([false, true])(
-    "revalidates whole-parent reuse with the admitted P verifier before passing the decision (descendant=%s)",
-    async (descendant) => {
-      const root = candidatePublicationFixture();
+  it.each(["exact", "changelog", "beta promotion"])(
+    "revalidates whole-parent reuse with the admitted P verifier before passing the decision (%s)",
+    async (mode) => {
+      const descendant = mode !== "exact";
+      const promotion = mode === "beta promotion";
+      const root = candidatePublicationFixture(
+        promotion ? { candidateVersion: "2026.8.28-beta.1", releaseProfile: "stable" } : {},
+      );
       const current = candidatePublicationFixture({
         candidateSha: descendant ? "d".repeat(40) : root.q,
+        ...(promotion ? { candidateVersion: "2026.8.28" } : {}),
         runId: "29071366026",
       });
       current.plan.sourceAdmission = JSON.parse(
@@ -52,19 +57,27 @@ describe("candidate-owned frozen qualification coverage", () => {
         },
         root.client,
       );
+      const reusePolicy = promotion
+        ? "stable-qualified-beta-final-v1"
+        : descendant
+          ? "split-changelog-release-v1"
+          : "exact-target-full-validation-v1";
+      const changedPaths = promotion
+        ? ["package.json"]
+        : descendant
+          ? ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"]
+          : [];
       const sealed = buildReleaseExecutionPlanArtifact({
         ...current.plan,
         expected: current.plan,
         children: root.plan.children.map((child) => ({ ...child, source: "reused" })),
         evidenceReuse: {
           requested: true,
-          policy: descendant ? "split-changelog-release-v1" : "exact-target-full-validation-v1",
+          policy: reusePolicy,
           rootRunId: root.runId,
           selectedRunId: root.runId,
           evidenceSha: root.q,
-          changedPaths: descendant
-            ? ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"]
-            : [],
+          changedPaths,
           runUrl: root.parent.html_url,
           sourceManifest: root.manifest,
         },
@@ -120,7 +133,7 @@ console.log(response);
         GITHUB_REF_NAME: current.branch,
         GITHUB_SHA: current.q,
         TARGET_SHA: current.q,
-        RELEASE_PROFILE: "beta",
+        RELEASE_PROFILE: current.plan.releaseProfile,
         RERUN_GROUP: "all",
         FULL_RELEASE_EXECUTION_PLAN_PATH: planPath,
         FULL_RELEASE_STATE_PATH: statePath,
@@ -141,11 +154,8 @@ console.log(response);
             ? {
                 "--expected-target-sha": current.q,
                 "--expected-evidence-sha": root.q,
-                "--expected-evidence-policy": "split-changelog-release-v1",
-                "--expected-changed-paths-json": JSON.stringify([
-                  "CHANGELOG/2026.8.28.md",
-                  "CHANGELOG/records/2026.8.28.md",
-                ]),
+                "--expected-evidence-policy": reusePolicy,
+                "--expected-changed-paths-json": JSON.stringify(changedPaths),
               }
             : {}),
         }),

@@ -489,6 +489,14 @@ publish blocker. Requested Discord announcements use
 Existing explicit posting authorization is required. Beta-only requests end
 after verification and any requested announcement.
 
+For a prerelease-to-final version change, use
+[stable-qualified beta to final](../../../../docs/reference/full-release-validation/evidence.md#stable-qualified-beta-to-final):
+a successful stable/full beta FRV may supply product checks for its version-only
+final descendant. Admit a new final FRV with matching inputs and evidence reuse;
+prepare and qualify final publication artifacts afresh. Do not publish a final
+version to beta merely to make the later selector operation possible. Beta-profile
+FRV remains ineligible, and publication still requires the successful final parent.
+
 Stable publication and any dist-tag promotion to `latest` require exact
 stable/full validation with soak, blocking performance, and successful selected
 blocking lanes. Matching beta-profile evidence never qualifies stable. Run published npm

@@ -9,9 +9,14 @@ export function validateReleaseManifestAdvisoryJobs(
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
-export function classifyReleaseChangelogEvidenceComparison(
+export function classifyReleaseEvidenceComparison(
   comparison: unknown,
-  identity: { baseSha: string; version?: unknown },
+  identity: {
+    baseSha: string;
+    targetSha?: string;
+    version?: unknown;
+    readSourceFile?: (sha: string, path: string) => string;
+  },
 ): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
 export function buildReleaseValidationManifest(input: {

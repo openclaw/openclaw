@@ -2061,6 +2061,77 @@ describe("release CI summary child correlation", () => {
     ).toEqual(["productPerformance"]);
   });
 
+  it.each([
+    "beta profile",
+    "missing soak",
+    "advisory performance",
+    "different final",
+    "dependency change",
+    "source change",
+    "foreign notes",
+    "renamed file",
+    "incomplete comparison",
+  ])("rejects unsafe beta-to-final evidence reuse: %s", (fault) => {
+    const root = manifestFixture();
+    Object.assign(root, {
+      releaseProfile: fault === "beta profile" ? "beta" : "stable",
+      runReleaseSoak: fault === "missing soak" ? "false" : "true",
+      controls: { ...root.controls, performanceBlocking: fault !== "advisory performance" },
+      validationInputs: { ...root.validationInputs, targetVersion: "2026.11.24-beta.2" },
+    });
+    const current = reuseManifest(root, {
+      policy: "stable-qualified-beta-final-v1",
+      targetSha: "b".repeat(40),
+      changedPaths: ["package.json"],
+    });
+    current.validationInputs = { ...root.validationInputs, targetVersion: "2026.11.24" };
+    const files = [{ filename: "package.json", status: "modified" }];
+    if (fault === "source change") {
+      files.push({ filename: "src/index.ts", status: "modified" });
+    }
+    if (fault === "foreign notes") {
+      files.push({ filename: "CHANGELOG/2026.11.23.md", status: "modified" });
+    }
+    if (fault === "renamed file") {
+      files[0]!.status = "renamed";
+    }
+    if (fault === "incomplete comparison") {
+      for (let index = 1; index < 300; index++) {
+        files.push({ filename: `extensions/plugin-${index}/package.json`, status: "modified" });
+      }
+    }
+    expect(() =>
+      validateEvidenceReuseChain(
+        current,
+        root,
+        root,
+        () => ({ status: "ahead", merge_base_commit: { sha: root.targetSha }, files }),
+        (sha: string) =>
+          JSON.stringify({
+            version:
+              sha === root.targetSha
+                ? "2026.11.24-beta.2"
+                : fault === "different final"
+                  ? "2026.11.25"
+                  : "2026.11.24",
+            dependencies: {
+              example: sha !== root.targetSha && fault === "dependency change" ? "2" : "1",
+            },
+          }),
+      ),
+    ).toThrow(
+      fault === "beta profile" || fault === "missing soak" || fault === "advisory performance"
+        ? "stable/full qualification, soak and blocking performance"
+        : fault === "different final"
+          ? "versions differ"
+          : fault === "dependency change"
+            ? "non-version changes"
+            : fault === "incomplete comparison"
+              ? "complete same-base"
+              : "product change",
+    );
+  });
+
   it("rejects unverified changed paths and cross-SHA exact-target reuse", () => {
     const root = manifestFixture();
     const changedPaths = reuseManifest(root, {

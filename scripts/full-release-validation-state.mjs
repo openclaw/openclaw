@@ -55,6 +55,10 @@ import {
   manifestContextFromEnvironment,
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  promotionSourceIdentity,
+} from "./lib/release-beta-promotion.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
@@ -611,13 +615,26 @@ async function validateReuse(executionPlan, signal) {
     ) {
       throw new Error("reused release evidence manifest differs from the immutable plan");
     }
-    validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    const promotion = evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY;
+    // The frozen admitted coverage is checked above. Only its version-derived
+    // npm-stable label differs between the beta and final candidates.
+    if (!promotion) {
+      validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    }
     const source = validatePublicationSourceBinding(evidence.manifest, {
       sourceAdmissionContract: executionPlan.sourceAdmissionContract,
     });
     if (
-      JSON.stringify(publicationSourceReuseIdentity(source)) !==
-      JSON.stringify(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(source))
+          : publicationSourceReuseIdentity(source),
+      ) !==
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+          : publicationSourceReuseIdentity(executionPlan.sourceAdmission),
+      )
     ) {
       throw new Error("reused source admission differs from the requested publication source");
     }

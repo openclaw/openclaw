@@ -44,6 +44,34 @@ unchanged registry state; final writers retain trust, approval, content, and rea
 checks. Pre-fanout budgeting cannot prevent later job/attempt growth exceeding final
 artifact limits: fail sealing, never truncate evidence.
 
+## Stable-qualified beta to final
+
+A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
+`2026.11.24` without first publishing an unsuffixed version to the beta selector:
+
+1. Complete a successful `stable` or `full` FRV on the beta candidate, with
+   `rerun_group=all`, soak enabled, and blocking performance. A `beta` profile
+   never qualifies stable, even if its selected jobs passed.
+2. Prepare a descendant for the corresponding unsuffixed final version. The only
+   allowed changes are version alignment in root/plugin/SDK package manifests,
+   generated plugin catalog/reference versions, and that final release's canonical
+   changelog entry, index, and contribution record. Dependencies, product code,
+   qualification tooling, and unrelated release notes must remain unchanged.
+3. Admit and run FRV for the final candidate with evidence reuse enabled and the
+   same profile, lane inputs, baselines, and publication roster. The strict
+   verifier authenticates both admissions and the complete immutable Git delta
+   under `stable-qualified-beta-final-v1`. An incomplete comparison falls back to
+   fresh qualification.
+4. Retain the successful final parent and its original beta evidence root. Product
+   children retain their original run/attempt identities. Final npm, plugin npm,
+   and Docker artifacts are prepared and qualified afresh; beta publication
+   artifacts are not adopted or renamed. Publish using the final parent's evidence.
+
+This is qualification reuse, not an npm dist-tag rename or a waiver. It requires
+promotion-aware qualification/publisher tooling; it cannot relabel historical
+beta-profile evidence. Changes beyond the version-only cut require fresh product
+qualification. Platform signing and publication keep their own gates.
+
 ## Bounded publication recovery
 
 A nonempty plugin subset may consume authenticated all-publishable admission, retaining
