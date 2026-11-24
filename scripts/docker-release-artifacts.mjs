@@ -15,6 +15,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { promoteDockerChannel } from "./docker-channel-promote.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import { releaseEvidenceProducerTuple } from "./lib/release-evidence-identity.mjs";
 import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
 import {
   collectDockerAttestationErrors,
@@ -128,6 +129,7 @@ function isDockerReleaseArtifactName(name, sourceSha) {
 }
 
 export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, runId, runAttempt }) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest);
   const prepared = manifest.publicationArtifacts?.docker;
   // Historical successful FRV manifests did not prepare publication images.
   // Their recovery route invokes the same preparation owner before publishing.
@@ -136,8 +138,8 @@ export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, run
   }
   requireValue(
     manifest.targetSha === sourceSha &&
-      String(manifest.runId) === String(runId) &&
-      String(manifest.runAttempt) === String(runAttempt),
+      String(evidenceProducer.runId) === String(runId) &&
+      String(evidenceProducer.runAttempt) === String(runAttempt),
     "Docker qualification does not match the selected full release run.",
   );
   // FRV authorizes the release; its recorded producer owns the immutable bytes.
@@ -731,11 +733,12 @@ export async function verifyDockerReleaseProducer(
       throw new Error("Missing authenticated candidate admission.");
     }
     revalidateAuthority = authenticated.revalidateAuthority;
+    const evidenceProducer = releaseEvidenceProducerTuple(fullReleaseManifest);
     const selected = preparedDockerEvidenceFromFullRelease({
       manifest: fullReleaseManifest,
       sourceSha: manifest.sourceSha,
-      runId: fullReleaseManifest.runId,
-      runAttempt: fullReleaseManifest.runAttempt,
+      runId: evidenceProducer.runId,
+      runAttempt: evidenceProducer.runAttempt,
     });
     requireValue(
       selected.preparedRunId === producer.runId &&
