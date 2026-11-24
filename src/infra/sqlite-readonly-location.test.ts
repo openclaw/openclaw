@@ -336,7 +336,7 @@ it("identifies filesystem failures whose path belongs to the staging destination
   expect(fs.readdirSync(stagingRoot)).toEqual([]);
 });
 
-it("preserves source corruption without reporting a snapshot staging quota failure", async () => {
+it("preserves source corruption for consumer validation without staging quota errors", async () => {
   const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
   const databasePath = createTempDatabasePath(
     "CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('corrupt');",
@@ -360,23 +360,30 @@ it("preserves source corruption without reporting a snapshot staging quota failu
   );
 
   await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-    const inProcessError = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
-      (error: unknown) => error,
-    );
-    const workerError = await prepareSqliteReadOnlyLocation(databasePath).catch(
-      (error: unknown) => error,
-    );
-
-    expect(inProcessError).toMatchObject({
-      code: "ERR_SQLITE_ERROR",
-      errcode: 11,
-      message: "database disk image is malformed",
-    });
-    expect(workerError).toBeInstanceOf(Error);
-    expect((workerError as Error).message).toContain(
-      "database disk image is malformed (code=ERR_SQLITE_ERROR, errcode=11)",
-    );
-    expect((workerError as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+    for (const prepare of [prepareSqliteReadOnlyLocationInProcess, prepareSqliteReadOnlyLocation]) {
+      const prepared = await prepare(databasePath);
+      try {
+        // Acquisition owns raw pages, not integrity admission. Validate the
+        // acquired image without normalizing or repairing its malformed catalog.
+        let failure: unknown;
+        try {
+          withDatabase(
+            prepared.location,
+            (snapshot) => snapshot.prepare("PRAGMA quick_check;").get(),
+            true,
+          );
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toMatchObject({
+          code: "ERR_SQLITE_ERROR",
+          errcode: 11,
+          message: "database disk image is malformed",
+        });
+      } finally {
+        expect(await prepared.cleanupAsync()).toBe(true);
+      }
+    }
   });
 });
 
