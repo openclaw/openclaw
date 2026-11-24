@@ -35,6 +35,7 @@ function fixture(json = true) {
     preManagedServiceStop: {
       stopped: false,
       inspected: true,
+      runtimeInspected: true,
       running: false,
       serviceUpdateVerdict: { kind: "absent" },
     },
