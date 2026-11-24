@@ -63,16 +63,19 @@ export function sameLegacyTrial(left: LegacyTrialReceipt, right: LegacyTrialRece
   );
 }
 
-/** Only the exact prepared trial observed ready can correct lost completion bookkeeping. */
-export function recoverableLegacyTrial(run: UpdateRunRecord): LegacyTrialReceipt | undefined {
+/** Retain eligible prepared trials; completion also requires the matching ready receipt. */
+export function recoverableLegacyTrial(
+  run: UpdateRunRecord,
+  requireReady = true,
+): LegacyTrialReceipt | undefined {
   const prepared = readLegacyTrialReceipt(run);
   const ready = readLegacyTrialReceipt(run, true);
   const abandoned = run.status === "failed" && run.reason === "abandoned";
   const drivers = recordedUpdateRunDrivers(run);
   if (
     !prepared ||
-    !ready ||
-    !sameLegacyTrial(prepared, ready) ||
+    (requireReady && !ready) ||
+    (ready && !sameLegacyTrial(prepared, ready)) ||
     run.target.kind !== "git" ||
     run.repair.length ||
     run.verification.recovery ||

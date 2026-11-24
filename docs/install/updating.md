@@ -217,10 +217,14 @@ exit status of the already-running older updater.
 Readiness looks up the exact prepared publication in the history worker, returning
 at most two matching runs to detect ambiguity regardless of unrelated history size.
 Multiple matching runs retain their existing outcomes.
-The verified startup-readiness boundary records this observation without waiting
-for the 30-second maintenance tick. Unsettled observations and failed history
-writes remain eligible for maintenance retry. Native activation pins its history
-namespace inside the admitted executor interval; repair and missing-run commands
+The verified core-readiness boundary records this observation without waiting
+for the 30-second maintenance tick; unrelated channel health does not keep a
+healthy release trial armed. An initially unready startup retains its readiness
+reader for the existing maintenance retry. Unsettled observations and failed
+history writes remain eligible for that retry. Repair retains an eligible
+prepared run while service restoration publishes its matching ready receipt;
+other changes to the captured run still prevent history correction. Native
+activation pins its history namespace inside the admitted executor interval; repair and missing-run commands
 do not create activation receipts or prevent separately authorized service restoration.
 
 Prepared-release plugin maintenance normally runs after the candidate has migrated

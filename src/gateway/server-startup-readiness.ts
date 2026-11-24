@@ -6,22 +6,26 @@ type GatewayReadinessLog = {
   log: { info: (message: string) => void };
   getReadiness: PreparedReadinessChecker;
   isClosing?: () => boolean;
+  startupTrace?: GatewayStartupTrace;
 };
 
 export async function logGatewayReady(
   params: GatewayReadinessLog,
   message = "gateway ready",
 ): Promise<void> {
+  if (params.isClosing?.()) {
+    return;
+  }
+  await announceGatewayInstallationReady(params.getReadiness);
   const prepared = await params.getReadiness.prepare();
   if (!params.isClosing?.() && prepared.publish().ready) {
-    await announceGatewayInstallationReady();
+    params.startupTrace?.mark("ready");
     params.log.info(message);
   }
 }
 
 export async function logGatewaySidecarsReady(
   params: GatewayReadinessLog & {
-    startupTrace?: GatewayStartupTrace;
     loadedPluginCount: number;
     postReadySidecarCount: number;
   },
@@ -51,6 +55,7 @@ export function createGatewayReadyAnnouncer(
     ) {
       return;
     }
+    await announceGatewayInstallationReady(params.getReadiness);
     const prepared = await params.getReadiness.prepare();
     if (
       !readyAnnounced &&
@@ -60,7 +65,6 @@ export function createGatewayReadyAnnouncer(
       prepared.publish().ready
     ) {
       readyAnnounced = true;
-      await announceGatewayInstallationReady();
       params.startupTrace.mark("ready");
       params.log.info("gateway ready");
     }

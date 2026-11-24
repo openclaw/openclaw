@@ -9,6 +9,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 const fixture = vi.hoisted(() => ({ root: "", buildId: "build-before" as string | null }));
 const trial = vi.hoisted(() => ({
@@ -103,7 +104,7 @@ describe("running installation replacement", () => {
       throw new Error("history write failed");
     });
     let completed = false;
-    const pending = owner.announceGatewayInstallationReady().then(
+    const pending = owner.announceGatewayInstallationReady(createPreparedReadinessFixture()).then(
       () => {
         completed = true;
         return undefined;
@@ -121,11 +122,32 @@ describe("running installation replacement", () => {
     expect(trial.ready).toHaveBeenCalledTimes(2);
     expect(trial.ready).toHaveBeenLastCalledWith("build-before", fixture.root);
   });
+  it("rechecks core admission after an early startup observation was not ready", async () => {
+    registerReplacement();
+    const { createReadinessChecker } = await import("./server/readiness.js");
+    const { logGatewayReady } = await import("./server-startup-readiness.js");
+    let pending = true;
+    const readiness = createReadinessChecker({
+      startedAt: Date.now(),
+      getStartupPending: () => pending,
+      channelManager: {
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getAutostartSuppression: () => null,
+        isAmbientAutostartSuppressed: () => false,
+      },
+    });
+    await logGatewayReady({ getReadiness: readiness, log: { info: vi.fn() } });
+    await owner.checkGatewayInstallationReplacement();
+    expect(trial.ready).not.toHaveBeenCalled();
+    pending = false;
+    await owner.checkGatewayInstallationReplacement();
+    expect(trial.ready).toHaveBeenCalledExactlyOnceWith("build-before", fixture.root);
+  });
+
   it("retries a ready observation that did not settle a trial", async () => {
     registerReplacement();
     trial.ready.mockResolvedValueOnce(false);
     const { logGatewayReady } = await import("./server-startup-readiness.js");
-    const { createPreparedReadinessFixture } = await import("./server/readiness.test-support.js");
     await logGatewayReady({
       getReadiness: createPreparedReadinessFixture(),
       log: { info: vi.fn() },

@@ -30,6 +30,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import type { PreparedReadinessChecker } from "./server/readiness.js";
 import { isGatewayTransportError } from "./transport-error.js";
 
 export const GATEWAY_STALE_INSTALL_CLOSE_REASON =
@@ -78,7 +79,7 @@ type InstallationObserver = {
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
-  ready?: boolean;
+  readiness?: PreparedReadinessChecker;
   trialSettled?: boolean;
   trialSettlement?: Promise<void>;
 };
@@ -183,12 +184,14 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
   }
 }
 
-export async function announceGatewayInstallationReady(): Promise<void> {
+export async function announceGatewayInstallationReady(
+  readiness: PreparedReadinessChecker,
+): Promise<void> {
   const observer = installationState.observer;
   if (!observer) {
     return;
   }
-  observer.ready = true;
+  observer.readiness = readiness;
   try {
     await settleInstallationTrial(observer);
   } catch (error) {
@@ -199,11 +202,17 @@ export async function announceGatewayInstallationReady(): Promise<void> {
 }
 
 function settleInstallationTrial(observer: InstallationObserver): Promise<void> {
-  if (observer.trialSettled) {
+  const readiness = observer.readiness;
+  if (observer.trialSettled || !readiness) {
     return Promise.resolve();
   }
-  observer.trialSettlement ??= import("../update/gateway-trial.js")
-    .then(async ({ announceReady }) => {
+  observer.trialSettlement ??= readiness
+    .prepare()
+    .then(async (prepared) => {
+      if (!prepared.publish().coreReady) {
+        return;
+      }
+      const { announceReady } = await import("../update/gateway-trial.js");
       observer.trialSettled = await announceReady(observer.running.buildId, observer.root);
     })
     .finally(() => {
@@ -215,7 +224,7 @@ function settleInstallationTrial(observer: InstallationObserver): Promise<void> 
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export async function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
-  if (observer?.ready) {
+  if (observer?.readiness) {
     await settleInstallationTrial(observer);
   }
   const root = observer?.installationRoot;

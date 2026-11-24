@@ -1,17 +1,22 @@
+import { isDeepStrictEqual } from "node:util";
 import { formatUpdateRunOwnership } from "../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
   reconcileAbandonedUpdateRunsAsync,
 } from "../infra/update-run-ledger.js";
-import { recoverableLegacyTrial } from "./legacy-trial-record.js";
+import {
+  LEGACY_TRIAL_READY,
+  readLegacyTrialReceipt,
+  recoverableLegacyTrial,
+} from "./legacy-trial-record.js";
 import { completeLegacyTrialRepair } from "./legacy-trial.js";
 
-/** Capture before maintenance; a later write to the original row must not be regraded. */
+/** Capture before maintenance; only the matching ready receipt may arrive during restoration. */
 export function prepareUpdateRepairHistory(runIds: readonly string[]) {
   const legacyTrials = runIds.flatMap((runId) => {
     const run = getUpdateRun(runId);
-    return run && recoverableLegacyTrial(run) ? [run] : [];
+    return run && recoverableLegacyTrial(run, false) ? [run] : [];
   });
   return async (repairRunId: string, root: string, allowCorrection: boolean): Promise<string[]> => {
     await reconcileAbandonedUpdateRunsAsync({ explicit: true, runIds });
@@ -23,7 +28,23 @@ export function prepareUpdateRepairHistory(runIds: readonly string[]) {
     }
     const reconciled: string[] = [];
     for (const runId of runIds) {
-      const legacy = legacyTrials.find((run) => run.runId === runId);
+      let legacy = legacyTrials.find((run) => run.runId === runId);
+      if (legacy && !readLegacyTrialReceipt(legacy, true)) {
+        const current = getUpdateRun(runId);
+        if (
+          current &&
+          isDeepStrictEqual(
+            {
+              ...current,
+              updatedAtMs: legacy.updatedAtMs,
+              steps: current.steps.filter((step) => step.step !== LEGACY_TRIAL_READY),
+            },
+            legacy,
+          )
+        ) {
+          legacy = current;
+        }
+      }
       if (legacy) {
         if (allowCorrection && (await completeLegacyTrialRepair(legacy, repairRunId, root))) {
           reconciled.push(runId);
