@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import type {
+  dispatchGatewayMethod,
+  sendToResolvedSession,
+} from "openclaw/plugin-sdk/gateway-method-runtime";
 import type { GatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -107,16 +110,13 @@ async function fixture() {
     | undefined;
   let sends = 0;
   let adopted = 0;
-  const attempts: {
-    sessionId?: string;
-    expectedSessionId?: string;
-    idempotencyKey?: string;
-    message?: string;
-  }[] = [];
-  const dispatch: typeof dispatchGatewayMethod = async (method, params) => {
+  const attempts: Parameters<typeof sendToResolvedSession>[0][] = [];
+  const dispatch: typeof dispatchGatewayMethod = async (method) => {
     if (method.endsWith(".resolve")) {
       onResolve?.();
-      if (resolveFailure) return { ok: false, error: { code: resolveFailure, message: "failed" } };
+      if (resolveFailure) {
+        return { ok: false, error: { code: resolveFailure, message: "failed" } };
+      }
       return { ok: true, payload: { sessionKey: binding.sessionKey, sessionId: nativeId } };
     }
     if (method.endsWith(".continue")) {
@@ -125,30 +125,32 @@ async function fixture() {
       await handoffs.register(row.beamId, row);
       return { ok: true, payload: { sessionKey: binding.sessionKey } };
     }
-    if (method !== "chat.send") throw new Error("unexpected host method");
-    const p = params as {
-      sessionId?: string;
-      expectedSessionId?: string;
-      idempotencyKey?: string;
-      message?: string;
-    };
-    attempts.push(p);
-    if (replaceBeforeSend) nativeId = "replacement";
-    if (p.expectedSessionId !== nativeId)
-      return { ok: false, error: { code: "INVALID_REQUEST", message: "changed incarnation" } };
+    throw new Error("unexpected host method");
+  };
+  const send: typeof sendToResolvedSession = async (input) => {
+    attempts.push(input);
+    if (replaceBeforeSend) {
+      nativeId = "replacement";
+    }
+    if (input.target.sessionId !== nativeId) {
+      return "unconfirmed";
+    }
     sends++;
     if (waitOnSend) {
       waitOnSend.entered.resolve();
       await waitOnSend.release.promise;
     }
-    if (lostAck) throw new Error("ack lost");
-    return { ok: true, payload: { status: "started", runId: p.idempotencyKey } };
+    if (lostAck) {
+      throw new Error("ack lost");
+    }
+    return "accepted";
   };
   const service = () =>
     createBeamContinuation(
       runtime,
       { readPublication: async () => ({ snapshot: { ...row, items: [] }, ownership: row }) },
       dispatch,
+      send,
     );
   return {
     service,
@@ -172,6 +174,9 @@ async function fixture() {
     },
     replace() {
       replaceBeforeSend = true;
+    },
+    replaceReadableDestination() {
+      nativeId = "readable-replacement";
     },
     hold() {
       waitOnSend = { entered: createDeferred<void>(), release: createDeferred<void>() };
@@ -267,14 +272,20 @@ it("checks the Visitor grant for sends and the admitted request lifetime for sta
   let guestRefreshes = 0;
   function guard(requiredGrant?: string) {
     checked.push(requiredGrant);
-    if (!connected) throw new Error("request closed");
-    if (!active && requiredGrant === "visitor-access") throw new Error("Visitor grant revoked");
+    if (!connected) {
+      throw new Error("request closed");
+    }
+    if (!active && requiredGrant === "visitor-access") {
+      throw new Error("Visitor grant revoked");
+    }
   }
   const guest: GatewayRequestAuthorityV1 = {
     ...owner,
     assertCurrent: guard,
     async revalidate(requiredGrant) {
-      if (requiredGrant === "visitor-access") guestRefreshes++;
+      if (requiredGrant === "visitor-access") {
+        guestRefreshes++;
+      }
       guard(requiredGrant);
     },
   };
@@ -316,8 +327,8 @@ it("fences the original native session when it changes between authorized resolu
   expect(await f.service().continue(source, request, owner)).toMatchObject({
     state: "needs_reconciliation",
   });
-  expect(f.attempts.map((p) => [p.sessionId, p.expectedSessionId])).toEqual([
-    ["first-session", "first-session"],
+  expect(f.attempts.map((p) => p.target)).toEqual([
+    { sessionKey: binding.sessionKey, sessionId: "first-session" },
   ]);
   expect(f.sends).toBe(0);
   expect(await f.service().continue(source, request, owner)).toMatchObject({
@@ -325,6 +336,21 @@ it("fences the original native session when it changes between authorized resolu
   });
   expect(f.attempts).toHaveLength(1);
   expect(f.adopted).toBe(1);
+});
+
+it("reports the original acknowledgement without identifying a replacement as its recipient", async () => {
+  await using f = await fixture();
+  expect(await f.service().continue(source, request, owner)).toMatchObject({
+    state: "accepted",
+    destination: { reference: binding.id },
+  });
+  f.replaceReadableDestination();
+  const historical = { state: "accepted", requestId: request.requestId };
+  expect(await f.service().status(source, request.requestId, owner)).toEqual(historical);
+  expect(await f.service().continue(source, request, owner)).toEqual(historical);
+  expect(await f.service().status(source, request.requestId, staff)).toBe("unavailable");
+  expect(f.attempts).toHaveLength(1);
+  expect(f.sends).toBe(1);
 });
 
 it("never replays a potentially accepted turn after loss, process interruption, or expiry", async () => {

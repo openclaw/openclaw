@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import {
+  dispatchGatewayMethod,
+  sendToResolvedSession,
+} from "openclaw/plugin-sdk/gateway-method-runtime";
 import type { GatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   BeamSendActor,
   BeamSendOperations,
@@ -47,8 +49,9 @@ function sendActor(
     profile === row.publisherProfileId &&
     auth.requiredGrantPluginId === "visitor-access" &&
     auth.scopes.includes("operator.sessions.write")
-  )
+  ) {
     return { key: digest("person", profile), guestProfileId: profile };
+  }
   return undefined;
 }
 
@@ -56,6 +59,7 @@ export function createBeamContinuation(
   runtime: PluginRuntime,
   store: ReadStore,
   dispatch = dispatchGatewayMethod,
+  send = sendToResolvedSession,
 ) {
   const handoffs = runtime.state.openKeyedStoreV2<BeamHandoff>({
     namespace: "handoffs",
@@ -78,9 +82,11 @@ export function createBeamContinuation(
     auth: GatewayRequestAuthorityV1,
     input?: SendInput,
   ): Promise<BeamContinuationResult> {
-    const generation = initial.publicationId;
+    const publicationId = initial.publicationId;
     const actor = sendActor(auth, initial, !input);
-    if (!generation || !actor) return "unavailable";
+    if (!publicationId || !actor) {
+      return "unavailable";
+    }
     // HTTP already admitted a status read. It keeps that identity and request lifetime;
     // a new owned Visitor effect must still hold its original grant at dispatch and commit.
     const guestProfileId = actor.guestProfileId;
@@ -88,7 +94,9 @@ export function createBeamContinuation(
     const assertCurrent = () => auth.assertCurrent(requiredGrant);
     async function revalidate() {
       // Read-only status uses the captured dispatch lease. Only effects refresh asynchronous guards.
-      if (input) await auth.revalidate(requiredGrant);
+      if (input) {
+        await auth.revalidate(requiredGrant);
+      }
       assertCurrent();
     }
     async function current() {
@@ -97,10 +105,11 @@ export function createBeamContinuation(
       const row = publication.snapshot ?? publication.ownership;
       if (
         !row ||
-        row.publicationId !== generation ||
+        row.publicationId !== publicationId ||
         (guestProfileId && guestProfileId !== row.publisherProfileId)
-      )
-        return;
+      ) {
+        return undefined;
+      }
       const destination = await readBeamDestination(
         row,
         Boolean(publication.snapshot),
@@ -111,8 +120,12 @@ export function createBeamContinuation(
       return { row, destination };
     }
     let view = await current();
-    if (!view) return "unavailable";
-    if (typeof view.destination === "string") return view.destination;
+    if (!view) {
+      return "unavailable";
+    }
+    if (typeof view.destination === "string") {
+      return view.destination;
+    }
     if (input && view.destination.state === "released_unbound") {
       // The host owns authorization, one destination binding and crash reconciliation.
       // An adoption ACK is never a message-send ACK.
@@ -126,25 +139,33 @@ export function createBeamContinuation(
           ...(input.agent ? { agentId: input.agent } : {}),
         },
       );
-      if (!adopted.ok && adopted.error?.code !== "UNAVAILABLE") return "unavailable";
+      if (!adopted.ok && adopted.error?.code !== "UNAVAILABLE") {
+        return "unavailable";
+      }
       view = await current();
-      if (!view) return "unavailable";
+      if (!view) {
+        return "unavailable";
+      }
     }
-    if (typeof view.destination === "string") return view.destination;
+    if (typeof view.destination === "string") {
+      return view.destination;
+    }
     const target = view.destination.state === "ready" ? view.destination : undefined;
     const lookup = {
       beamId: initial.beamId,
-      generation,
+      publicationId,
       actor,
-      requestKey: digest("continue", initial.beamId, generation, requestId),
-      ...(target ? { target } : {}),
+      requestKey: digest("continue", initial.beamId, publicationId, requestId),
+      ...(target ? { target: { reference: target.reference, sessionKey: target.sessionKey } } : {}),
     };
     const operation = handoffs.createOperation?.<BeamSendOperations>(
       [handoffs, identities, receipts],
       { moduleName: "continuation-operation-api.js", exportName: "executeBeamSend" },
       { assertCurrent },
     );
-    if (!operation) throw new Error("Beam continuation requires worker-owned state operations");
+    if (!operation) {
+      throw new Error("Beam continuation requires worker-owned state operations");
+    }
     const act = async (action: BeamSendOperations["request"]["input"]) => {
       const writes = !target || action.op === "status" ? [] : action.op === "claim" ? [1, 2] : [2];
       try {
@@ -166,16 +187,20 @@ export function createBeamContinuation(
         throw error;
       }
     };
-    const expose = (state: BeamSendState | BeamSendRefusal): BeamContinuationResult =>
-      state === "needs_reconciliation"
-        ? { state, requestId }
-        : state === "accepted" || state === "pending"
-          ? {
-              state,
-              requestId,
-              destination: target && { state: "ready", reference: target.reference },
-            }
-          : state;
+    const expose = (
+      state: BeamSendState | BeamSendRefusal,
+      sentHere = false,
+    ): BeamContinuationResult => {
+      if (state === "accepted" && sentHere && target) {
+        return { state, requestId, destination: { state: "ready", reference: target.reference } };
+      }
+      // On replay, an accepted native acknowledgement describes the original turn only.
+      // The authorized logical destination may now point to a different native session.
+      if (state === "pending" || state === "accepted" || state === "needs_reconciliation") {
+        return { state, requestId };
+      }
+      return state;
+    };
     const claim = randomUUID();
     const decision = await act(
       input
@@ -188,39 +213,37 @@ export function createBeamContinuation(
           }
         : { op: "status", lookup },
     );
-    if (decision !== "claimed") return expose(decision);
-    if (!input || !target)
+    if (decision !== "claimed") {
+      return expose(decision);
+    }
+    if (!input || !target) {
       throw new Error("Beam claimed a send without an instruction or ready destination");
+    }
     // From here a crash, timeout, or missing host ACK must never trigger another native turn.
-    let accepted = false;
-    let denied = false;
+    let delivery: Awaited<ReturnType<typeof send>> = "unconfirmed";
+    await revalidate();
     try {
-      await revalidate();
-      const reply = await dispatch("chat.send", {
-        sessionKey: target.sessionKey,
-        sessionId: target.sessionId,
-        expectedSessionId: target.sessionId,
+      delivery = await send({
+        target: { sessionKey: target.sessionKey, sessionId: target.sessionId },
         message: input.instruction,
         idempotencyKey: claim,
       });
-      denied = !reply.ok && reply.error?.code === "FORBIDDEN";
-      accepted =
-        reply.ok &&
-        isRecord(reply.payload) &&
-        reply.payload.runId === claim &&
-        (reply.payload.status === "started" || reply.payload.status === "in_flight");
     } catch {
-      // Transport failure leaves delivery unknown; the durable claim prevents a second dispatch.
+      // A transport failure leaves the outcome unknown; the durable claim prevents a second send.
     }
     const state = await act({
       op: "settle",
       lookup,
       claim,
-      state: accepted ? "accepted" : "needs_reconciliation",
+      state: delivery === "accepted" ? "accepted" : "needs_reconciliation",
     });
-    if (denied) return "unavailable";
-    if (state === "claimed") throw new Error("invalid Beam send settlement");
-    return expose(state);
+    if (delivery === "forbidden") {
+      return "unavailable";
+    }
+    if (state === "claimed") {
+      throw new Error("invalid Beam send settlement");
+    }
+    return expose(state, true);
   }
 
   return {

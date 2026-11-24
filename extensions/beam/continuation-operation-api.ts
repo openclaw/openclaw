@@ -12,16 +12,16 @@ export type BeamSendRefusal =
   | "rate_limited"
   | "publication_send_limit"
   | "source_owned";
-export type BeamSendTarget = { reference: string; sessionKey: string; sessionId: string };
+type BeamSendTarget = { reference: string; sessionKey: string };
 export type BeamSendActor = { key: string; guestProfileId?: string };
 type Lookup = {
   beamId: string;
-  generation: string;
+  publicationId: string;
   requestKey: string;
   actor: BeamSendActor;
   target?: BeamSendTarget;
 };
-type Identity = { actor: string; fingerprint: string; sessionId: string };
+type Identity = { actor: string; fingerprint: string; destinationReference: string };
 type Outcome = { state: BeamSendState; claim: string; startedAt: number };
 type SendCommand =
   | { op: "status"; lookup: Lookup }
@@ -35,37 +35,54 @@ export type BeamSendOperations = { request: { input: SendCommand; output: SendDe
  * holds expiring outcomes. The retained marker makes a lost or expired ACK safe to replay. */
 export const executeBeamSend: PluginStateOperationHandler<BeamSendOperations> = (command, tx) => {
   const input = command.input;
-  const { beamId, generation, actor, target, requestKey } = input.lookup;
+  const { beamId, publicationId, actor, target, requestKey } = input.lookup;
   const [row] = tx.lookupMany<BeamHandoff>([{ store: 0, key: beamId }]);
   if (
     !row ||
-    row.publicationId !== generation ||
+    row.publicationId !== publicationId ||
     (actor.guestProfileId && row.publisherProfileId !== actor.guestProfileId)
-  )
+  ) {
     return "unavailable";
-  if (!row.handoffId) return "source_owned";
+  }
+  if (!row.handoffId) {
+    return "source_owned";
+  }
   const [identity] = tx.lookupMany<Identity>([{ store: 1, key: requestKey }]);
   // A missing or changing target must not reveal which request IDs another caller owns.
-  if (identity && identity.actor !== actor.key) return "unavailable";
-  if (!identity && input.op === "status") return "unavailable";
-  if (identity && input.op === "claim" && identity.fingerprint !== input.fingerprint)
+  if (identity && identity.actor !== actor.key) {
+    return "unavailable";
+  }
+  if (!identity && input.op === "status") {
+    return "unavailable";
+  }
+  if (identity && input.op === "claim" && identity.fingerprint !== input.fingerprint) {
     return "request_identity_conflict";
+  }
   if (
     !target ||
-    row.handoffId !== generation ||
+    row.handoffId !== publicationId ||
     row.continuation?.id !== target.reference ||
     row.continuation.sessionKey !== target.sessionKey ||
     !row.continuation.ready
-  )
+  ) {
     return "needs_reconciliation";
+  }
   const now = Date.now();
   if (identity) {
-    if (identity.sessionId !== target.sessionId) return "needs_reconciliation";
+    if (identity.destinationReference !== target.reference) {
+      return "needs_reconciliation";
+    }
     const [receipt] = tx.lookupMany<Outcome>([{ store: 2, key: requestKey }]);
-    if (!receipt) return "needs_reconciliation";
+    if (!receipt) {
+      return "needs_reconciliation";
+    }
     if (input.op === "settle") {
-      if (receipt.claim !== input.claim) return "needs_reconciliation";
-      if (receipt.state !== "pending") return receipt.state;
+      if (receipt.claim !== input.claim) {
+        return "needs_reconciliation";
+      }
+      if (receipt.state !== "pending") {
+        return receipt.state;
+      }
       tx.set(
         2,
         requestKey,
@@ -74,28 +91,37 @@ export const executeBeamSend: PluginStateOperationHandler<BeamSendOperations> = 
       );
       return input.state;
     }
-    if (receipt.state === "pending" && now - receipt.startedAt >= BEAM_SEND_PENDING_MS)
+    if (receipt.state === "pending" && now - receipt.startedAt >= BEAM_SEND_PENDING_MS) {
       return "needs_reconciliation";
+    }
     return receipt.state;
   }
-  if (input.op !== "claim") return "needs_reconciliation";
-  if (input.agent && input.agent !== row.continuation.agentId) return "request_identity_conflict";
-  const countKey = "count:" + beamId + "." + generation;
+  if (input.op !== "claim") {
+    return "needs_reconciliation";
+  }
+  if (input.agent && input.agent !== row.continuation.agentId) {
+    return "request_identity_conflict";
+  }
+  const countKey = "count:" + beamId + "." + publicationId;
   const [count = 0] = tx.lookupMany<number>([{ store: 1, key: countKey }]);
-  if (count >= BEAM_MAX_SENDS_PER_PUBLICATION) return "publication_send_limit";
+  if (count >= BEAM_MAX_SENDS_PER_PUBLICATION) {
+    return "publication_send_limit";
+  }
   if (actor.guestProfileId) {
     const key = "guest:" + actor.key;
     const expiries = (tx.lookupMany<number[]>([{ store: 2, key }])[0] ?? []).filter(
       (at) => at > now,
     );
-    if (expiries.length >= BEAM_MAX_GUEST_RECEIPTS) return "rate_limited";
+    if (expiries.length >= BEAM_MAX_GUEST_RECEIPTS) {
+      return "rate_limited";
+    }
     tx.set(2, key, [...expiries, now + BEAM_RETENTION_MS]);
   }
   tx.set(1, countKey, count + 1);
   tx.set(1, requestKey, {
     actor: actor.key,
     fingerprint: input.fingerprint,
-    sessionId: target.sessionId,
+    destinationReference: target.reference,
   } satisfies Identity);
   tx.set(2, requestKey, { state: "pending", claim: input.claim, startedAt: now } satisfies Outcome);
   return "claimed";
