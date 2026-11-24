@@ -2521,13 +2521,13 @@ console.log(JSON.stringify({ data }));
     expect(JSON.parse(readFileSync(manifest, "utf8")).source.directCommits).toBe(0);
   });
 
-  it.each(["missing", "mixed", "wrong-path", "non-null"])(
+  it.each(["missing", "mixed", "wrong-path", "non-null", "auth-diagnostic"])(
     "preserves optional missing-user semantics at the CLI boundary: %s",
     (mode) => {
       const { cwd, base } = seedRepository("openclaw-release-optional-user-", "main");
       const target = commitAll(
         cwd,
-        "chore: source\n\nCo-authored-by: Former <123+former-user@users.noreply.github.com>\nCo-authored-by: Verified <456+verified-user@users.noreply.github.com>",
+        "chore: source\n\nCo-authored-by: Former <123+former-user@users.noreply.github.com>\nCo-authored-by: Former Again <234+former-again@users.noreply.github.com>\nCo-authored-by: Verified <456+verified-user@users.noreply.github.com>",
       );
       const gh = join(cwd, "gh");
       writeFileSync(
@@ -2538,12 +2538,17 @@ const mode = ${JSON.stringify(mode)};
 const data = {}, errors = [];
 for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
 for (const [, alias, login] of query.matchAll(/(u\\d+): user\\(login: "([^"]+)"\\)/g)) {
-  data[alias] = login === "former-user" && mode !== "non-null" ? null : { __typename: "User", login };
-  if (login === "former-user") errors.push({ type: "NOT_FOUND", path: mode === "wrong-path" ? [alias, "login"] : [alias], message: "Could not resolve to a User" });
+  const missing = login === "former-user" || login === "former-again";
+  data[alias] = missing && mode !== "non-null" ? null : { __typename: "User", login };
+  if (missing) errors.push({ type: "NOT_FOUND", path: mode === "wrong-path" ? [alias, "login"] : [alias], message: "Could not resolve to a User with the login of '" + login + "'." });
 }
 if (errors.length && mode === "mixed") errors.push({ type: "FORBIDDEN", path: ["unrelated"], message: "Resource not accessible" });
 console.log(JSON.stringify({ data, ...(errors.length ? { errors } : {}) }));
-if (errors.length) { for (const error of errors) console.error("gh: " + error.message); process.exitCode = 1; }
+if (errors.length) {
+  console.error("gh: " + errors.map(error => error.message).join("\\n"));
+  if (mode === "auth-diagnostic") console.error("gh: Bad credentials (HTTP 401)");
+  process.exitCode = 1;
+}
 `,
       );
       chmodSync(gh, 0o755);
@@ -2558,13 +2563,16 @@ if (errors.length) { for (const error of errors) console.error("gh: " + error.me
       });
       if (mode !== "missing") {
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("GitHub GraphQL errors");
+        expect(result.stderr).toContain(
+          mode === "auth-diagnostic" ? "Bad credentials (HTTP 401)" : "GitHub GraphQL errors",
+        );
         expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toBe(before);
       } else {
         expect(result.status, result.stderr).toBe(0);
         const output = readFileSync(manifest, "utf8");
         expect(output).toContain("verified-user");
         expect(output).not.toContain('"former-user"');
+        expect(output).not.toContain('"former-again"');
         expect(JSON.parse(result.stdout).errors).toEqual([]);
       }
     },
