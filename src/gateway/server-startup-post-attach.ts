@@ -19,6 +19,7 @@ import {
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
@@ -38,7 +39,6 @@ import { startGatewaySidecars } from "./server-startup-sidecars.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
-import type { PreparedReadinessChecker } from "./server/readiness.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 type Awaitable<T> = T | Promise<T>;
 

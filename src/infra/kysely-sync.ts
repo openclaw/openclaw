@@ -1,7 +1,14 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
+import type {
+  Compilable,
+  CompiledQuery,
+  Expression,
+  Kysely,
+  QueryResult,
+  RawBuilder,
+} from "kysely";
 import {
   InsertQueryNode,
   Kysely as KyselyInstance,
@@ -111,7 +118,7 @@ export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
 
 /** Expands encoded string tuples without adding one SQLite parameter per field. */
 export function sqliteStringSetEntries(
-  encoded: string | RawBuilder<string>,
+  encoded: string | Expression<string>,
 ): RawBuilder<{ key: number; value: string | null }> {
   return kyselySql<{ key: number; value: string | null }>(sqliteStringSetEntriesFragments, encoded);
 }

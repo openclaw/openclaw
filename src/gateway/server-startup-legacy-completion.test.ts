@@ -64,7 +64,9 @@ vi.mock("../cli/update-cli/update-command-post-activation-inspections.js", async
   >[0]) => result,
 }));
 
-it("automatically completes the original Git update after its schema-40 driver refuses schema 41 and exits", async () => {
+it("automatically completes the original Git update after its schema-40 driver refuses schema 41 and exits", async ({
+  signal,
+}) => {
   const fixture = await import("./server-startup-state.test-support.js");
   const state = await fixture.createGatewayStartupTestState("legacy-automatic-completion", {
     OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
@@ -190,7 +192,18 @@ it("automatically completes the original Git update after its schema-40 driver r
       ...fixture.gatewayStartupTestOptions(token),
       sidecarStartup: "start",
     });
-    await server.startupSettled;
+    const { waitForGatewayHttpReadiness } =
+      await import("../cli/daemon-cli/restart-health-probe.js");
+    expect(
+      await waitForGatewayHttpReadiness({
+        port,
+        attempts: 100,
+        deadlineAt: performance.now() + 5_000,
+        delayMs: 50,
+        requireChannelHealth: false,
+        signal,
+      }),
+    ).toMatchObject({ coreReady: true, healthz: 200, readyz: 503 });
     const response = await fetch("http://127.0.0.1:" + port + "/readyz");
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({

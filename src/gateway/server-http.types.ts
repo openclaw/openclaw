@@ -3,6 +3,7 @@ import type { TlsOptions } from "node:tls";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { GatewayHttpRequestLifetime } from "./http-request-authority.js";
 import type {
   GatewayIngressTransport,
@@ -14,7 +15,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import type { PluginHttpRequestHandler } from "./server/plugins-http.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
-import type { PreparedReadinessChecker, StartupChecker } from "./server/readiness.js";
+import type { StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";

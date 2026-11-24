@@ -240,32 +240,47 @@ it("does not attribute an uncorrelated healthy trial to the newest failed run", 
   expect(await getUpdateRunAsync(f.runId)).toEqual(before);
 });
 
-it("retains the ready legacy trial until its original completion transaction can commit", async () => {
-  const f = await fixture();
-  await prepareLegacyTrialRun(f.runId, f.root, () => {});
-  await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
-  const other = await createUpdateRunAsync({ trigger: "cli" });
-  const bytes = await fs.readFile(f.file, "utf8");
-  expect(await announceReady(f.trial.buildId, f.root)).toBe(false);
-  expect(await fs.readFile(f.file, "utf8")).toBe(bytes);
-  const pending = await getUpdateRunAsync(f.runId);
-  expect(pending?.status).toBe("failed");
-  expect(pending?.steps).toContainEqual(
-    expect.objectContaining({ step: "finalize:legacy-release-ready", status: "completed" }),
-  );
-  await finishUpdateRunAsync(other.runId, {
-    status: "failed",
-    reason: "unrelated-fixture-failure",
-  });
-  const unrelated = await getUpdateRunAsync(other.runId);
-  expect(await announceReady(f.trial.buildId, f.root)).toBe(true);
-  expect(await getUpdateRunAsync(f.runId)).toMatchObject({
-    status: "succeeded",
-    after: { version: VERSION, buildId: f.trial.buildId },
-  });
-  expect(await getUpdateRunAsync(other.runId)).toEqual(unrelated);
-  await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
-});
+it.each(["newer", "older"])(
+  "retains the ready legacy trial while a %s active run blocks completion",
+  async (order) => {
+    const f = await fixture();
+    let blockerRunId = f.runId;
+    if (order === "older") {
+      const current = await createUpdateRunAsync({
+        trigger: "cli",
+        target: { kind: "git" },
+        origin: { driver: deadDriverFixture().dead },
+      });
+      f.runId = current.runId;
+      await recordUpdateRunPhaseAsync(f.runId, "restarting");
+    }
+    await prepareLegacyTrialRun(f.runId, f.root, () => {});
+    if (order === "newer") {
+      await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
+      blockerRunId = (await createUpdateRunAsync({ trigger: "cli" })).runId;
+    }
+    const bytes = await fs.readFile(f.file, "utf8");
+    expect(await announceReady(f.trial.buildId, f.root)).toBe(false);
+    expect(await fs.readFile(f.file, "utf8")).toBe(bytes);
+    const pending = await getUpdateRunAsync(f.runId);
+    expect(pending?.status).toBe(order === "older" ? "running" : "failed");
+    expect(pending?.steps).toContainEqual(
+      expect.objectContaining({ step: "finalize:legacy-release-ready", status: "completed" }),
+    );
+    await finishUpdateRunAsync(blockerRunId, {
+      status: "failed",
+      reason: "unrelated-fixture-failure",
+    });
+    const unrelated = await getUpdateRunAsync(blockerRunId);
+    expect(await announceReady(f.trial.buildId, f.root)).toBe(true);
+    expect(await getUpdateRunAsync(f.runId)).toMatchObject({
+      status: "succeeded",
+      after: { version: VERSION, buildId: f.trial.buildId },
+    });
+    expect(await getUpdateRunAsync(blockerRunId)).toEqual(unrelated);
+    await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
 
 it("does not attribute an ambiguous publication to any matching run", async () => {
   const f = await fixture();

@@ -1,5 +1,5 @@
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import type { PreparedReadinessChecker } from "./server/readiness.js";
 import { announceGatewayInstallationReady } from "./stale-install.js";
 
 type GatewayReadinessLog = {

@@ -1,4 +1,3 @@
-import { sql } from "kysely";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB, UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { jsonExtractText } from "./database-engine/json-values.js";
@@ -134,7 +133,7 @@ export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) 
     query = query.where((eb) =>
       eb.exists(
         eb
-          .selectFrom(sqliteStringSetEntries(sql.ref<string>("update_runs.steps_json")).as("step"))
+          .selectFrom(sqliteStringSetEntries(eb.ref("update_runs.steps_json")).as("step"))
           .select("step.key")
           .where((step) =>
             step.and([

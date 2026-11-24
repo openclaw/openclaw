@@ -30,7 +30,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
-import type { PreparedReadinessChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import { isGatewayTransportError } from "./transport-error.js";
 
 export const GATEWAY_STALE_INSTALL_CLOSE_REASON =

@@ -20,6 +20,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { GatewayHttpRequestLifetime } from "./http-request-authority.js";
 import {
@@ -56,7 +57,7 @@ import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
-import type { PreparedReadinessChecker, StartupChecker } from "./server/readiness.js";
+import type { StartupChecker } from "./server/readiness.js";
 import { GATEWAY_PER_MESSAGE_DEFLATE } from "./server/ws-compression.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";

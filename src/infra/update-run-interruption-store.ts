@@ -17,7 +17,6 @@ import type {
 import {
   decodeRun,
   hasStoredUpdateRecovery,
-  readActiveUpdateRun,
   readLatestUpdateRun,
   readUpdateRunRecord,
   readUpdateRuns,
@@ -94,11 +93,11 @@ export function persistInterruptedUpdateObservation(
       const current = input.legacyReady
         ? readUpdateRunRecord(db, input.expected.runId)
         : readLatestUpdateRun(db);
-      const active = readActiveUpdateRun(db);
+      const active = readUpdateRuns(db, { active: true, limit: input.legacyReady ? 100 : 1 });
       if (
         !current ||
         !isDeepStrictEqual(current, input.expected) ||
-        (active && active.runId !== current.runId) ||
+        active.some((run) => run.runId !== current.runId) ||
         hasStoredUpdateRecovery(db, current.runId)
       ) {
         return { accepted: false };
@@ -106,13 +105,7 @@ export function persistInterruptedUpdateObservation(
       const legacyCandidate = input.legacyReady
         ? verifiedLegacyTrialReadiness(current, input.verification)
         : undefined;
-      if (
-        input.legacyReady &&
-        (!legacyCandidate ||
-          readUpdateRuns(db, { active: true, limit: 100 }).some(
-            (run) => run.runId !== current.runId,
-          ))
-      ) {
+      if (input.legacyReady && !legacyCandidate) {
         return { accepted: false };
       }
       const previous = current.steps.find((step) => step.step === "reconcile:settle");
