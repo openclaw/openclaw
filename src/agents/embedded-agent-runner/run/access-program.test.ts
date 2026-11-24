@@ -1,5 +1,5 @@
-import type { CyberAccessProgram } from "@openclaw/gateway-protocol";
 import { beforeAll, expect, it, vi } from "vitest";
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
