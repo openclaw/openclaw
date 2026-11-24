@@ -6,6 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
@@ -15,6 +16,7 @@ import {
   prepareSqliteDatabaseDirectory,
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { canReadUpgradeFile, readableCompanionBytes } from "./state-upgrade-readability.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -257,7 +259,7 @@ export async function copyTree(
   baseline: Map<string, string | undefined>,
   options: {
     requiredSqlite?: ReadonlySet<string>;
-    log?: { info: (message: string) => void };
+    log?: { info: (message: string) => void; warn: (message: string) => void };
     additionalCopyBytes?: number;
   } = {},
 ): Promise<UpgradeCopyScope> {
@@ -285,10 +287,22 @@ export async function copyTree(
   }
   let bytes = options.additionalCopyBytes ?? 0;
   const walk = (directory: string, visited: ReadonlySet<string>, retired = false) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (directory === live || (!hasErrnoCode(error, "EACCES") && !hasErrnoCode(error, "EPERM"))) {
+        throw error;
+      }
+      (options.log ?? createSubsystemLogger("state/upgrade")).warn(
+        `Skipping unreadable state upgrade directory ${directory}: ${formatErrorMessage(error)}`,
+      );
+      return;
+    }
     if (!retired) {
       scope.directories.add(directory);
     }
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of entries) {
       const source = path.join(directory, entry.name);
       if (skip(source)) {
         continue;
@@ -332,21 +346,19 @@ export async function copyTree(
         }
         continue;
       }
+      const requiredDatabase = options.requiredSqlite?.has(source) === true;
+      if (!canReadUpgradeFile(source, requiredDatabase, options.log)) {
+        continue;
+      }
       const sqlite = isSqliteFile(source);
-      const fileBytes =
-        stat.size +
-        (sqlite
-          ? ["-wal", "-journal"].reduce(
-              (sum, suffix) =>
-                sum + (fs.statSync(`${source}${suffix}`, { throwIfNoEntry: false })?.size ?? 0),
-              0,
-            )
-          : 0);
-      if (
-        sqlite &&
-        fileBytes > ANCILLARY_SQLITE_MAX_BYTES &&
-        !options.requiredSqlite?.has(source)
-      ) {
+      const companionBytes = sqlite
+        ? readableCompanionBytes(source, requiredDatabase, options.log)
+        : 0;
+      if (companionBytes === undefined) {
+        continue;
+      }
+      const fileBytes = stat.size + companionBytes;
+      if (sqlite && fileBytes > ANCILLARY_SQLITE_MAX_BYTES && !requiredDatabase) {
         continue;
       }
       files.push({ source, target, mode: stat.mode, sqlite });

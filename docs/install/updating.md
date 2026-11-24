@@ -142,6 +142,15 @@ legacy imports. SQLite and retained WAL/journal content use byte copies, with
 NOCOW directories on btrfs, so the new database does not share extents with its
 preserved original. Committed WAL is recovered in the private copy.
 
+The startup copy checks readability before budgeting or copying files. It skips
+unreadable optional files (such as old config backups or macOS `._*` metadata)
+and subdirectories (such as an ext4 volume's `lost+found`) with a warning, without
+changing their contents or permissions. An unreadable state root, other filesystem
+errors, or an uncopied required database still stops the upgrade. Unreadable
+required database files, including their WAL and rollback journals, are refused
+before copying; an optional SQLite family is skipped together rather than copied
+without its unreadable journal.
+
 Before copying, startup checks free space against the selected file bytes plus
 an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
 that budget because a filesystem can decline reflinking. Insufficient space
