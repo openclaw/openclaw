@@ -128,13 +128,17 @@ async function waitForSavedTranscript(page: Page, sessionId: string) {
   await expect
     .poll(() =>
       page.evaluate(
-        async ({ sessionId, sessionKey }) => {
+        async ({ sessionId: expectedSessionId, sessionKey: expectedSessionKey }) => {
           const name = "openclaw-chat-snapshots";
-          if (!(await indexedDB.databases()).some((db) => db.name === name)) return false;
+          if (!(await indexedDB.databases()).some((db) => db.name === name)) {
+            return false;
+          }
           const db = await new Promise<IDBDatabase>((resolve, reject) => {
             const request = indexedDB.open(name);
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+            request.addEventListener("success", () => resolve(request.result), { once: true });
+            request.addEventListener("error", () =>
+              reject(request.error ?? new Error("Snapshot open failed")),
+            );
           });
           try {
             const transaction = db.transaction("snapshots", "readonly");
@@ -142,13 +146,17 @@ async function waitForSavedTranscript(page: Page, sessionId: string) {
               { sessionId: string; sessionKey: string; snapshot: { messages: unknown[] } }[]
             >((resolve, reject) => {
               const request = transaction.objectStore("snapshots").getAll();
-              transaction.oncomplete = () => resolve(request.result);
-              transaction.onerror = () => reject(transaction.error);
+              const fail = () => reject(transaction.error ?? new Error("Snapshot read failed"));
+              transaction.addEventListener("complete", () => resolve(request.result), {
+                once: true,
+              });
+              transaction.addEventListener("error", fail, { once: true });
+              transaction.addEventListener("abort", fail, { once: true });
             });
             return records.some(
               (record) =>
-                record.sessionId === sessionId &&
-                record.sessionKey.endsWith(`\u0000${sessionKey}`) &&
+                record.sessionId === expectedSessionId &&
+                record.sessionKey.endsWith(`\u0000${expectedSessionKey}`) &&
                 record.snapshot.messages.length > 0,
             );
           } finally {
@@ -180,7 +188,9 @@ async function trackInlineGeometry(preview: Locator) {
         const value = Number(Reflect.get(entry, "value"));
         const recentInput = Boolean(Reflect.get(entry, "hadRecentInput"));
         shifts.push({ atMs: entry.startTime, value, recentInput });
-        if (recentInput) continue;
+        if (recentInput) {
+          continue;
+        }
         if (!last || entry.startTime - first >= 5000 || entry.startTime - last >= 1000) {
           first = entry.startTime;
           windowValue = 0;
@@ -751,7 +761,9 @@ suite.define(() => {
           await page.route("**/*", async (route) => {
             if (route.request().headers()["x-openclaw-reachability-probe"] === "1" && !available) {
               await route.fulfill({ status: 503 });
-            } else await route.fallback();
+            } else {
+              await route.fallback();
+            }
           });
           await page.reload({ waitUntil: "domcontentloaded" });
           // The failed summary no longer contains the command label. The fixture's
