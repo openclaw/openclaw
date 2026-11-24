@@ -50,7 +50,7 @@ async function acceptHello(
     },
   });
   await vi.dynamicImportSettled();
-  await vi.advanceTimersByTimeAsync(0);
+  await vi.waitFor(() => expect(socket.sent.join("\n")).toContain('"sessions.messages.subscribe"'));
   const subscription = socket.sent
     .map((value) => JSON.parse(value))
     .find((frame) => frame.method === "sessions.messages.subscribe");
