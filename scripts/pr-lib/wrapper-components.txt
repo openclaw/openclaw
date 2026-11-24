@@ -1097,6 +1097,7 @@ src/infra/sqlite-integrity-worker.ts
 src/infra/sqlite-integrity.ts
 src/infra/sqlite-jsonl-budget-error.ts
 src/infra/sqlite-jsonl-budget.ts
+src/infra/sqlite-live-owner.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-native-exclusion.ts
@@ -1197,6 +1198,7 @@ src/infra/state-migrations.agent-owner-guidance.ts
 src/infra/state-migrations.cron-run-logs.ts
 src/infra/state-migrations.media-persistence-targets.ts
 src/infra/state-migrations.receipts.ts
+src/infra/tailscale-backend-stopped-error.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
