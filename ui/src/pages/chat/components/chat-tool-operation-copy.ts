@@ -86,13 +86,17 @@ export function catalogToolIcon(name: string): IconName | undefined {
   return operationIcons.get(name.trim().toLowerCase());
 }
 
-function readMessageReceipt(card: ToolCard) {
+function readMessageReceipt(card: ToolCard): Record<string, unknown> | undefined {
   const details = asNullableRecord(card.details);
   // History projects only a few fields from details; the channel receipt stays in the JSON output.
   const receipt = {
     ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
     ...(asNullableRecord(asNullableRecord(details?.result)?.details) ?? details),
   };
+  // Telegram can echo the attempted change in a refusal. None of those fields confirms an effect.
+  if (receipt.ok === false) {
+    return { ok: false };
+  }
   return receipt.ok === true ? receipt : undefined;
 }
 
@@ -160,7 +164,7 @@ export function catalogToolLabel(
     ) {
       action = "clear_reactions";
     }
-    if (receipt?.dryRun === true) {
+    if (receipt?.ok === false || receipt?.dryRun === true) {
       return t(`chat.toolCards.operationLabels.message.${action}.action`);
     }
     if (receipt?.changed === false || removed === null || clearCount === 0) {

@@ -2,12 +2,82 @@
 
 import { expect, it } from "vitest";
 import { jsonResult } from "../../../../../src/agents/tools/tool-results.js";
+import { projectCatalogItemForDisplay } from "../../../../../src/chat/session-catalog-display.js";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "../tool-stream.ts";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 const text = (container: ParentNode, selector: string) =>
   container.querySelector(selector)?.textContent;
+
+it.each([
+  [
+    "message",
+    { emoji: "✅" },
+    { ok: false, added: "✅", warning: "Reaction unavailable: ✅" },
+    "React to message",
+  ],
+  [
+    "tool_call",
+    { emoji: "" },
+    {
+      ok: false,
+      reason: "disabled",
+      hint: "Telegram reactions are disabled via actions.reactions. Do not retry.",
+    },
+    "Clear reactions",
+  ],
+] as const)(
+  "keeps a refused Telegram reaction neutral through %s",
+  async (name, intent, receipt, label) => {
+    const args = { action: "react", channel: "telegram", messageId: "456", ...intent };
+    const result = jsonResult(receipt);
+    const tool = { id: "message", name: "message", source: "openclaw" };
+    const dispatch = name === "tool_call";
+    const input = dispatch ? { id: tool.id, args } : args;
+    const details = dispatch ? { tool, result, status: "failed" } : result.details;
+    const toolCallId = "telegram-reaction";
+    const host = createHost({ chatRunId: toolCallId });
+    handleAgentEvent(
+      host,
+      agentEvent(toolCallId, 1, "tool", { phase: "start", toolCallId, name, args: input }),
+    );
+    // A capture without outer text must still honor the dispatcher's inner details.
+    handleAgentEvent(
+      host,
+      agentEvent(toolCallId, 2, "tool", {
+        phase: "result",
+        toolCallId,
+        name,
+        result: dispatch ? { text: "", details } : result,
+      }),
+    );
+    // A completed catalog call can retain just the serialized result, without native details.
+    const history = projectCatalogItemForDisplay({
+      type: "toolResult",
+      toolName: name,
+      toolCallId,
+      toolInput: input,
+      isError: false,
+      raw: { result: dispatch ? { tool, result: { content: result.content } } : receipt },
+    });
+    const titles = [];
+    for (const message of [host.chatToolMessages[0], history]) {
+      const card = extractToolCardsCached(message)[0]!;
+      const container = await mountCard(card, { expanded: false });
+      titles.push(text(container, ".chat-tool-row__title"));
+      if (!dispatch || message === history) {
+        await mountCard(card, { expanded: true }, container);
+        expect(text(container, ".chat-tool-msg-body")).toContain(
+          "warning" in receipt ? receipt.warning : receipt.hint,
+        );
+      }
+    }
+    expect(titles).toEqual([label, label]);
+  },
+);
 
 it.each([
   [{ ok: true, messageId: "reply-guid", repliedTo: "parent-guid" }, "Replied to message"],
