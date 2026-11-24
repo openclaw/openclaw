@@ -251,6 +251,9 @@ it("rearms parked retention from a committed worker history write", async () => 
       const now = Date.now();
       const clock = createGatewaySchedulerClock(now);
       const scheduler = createTestGatewayScheduler(clock.clock);
+      const lowMemory = vi
+        .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
+        .mockReturnValue(false);
       try {
         await captureRuntimeConfigAsyncReader()();
         startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
@@ -273,6 +276,7 @@ it("rearms parked retention from a committed worker history write", async () => 
       } finally {
         await stopCronMaintenance();
         await scheduler.stop();
+        lowMemory.mockRestore();
         resetGatewayWorkAdmission();
       }
     },
