@@ -37,6 +37,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   };
 });
 
+worker.gate = createWorkerSqliteIntegrityGate();
 const { openClient } = setupSessionCreateTestHarness();
 type CreateSessionReply = Awaited<ReturnType<typeof rpcReq<{ key: string; sessionId: string }>>>;
 
@@ -60,6 +61,9 @@ test.for(["new database", "interrupted empty database"])(
       "agent",
       "openclaw-agent.sqlite",
     );
+    // Connecting prepares the configured reply runtime, which now admits agent storage.
+    // Introduce the target only after that warmup so the native worker owns its first birth.
+    const { ws } = await openClient();
     testState.sessionStorePath = path.join(
       stateDir,
       "agents",
@@ -69,15 +73,14 @@ test.for(["new database", "interrupted empty database"])(
     );
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, [agentId]: {} } };
     setRuntimeConfigSnapshot(loadGatewayTestConfig());
-    const { ws } = await openClient();
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     if (scenario === "interrupted empty database") {
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
       await fs.writeFile(databasePath, "");
     }
 
-    const gate = createWorkerSqliteIntegrityGate(databasePath);
-    worker.gate = gate;
-    gate.arm();
+    const gate = worker.gate!;
+    gate.arm(databasePath);
     const nativeWorker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
       { agentId, path: databasePath },
       { version: 2, assertCurrent() {} },
@@ -211,7 +214,6 @@ test.for(["new database", "interrupted empty database"])(
       await nativeWorker.close();
       readCandidates.mockRestore();
       run.mockRestore();
-      worker.gate = undefined;
       await closeGatewayTestWebSocket(ws);
     }
   },

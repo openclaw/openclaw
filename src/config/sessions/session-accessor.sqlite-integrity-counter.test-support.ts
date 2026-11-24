@@ -13,7 +13,11 @@ const integrityCounterPreload = `
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = prepare.call(this, sql);
-    if (this.location() === databasePath &&
+    const pathControl = workerData.integrityPathControl;
+    const targetPath = pathControl
+      ? Buffer.from(pathControl).toString("utf8", 4, 4 + Atomics.load(new Int32Array(pathControl, 0, 1), 0))
+      : databasePath;
+    if (this.location() === targetPath &&
         (/^PRAGMA integrity_check;?$/i.test(sql.trim()) ||
          sql.trim() === "PRAGMA integrity_check('sqlite_schema');")) {
       for (const method of ["all", "get", "iterate", "run"]) {
@@ -52,6 +56,7 @@ export function withWorkerSqliteIntegrityCounter(
   release?: SharedArrayBuffer,
   databasePath?: string,
   firstCheck?: SharedArrayBuffer,
+  pathControl?: SharedArrayBuffer,
 ): WorkerOptions | undefined {
   return counts
     ? {
@@ -67,24 +72,41 @@ export function withWorkerSqliteIntegrityCounter(
           ...(databasePath ? { integrityDatabasePath: databasePath } : {}),
           ...(release ? { integrityRelease: release } : {}),
           ...(firstCheck ? { integrityFirstCheck: firstCheck } : {}),
+          ...(pathControl ? { integrityPathControl: pathControl } : {}),
         },
       }
     : options;
 }
 
 /** Arm after fixture preparation, including when the executor is already retained. */
-export function createWorkerSqliteIntegrityGate(databasePath: string) {
+export function createWorkerSqliteIntegrityGate(databasePath = "") {
   const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const firstCheck = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  // Retained workers must see the next case's target without another constructor/preload.
+  const pathControl = new SharedArrayBuffer(4 + 4096);
   Atomics.store(new Int32Array(firstCheck), 0, 1);
-  const entered = createDeferred();
+  let entered = createDeferred();
   const workers = new Set<Worker>();
+  const setTargetPath = (targetPath: string) => {
+    const encoded = Buffer.from(targetPath);
+    if (encoded.length > pathControl.byteLength - 4) {
+      throw new Error("Integrity gate path exceeds the fixture buffer");
+    }
+    new Uint8Array(pathControl, 4).set(encoded);
+    Atomics.store(new Int32Array(pathControl, 0, 1), 0, encoded.length);
+  };
+  setTargetPath(databasePath);
   return {
-    entered: entered.promise,
+    get entered() {
+      return entered.promise;
+    },
     workers,
-    arm() {
+    arm(targetPath = databasePath) {
+      setTargetPath(targetPath);
+      entered = createDeferred();
       Atomics.store(new Int32Array(counts), 0, 0);
+      Atomics.store(new Int32Array(release), 0, 0);
       Atomics.store(new Int32Array(firstCheck), 0, 0);
     },
     count: () => Atomics.load(new Int32Array(counts), 0),
@@ -93,7 +115,14 @@ export function createWorkerSqliteIntegrityGate(databasePath: string) {
       Atomics.notify(new Int32Array(release), 0);
     },
     options: (options?: WorkerOptions) =>
-      withWorkerSqliteIntegrityCounter(options, counts, release, databasePath, firstCheck),
+      withWorkerSqliteIntegrityCounter(
+        options,
+        counts,
+        release,
+        databasePath,
+        firstCheck,
+        pathControl,
+      ),
     message(worker: Worker, message: unknown) {
       if (!isRecord(message) || message.type !== "test-integrity-check") {
         return false;
