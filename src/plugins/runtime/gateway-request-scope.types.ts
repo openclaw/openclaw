@@ -3,6 +3,7 @@ import type {
   GatewayRequestContext,
   GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
+import type { GatewaySessionAccessAuthority } from "../../gateway/session-access-authority.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
@@ -29,11 +30,8 @@ export type PluginRuntimeGatewayRequestScope = {
   parentHttpRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
   /** Request-owned reader headroom expires when the interactive handler settles. */
   canUseInteractiveStateReadCapacity?: () => boolean;
-  /** An admitted plugin RPC may retain its original session, not select a new one. */
-  sessionResourceForFork?: Pick<
-    import("../../gateway/session-access-authority.js").GatewaySessionAccessAuthority,
-    "target" | "retainSession"
-  >;
+  /** The existing session a `sessionAccess` method admitted for writing; a fork may run only there. */
+  sessionResourceForFork?: Pick<GatewaySessionAccessAuthority, "target" | "retainSession">;
   /** Exact registration and Gateway owner retained across awaited system operations. */
   assertSystemOwnerCurrent?: () => void;
   /** Recheck the admitted HTTP device or cookie grant before effects/disclosure; rejection sends HTTP 401 and throws. */

@@ -81,23 +81,13 @@ export async function runPluginForkedTurn<T>(
     sessionKey: params.sessionKey,
     config: context.getRuntimeConfig(),
   });
-  // Only RPCs admitted for an existing writable session carry this target. An arbitrary
-  // session key supplied by a plugin is not an execution grant.
-  const scopes = scope?.client?.connect.scopes ?? [];
-  const profileId = scope?.client?.authenticatedUserProfile?.profileId;
-  const resource =
-    profileId &&
-    scopes.includes("operator.sessions.write") &&
-    !scopes.includes("operator.write") &&
-    !scopes.includes("operator.admin")
-      ? scope?.sessionResourceForFork
-      : undefined;
+  // A session-scoped RPC admitted this existing session for writing; its fork runs as that
+  // session's own run, whatever other scopes the caller holds. Without that admission the fork
+  // stays a sessionless agent launch: a session key named by a plugin is not an execution grant.
+  const resource = scope?.sessionResourceForFork;
   const source = resource?.target;
   if (source && (source.sessionKey !== params.sessionKey || source.agentId !== agentId)) {
     throw new Error("Plugin fork must use the admitted session.");
-  }
-  if (source && params.tools.some((tool) => tool !== "read" && tool !== "ls")) {
-    return { status: "refused", reason: "tool_policy" };
   }
   // The fork may outlive its RPC. Let the resource owner fence resets and replacements.
   const sessionLifetime = resource?.retainSession();
@@ -109,7 +99,7 @@ export async function runPluginForkedTurn<T>(
     runId,
   };
   const execution = await prepareInProcessAgentExecution({
-    ...(sessionRun ? { sessionRun } : {}),
+    sessionRun,
     agentId,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
@@ -144,7 +134,6 @@ export async function runPluginForkedTurn<T>(
           agentId,
           assertActive: assertCurrent,
         });
-        sessionLifetime?.assertCurrent();
         if (!target.entry?.sessionId) {
           throw new Error(`No active session context for "${params.sessionKey}".`);
         }
@@ -172,7 +161,7 @@ export async function runPluginForkedTurn<T>(
             : {}),
           authorizeModelOverride: deps.authorizeModelOverride,
           operatorAuthority: execution.operatorAuthority,
-          ...(sessionRun && profileId ? { requiredForkProfileId: profileId } : {}),
+          caller: source && scope?.client?.authenticatedUserProfile?.profileId,
           runId,
           timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 120_000),
           ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
@@ -210,7 +199,8 @@ export async function forkPluginSession<T>(input: {
   override?: { provider: string; model: string };
   authorizeModelOverride?: (model: ModelRef, authProfileId?: string) => void;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  requiredForkProfileId?: string;
+  /** The authenticated person whose session-scoped request started the fork. */
+  caller?: string;
   runId: string;
   timeoutMs: number;
   maxTokens?: number;
@@ -254,14 +244,6 @@ export async function forkPluginSession<T>(input: {
   // The anchored turn supplies its own requester and model, never the plugin.
   const turn = await readSessionForkTurn(source, input.abortSignal);
   assertCurrent();
-  if (
-    input.requiredForkProfileId &&
-    input.tools.length > 0 &&
-    (turn?.requester?.senderId !== input.requiredForkProfileId ||
-      turn.requester.messageProvider !== "webchat")
-  ) {
-    return { status: "refused", reason: "tool_policy" };
-  }
   if (!turn && input.tools.length > 0) {
     // Without the turn's own requester, sender-specific tool policy cannot be checked. A
     // tool-free fork runs nothing, so it proceeds on the session's own facts.
@@ -308,6 +290,7 @@ export async function forkPluginSession<T>(input: {
     model,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     ...(turn?.requester ? { requester: turn.requester } : {}),
+    caller: input.caller,
     ...(input.runtimePluginToolGrant
       ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
       : {}),

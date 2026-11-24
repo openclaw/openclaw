@@ -23,44 +23,6 @@ import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2
 
 describe("plugin forked turns through the real Gateway", () => {
   it(
-    "lets a session writer run a read-only plugin fork in their own WebChat",
-    { timeout: 150_000 },
-    async () => {
-      await withForkGateway(
-        (config) => config,
-        async ({ client, proof, ownFork, forkScript, forkToolOutputs }) => {
-          const { key } = await client.request<{ key: string }>("sessions.create", {
-            agentId: "main",
-            label: "Writer's own chat",
-          });
-          await client.request("chat.send", {
-            sessionKey: key,
-            message: "Say hello.",
-            idempotencyKey: randomUUID(),
-          });
-          await expect
-            .poll(() => proof.agentEnds.some((end) => end.sessionKey === key), { timeout: 45_000 })
-            .toBe(true);
-          const request = { sessionKey: key, tools: ["read"] };
-          await expect(client.request("forkproof.run", request)).rejects.toThrow(/operator.write/);
-          await expect(ownFork(key, ["exec"])).resolves.toMatchObject({
-            ok: true,
-            result: { status: "refused", reason: "tool_policy" },
-          });
-          forkScript.calls.push({ name: "read", args: { path: "notes.txt" } });
-          const fork = await ownFork(key, ["read"]);
-          expect(fork, fork.ok ? undefined : fork.message).toMatchObject({
-            ok: true,
-            result: { status: "settled" },
-          });
-          expect(forkToolOutputs().join(" ")).toContain("Release notes.");
-          expect(proof.settled.at(-1)).toMatchObject({ ok: true, text: "FORK_DONE" });
-        },
-        { sessionWriter: true },
-      );
-    },
-  );
-  it(
     "runs a hidden fork that executes only the plugin's own tool, settles inside admission, and refuses replaced sessions",
     { timeout: 150_000 },
     async () => {

@@ -26,6 +26,7 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./client.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -215,7 +216,7 @@ function toolCallResponse(
   ]);
 }
 
-type Fixture = {
+export type Fixture = {
   client: GatewayClient;
   workspaceDir: string;
   /** Tool calls the next foreground turn makes before it answers, to lengthen the turn. */
@@ -257,8 +258,11 @@ export type Turn = {
 export async function withForkGateway(
   configure: (config: OpenClawConfig) => OpenClawConfig,
   run: (fixture: Fixture) => Promise<void>,
-  /** Also load `fork-claim`, which registers tools named like core `exec` and `write`. */
-  options: { claimPlugin?: boolean; sessionWriter?: boolean } = {},
+  /**
+   * `claimPlugin` also loads `fork-claim`, which registers tools named like core `exec` and
+   * `write`. `proxyScopes` connects the client as a person signed in through a trusted proxy.
+   */
+  options: { claimPlugin?: boolean; proxyScopes?: OperatorScope[] } = {},
 ) {
   const state = await createOpenClawTestState({
     layout: "home",
@@ -395,10 +399,10 @@ export async function withForkGateway(
           skills: { load: { watch: false } },
         });
         const connection: Partial<Parameters<typeof startGatewayWithClient>[0]> = {};
-        if (options.sessionWriter) {
-          const user = "fork-writer@example.test";
+        if (options.proxyScopes) {
+          const user = "fork-caller@example.test";
           const origin = "https://control.example.test";
-          const scopes = ["operator.sessions.write" as const];
+          const scopes = options.proxyScopes;
           const auth = {
             mode: "trusted-proxy" as const,
             trustedProxy: {
@@ -439,7 +443,7 @@ export async function withForkGateway(
         const active = await startGatewayWithClient({
           cfg: config,
           configPath: state.configPath,
-          token: options.sessionWriter ? undefined : token,
+          token: options.proxyScopes ? undefined : token,
           scopes: ["operator.admin", "operator.read", "operator.write"],
           ...connection,
         });
