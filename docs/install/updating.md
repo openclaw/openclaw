@@ -142,6 +142,9 @@ SQLite/PostgreSQL installations. PostgreSQL uses only a server-side copy in a
 fresh namespace. The candidate migrates and validates that copy before writing
 the durable file-swap plan or publishing its anchor. Original PostgreSQL
 application schema and rows remain unchanged.
+Source access grants and schema-specific default privileges are copied and
+verified in the same transaction, so existing reporting and backup roles keep
+their permissions in the new namespace.
 
 If protection cannot be prepared, the candidate uses the existing configuration
 refusal (exit 78), with the obstruction in its diagnostics. It never falls back

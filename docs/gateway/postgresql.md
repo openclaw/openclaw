@@ -1072,10 +1072,16 @@ the existing configuration-refusal exit (78) and names the obstruction. It does
 not migrate the original in place. Restore missing database `CREATE` privileges
 or namespace ownership before retrying; see [runtime role requirements](#provision-a-database-and-runtime-role).
 
+The copy preserves and verifies schema, table, column, and sequence grants,
+including grant options and schema-specific default privileges. Existing reader,
+backup, and reporting roles keep their access. If the configured login cannot
+assume a source owner or grantor role, preparation refuses and names the required
+administrator action.
+
 Expect a longer restart: the copy runs after the old Gateway stops. Each
 schema-changing update changes the affected store's namespace name. Update
-operator tooling tied to a namespace, including dump scripts, schema-specific
-grants, and monitoring, to use the namespace selected by the current anchor.
+operator tooling tied to a namespace, including dump scripts, grant-management
+scripts, and monitoring, to use the namespace selected by the current anchor.
 Allow space for at least the original and private server copies, plus indexes,
 WAL, temporary work, and any retained generations. There is no portable local
 row export on this release path. The existing release-trial deadline still
