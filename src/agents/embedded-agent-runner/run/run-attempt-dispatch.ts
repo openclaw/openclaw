@@ -24,6 +24,7 @@ import { log } from "../logger.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { preparePluginHarnessSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
+import { readDispatchAccessPrograms } from "./access-program.js";
 import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
@@ -136,7 +137,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     modelId,
     model: effectiveModel,
-    modelApi: effectiveModel.api,
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
@@ -149,6 +149,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkingLevel: mapThinkingLevelForProvider(runtime.thinkLevel, effectiveModel),
     extraParamsOverride: { ...params.streamParams, fastMode: attemptFastMode },
+    cyberAccessPrograms: await readDispatchAccessPrograms(input, runtime, attemptAccessProgram),
   });
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");

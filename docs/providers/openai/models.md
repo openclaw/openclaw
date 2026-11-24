@@ -114,10 +114,11 @@ model and runtime and your operator role permits it. Turning Daybreak off select
 choices remain scoped to the authenticated user and agent.
 
 An unset session choice follows the configured model/agent Access default. Without
-a configured default, supported OpenAI routes use Standard. An explicit session
-choice overrides the default; an explicit empty model `accessPrograms: {}` retains
-provider/native inheritance. If the saved choice becomes unavailable, select
-Standard rather than silently downgrading the request.
+a configured default, supported OpenAI routes use Standard unless the selected
+account advertises exactly one program for the model and that program is Daybreak.
+An explicit session choice overrides the default; an explicit empty model
+`accessPrograms: {}` retains provider/native inheritance. A stale saved choice can
+fail before submission. Follow the error's guidance for the selected model.
 
 The session choice survives `/new` and session reset, and is inherited by a fork
 unless replaced. Changes affect the next admitted turn, not an already-running
@@ -139,7 +140,7 @@ omits `accessPrograms`. An explicit
 operator: `[]` permits Standard only, and Blue and Red are listed independently.
 For restricted operators, omission also permits Standard only. The actual model
 must separately be allowed by the role's model policy, and account access and
-provider entitlement are still required. Configured defaults do not bypass
+provider entitlement are still required. Configured and advertised defaults do not bypass
 explicit ceilings or restricted-role grants. Server-side checks cover direct requests, creation,
 execution, and retained or recovered authority after permissions change.
 
@@ -179,7 +180,9 @@ the provider enforces entitlement on every actual request.
 For the OpenClaw runtime on an official OpenAI Platform or ChatGPT subscription
 Responses endpoint, set the selected
 model's `params.accessPrograms.cyber` to `standard`, `daybreak_blue`, or
-`daybreak_red`. Omitting the setting defaults supported routes to Standard; use
+`daybreak_red`. Omitting the setting defaults supported routes to Standard, or to
+the model's one advertised Daybreak program when the account's metadata for that
+model excludes Standard; use
 `accessPrograms: {}` to retain OpenAI's model/account/project defaults. Neither `accessPrograms` nor `cyber` accepts
 `null`. Native Codex also accepts this model setting on ChatGPT authentication,
 with the session override taking precedence. This setting never grants access.
