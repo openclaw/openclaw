@@ -10,6 +10,7 @@ import {
   buildVercelAiGatewayProvider,
   resolveVercelAiGatewayModel,
 } from "./provider-catalog.js";
+import { buildVercelAiGatewaySpeechProvider } from "./speech-provider.js";
 import { resolveVercelAiGatewayThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "vercel-ai-gateway";
@@ -72,5 +73,8 @@ export default defineSingleProviderPluginEntry({
       }
       return undefined;
     },
+  },
+  register(api) {
+    api.registerSpeechProvider(buildVercelAiGatewaySpeechProvider);
   },
 });

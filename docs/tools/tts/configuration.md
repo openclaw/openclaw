@@ -233,6 +233,24 @@ or blank, it keeps the base TTS voice.
 }
 ```
   </Tab>
+  <Tab title="Vercel AI Gateway">
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "vercel-ai-gateway",
+    providers: {
+      "vercel-ai-gateway": {
+        // Optional: defaults to the chat key (auth profile or AI_GATEWAY_API_KEY).
+        apiKey: "${AI_GATEWAY_API_KEY}",
+        model: "openai/tts-1",
+        speakerVoice: "alloy",
+      },
+    },
+  },
+}
+```
+  </Tab>
   <Tab title="Volcengine">
 ```json5
 {

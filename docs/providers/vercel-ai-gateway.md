@@ -120,6 +120,30 @@ Use either form in your configuration; OpenClaw resolves the full
     OpenAI, and `vercel-ai-gateway/moonshotai/kimi-k2.6` routes through
     MoonshotAI. One `AI_GATEWAY_API_KEY` authenticates all upstream providers.
   </Accordion>
+  <Accordion title="Text-to-speech">
+    The plugin registers AI Gateway as a [text-to-speech](/tools/tts) provider.
+    Replies are synthesized through AI Gateway's native speech endpoint with the
+    same API key used for chat. The default model is `openai/tts-1`; any AI
+    Gateway speech model works, for example `elevenlabs/eleven-v3`,
+    `google/gemini-3.8-flash-tts`, or `microsoft/mai-voice-2.1-flash`:
+
+    ```json5
+    {
+      tts: {
+        provider: "vercel-ai-gateway",
+        providers: {
+          "vercel-ai-gateway": { model: "openai/tts-1-hd", speakerVoice: "nova" },
+        },
+      },
+    }
+    ```
+
+    Voice ids are upstream-specific and AI Gateway has no voice listing
+    endpoint, so set `speakerVoice` to a voice the chosen model supports.
+    Voice-note targets get Ogg/Opus: OpenClaw transcodes other formats with
+    `ffmpeg`. See the [field reference](/tools/tts/field-reference#vercel-ai-gateway).
+
+  </Accordion>
   <Accordion title="Thinking levels">
     `/think` options follow the upstream model prefix when OpenClaw recognizes
     it. `vercel-ai-gateway/anthropic/...` uses the Claude thinking profile,

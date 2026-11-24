@@ -167,6 +167,16 @@ and resolved values still fail startup or reject the update.
     <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
   </Accordion>
 
+  <Accordion title="Vercel AI Gateway">
+    <ParamField path="apiKey" type="string">Optional. Falls back to the `vercel-ai-gateway` chat credentials: auth profile, `AI_GATEWAY_API_KEY`, or `models.providers.vercel-ai-gateway.apiKey`.</ParamField>
+    <ParamField path="model" type="string">Any AI Gateway speech model id, for example `elevenlabs/eleven-v3` or `google/gemini-3.8-flash-tts`. Default `openai/tts-1`. Alias: `modelId`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Upstream voice id. When omitted, the upstream provider's default voice is used (`alloy` for OpenAI). Legacy aliases: `speakerVoiceId`, `voice`, `voiceId`.</ParamField>
+    <ParamField path="responseFormat" type="string">Upstream output format, passed through as the AI SDK `outputFormat` (for example `mp3`, `wav`, or `opus` for OpenAI models). When omitted, the upstream default is used.</ParamField>
+    <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
+    <ParamField path="language" type="string">Language hint for models that accept one.</ParamField>
+    <ParamField path="instructions" type="string">Style instructions for models that accept them.</ParamField>
+  </Accordion>
+
   <Accordion title="Volcengine (BytePlus Seed Speech)">
     <ParamField path="apiKey" type="string">Env: `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY`.</ParamField>
     <ParamField path="resourceId" type="string">Default `seed-tts-1.0`. Env: `VOLCENGINE_TTS_RESOURCE_ID`. Use `seed-tts-2.0` when your project has TTS 2.0 entitlement.</ParamField>
