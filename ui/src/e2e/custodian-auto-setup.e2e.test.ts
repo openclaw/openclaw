@@ -122,6 +122,8 @@ const detected: Detection = {
   setupComplete: false,
 };
 const nothingDetected: Detection = { ...detected, candidates: [] };
+// What openclaw.setup.options answers before local discovery finishes: no found logins yet.
+const knownChoices: Detection = { ...nothingDetected, recommendedInstalls: [] };
 const activated = (modelRef: string) => ({
   done: true,
   status: "done",
@@ -138,6 +140,7 @@ function installGateway(page: Page, scenario: ControlUiMockGatewayScenario = {})
       ...defaultControlUiFeatureMethods,
       "openclaw.chat",
       "openclaw.setup.detect",
+      "openclaw.setup.options",
       "openclaw.setup.activate.start",
       "openclaw.setup.auth.start",
       "openclaw.setup.prepare.start",
@@ -146,6 +149,7 @@ function installGateway(page: Page, scenario: ControlUiMockGatewayScenario = {})
     ],
     methodResponses: {
       "openclaw.setup.detect": detected,
+      "openclaw.setup.options": knownChoices,
       "openclaw.chat": {
         sessionId: "setup-proof",
         reply: "Your AI is ready. Let’s get to know each other.",
@@ -185,6 +189,14 @@ async function capture(page: Page, name: string, surface: Locator, content: Loca
   await writeFile(path.join(artifacts, "page.png"), frame.png);
   await writeFile(path.join(artifacts, "card.png"), frame.elements[0]!.png);
 }
+
+/** Each picker row's title, without its badge and subtitle. */
+const rowTitles = (card: Locator) =>
+  card
+    .locator(".custodian-setup__list .option-card__choice")
+    .evaluateAll((rows) => rows.map((row) => row.querySelector("strong")?.firstChild?.textContent));
+const row = (card: Locator, title: string) =>
+  card.getByRole("button", { name: new RegExp(`^${title}\\b`) });
 
 async function nextStep(card: Locator, heading: string) {
   await card.getByRole("button", { name: "Next", exact: true }).click();
@@ -226,14 +238,17 @@ suite.define(() => {
       await nextStep(card, "Where should your assistant run?");
       const where = card.getByRole("button", { name: /On this computer/ });
       await capture(page, "setup-2-where", card, [where]);
-      await card.getByRole("button", { name: "Use a different Gateway" }).click();
+      await card.getByRole("button", { name: /^On another computer/ }).click();
       await nextStep(card, "Connect your AI");
+      // Sign-ins and keys are usable while the Gateway still looks for logins, as on the Mac.
       const detecting = card.getByText("Looking for AI you already use…", { exact: true });
       await detecting.waitFor();
+      await row(card, "API key").waitFor();
+      expect(await row(card, "API key").isEnabled()).toBe(true);
       await capture(page, "setup-3-detecting", card, [detecting]);
       await gateway.resolveDeferred("openclaw.setup.detect", detected);
-      const codexRow = card.getByRole("button", { name: "ChatGPT", exact: true });
-      await codexRow.waitFor();
+      const codexRow = row(card, "ChatGPT");
+      await card.getByText("On this computer", { exact: true }).first().waitFor();
       expect(await card.getByText(/openai\/default|ollama\/local-model/).count()).toBe(0);
       // The Codex login and the ChatGPT sign-ins show as one ChatGPT choice.
       expect(await card.getByRole("button", { name: /ChatGPT|Codex/ }).count()).toBe(1);
@@ -241,15 +256,15 @@ suite.define(() => {
       expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
 
-      // One row per provider: ChatGPT first, as on main.
-      expect(await card.locator(".option-card__choice").allTextContents()).toEqual([
+      // The Mac's rows, ChatGPT first.
+      expect(await rowTitles(card)).toEqual([
         "ChatGPT",
         "Claude",
-        "Run a model locally",
-        "Another provider",
+        "API key",
+        "A model on your own computer",
       ]);
       // A model already running on the Gateway sits on the local models card.
-      await card.getByRole("button", { name: "Run a model locally", exact: true }).click();
+      await row(card, "A model on your own computer").click();
       await card.getByRole("button", { name: /^Local model/ }).click();
       expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
         kind: local.kind,
@@ -266,13 +281,12 @@ suite.define(() => {
       await capture(page, "setup-5-test-failed", card, [failed]);
 
       // As on main, picking ChatGPT tests the login the Gateway already has.
-      await card.getByRole("button", { name: "All choices" }).click();
+      await card.getByRole("button", { name: "Choose another AI" }).click();
       await codexRow.click();
       const checking = card.getByText("Checking a real conversation. This may take a minute.", {
         exact: true,
       });
       await checking.waitFor();
-      expect(await card.getByRole("button", { name: "All choices" }).isDisabled()).toBe(true);
       await capture(page, "setup-13-chatgpt-checking", card, [checking]);
       expect(
         (
@@ -284,7 +298,10 @@ suite.define(() => {
       await gateway.resolveDeferred("openclaw.setup.activate.start", activated(codex.modelRef));
       const done = card.getByRole("heading", { name: "You’re all set!" });
       await done.waitFor();
-      expect(await card.getByText(/openai\/default/).count()).toBe(0);
+      await card
+        .getByText("Using ChatGPT (openai/default) on this computer", { exact: true })
+        .waitFor();
+      await card.getByRole("button", { name: "Sign in separately" }).waitFor();
       await page
         .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
         .waitFor();
@@ -300,7 +317,7 @@ suite.define(() => {
     });
   });
 
-  it("connects a Claude API key from the Claude card", async () => {
+  it("connects an Anthropic API key from the API key card", async () => {
     await suite.withPage(options, async ({ page }) => {
       const gateway = await installGateway(page, {
         methodResponses: { "openclaw.setup.activate.start": activated("anthropic/claude-sonnet") },
@@ -309,10 +326,13 @@ suite.define(() => {
       const card = page.locator(".custodian-setup");
       await nextStep(card, "Where should your assistant run?");
       await nextStep(card, "Connect your AI");
-      await card.getByRole("button", { name: "Claude", exact: true }).click();
+      await row(card, "API key").click();
+      await card.getByLabel("Provider and access method").selectOption({
+        label: "Anthropic: API key",
+      });
       const key = card.getByLabel("API key", { exact: true });
       await key.fill("sk-test-not-real");
-      await capture(page, "setup-9-claude-card", card, [key]);
+      await capture(page, "setup-9-key-card", card, [key]);
       await card.getByRole("button", { name: "Connect", exact: true }).click();
       expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
         kind: "api-key",
@@ -339,14 +359,14 @@ suite.define(() => {
       const card = page.locator(".custodian-setup");
       await nextStep(card, "Where should your assistant run?");
       await nextStep(card, "Connect your AI");
-      await card.getByRole("button", { name: "Another provider", exact: true }).click();
+      await row(card, "API key").click();
       const provider = card.getByLabel("Provider and access method");
-      const key = card.getByLabel("API key or token");
+      const key = card.getByLabel("API key", { exact: true });
       const connect = card.getByRole("button", { name: "Connect", exact: true });
       await provider.selectOption({ label: "Anthropic: API key" });
       await key.fill("sk-test-rejected");
       await connect.click();
-      await card.getByRole("alert").getByText("AI setup didn’t complete").waitFor();
+      await card.getByRole("alert").getByText("That key didn’t work").waitFor();
       expect
         .soft(await provider.locator("option:checked").textContent())
         .toBe("Anthropic: API key");
@@ -391,51 +411,44 @@ suite.define(() => {
       const card = page.locator(".custodian-setup");
       await nextStep(card, "Where should your assistant run?");
       await nextStep(card, "Connect your AI");
-      const signIn = card.getByRole("button", { name: "ChatGPT", exact: true });
+      const signIn = row(card, "ChatGPT");
       await signIn.waitFor();
-      expect(await card.locator(".option-card__choice").allTextContents()).toEqual([
+      await card.getByText("Looking for AI you already use…").waitFor({ state: "detached" });
+      expect(await rowTitles(card)).toEqual([
         "ChatGPT",
         "Claude",
-        "Run a model locally",
-        "Another provider",
+        "API key",
+        "A model on your own computer",
       ]);
       await capture(page, "setup-7-nothing-detected", card, [signIn]);
       if (!ok) {
-        const back = card.getByRole("button", { name: "All choices" });
-        await card.getByRole("button", { name: "Claude", exact: true }).click();
-        const claudeKey = card.getByLabel("API key", { exact: true });
-        await claudeKey.waitFor();
-        await capture(page, "setup-10-claude-card", card, [claudeKey]);
+        const back = card.getByRole("button", { name: "Choose another AI" });
+        await row(card, "API key").click();
+        const key = card.getByLabel("API key", { exact: true });
+        await key.waitFor();
+        await capture(page, "setup-10-key-card", card, [key]);
         await back.click();
-        await card.getByRole("button", { name: "Run a model locally", exact: true }).click();
+        await row(card, "A model on your own computer").click();
         const ollama = card.getByRole("link", { name: /^Ollama/ });
         expect(await ollama.getAttribute("href")).toBe("https://ollama.com/download");
         await card.getByRole("button", { name: /^LM Studio/ }).waitFor();
-        await capture(page, "setup-11-local-card", card, [ollama]);
+        const checkAgain = card.getByRole("button", { name: "Check again" });
+        await capture(page, "setup-11-local-card", card, [ollama, checkAgain]);
         await back.click();
-        await card.getByRole("button", { name: "Another provider", exact: true }).click();
-        const provider = card.getByLabel("Provider and access method");
-        await provider.waitFor();
-        await capture(page, "setup-12-other-card", card, [provider]);
-        await back.click();
+        await card.getByRole("button", { name: "More providers" }).click();
+        const pair = card.getByRole("button", { name: /^Codex login \(device code\)/ });
+        await capture(page, "setup-12-more-providers", card, [pair]);
         expect(await gateway.getRequests("openclaw.setup.prepare.start")).toHaveLength(0);
       }
+      // With no Codex login, picking ChatGPT starts its sign-in, as on the Mac.
       await signIn.click();
-      // One sign-in, as on main: no Codex alternatives inside the ChatGPT card.
-      const chatgptSignIn = card.getByRole("button", { name: "Sign in with ChatGPT", exact: true });
-      await chatgptSignIn.waitFor();
-      expect(await card.getByRole("link").count()).toBe(0);
-      if (!ok) {
-        await capture(page, "setup-14-chatgpt-card", card, [chatgptSignIn]);
-      }
-      await chatgptSignIn.click();
       expect((await gateway.waitForRequest("openclaw.setup.auth.start")).params).toMatchObject({
         authChoice: chatgpt.id,
       });
       const confirmation = card.getByRole("textbox", { name: "Enter the confirmation code" });
       await confirmation.waitFor();
       // The provider's card replaces the list while it signs in.
-      expect(await card.getByRole("button", { name: "Claude", exact: true }).count()).toBe(0);
+      expect(await row(card, "Claude").count()).toBe(0);
       if (!ok) {
         await capture(page, "setup-15-chatgpt-signing-in", card, [confirmation]);
       }

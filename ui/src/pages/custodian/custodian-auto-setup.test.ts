@@ -93,7 +93,9 @@ function setupRequest(
       ? (handlers[method]?.(params) ?? { turns: [] })
       : method === "openclaw.setup.detect"
         ? detect()
-        : (handlers[method]?.(params) ?? reply),
+        : method === "openclaw.setup.options"
+          ? new Promise(() => {})
+          : (handlers[method]?.(params) ?? reply),
   );
 }
 const setupContext = (request: Request) => createContext(request, methods, { agentsList });
@@ -124,9 +126,15 @@ async function settled(page: Page, expected = () => true) {
   flush();
   await page.updateComplete;
 }
+/** A picker row's title, without its badge and subtitle. */
+const rowTitle = (row: Element) => row.querySelector("strong")?.firstChild?.textContent;
+const rowTitles = (page: Page) =>
+  [...page.querySelectorAll(".custodian-setup__list .option-card__choice")].map(rowTitle);
 function findButton(root: HTMLElement, label: string) {
   const button = [...root.querySelectorAll("button")].find(
-    (entry) => entry.textContent?.trim() === label,
+    (entry) =>
+      entry.textContent?.trim() === label ||
+      (entry.classList.contains("option-card__choice") && rowTitle(entry) === label),
   );
   expect(button).toBeDefined();
   return button!;
@@ -170,16 +178,12 @@ it("waits for the user to pick the detected AI before testing and saving it", as
   expectRpc(request, "detect", {});
   expect(calls(request, "activate.start")).toHaveLength(0);
   expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(0);
-  // One row per provider, ChatGPT first as on main, never a model id.
-  expect(
-    [...page.querySelectorAll(".custodian-setup .option-card__choice")].map(
-      (row) => row.textContent,
-    ),
-  ).toEqual(["ChatGPT", "Run a model locally", "Another provider"]);
+  // The Mac's rows, ChatGPT first, never a model id.
+  expect(rowTitles(page)).toEqual(["ChatGPT", "API key", "A model on your own computer"]);
   text(page).not.toContain("Codex");
   text(page).not.toContain("Sign in with ChatGPT");
   text(page).not.toContain("openai/gpt-5.5");
-  await click(page, "Run a model locally");
+  await click(page, "A model on your own computer");
   const row = findButton(page, "Local modelLoaded in OllamaUse");
   row.click();
   row.click();
@@ -195,7 +199,7 @@ it("waits for the user to pick the detected AI before testing and saving it", as
   activation.resolve(activated("ollama/qwen3"));
   await settled(page, () => page.store.autoSetup.ready);
   text(page).toContain("You’re all set!");
-  text(page).not.toContain("ollama/qwen3");
+  text(page).toContain("Using Local model (ollama/qwen3) on gateway.test");
   await waitForFast(() => text(page).toContain(reply.reply));
 });
 
@@ -229,6 +233,29 @@ it("shows a short reason for a failed test and folds the Gateway's error into de
   );
 });
 
+it("names the shared Codex login on the finished card and signs in separately", async () => {
+  const request = setupRequest(undefined, {
+    "openclaw.setup.activate.start": () => activated("openai/gpt-5.5"),
+    "openclaw.setup.auth.start": () => new Promise(() => {}),
+  });
+  const { page } = await mountSetup(request);
+  await openAiStep(page);
+  await click(page, "ChatGPT", () => page.store.autoSetup.ready);
+  text(page).toContain("Using ChatGPT (openai/gpt-5.5) on gateway.test");
+  text(page).toContain("Using your existing Codex login · sessions shared with Codex");
+  findButton(page, "Sign in separately").click();
+  await waitForFast(() =>
+    expectRpc(request, "auth.start", expect.objectContaining({ authChoice: chatgpt.id })),
+  );
+});
+
+it("changes where the assistant runs on the connection page in a browser", async () => {
+  const { page, context } = await mountSetup(setupRequest());
+  await click(page, "Next");
+  await click(page, "On this computer");
+  expect(context.navigate).toHaveBeenCalledWith("connection");
+});
+
 // Real error text from a failed first-run ChatGPT sign-in (Control UI, 2026-11-19).
 const realSignInError =
   "Credentials saved; default unchanged. OAuth token refresh failed for openai: Auth profile credential authority is unavailable; retry after owner recovery. Please try again or re-authenticate. Choose the saved sign-in in Model Setup to retry without signing in again.";
@@ -246,8 +273,8 @@ it.each([
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
+  // With no Codex login, picking ChatGPT starts its sign-in, as on the Mac.
   await click(page, "ChatGPT");
-  await click(page, "Sign in with ChatGPT");
   expectRpc(request, "auth.start", expect.objectContaining({ authChoice: chatgpt.id }));
   await click(page, "Yes");
   if (outcome === "done") {
@@ -306,8 +333,9 @@ it("uses shell-neutral native capabilities for Gateway selection and permissions
   };
   const { page } = await mountSetup(setupRequest());
   await click(page, "Next");
-  text(page).toContain("On this computerStudio Mac");
-  await click(page, "Use a different Gateway");
+  text(page).toContain("On this computer RecommendedStudio Mac");
+  // The other place is another Gateway, chosen in the shell's Gateways window.
+  await click(page, "On another computer");
   await click(page, "Review permissions");
   expect(openGateways).toHaveBeenCalledOnce();
   expect(reviewPermissions).toHaveBeenCalledOnce();
@@ -351,7 +379,7 @@ it("sets up a local model from the card, as on the Mac", async () => {
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  await click(page, "Run a model locally");
+  await click(page, "A model on your own computer");
   await click(page, "LM StudioConnect server");
   expectRpc(request, "prepare.start", expect.objectContaining({ authChoice: lmStudio.id }));
   await waitForFast(() =>
@@ -385,7 +413,7 @@ it("activates the prepared Ollama model when discovery omits it", async () => {
   );
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  await click(page, "Run a model locally");
+  await click(page, "A model on your own computer");
   await click(page, "OllamaChoose connection");
   await waitForFast(() =>
     expectRpc(
@@ -404,7 +432,7 @@ it("connects an API key from the card's own form", async () => {
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  await click(page, "Another provider");
+  await click(page, "API key");
   const form = page.querySelector("form")!;
   form.querySelector<HTMLInputElement>('input[name="key"]')!.value = "sk-test-not-real";
   form.requestSubmit();
@@ -436,68 +464,60 @@ it("uses a Claude Code login the Gateway found with one click", async () => {
   const { page } = await mountSetup(request);
   await openAiStep(page);
   await click(page, "Claude");
-  expect(page.querySelector('.custodian-setup input[name="key"]')).toBeNull();
-  await click(page, "Use my Claude Code login");
   expectRpc(request, "activate.start", expect.objectContaining({ kind: "claude-cli" }));
   await settled(page, () => page.store.autoSetup.ready);
   text(page).toContain("You’re all set!");
 });
 
-it.each(["Claude", "Another provider"])(
-  "recovers from a failed Claude Code login using an API key from %s",
-  async (card) => {
-    const modelRef = "anthropic/claude-sonnet";
-    const claudeCode = {
-      kind: "claude-cli",
-      brandId: "anthropic",
-      label: "Claude Code",
-      detail: "installed; login status unverified",
-      modelRef,
-      recommended: false,
-    } satisfies Detection["candidates"][number];
-    const request = setupRequest(
-      () => ({
-        ...detection([claudeCode]),
-        manualProviders: [
-          { ...apiKey, id: "anthropic-api-key", brandId: "anthropic", groupLabel: "Anthropic" },
-        ],
-      }),
-      {
-        "openclaw.setup.activate.start": vi
-          .fn()
-          .mockReturnValueOnce(failed("Claude Code is signed out"))
-          .mockReturnValueOnce(activated(modelRef)),
-      },
-    );
-    const { page } = await mountSetup(request);
-    await openAiStep(page);
-    await click(page, "Claude");
-    await click(page, "Use my Claude Code login");
-    expectRpc(request, "activate.start", expect.objectContaining({ kind: "claude-cli" }));
-    expect(page.querySelector(".custodian-setup details pre")?.textContent).toBe(
-      "Claude Code is signed out",
-    );
-    if (card === "Another provider") {
-      await click(page, "All choices");
-      await click(page, card);
-    }
-    const key = page.querySelector<HTMLInputElement>('.custodian-setup input[name="key"]');
-    expect(key).not.toBeNull();
-    key!.value = "sk-test-claude-recovery";
-    key!.form!.requestSubmit();
-    await settled(page, () => page.store.autoSetup.ready);
-    expectRpc(
-      request,
-      "activate.start",
-      expect.objectContaining({
-        kind: "api-key",
-        authChoice: "anthropic-api-key",
-        apiKey: "sk-test-claude-recovery",
-      }),
-    );
-    text(page).toContain("You’re all set!");
-  },
-);
+it("recovers from a failed Claude Code login using an API key", async () => {
+  const modelRef = "anthropic/claude-sonnet";
+  const claudeCode = {
+    kind: "claude-cli",
+    brandId: "anthropic",
+    label: "Claude Code",
+    detail: "installed; login status unverified",
+    modelRef,
+    recommended: false,
+  } satisfies Detection["candidates"][number];
+  const request = setupRequest(
+    () => ({
+      ...detection([claudeCode]),
+      manualProviders: [
+        { ...apiKey, id: "anthropic-api-key", brandId: "anthropic", groupLabel: "Anthropic" },
+      ],
+    }),
+    {
+      "openclaw.setup.activate.start": vi
+        .fn()
+        .mockReturnValueOnce(failed("Claude Code is signed out"))
+        .mockReturnValueOnce(activated(modelRef)),
+    },
+  );
+  const { page } = await mountSetup(request);
+  await openAiStep(page);
+  await click(page, "Claude");
+  expectRpc(request, "activate.start", expect.objectContaining({ kind: "claude-cli" }));
+  expect(page.querySelector(".custodian-setup details pre")?.textContent).toBe(
+    "Claude Code is signed out",
+  );
+  await click(page, "Choose another AI");
+  await click(page, "API key");
+  const key = page.querySelector<HTMLInputElement>('.custodian-setup input[name="key"]');
+  expect(key).not.toBeNull();
+  key!.value = "sk-test-claude-recovery";
+  key!.form!.requestSubmit();
+  await settled(page, () => page.store.autoSetup.ready);
+  expectRpc(
+    request,
+    "activate.start",
+    expect.objectContaining({
+      kind: "api-key",
+      authChoice: "anthropic-api-key",
+      apiKey: "sk-test-claude-recovery",
+    }),
+  );
+  text(page).toContain("You’re all set!");
+});
 
 it("ignores an old Gateway result after connection ownership changes", async () => {
   const pending = createDeferred<Detection>();
@@ -538,7 +558,6 @@ it("keeps cancellation available during an answer and resumes after protected ca
   const { page } = await mountSetup(request);
   await openAiStep(page);
   await click(page, "ChatGPT");
-  await click(page, "Sign in with ChatGPT");
   findButton(page, "Yes").click();
   await waitForSolid(() => expect(findButton(page, "Yes").disabled).toBe(true));
   expect(findButton(page, "Cancel").disabled).toBe(false);

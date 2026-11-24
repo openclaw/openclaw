@@ -103,15 +103,15 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     get cancelling() {
       return cancelling();
     },
-    activate: (candidate: Parameters<CustodianAutoSetup["activate"]>[0]) =>
-      void run("wizard", (source) => source.autoSetup.activate(candidate)),
+    activate: (candidate: Parameters<CustodianAutoSetup["activate"]>[0], label: string) =>
+      void run("wizard", (source) => source.autoSetup.activate(candidate, label)),
     prepare: (option: SetupPrepareOption) =>
       void run("wizard", (source) => source.autoSetup.prepare(option)),
     connectKey: (provider: SetupManualProvider, apiKey: string) =>
       void run("wizard", (source) => source.autoSetup.connectKey(provider, apiKey)),
     retry: () => void run("verification", (source) => source.autoSetup.retry()),
-    signIn: (option: SetupAuthOption) =>
-      void run("wizard", (source) => source.autoSetup.signIn(option)),
+    signIn: (option: SetupAuthOption, label?: string) =>
+      void run("wizard", (source) => source.autoSetup.signIn(option, label)),
     answer: (value: unknown) =>
       void run("wizard", (source) => source.autoSetup.answerWizard(value)),
     cancel: () => void run("cancellation", (source) => source.autoSetup.cancelWizard()),

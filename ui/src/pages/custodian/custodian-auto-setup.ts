@@ -20,10 +20,14 @@ export type SetupPrepareOption = NonNullable<SetupDetection["prepareOptions"]>[n
 export type SetupManualProvider = SetupDetection["manualProviders"][number];
 type SetupAttempt = {
   key: string;
+  /** The name the user picked, such as ChatGPT, for the finished card. */
+  label: string;
   progress?: string;
   signIn?: true;
   prepareOption?: SetupPrepareOption;
 };
+/** What this page connected: the finished card names it. */
+export type SetupConnection = { label: string; modelRef: string; shared: boolean };
 export type SetupStep = "welcome" | "where" | "ai";
 /** One short sentence for the card; the Gateway's own text stays behind Show details. */
 export type SetupFailure = { title: string; summary: string; detail?: string };
@@ -37,13 +41,12 @@ const DISMISSED_KEY = "openclaw.custodian.setup-dismissed.v1:";
 export class CustodianAutoSetup {
   step: SetupStep = "welcome";
   detection: SetupDetection | null = null;
-  /** Detection is in flight. */
+  /** Detection is in flight; known choices may already be listed. */
   pending = false;
   /** The choice the wizard is running or last ran: candidate kind, option id, or "api-key". */
   attempt: SetupAttempt | null = null;
-  nativeSessionCatalogsEnabled = false;
   /** This page tested and saved a choice. */
-  connected = false;
+  connection: SetupConnection | null = null;
   error: SetupFailure | null = null;
   dismissed = false;
   supported = false;
@@ -88,7 +91,7 @@ export class CustodianAutoSetup {
    * Gateway's agent always names an implicit default model, so that alone proves nothing.
    */
   get ready(): boolean {
-    return this.connected || this.detection?.setupComplete === true;
+    return this.connection !== null || this.detection?.setupComplete === true;
   }
 
   private selectedAgent() {
@@ -150,8 +153,7 @@ export class CustodianAutoSetup {
         this.step = "welcome";
         this.detection = null;
         this.attempt = null;
-        this.nativeSessionCatalogsEnabled = false;
-        this.connected = false;
+        this.connection = null;
         this.error = null;
         this.started = false;
         this.dismissalKey = DISMISSED_KEY + context.gateway.connection.gatewayUrl;
@@ -175,17 +177,32 @@ export class CustodianAutoSetup {
     }
   }
 
-  /** Detection only reads the Gateway; nothing is tested or saved until the user picks. */
+  /**
+   * Detection only reads the Gateway; nothing is tested or saved until the user picks. As on
+   * the Mac, sign-ins and keys are listed from config while local discovery still runs.
+   */
   async retry(): Promise<void> {
     const client = this.client;
-    if (!client || this.pending) {
+    if (!client) {
       return;
     }
     const epoch = ++this.epoch;
     const isCurrent = () => epoch === this.epoch && client === this.client;
     this.pending = true;
     this.error = null;
+    if (!this.testing) {
+      this.attempt = null;
+    }
     this.changed();
+    void client.request<SetupDetection>("openclaw.setup.options", {}, { timeoutMs: null }).then(
+      (options) => {
+        if (isCurrent() && this.pending && !this.detection) {
+          this.detection = options;
+          this.changed();
+        }
+      },
+      () => undefined,
+    );
     try {
       const detection = await client.request<SetupDetection>(
         "openclaw.setup.detect",
@@ -194,7 +211,6 @@ export class CustodianAutoSetup {
       );
       if (isCurrent()) {
         this.detection = detection;
-        this.attempt = null;
       }
     } catch (error) {
       if (isCurrent()) {
@@ -212,13 +228,6 @@ export class CustodianAutoSetup {
     }
   }
 
-  /** Native conversation discovery is asked only when the Gateway says a fresh setup needs it. */
-  private catalogPreference(): { nativeSessionCatalogsEnabled?: boolean } {
-    return this.detection?.nativeSessionCatalogPreferenceRequired
-      ? { nativeSessionCatalogsEnabled: this.nativeSessionCatalogsEnabled }
-      : {};
-  }
-
   /**
    * Every choice runs as a Gateway wizard, as on the Mac: plugin approvals, sign-in
    * codes and the live test question arrive as steps this card can answer.
@@ -227,7 +236,7 @@ export class CustodianAutoSetup {
     attempt: SetupAttempt,
     launch: () => Promise<ModelSetupWizardCompletion | null>,
   ): Promise<void> {
-    if (!this.client || this.pending || this.testing) {
+    if (!this.client || this.testing) {
       return;
     }
     this.wizard.close();
@@ -241,15 +250,17 @@ export class CustodianAutoSetup {
     }
   }
 
-  activate(candidate: Pick<SetupCandidate, "kind" | "modelRef" | "modelTarget">): Promise<void> {
+  activate(
+    candidate: Pick<SetupCandidate, "kind" | "modelRef" | "modelTarget">,
+    label: string,
+  ): Promise<void> {
     const params = {
       ...candidateActivation(candidate),
       // Like automatic setup: reuse the Codex login instead of a second sign-in.
       ...(candidate.kind === "codex-cli" ? { shareCodexLogin: true as const } : {}),
-      ...this.catalogPreference(),
     };
     const progress = t("custodian.autoSetup.testing");
-    return this.begin({ key: candidate.kind, progress }, () =>
+    return this.begin({ key: candidate.kind, label, progress }, () =>
       this.wizard.activate(params, activationTargetId(candidate.kind, candidate.modelRef)),
     );
   }
@@ -261,31 +272,25 @@ export class CustodianAutoSetup {
       authChoice: provider.id,
       apiKey,
       ...(provider.modelTarget ? { modelTarget: provider.modelTarget } : {}),
-      ...this.catalogPreference(),
     };
-    return this.begin({ key: "api-key", progress: t("custodian.autoSetup.testing") }, () =>
+    const label = provider.groupLabel ?? provider.label;
+    return this.begin({ key: "api-key", label, progress: t("custodian.autoSetup.testing") }, () =>
       this.wizard.activate(params, "api-key"),
     );
   }
 
-  signIn(option: SetupAuthOption): Promise<void> {
+  signIn(option: SetupAuthOption, label = option.label): Promise<void> {
     const progress = t("custodian.autoSetup.startingSignIn");
-    return this.begin({ key: option.id, progress, signIn: true }, () => {
+    return this.begin({ key: option.id, label, progress, signIn: true }, () => {
       this.wizard.prepareSignIn(option.kind, option.label, option.brandId);
-      return this.wizard.start(
-        option.id,
-        "openclaw.setup.auth.start",
-        this.catalogPreference(),
-        option.modelTarget,
-      );
+      return this.wizard.start(option.id, "openclaw.setup.auth.start", {}, option.modelTarget);
     });
   }
 
   prepare(option: SetupPrepareOption): Promise<void> {
     const progress = t("custodian.autoSetup.preparing");
-    return this.begin({ key: option.id, progress, prepareOption: option }, () =>
-      this.wizard.start(option.id, "openclaw.setup.prepare.start"),
-    );
+    const attempt = { key: option.id, label: option.label, progress, prepareOption: option };
+    return this.begin(attempt, () => this.wizard.start(option.id, "openclaw.setup.prepare.start"));
   }
 
   private async finish(completion: ModelSetupWizardCompletion): Promise<void> {
@@ -293,8 +298,13 @@ export class CustodianAutoSetup {
       return;
     }
     this.wizard.close();
-    if (completion.modelActivation?.modelRef) {
-      this.connected = true;
+    const modelRef = completion.modelActivation?.modelRef;
+    if (modelRef) {
+      this.connection = {
+        label: this.attempt?.label ?? modelRef,
+        modelRef,
+        shared: this.attempt?.key === "codex-cli",
+      };
       this.attempt = null;
       void this.context?.agents.refreshList();
       this.changed();
@@ -303,7 +313,10 @@ export class CustodianAutoSetup {
     const prepareOption = this.attempt?.prepareOption;
     if (prepareOption && completion.preparedModelRef) {
       // Discovery lists loaded models. The wizard returns the exact model the user prepared.
-      await this.activate(preparedModelActivation(prepareOption, completion.preparedModelRef));
+      await this.activate(
+        preparedModelActivation(prepareOption, completion.preparedModelRef),
+        prepareOption.label,
+      );
       return;
     }
     // A sign-in can complete without switching models. Refresh the available choices.
@@ -326,13 +339,11 @@ export class CustodianAutoSetup {
     if (state.phase !== "error") {
       return null;
     }
-    const signIn = this.attempt?.signIn === true;
+    const kind = this.attempt?.signIn ? "signIn" : key === "api-key" ? "key" : "test";
     return {
       key,
-      title: t(
-        signIn ? "custodian.autoSetup.signInFailedTitle" : "custodian.autoSetup.testFailedTitle",
-      ),
-      summary: t(signIn ? "custodian.autoSetup.signInFailed" : "custodian.autoSetup.testFailed"),
+      title: t(`custodian.autoSetup.${kind}FailedTitle`),
+      summary: t(`custodian.autoSetup.${kind}Failed`),
       detail: state.message,
     };
   }
@@ -362,11 +373,6 @@ export class CustodianAutoSetup {
       summary: t("custodian.autoSetup.failed"),
       detail: formatUiError(error, t("custodian.autoSetup.failed")),
     };
-    this.changed();
-  }
-
-  setNativeSessionCatalogs(enabled: boolean): void {
-    this.nativeSessionCatalogsEnabled = enabled;
     this.changed();
   }
 

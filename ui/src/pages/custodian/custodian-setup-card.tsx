@@ -1,5 +1,9 @@
 import { createMemo, For, Show } from "solid-js";
 import { nativeSetupCapability } from "../../app/native-setup.ts";
+import {
+  providerDisplayLabel,
+  providerIdFromModelRef,
+} from "../../components/provider-icon-data.ts";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -8,7 +12,8 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { CustodianSetupActions } from "./custodian-actions.ts";
 import type { SetupStep } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
-import { ChoiceRow, ConnectAi } from "./custodian-setup-ai.tsx";
+import { ChoiceRow, ConnectAi, WizardSteps } from "./custodian-setup-ai.tsx";
+import { setupPicker } from "./custodian-setup-picker.ts";
 
 const STEPS: SetupStep[] = ["welcome", "where", "ai"];
 
@@ -28,7 +33,6 @@ export function CustodianSetupCard(props: {
     return (
       props.actions.verifying ||
       props.actions.answering ||
-      current.pending ||
       current.wizard.state.phase === "starting" ||
       current.wizard.state.phase === "step"
     );
@@ -47,6 +51,33 @@ export function CustodianSetupCard(props: {
   // A loopback address means nothing to the user; a remote host name does.
   const gatewayLabel = () =>
     native()?.currentGateway?.name || (local() ? undefined : gatewayHost());
+  // The other place is another Gateway: the shell's Gateways window, or this page's connection.
+  const changeGateway = () => {
+    const openGateways = native()?.openGateways;
+    if (openGateways) {
+      openGateways();
+    } else {
+      context.navigate("connection");
+    }
+  };
+  const summary = () => {
+    const current = setup();
+    const connection = current.connection;
+    const modelRef = connection?.modelRef ?? current.detection?.configuredModel;
+    if (!modelRef) {
+      return undefined;
+    }
+    const label =
+      connection?.label ?? providerDisplayLabel(providerIdFromModelRef(modelRef) ?? modelRef);
+    const gateway = gatewayLabel();
+    return local() || !gateway
+      ? t("custodian.autoSetup.usingHere", { label, modelRef })
+      : t("custodian.autoSetup.using", { label, modelRef, gateway });
+  };
+  const separateSignIn = () =>
+    setup().connection?.shared && setup().detection
+      ? setupPicker(setup().detection!).chatgptSignIn
+      : undefined;
   const stepIndex = () => STEPS.indexOf(setup().step);
   const go = (step: SetupStep) => setup().setStep(step);
   return (
@@ -69,6 +100,27 @@ export function CustodianSetupCard(props: {
                   <Icon name="circleCheck" />
                 </span>
                 <h2>{t("custodian.autoSetup.doneTitle")}</h2>
+                <Show when={summary()}>{(text) => <p class="muted">{text()}</p>}</Show>
+                <Show when={setup().connection?.shared}>
+                  <p class="muted">{t("custodian.autoSetup.sharedCodexLogin")}</p>
+                  <Show when={separateSignIn()}>
+                    {(option) => (
+                      <button
+                        class="btn"
+                        type="button"
+                        disabled={busy()}
+                        onClick={() =>
+                          props.actions.signIn(option(), t("custodian.autoSetup.chatgpt"))
+                        }
+                      >
+                        {t("custodian.autoSetup.separateLogin")}
+                      </button>
+                    )}
+                  </Show>
+                </Show>
+                <div class="custodian-setup__stack">
+                  <WizardSteps setup={setup} actions={props.actions} />
+                </div>
               </header>
             }
           >
@@ -110,31 +162,40 @@ export function CustodianSetupCard(props: {
                 <p class="muted">{t("custodian.autoSetup.whereBody")}</p>
                 <div class="callout custodian-setup__stack">
                   <ChoiceRow
-                    icon={<Icon name={local() ? "monitor" : "server"} />}
-                    title={t(
-                      local()
-                        ? "custodian.autoSetup.whereLocal"
-                        : "custodian.autoSetup.whereRemote",
-                    )}
-                    detail={gatewayLabel()}
-                    selected
-                    trailing={<Icon name="circleCheck" />}
+                    icon={<Icon name="monitor" />}
+                    title={
+                      <>
+                        {t("custodian.autoSetup.whereLocal")}{" "}
+                        <span class="chip custodian-setup__badge">
+                          {t("custodian.autoSetup.recommended")}
+                        </span>
+                      </>
+                    }
+                    detail={(local() && gatewayLabel()) || t("custodian.autoSetup.whereLocalBody")}
+                    selected={local()}
+                    trailing={local() ? <Icon name="circleCheck" /> : undefined}
+                    onClick={() => !local() && changeGateway()}
                   />
-                  <Show when={native()?.openGateways}>
-                    {(openGateways) => (
-                      <button
-                        class="btn btn--ghost btn--sm"
-                        type="button"
-                        onClick={() => openGateways()()}
-                      >
-                        {t("custodian.autoSetup.differentGateway")}
-                      </button>
-                    )}
-                  </Show>
+                  <ChoiceRow
+                    icon={<Icon name="server" />}
+                    title={t("custodian.autoSetup.whereRemote")}
+                    detail={
+                      (!local() && gatewayLabel()) || t("custodian.autoSetup.whereRemoteBody")
+                    }
+                    selected={!local()}
+                    trailing={!local() ? <Icon name="circleCheck" /> : undefined}
+                    onClick={() => local() && changeGateway()}
+                  />
                 </div>
               </Show>
               <Show when={setup().step === "ai"}>
-                <ConnectAi setup={setup} actions={props.actions} busy={busy} />
+                <ConnectAi
+                  setup={setup}
+                  actions={props.actions}
+                  busy={busy}
+                  local={local}
+                  native={() => native() != null}
+                />
               </Show>
             </div>
             <footer class="custodian-setup__footer">

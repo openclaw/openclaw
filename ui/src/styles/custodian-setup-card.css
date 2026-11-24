@@ -89,3 +89,30 @@ openclaw-custodian-setup-card {
 .custodian-setup__dots .is-current {
   background: var(--accent);
 }
+
+.custodian-setup__list {
+  display: grid;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+}
+
+.custodian-setup__list > .option-card__choice {
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.custodian-setup__list > .option-card__choice + .option-card__choice {
+  border-top: 1px solid var(--border);
+}
+
+.custodian-setup__badge {
+  margin-left: 2px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.custodian-setup__warn {
+  color: var(--warn);
+}
