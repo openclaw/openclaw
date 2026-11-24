@@ -53,6 +53,7 @@ struct TalkChimeLifecycleTests {
 }
 
 #if os(iOS) || os(macOS)
+@MainActor
 struct TalkChimePreferenceUpgradeTests {
     private func makeDefaults() throws -> (UserDefaults, String) {
         let name = "talk-chime-upgrade-\(UUID().uuidString)"
