@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createCronViewJob as createJob,
   renderCronView as renderView,
@@ -14,10 +15,16 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
       lastDiagnosticSummary: "No response was recorded",
     },
   });
-  const container = await renderView({ editingJob: job });
+  const container = await renderView({ editingJob: job, detailTab: "history" });
   expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')?.textContent).toContain(
     "Auto-disabled",
   );
+  // The raw cause stays collapsed until asked for.
+  expect(container.querySelector(".cron-error-details__text")).toBeNull();
+  container
+    .querySelector<HTMLButtonElement>('[data-test-id="cron-failure-details-toggle"]')!
+    .click();
+  flush();
   const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("Provider rejected the request");
   expect(warning?.textContent).toContain("No response was recorded");
@@ -30,7 +37,7 @@ it("does not flag a manually paused historical error as an active failure", asyn
     enabled: false,
     state: { lastRunStatus: "error", lastError: "Historical failure" },
   });
-  const container = await renderView({ editingJob: job });
+  const container = await renderView({ editingJob: job, detailTab: "history" });
   expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')?.textContent).toContain(
     "Paused",
   );
@@ -45,7 +52,7 @@ it("does not imply that a recurring failure with a next run has stopped", async 
       lastError: "Temporary provider failure",
     },
   });
-  const container = await renderView({ editingJob: job });
+  const container = await renderView({ editingJob: job, detailTab: "history" });
   const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("Next run is scheduled");
   expect(warning?.textContent).not.toContain("No further run");
@@ -56,7 +63,7 @@ it("shows a run already in progress rather than implying that scheduling stopped
   const job = createJob("running", {
     state: { lastRunStatus: "error", runningAtMs: 10, lastError: "Previous failure" },
   });
-  const container = await renderView({ editingJob: job });
+  const container = await renderView({ editingJob: job, detailTab: "history" });
   const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("A new run is in progress");
   expect(warning?.textContent).not.toContain("No further run");

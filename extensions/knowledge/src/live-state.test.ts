@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, rm, rename, symlink } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { expect, it, vi } from "vitest";
 import { LiveState } from "./live-state.js";
 import { createKnowledgeService } from "./service.js";
+import { StorageClient } from "./storage-client.js";
 import {
   afterTest,
   apiFor,
@@ -12,6 +14,11 @@ import {
   toolContext,
   useTestTempDirs,
 } from "./test-support.js";
+
+vi.mock("openclaw/plugin-sdk/resource-profile", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/resource-profile")>()),
+  getResourceProfile: vi.fn(() => "standard"),
+}));
 
 const tempDirs = useTestTempDirs();
 
@@ -36,9 +43,18 @@ async function until(fn: any) {
 }
 
 it("external changes invalidate; events contain no data; authorized reads reconcile edits/renames/deletions", async () => {
+  vi.mocked(getResourceProfile).mockReturnValue("lean");
+  afterTest(() => {
+    vi.useRealTimers();
+    vi.mocked(getResourceProfile).mockReturnValue("standard");
+  });
   const f = await fixture();
-  const watch = vi.spyOn(LiveState.prototype, "start");
-  afterTest(() => watch.mockRestore());
+  const watch = vi.spyOn(LiveState.prototype, "start"),
+    calls = vi.spyOn(StorageClient.prototype, "call");
+  afterTest(() => {
+    watch.mockRestore();
+    calls.mockRestore();
+  });
   f.services[0].start();
   const r = await f.service.save_page(
     { requestId: randomUUID(), title: "Live fixture", type: "note", body: "Original" },
@@ -51,23 +67,37 @@ it("external changes invalidate; events contain no data; authorized reads reconc
   f.service = createKnowledgeService(f.context.api, { emit: (...args) => f.emitted.push(args) });
   f.services[1].start();
   f.emitted.length = 0;
-  const original = (await f.service.record({ id: r.id, view: "raw" }, f.context)).record!.raw;
+  // Only the host's idle clock advances; native watchers still run in the worker.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const original = (await f.service.record_detail({ id: r.id, view: "raw" }, f.context)).record!
+    .raw;
+  const client = calls.mock.contexts.at(-1);
+  if (!(client instanceof StorageClient)) {
+    throw new Error("Expected the real storage client");
+  }
+  const worker = Reflect.get(client, "worker");
+  await vi.advanceTimersByTimeAsync(60_001);
+  expect(Reflect.get(client, "worker"), "watch intent pins the idle worker").toBe(worker);
+  expect(worker.threadId).toBeGreaterThan(0);
+  vi.useRealTimers();
   const file = f.root + "/private/" + r.path;
   await writeFile(file, original!.replace("Original", "External edit"));
   await until(() => f.emitted.length);
   expect(f.emitted[0]).toStrictEqual(["changed", {}]);
-  expect((await f.service.record({ id: r.id }, f.context)).record!.body).toBe("External edit");
+  expect((await f.service.record_detail({ id: r.id }, f.context)).record!.body).toBe(
+    "External edit",
+  );
   await delay(200);
   f.emitted.length = 0;
   await rename(file, file + "-renamed.md");
   await until(() => f.emitted.length);
-  expect((await f.service.record({ id: r.id }, f.context)).record!.path).toBe(
+  expect((await f.service.record_detail({ id: r.id }, f.context)).record!.path).toBe(
     r.path + "-renamed.md",
   );
   await delay(200);
   f.emitted.length = 0;
   await rm(file + "-renamed.md"); // Native watchers can coalesce rapid rename/delete; periodic UI reads cover this.
-  expect((await f.service.record({ id: r.id }, f.context)).record).toBe(null);
+  expect((await f.service.record_detail({ id: r.id }, f.context)).record).toBe(null);
   expect((await f.service.status({}, f.context)).live).toBe("watching");
   expect(watch).not.toHaveBeenCalled();
 });
@@ -160,7 +190,10 @@ it("status snapshot is stable for unchanged reads and detects equal-count edits 
   const after = await f.service.status({}, f.context);
   expect(after.records).toBe(before.records);
   expect(after.snapshot).not.toBe(before.snapshot);
-  const detail = await f.service.record({ id: changed.id, includeMetadata: true }, f.context);
+  const detail = await f.service.record_detail(
+    { id: changed.id, includeMetadata: true },
+    f.context,
+  );
   await writeFile(
     f.root + "/private/" + detail.record!.metadata!.evidence![0]!.path,
     "Corrupted source",
@@ -175,24 +208,24 @@ it("agent bylines follow exact journaled revisions, never scope ownership or sou
     { requestId: randomUUID(), title: "Authored page", type: "note", body: "Agent text" },
     agent,
   );
-  const record = (await f.service.record({ id: saved.id, view: "raw" }, f.context)).record;
+  const record = (await f.service.record_detail({ id: saved.id, view: "raw" }, f.context)).record;
   expect(record!.writtenByAgentId).toBe("main");
   expect(
-    (await f.service.records({}, f.context)).records.find((r) => r.id === saved.id)!
+    (await f.service.records_detail({}, f.context)).records.find((r) => r.id === saved.id)!
       .writtenByAgentId,
   ).toBe("main");
   const operator = await f.service.save_page(
     { requestId: randomUUID(), title: "Operator page", type: "note", body: "Operator text" },
     f.context,
   );
-  expect((await f.service.record({ id: operator.id }, f.context)).record!.writtenByAgentId).toBe(
-    undefined,
-  );
+  expect(
+    (await f.service.record_detail({ id: operator.id }, f.context)).record!.writtenByAgentId,
+  ).toBe(undefined);
   await writeFile(
     f.root + "/private/" + saved.path,
     record!.raw!.replace("Agent text", "External text"),
   );
-  expect((await f.service.record({ id: saved.id }, f.context)).record!.writtenByAgentId).toBe(
-    undefined,
-  );
+  expect(
+    (await f.service.record_detail({ id: saved.id }, f.context)).record!.writtenByAgentId,
+  ).toBe(undefined);
 });

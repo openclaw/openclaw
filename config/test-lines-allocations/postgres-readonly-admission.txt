@@ -1,2 +1,0 @@
-# Real PostgreSQL refusal/read cases, cached seal/schema binding, dynamic extension reuse, override rejection, async/worker propagation and actual idle reader/writer backend reuse.
-295

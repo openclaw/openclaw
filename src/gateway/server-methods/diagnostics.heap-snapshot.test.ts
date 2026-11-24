@@ -10,6 +10,12 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { diagnosticProfileEntrypoints } from "../../logging/diagnostic-profile-runtime.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createAgentSchemaInspectionWorker } from "../../state/openclaw-agent-schema-inspection-worker.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-schema-versions.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -261,6 +267,12 @@ describe("diagnostics.heapSnapshot", () => {
   ])("captures a native snapshot: $name", { timeout: 30_000 }, async ({ tracking }, { signal }) => {
     vi.restoreAllMocks();
     const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
+    let sealedPath: string | undefined;
+    if (!tracking) {
+      sealedPath = openOpenClawStateDatabase().path + ".seal";
+      await closeOpenClawStateDatabaseAsync();
+    }
+    const cpuOwnerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.cpu);
     const source = `
 import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
@@ -268,6 +280,15 @@ import { Session, url } from 'node:inspector/promises';
 import path from 'node:path';
 import { captureDiagnosticHeapSnapshot } from ${JSON.stringify(ownerUrl.href)};
 const tracking = ${JSON.stringify(tracking)};
+const sealedPath = ${JSON.stringify(sealedPath)};
+let sealBefore;
+if (!tracking) {
+  sealBefore = await readFile(sealedPath, 'utf8');
+  const { captureDiagnosticCpuProfile } = await import(${JSON.stringify(cpuOwnerUrl.href)});
+  const cpu = await captureDiagnosticCpuProfile({ windows: 1, windowMs: 100, signal: new AbortController().signal, hasAuthority: () => true });
+  assert.equal(cpu.status, 'complete', JSON.stringify(cpu));
+  assert.equal(await readFile(sealedPath, 'utf8'), sealBefore);
+}
 if (tracking) assert.equal(process.versions.bun, undefined, 'V8 tracking regression requires real Node');
 else assert.equal(process.versions.bun ?? null, ${JSON.stringify(process.versions.bun ?? null)});
 assert.equal(url(), undefined);
@@ -278,6 +299,7 @@ try {
   const tracked = await observer?.post('Runtime.evaluate', { expression: 'globalThis.snapshotMarker' });
   const outcome = await captureDiagnosticHeapSnapshot({ signal: new AbortController().signal, hasAuthority: () => true });
   assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
+  if (sealedPath) assert.equal(await readFile(sealedPath, 'utf8'), sealBefore);
   const result = outcome.result;
   const metadata = await stat(result.path);
   assert.ok(result.sizeBytes > 0);
@@ -312,6 +334,21 @@ try {
     expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
     if (!tracking) {
       console.log("HEAP_SNAPSHOT_NATIVE", result.stdout.trim());
+      await using reader = createAgentSchemaInspectionWorker();
+      const inspection = await reader.inspectState(
+        {
+          pathname: path.join(stateDir, "state", "openclaw.sqlite"),
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          requireStartupMigrationReadiness: true,
+          purpose: "runtime",
+          scope: "state",
+        },
+        undefined,
+      );
+      expect(inspection?.startupMetrics).toMatchObject({
+        stateIntegrityCheckCount: 0,
+        stateSealCount: 1,
+      });
     }
   });
 });

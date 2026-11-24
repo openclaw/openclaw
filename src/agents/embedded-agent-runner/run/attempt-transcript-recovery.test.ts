@@ -17,6 +17,7 @@ import {
 import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 
 const precheckError = new MidTurnPrecheckSignal({
+  pressure: "overflow",
   route: "compact_only",
   estimatedPromptTokens: 1100,
   promptBudgetBeforeReserve: 1000,

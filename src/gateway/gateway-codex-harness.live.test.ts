@@ -110,9 +110,6 @@ const CODEX_HARNESS_MULTI_SESSION_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
 );
-const CODEX_HARNESS_DISABLE_LOOP_RELAY = isTruthyEnvValue(
-  process.env.OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY,
-);
 const CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS,
 );
@@ -447,7 +444,6 @@ async function writeLiveGatewayConfig(params: {
   compactionMode: CodexCompactionStressMode;
   nativeSupervision?: { command: string };
   sessionCatalogHomes?: string[];
-  loopDetectionPreToolUseRelay?: boolean;
   queueMode?: "steer";
   configPath: string;
   modelKey: string;
@@ -487,9 +483,6 @@ async function writeLiveGatewayConfig(params: {
                 : {}),
               ...(appServerArgs ? { args: appServerArgs } : {}),
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
-              ...(params.loopDetectionPreToolUseRelay === false
-                ? { loopDetectionPreToolUseRelay: false }
-                : {}),
             },
           },
         },
@@ -2401,7 +2394,6 @@ describeLive("gateway live (Codex harness)", () => {
           requireCodexFileApprovals: CODEX_HARNESS_MULTI_SESSION_PROBE,
           codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
           compactionMode: CODEX_HARNESS_COMPACTION_MODE,
-          ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
         });
         const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
           displayName: "vitest-codex-harness-live",

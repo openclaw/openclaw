@@ -5,7 +5,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { isLiveStateRead } from "./artifact-preserving-state-reads.js";
 import { createAgentDatabaseLeaseStaleReasonReader } from "./openclaw-agent-db-lease-provenance.js";

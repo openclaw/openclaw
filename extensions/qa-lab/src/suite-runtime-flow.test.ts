@@ -334,9 +334,11 @@ describe("qa suite runtime flow", () => {
     expect(api.markGatewayLogCursor()).toBe(-1);
     expect(() => api.assertNoGatewayLogSentinels()).not.toThrow();
     await api.runRuntimeToolFixture(env, { toolName: "read" });
-    expect(runtimeToolFixture.runRuntimeToolFixture).toHaveBeenCalledWith(env, {
-      toolName: "read",
-    });
+    expect(runtimeToolFixture.runRuntimeToolFixture).toHaveBeenCalledWith(
+      env,
+      { toolName: "read" },
+      expect.any(Function),
+    );
     expect(api).toMatchObject({
       imageUnderstandingPngBase64: "small",
       imageUnderstandingLargePngBase64: "large",

@@ -71,6 +71,26 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
         );
       }
     },
+    /** Separately bounded work the budget does not cover: the deadline moves by its duration. */
+    async exclude<T>(operation: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      const started = admission;
+      if (!started) {
+        return await operation();
+      }
+      cancelDeadline?.();
+      const pausedAtMs = performance.now();
+      try {
+        return await operation();
+      } finally {
+        started.deadlineAtMs += performance.now() - pausedAtMs;
+        if (!closed && !failure) {
+          cancelDeadline = scheduleAbsoluteDeadline(started.deadlineAtMs, inspectDeadline, () =>
+            performance.now(),
+          );
+        }
+      }
+    },
     async run<T>(
       operation: () => Promise<T>,
       acceptSettledTimeout?: (result: T) => boolean,

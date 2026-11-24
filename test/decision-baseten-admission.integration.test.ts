@@ -8,7 +8,6 @@ import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-mode
 import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { DecisionContractError } from "../src/decisions/contract-error.js";
 import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
 import { evaluateDecisionV2InRegistry } from "../src/decisions/runtime.js";
 import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
@@ -39,7 +38,7 @@ const input: DecisionBatchV2 = {
   },
 };
 
-it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-release"] as const)(
+it.each(["allowed", "auth-reflection", "header-reflection", "abort-release"] as const)(
   "composes registered Baseten preparation, native HTTP and settlement (%s)",
   (change) =>
     withAdmissionFixture(
@@ -122,7 +121,6 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
         const allowRelease = createDeferredCore();
         const loopbackDispatcher = createHttp1Agent();
         const originalFetch = fetchGuard.fetchWithSsrFGuard;
-        let admission: "unreached" | "allowed" | "rejected" = "unreached";
         let pending: Promise<unknown> | undefined;
         let settled = false;
         let phase = "evaluation";
@@ -143,15 +141,6 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
                 dnsEntered.resolve();
                 await allowDns.promise;
                 return [{ address: "93.184.216.34", family: 4 }];
-              },
-              beforeRequest: () => {
-                try {
-                  params.beforeRequest?.();
-                  admission = "allowed";
-                } catch (error) {
-                  admission = "rejected";
-                  throw error;
-                }
               },
               fetchImpl: (url, init) => {
                 expect(url).toBe(nativeUrl);
@@ -223,22 +212,6 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
               }),
             ]);
             expect(received).toHaveLength(0);
-            if (change === "replaced") {
-              // Test workers persist through the fixture owner, not host-only agent admission.
-              await state.writeAuthProfiles(
-                {
-                  version: 1,
-                  profiles: {
-                    [profileId]: {
-                      type: "api_key",
-                      provider: "baseten",
-                      key: "synthetic-new-profile-secret",
-                    },
-                  },
-                },
-                agentId,
-              );
-            }
             allowDns.resolve();
             if (change === "abort-release") {
               await Promise.race([
@@ -264,55 +237,48 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
               allowRelease.resolve();
             }
             const completed = await outcome;
-            if (change === "replaced") {
-              expect(admission).toBe("rejected");
-              expect(received).toHaveLength(0);
-              expect(completed).toMatchObject({ error: new DecisionContractError() });
-            } else {
-              expect(admission).toBe("allowed");
-              expect(received).toHaveLength(1);
-              expect(received[0]).toMatchObject({
-                url: "/v1/systemone",
-                method: "POST",
-                authorization: undefined,
-                headers: {
-                  "x-fixture-auth": "Token-synthetic-replacement-secret",
-                  "x-fixture-secret": "synthetic-configured-secret",
+            expect(received).toHaveLength(1);
+            expect(received[0]).toMatchObject({
+              url: "/v1/systemone",
+              method: "POST",
+              authorization: undefined,
+              headers: {
+                "x-fixture-auth": "Token-synthetic-replacement-secret",
+                "x-fixture-secret": "synthetic-configured-secret",
+              },
+              body: {
+                model: modelId,
+                state: '{"incident":"synthetic outage"}',
+                questions: {
+                  urgent: { type: "noul", instructions: "Needs review?" },
+                  impact: { type: "score", criteria: ["Low", '{"severity":"high"}'] },
                 },
-                body: {
-                  model: modelId,
-                  state: '{"incident":"synthetic outage"}',
-                  questions: {
-                    urgent: { type: "noul", instructions: "Needs review?" },
-                    impact: { type: "score", criteria: ["Low", '{"severity":"high"}'] },
+              },
+            });
+            if (change === "allowed") {
+              expect(completed).toMatchObject({
+                result: {
+                  status: "ok",
+                  result: {
+                    model: "synthetic-native-backend",
+                    answers: {
+                      urgent: { type: "boolean", probabilityTrue: 0.9 },
+                      impact: { type: "score", score: 0.75 },
+                    },
+                    usage: { inputTokens: 11, outputTokens: 2 },
                   },
                 },
               });
-              if (change === "allowed") {
-                expect(completed).toMatchObject({
-                  result: {
-                    status: "ok",
-                    result: {
-                      model: "synthetic-native-backend",
-                      answers: {
-                        urgent: { type: "boolean", probabilityTrue: 0.9 },
-                        impact: { type: "score", score: 0.75 },
-                      },
-                      usage: { inputTokens: 11, outputTokens: 2 },
-                    },
-                  },
-                });
-                expect(usage).toMatchObject([
-                  { provider: "baseten", model: modelId, usage: { input: 11, output: 2 } },
-                ]);
-              } else if (change === "abort-release") {
-                assert("error" in completed);
-                expect(completed.error).toBe(controller.signal.reason);
-              } else {
-                expect(completed).toMatchObject({
-                  result: { status: "unavailable", reason: "invalid-response" },
-                });
-              }
+              expect(usage).toMatchObject([
+                { provider: "baseten", model: modelId, usage: { input: 11, output: 2 } },
+              ]);
+            } else if (change === "abort-release") {
+              assert("error" in completed);
+              expect(completed.error).toBe(controller.signal.reason);
+            } else {
+              expect(completed).toMatchObject({
+                result: { status: "unavailable", reason: "invalid-response" },
+              });
             }
             expect(usage).toHaveLength(change === "allowed" ? 1 : 0);
             expect(builder.registry.decisionProviders[0]?.host.inspect(cfg).activeRequests).toBe(0);

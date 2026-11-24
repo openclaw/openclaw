@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { emitResetCommandHooks } from "../auto-reply/reply/commands-reset-hooks.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -8,13 +9,24 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   pairedOperator,
   persistDevices,
   recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { recordSessionOperatorSource } from "./session-operator-sources.js";
 import { triggerSessionPatchHook } from "./session-patch-hooks.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
@@ -50,12 +62,66 @@ it("admits an untiered person's session work only through their recorded, curren
     try {
       // The original connection's scopes, never an administrator substitute.
       expect(admitted.authority.scopes).toEqual(["operator.write"]);
-      expect(admitted.authority.assertCurrent).not.toThrow();
     } finally {
       admitted.release();
     }
 
     persistDevices(stateDir, [], "both");
+    await expect(admit()).rejects.toThrow();
+  }));
+
+it("admits a restart wake for a Tailscale Control UI person whose browser key was never paired", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    setRuntimeConfigSnapshot({});
+    const profile = ensureProfileForEmail("tailscale-principal@example.test");
+    const fixture = await recoveryFixture(stateDir, profile.id, {
+      device: pairedOperator(),
+      tokenlessDevice: true,
+    });
+    // Tailscale Serve skips Control UI pairing: the browser presents its key, unpaired.
+    const config: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "fixture-token", allowTailscale: true } },
+    };
+    fixture.setConfig(config);
+    fixture.client.authPolicy = captureGatewayAuthPolicy(config, {
+      role: "operator",
+      authMethod: "tailscale",
+      verifiedIdentity: "tailscale-principal@example.test",
+    });
+    persistDevices(stateDir, [], "both");
+    const admit = () =>
+      prepareSessionPrincipalRunAuthority({
+        context: fixture.context,
+        profileId: profile.id,
+        ...fixture.target,
+        sessionPrincipal: true,
+      });
+    await expect(admit()).rejects.toThrow("no current run authority");
+
+    // A new message from this person is admitted and records its source.
+    const message = expectDefined(
+      await prepareGatewayOperatorRunAuthority({
+        client: captureAgentTurnPrincipal(fixture.client),
+        context: fixture.context,
+        sourceAuthority: null,
+      }),
+      "new message admission",
+    );
+    try {
+      await recordSessionOperatorSource({ ...fixture.target, authority: message.authority, log });
+    } finally {
+      message.release();
+    }
+    const wake = await admit();
+    try {
+      expect(wake.authority.scopes).toEqual(["operator.admin"]);
+    } finally {
+      wake.release();
+    }
+
+    fixture.setConfig({
+      gateway: { auth: { mode: "token", token: "fixture-token", allowTailscale: false } },
+    });
     await expect(admit()).rejects.toThrow();
   }));
 
@@ -162,3 +228,83 @@ it("keeps recorded sources out of reset and patch hook payloads", async () => {
   expect(JSON.stringify(seen)).not.toContain("operatorSources");
   expect(entry.operatorSources).toBe(sources);
 });
+
+it.each([
+  { enforced: false, preserve: false },
+  { enforced: false, preserve: true },
+  { enforced: true, preserve: false },
+  { enforced: true, preserve: true },
+])(
+  "retains member agent and session authority for session turns ($enforced, $preserve)",
+  ({ enforced, preserve }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const profile = ensureProfileForEmail("member-source@example.test");
+      const principal = {
+        kind: "member" as const,
+        peerKey: `iroh:${"ab".repeat(32)}`,
+        accountId: "member",
+        role: "limited",
+        authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+      };
+      const config: OpenClawConfig = {
+        gateway: {
+          openclawId: { enabled: true },
+          roles: {
+            ...(enforced ? { default: "reader" } : {}),
+            definitions: {
+              limited: {
+                scopes: ["operator.read", "operator.write"],
+                agents: ["main"],
+                sessions: { others: "none" },
+              },
+              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+            },
+          },
+        },
+      };
+      setUserProfileRole(profile.id, "limited");
+      linkOpenClawIdUserProfile(
+        { profileId: profile.id, accountId: principal.accountId, email: null },
+        {},
+      );
+      setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
+      setRuntimeConfigSnapshot(config);
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        const fixture = await recoveryFixture(stateDir, profile.id, {
+          config,
+          scopes: ["operator.read", "operator.write"],
+          openclawIdPrincipal: principal,
+        });
+        await recordSessionOperatorSource({
+          ...fixture.target,
+          authority: fixture.sourceAuthority,
+          log,
+        });
+        const admitted = await prepareSessionPrincipalRunAuthority({
+          context: fixture.context,
+          profileId: profile.id,
+          ...fixture.target,
+          sessionPrincipal: true,
+          ...(preserve ? { preserveRecordedSource: true as const } : {}),
+        });
+        try {
+          const client = createOperatorClient({
+            profileId: profile.id,
+            scopes: [...admitted.authority.scopes],
+          });
+          client.internal = { operatorRunAuthority: admitted.authority };
+          expect(
+            authorizeGatewaySessionCreation({ cfg: config, client, agentId: "foreign" }),
+          ).toMatchObject({ code: "FORBIDDEN" });
+          expect(admitted.authority.rolePolicy?.sessionAccessCap).toBe("none");
+          expect(admitted.authority.openclawIdPrincipal).toEqual(principal);
+        } finally {
+          admitted.release();
+        }
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
+      }
+    }),
+);

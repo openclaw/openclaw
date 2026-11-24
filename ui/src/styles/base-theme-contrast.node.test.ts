@@ -129,7 +129,6 @@ describe("Control UI theme contrast", () => {
   const controls = (
     [
       ["components.css", ".btn.active", "var(--accent-subtle)"],
-      ["sessions.css", ".session-label-chip"],
       ["sessions.css", ".session-kind--direct"],
     ] satisfies [string, string, string?][]
   ).flatMap(([file, selector, tint]) =>
@@ -275,23 +274,19 @@ describe("Control UI theme contrast", () => {
   });
 
   it("keeps the markdown code chip separated from every surface it sits on", () => {
-    // --secondary matched --card and hid code chips in dark user bubbles.
+    // --secondary matched --card and hid code chips in dark user bubbles. The chip
+    // has no outline, so its fill has to clear every host by itself.
     const rule = readRule(textRules, ".chat-text :where(:not(pre, a.markdown-file-link) > code)");
-    for (const [property, minimum] of [
-      ["background", 1.05],
-      ["border", 1.25],
-    ] as const) {
-      const paint = required(readPaint(rule, property).match(/var\(.+\)/u)?.[0], property);
-      for (const [theme, tokens] of themes) {
-        const color = resolveColor(paint, tokens);
-        for (const hostToken of ["--card", "--bg"]) {
-          const host = resolveOpaqueColor(`var(${hostToken})`, tokens);
-          expectFloor(
-            contrastRatio(composite(color, host), host),
-            minimum,
-            `${theme}/${hostToken} chip ${property}`,
-          );
-        }
+    const paint = required(readPaint(rule, "background").match(/var\(.+\)/u)?.[0], "background");
+    for (const [theme, tokens] of themes) {
+      const color = resolveColor(paint, tokens);
+      for (const hostToken of ["--card", "--bg"]) {
+        const host = resolveOpaqueColor(`var(${hostToken})`, tokens);
+        expectFloor(
+          contrastRatio(composite(color, host), host),
+          1.05,
+          `${theme}/${hostToken} chip fill`,
+        );
       }
     }
   });

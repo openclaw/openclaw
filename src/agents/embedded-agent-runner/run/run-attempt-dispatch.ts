@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -17,6 +16,7 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
+import { createStableSkillAuthoring } from "../../stable-skill-authoring.js";
 import { resolveLiveToolResultMaxChars } from "../../tool-result-limits.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
@@ -24,6 +24,7 @@ import { log } from "../logger.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { preparePluginHarnessSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
+import { readDispatchAccessPrograms } from "./access-program.js";
 import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
@@ -43,6 +44,9 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+// Internal turns publish the session's last human skill authoring shape with an expired grant.
+const resolveStableEmbeddedSkillAuthoring = createStableSkillAuthoring();
 
 /** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 export async function prepareAndDispatchEmbeddedRunAttempt(
@@ -94,7 +98,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
 
   params.assertModelInput?.(effectiveModel);
 
-  await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
   }
@@ -134,7 +137,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     modelId,
     model: effectiveModel,
-    modelApi: effectiveModel.api,
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
@@ -147,6 +149,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkingLevel: mapThinkingLevelForProvider(runtime.thinkLevel, effectiveModel),
     extraParamsOverride: { ...params.streamParams, fastMode: attemptFastMode },
+    cyberAccessPrograms: await readDispatchAccessPrograms(input, runtime, attemptAccessProgram),
   });
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
@@ -293,7 +296,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     params.execOverrides ??= {};
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
-  const { extraSystemPrompt, gitCoauthorPrompt } = await prepareAttemptSystemPromptAdditions({
+  const admittedEntry = runInput.sessionAdmission?.entry;
+  const entry = admittedEntry?.sessionId === sessionId ? admittedEntry : undefined;
+  const promptAdditions = await prepareAttemptSystemPromptAdditions({
+    entry,
+    senderIsOwner: params.senderIsOwner,
+    admittedRunContext: params.admittedRunContext,
     agentId: workspaceResolution.agentId,
     authProfileId: runtime.lastProfileId,
     config: params.config,
@@ -397,6 +405,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
+    toolUsageRankingSeed: entry?.toolUsageRankingSeed,
+    // A fork reads another session's row; its caller passes that session's prewarm.
+    promptCacheKeepWarm: params.promptCacheKeepWarm ?? entry?.promptCacheKeepWarm,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
@@ -410,6 +421,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     bootstrapUserProfileId: params.bootstrapUserProfileId,
+    sessionUserProfileId: params.sessionUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
@@ -473,6 +485,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     // the accepted candidate boundary to that owner.
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage,
+    replayCurrentTranscript: sessionPromptState.activePrompt.replayCurrentTranscript,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>
@@ -597,9 +610,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt,
+    ...promptAdditions,
     extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
-    gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     messageToolFinalByDefault: params.messageToolFinalByDefault,
@@ -614,7 +626,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    skillLibraryAuthoring: params.skillLibraryAuthoring,
+    skillLibraryAuthoring: resolveStableEmbeddedSkillAuthoring(
+      params.sessionKey,
+      params.skillLibraryAuthoring,
+    ),
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,
@@ -627,9 +642,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
     toolExecutionAllow: params.toolExecutionAllow,
+    sessionForkRequest: params.sessionForkRequest,
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,
+    providerStateScope: params.providerStateScope,
     // The host loop settles all completed counts, including default/SDK runs.
     compactionCountOwner: "caller",
     onContextAccountingEvent: params.onContextAccountingEvent,
@@ -674,8 +691,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       placement?.assertCurrent();
       return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
     });
-  } catch (err) {
-    throw input.getPostCompactionAbortError() ?? err;
   } finally {
     attemptControls.close();
     try {
@@ -694,10 +709,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     }
   }
 
-  const postCompactionAbortError = input.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
-  }
   if (pluginWorkspace?.sandboxRuntime) {
     rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }

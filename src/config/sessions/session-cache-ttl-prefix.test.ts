@@ -4,6 +4,7 @@ import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
+import { clearHistoryNavigation } from "./session-accessor.sqlite-history.test-support.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -94,13 +95,7 @@ it.each([
           }
           if (analyzed) {
             // The same type-index seek must cover transcripts admitted without a backfill.
-            database.db
-              .prepare(`UPDATE transcript_events
-              SET navigation_type = NULL, navigation_custom_type = NULL,
-                  navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-                  navigation_last_custom_type = NULL, navigation_valid = 1
-              WHERE session_id = ?`)
-              .run(scope.sessionId);
+            clearHistoryNavigation(database, scope.sessionId);
           }
         },
         { agentId: database.agentId, path: database.path },

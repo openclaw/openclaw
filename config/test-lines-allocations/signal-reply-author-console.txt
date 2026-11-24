@@ -1,0 +1,3 @@
+# Console-visibility regression cases for Signal reply-author persistence failures, folded into the
+# existing reply-authors.test.ts. Exact net growth for this PR.
+28

@@ -7,8 +7,10 @@ import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
+import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
 import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
@@ -71,6 +73,7 @@ import {
 } from "./server-plugin-reload.memory.test-support.js";
 import {
   createRecoveryChannelManager,
+  waitForChannelAbort,
   createPluginReloadRecoveryFixture,
   verifyChannelReplacementContracts,
   verifyColdAccountReplacement,
@@ -118,10 +121,10 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-startup-model-runtime.js")>()),
   publishConfiguredModelRuntimeSnapshots: async () => {},
 }));
-// mock-isolation: Transcript reload startup does not execute config-driven replies or their agent-runtime graph.
-vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: vi.fn(),
-  prewarmConfigDrivenReplyRuntime: async () => {},
+// mock-isolation: Transcript reload startup does not execute the agent-runtime graph.
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  loadEmbeddedAgentRuntime: async () => {},
+  loadSessionUpdatesRuntime: async () => {},
 }));
 // mock-isolation: Transcript reload startup owns this import, not authenticated WebSocket connection dispatch.
 vi.mock("./server/ws-connection/message-handler.js", () => ({
@@ -272,6 +275,45 @@ it("flushes failed candidate services before closing their shared resources", ()
   verifyCandidateResourceCleanup(createRecoveryFixture));
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
+
+it("settles captured rollback custody but cancels before draining the live plugin", async () => {
+  const controller = new AbortController();
+  const started = createDeferredCore();
+  const finish = createDeferredCore();
+  const dispose = vi.fn(async () => {});
+  const fixture = await createRecoveryFixture({
+    waitForDrain: true,
+    drainSignal: controller.signal,
+  });
+  const old = fixture.previousRegistry.plugins.find((entry) => entry.id === "first")!;
+  bindPluginRuntimeArtifactSelection(old, { runtimeEntry: { source: "first.js", rootDir: "." } });
+  const instance = fixture.instance();
+  const drain = vi.spyOn(instance, "waitForRetainedWork");
+  const idle = vi.spyOn(instance, "waitForIdle");
+  instance.bindModuleLoaderRecovery(async () => {
+    started.resolve();
+    await finish.promise;
+    return { bind() {}, dispose };
+  });
+  const reloading = observeSettlement(fixture.reload());
+  try {
+    expect(await Promise.race([started.promise, reloading.result])).toBeUndefined();
+    controller.abort(new Error("operator cancelled during rollback capture"));
+    finish.resolve();
+    expect(await reloading.result).toMatchObject({
+      cause: controller.signal.reason,
+      details: { phase: "prepare", committed: false },
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(drain).not.toHaveBeenCalled();
+    expect(idle).not.toHaveBeenCalled();
+    expect(fixture.firstStop).not.toHaveBeenCalled();
+    expect(instance.run(() => "still live")).toBe("still live");
+  } finally {
+    finish.resolve();
+    await reloading.result;
+  }
+});
 
 it.each(["commit", "rollback"] as const)(
   "keeps service and lifecycle Cron getters current after %s",
@@ -466,6 +508,42 @@ it.each(["retry", "shutdown"] as const)(
 
 it("replaces channel command provenance while keeping webhook ingress retryable", () =>
   verifyChannelReplacementContracts(createRecoveryFixture));
+
+it("refreshes only native command channels when an unrelated plugin reloads", async () => {
+  const starts: string[] = [];
+  const context = { channel: "native", isAuthorizedSender: true, commandBody: "/go", config: {} };
+  let runRetained = async (): Promise<unknown> => undefined;
+  const fixture = await createRecoveryFixture({
+    abortOnCandidateStart: false,
+    register(api, owner) {
+      if (owner !== "sibling") {
+        return;
+      }
+      api.registerCommand({ name: "go", description: "k", handler: async () => ({ text: "ok" }) });
+      for (const id of ["native", "plain"]) {
+        const capabilities = { chatTypes: ["direct" as const], nativeCommands: id === "native" };
+        const startAccount = async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+          const cmd = createPluginCommandRuntime().listNativeCandidates(id)[0]?.prepareDispatch();
+          assert(cmd?.kind === "plugin");
+          starts.push(id);
+          runRetained = () => cmd.execute(context);
+          await waitForChannelAbort(abortSignal);
+        };
+        const base = createChannelTestPluginBase({ id, capabilities });
+        api.registerChannel({ plugin: { ...base, gateway: { startAccount } } });
+      }
+    },
+  });
+  const manager = createRecoveryChannelManager(fixture);
+  fixture.runtime.channelManager = manager;
+  await manager.startChannel("plain");
+  await manager.startChannel("native");
+  await fixture.reload();
+  await Promise.all([manager.stopChannel("native"), manager.stopChannel("plain")]);
+  // Only the native command channel restarts, and its new handler runs the retained command.
+  expect(starts).toEqual(["plain", "native", "native"]);
+  await expect(runRetained()).resolves.toEqual({ text: "ok" });
+});
 
 it("keeps cold accounts isolated while replacing their plugin and healthy accounts", () =>
   verifyColdAccountReplacement(createRecoveryFixture));

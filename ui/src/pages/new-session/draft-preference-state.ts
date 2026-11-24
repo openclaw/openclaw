@@ -69,7 +69,7 @@ export class DraftPreferenceState {
     },
   ) {}
 
-  static forChat(context: ApplicationContext, changed: () => void): DraftPreferenceState {
+  static forChat(context: ApplicationContext): DraftPreferenceState {
     return new DraftPreferenceState(
       () => {
         const gateway = context.gateway;
@@ -87,7 +87,7 @@ export class DraftPreferenceState {
           agentsHydrated: true,
         };
       },
-      { changed, onAdoptAgentDefaults: () => {} },
+      { changed: () => {}, onAdoptAgentDefaults: () => {} },
     );
   }
 
@@ -348,7 +348,12 @@ export class DraftPreferenceState {
             }
             if (current && this.preferenceScope === scope) {
               this.identityPreferences = { ...this.identityPreferences, [agentId]: next };
-              this.callbacks.changed();
+              if (this.callbacks.preferenceScope === "palette") {
+                // The palette may have reopened while its own model save was pending.
+                this.adoptPreferences();
+              } else {
+                this.callbacks.changed();
+              }
             }
             return true;
           }

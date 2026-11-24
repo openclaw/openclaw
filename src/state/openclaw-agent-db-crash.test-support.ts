@@ -48,14 +48,14 @@ wal.exec("UPDATE auth_profile_state SET updated_at=3 WHERE state_key='committed-
 
 const state = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
 state.function("pause_interrupted_admission", () => {
-  // The lease claim is committed; admission's required-verification receipt is still in flight.
+  // The lease claim is committed; admission's completion record is still in flight.
   process.send?.(fixtures);
   Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0);
-  throw new Error("Interrupted integrity admission unexpectedly resumed");
+  throw new Error("Interrupted database admission unexpectedly resumed");
 });
 state.exec(`CREATE TEMP TRIGGER pause_interrupted_admission
   BEFORE UPDATE OF opened_at ON agent_database_leases
   WHEN NEW.agent_id = 'interrupted-admission'
   BEGIN SELECT pause_interrupted_admission(); END;`);
 openOpenClawAgentDatabase({ agentId: interrupted.agentId });
-throw new Error("Crash fixture reopened without entering its mandatory integrity scan");
+throw new Error("Crash fixture reopened without recording admission completion");

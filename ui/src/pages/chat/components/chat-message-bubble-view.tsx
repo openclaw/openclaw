@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
+  createSignal,
   lazy,
   For,
   Match,
@@ -15,6 +16,7 @@ import {
 } from "solid-js";
 import { readMessageWorkContext } from "../../../../../src/chat/work-context.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -49,6 +51,8 @@ import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import {
   AssistantAttachments,
   ChatClawHubCard,
+  ChatTemplatePluginCards,
+  AutomationCreationCard,
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -75,6 +79,9 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
+const RecordingApiKeyNotice = lazy(() => import("./chat-read-aloud-status.tsx"), {
+  export: "RecordingApiKeyNotice",
+});
 const PluginInlineView = lazy(() => import("../../../plugins/control-ui-inline-view.tsx"), {
   export: "PluginInlineView",
 });
@@ -85,6 +92,8 @@ export function GroupedMessage(props: {
   messageKey: string;
   options: GroupedMessageOptions;
   onOpenSidebar?: (content: SidebarContent) => void;
+  /** Reactions hang off this bubble's outer corner, so the bubble owns their anchor. */
+  reactions?: JSX.Element;
 }) {
   const refreshMedia = () => void refresh(state);
   const state = createMemo(() =>
@@ -189,6 +198,7 @@ export function GroupedMessage(props: {
                         {t("chat.composer.runInterrupted")}
                       </div>
                     </Show>
+                    {props.reactions}
                   </div>
                   <Show when={readMessageWorkContext(state().message)}>
                     <MessageWorkContext message={state().message} />
@@ -303,8 +313,16 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
   const presented = usePanePresentation(
     () => parentPresented() && (props.options.transcriptVisible ?? true),
   );
+  const identity = createMemo(() => props.item()?.attachment.url);
+  const [playing, setPlaying] = createSignal(() => {
+    identity();
+    presented();
+    return false;
+  });
   return (
-    <div class="chat-image-frame chat-video-preview">
+    <div
+      class={["chat-image-frame chat-video-preview", { "chat-video-preview--active": playing() }]}
+    >
       <Show when={props.item()}>
         {(item) => (
           <Show when={presented()}>
@@ -313,7 +331,8 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
               options={props.state().imageRenderOptions}
               onOpenSidebar={props.onOpenSidebar}
               onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
-              presentation="preview"
+              presentation={playing() ? "inline" : "preview"}
+              onPlay={() => setPlaying(true)}
             />
           </Show>
         )}
@@ -322,23 +341,54 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
   );
 }
 
-function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
-  const content = (
-    <MarkdownText
-      class="chat-thinking"
-      content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
-        codeBlockInteraction: "interactive",
-      })}
-    />
-  );
+/** A quiet one-line step that opens into the full thought, like a tool row. */
+function MessageReasoning(props: Pick<ContentProps, "state" | "options" | "messageKey">) {
+  // The transcript's per-message disclosure store keeps a thought open when its
+  // row remounts, as when Worked closes and reopens or the row scrolls away.
+  const disclosureId = () => `reasoning:${props.messageKey}`;
+  const open = () => props.options.isUserMessageExpanded?.(disclosureId()) ?? false;
+  // Shimmer only while the thought itself is the live part of the reply.
+  const thinking = () => props.options.isStreaming && !props.state().bodyMarkdown;
   return (
-    <Show when={props.options.bubbleMode} fallback={content}>
-      <ChatBubbleActivity label={t("chat.view.reasoning")}>{content}</ChatBubbleActivity>
-    </Show>
+    <div class="chat-reasoning">
+      <button
+        class="chat-inline-disclosure"
+        type="button"
+        aria-expanded={open() ? "true" : "false"}
+        aria-label={t("chat.view.reasoning")}
+        onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
+      >
+        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+          <Icon name="brain" />
+        </span>
+        <span>{open() ? t("chat.view.reasoning") : ""}</span>
+        <span class="chat-tool-row__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      </button>
+      <MarkdownText
+        class={
+          open()
+            ? "chat-thinking"
+            : `chat-thinking chat-thinking--preview${thinking() ? " text-shimmer" : ""}`
+        }
+        inert={!open()}
+        content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
+          codeBlockInteraction: "interactive",
+        })}
+      />
+    </div>
   );
 }
 
 function BubbleContents(props: ContentProps) {
+  const audioKeyRequired = () => {
+    const message = asNullableRecord(props.state().message);
+    const provider = asNullableRecord(message?.["__openclaw"])?.audioApiKeyRequired;
+    return props.state().normalizedRole === "user" && typeof provider === "string"
+      ? provider
+      : undefined;
+  };
   const images = () =>
     props.state().renderInOrder ? props.state().supplementalImages : props.state().images;
   const previewCount = createMemo(() => props.state().videoPreviews.length);
@@ -352,6 +402,10 @@ function BubbleContents(props: ContentProps) {
   return (
     <>
       <Show when={props.state().sourceRole === "assistant"}>
+        <Show when={props.state().automationPlan}>
+          {(plan) => <AutomationCreationCard plan={plan()} />}
+        </Show>
+        <ChatTemplatePluginCards notices={props.state().templatePluginCards} />
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
           {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}
         </For>
@@ -377,13 +431,24 @@ function BubbleContents(props: ContentProps) {
         inlinePlayback={props.state().normalizedRole === "assistant"}
         inlineComments={props.state().inlineComments}
       />
+      <Show when={audioKeyRequired()}>
+        {(provider) => (
+          <ChatLazyBoundary>
+            <RecordingApiKeyNotice provider={provider()} agentId={props.options.agentId} />
+          </ChatLazyBoundary>
+        )}
+      </Show>
       <Show
         when={props.state().isStandaloneToolMessage && props.state().assistantViewBlocks.length > 0}
       >
         <AssistantViews {...props} />
       </Show>
       <Show when={props.state().reasoningMarkdown}>
-        <MessageReasoning state={props.state} options={props.options} />
+        <MessageReasoning
+          state={props.state}
+          options={props.options}
+          messageKey={props.messageKey}
+        />
       </Show>
       <Show
         when={

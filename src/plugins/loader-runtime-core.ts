@@ -15,6 +15,7 @@ import {
   resolveRuntimeSubagentMode,
   type PluginLoadCacheContext,
 } from "./loader-load-context.js";
+import { createPluginLoadLoopState } from "./loader-load-loop-state.js";
 import {
   createDeferredGatewayNodesRuntime,
   createDeferredGatewaySubagentRuntime,
@@ -28,10 +29,7 @@ import {
 } from "./loader-provenance.js";
 import { formatPluginFailureSummary } from "./loader-records.js";
 import { samePluginLoadInput } from "./loader-registration-config.js";
-import {
-  loadRuntimePluginCandidate,
-  type PluginLoadLoopState,
-} from "./loader-runtime-candidate.js";
+import { loadRuntimePluginCandidate } from "./loader-runtime-candidate.js";
 import {
   finishPluginCandidate,
   finishPluginPreparations,
@@ -53,6 +51,7 @@ import {
 } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import {
@@ -257,9 +256,9 @@ export function* loadOpenClawPluginsSteps(
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
   try {
     let sourcePreparationConcurrency = 1;
-    let pending: Awaited<ReturnType<typeof readPluginStateMigrationReadinessAsync>> | undefined;
+    let pending = options.pendingStateMigrations;
     yield async () => {
-      pending = await readPluginStateMigrationReadinessAsync({ env: context.env });
+      pending ??= await readPluginStateMigrationReadinessAsync({ env: context.env });
       sourcePreparationConcurrency = Math.min(4, availableParallelism());
     };
     pending ??= readPluginStateMigrationReadiness({ env: context.env });
@@ -302,25 +301,21 @@ export function* loadOpenClawPluginsSteps(
                 nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
               },
             });
-    const capabilityCatalogContext =
-      options.capabilityCatalogContext ??
-      options.capabilityCatalog?.context ??
-      nativeBindings.capabilityCatalogContext;
     registryBuilder = createPluginRegistry({
       logger,
       runtime,
-      resolveCapabilityCatalogContext:
-        createCapabilityCatalogContextResolver(capabilityCatalogContext),
+      resolveCapabilityCatalogContext: createCapabilityCatalogContextResolver(
+        options.capabilityCatalogContext ??
+          options.capabilityCatalog?.context ??
+          nativeBindings.capabilityCatalogContext,
+      ),
       allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs ?? true,
       coreGatewayHandlers: options.coreGatewayHandlers,
-      ...(options.coreGatewayMethodNames !== undefined && {
-        coreGatewayMethodNames: options.coreGatewayMethodNames,
-      }),
-      ...(options.hostServices !== undefined && { hostServices: options.hostServices }),
+      coreGatewayMethodNames: options.coreGatewayMethodNames,
+      hostServices: options.hostServices,
       activateGlobalSideEffects: context.runtimeSideEffects,
     });
-    const builder = registryBuilder;
-    const { registry } = builder;
+    const { registry } = registryBuilder;
     inspectionResources?.attach(registry);
     // The load context has verified the current generation's workspace, config, and scope.
     const suppliedManifestRegistry =
@@ -580,15 +575,16 @@ export function* loadOpenClawPluginsSteps(
         });
       }
     }
-    const state: PluginLoadLoopState = {
-      seenIds: new Map(),
-      selectedMemoryPluginId: null,
-      memorySlotMatched: false,
-      pluginLoadAttemptCount: 0,
-    };
+    const state = createPluginLoadLoopState(
+      manifestRegistry.plugins,
+      context.normalized.slots.memory,
+    );
     const pluginLoadStartMs = performance.now();
+    // Construction owns registration; it is not capability use by the requesting turn.
     const runCandidate = <T>(run: () => T): T =>
-      options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run();
+      pluginInvocationContext.exit(() =>
+        options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run(),
+      );
     const preparing: PendingPluginPreparation[] = [];
     for (const { candidate, manifest: manifestRecord } of orderedCandidates) {
       if (
@@ -620,7 +616,7 @@ export function* loadOpenClawPluginsSteps(
         onlyPluginIdSet,
         dreamingSidecar,
         validateOnly,
-        registryBuilder: builder,
+        registryBuilder,
         loadPluginModule,
         logger,
         state,

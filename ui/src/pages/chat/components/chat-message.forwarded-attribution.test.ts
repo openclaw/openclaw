@@ -21,7 +21,10 @@ import { createInitializationContext } from "../chat-application-context.test-su
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
+import {
+  createActivityGroupHarness,
+  createMessageGroupHarness,
+} from "./chat-message-native.test-support.tsx";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
@@ -89,7 +92,7 @@ function renderFrame(
         frame: input.kind === "group" ? { ...completedFrame, parts: [input] } : input,
         options: {
           streamOptions: {},
-          workPreviews: new Map(),
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
           isWorkExpanded: () => true,
           onToggleWork: () => {},
@@ -162,9 +165,19 @@ function narration(content: unknown, timestamp: number, overrides: Record<string
   };
 }
 
-async function renderToolFiles(group: MessageGroup, frame: boolean) {
+async function renderToolFiles(group: MessageGroup, frame: boolean | "activity") {
   const onOpenWorkspaceFile = vi.fn();
-  (frame ? renderFrame : renderGroup)(group, { onOpenWorkspaceFile, ...expanded });
+  if (frame === "activity") {
+    const activity = createActivityGroupHarness(container);
+    activity.render([group], {
+      showReasoning: true,
+      showToolCalls: true,
+      onOpenWorkspaceFile,
+      ...expanded,
+    });
+  } else {
+    (frame ? renderFrame : renderGroup)(group, { onOpenWorkspaceFile, ...expanded });
+  }
   await settleToolBridges(container);
   return onOpenWorkspaceFile;
 }
@@ -187,6 +200,8 @@ it.each([
   { frame: true, forwarded: false },
   { frame: false, forwarded: true },
   { frame: true, forwarded: true },
+  { frame: "activity" as const, forwarded: false },
+  { frame: "activity" as const, forwarded: true },
 ])(
   "routes nested tool files to their message owner (frame=$frame, forwarded=$forwarded)",
   async ({ frame, forwarded }) => {

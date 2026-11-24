@@ -1,6 +1,7 @@
 // Daemon status tests cover service status gathering and CLI responses.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonStatus } from "./status.gather.js";
 
@@ -134,38 +135,40 @@ describe("runDaemonStatus", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("renders disabled-probe validation failures as JSON in JSON mode", async () => {
+  it.each([
+    [
+      { probe: false },
+      "--require-rpc needs checking enabled. Remove --no-probe or drop --require-rpc.",
+    ],
+    [{ runtimeIntentOnly: true }, "--runtime-intent-only cannot be combined with --require-rpc."],
+  ])("renders invalid option combinations as JSON (%j)", async (extra, message) => {
     await expect(
-      runDaemonStatus({ ...statusOptions, probe: false, requireRpc: true, json: true }),
+      runDaemonStatus({ ...statusOptions, ...extra, requireRpc: true, json: true }),
     ).rejects.toThrow("__exit__:1");
 
+    expect(readDaemonServiceStatus).not.toHaveBeenCalled();
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error: {
-        type: "cli_error",
-        message:
-          "Gateway status failed: --require-rpc needs checking enabled. Remove --no-probe or drop --require-rpc.",
-      },
+      error: { type: "cli_error", message: `Gateway status failed: ${message}` },
     });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects an RPC requirement for local-only runtime inspection", async () => {
-    await expect(
-      runDaemonStatus({ ...statusOptions, runtimeIntentOnly: true, requireRpc: true, json: true }),
-    ).rejects.toThrow("__exit__:1");
-    expect(readDaemonServiceStatus).not.toHaveBeenCalled();
-    expect(gatherDaemonStatus).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message:
-          "Gateway status failed: --runtime-intent-only cannot be combined with --require-rpc.",
-      },
+  it("forwards the command signal and stays silent after an interrupt", async () => {
+    const scope = new AsyncWorkScope();
+    gatherDaemonStatus.mockImplementationOnce(async (opts) => {
+      expect(opts).toMatchObject({ signal: scope.signal });
+      scope.beginClose(new DOMException("Status interrupted.", "AbortError"));
+      return createStatus();
     });
+
+    await scope.run(() => runDaemonStatus({ ...statusOptions, json: true }));
+
+    expect(printDaemonStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("renders service-inspection failures as JSON in JSON mode", async () => {
@@ -204,10 +207,7 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
-    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
-      json: true,
-      deep: false,
-    });
+    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), { json: true, deep: false });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });

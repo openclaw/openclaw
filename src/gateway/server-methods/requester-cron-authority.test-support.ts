@@ -30,6 +30,7 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { pruneStaleControlPlaneBuckets } from "../control-plane-rate-limit.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
@@ -79,18 +80,12 @@ export function installRequesterCronAuthorityTestHooks(
   });
 }
 
-export function admission(
-  runId: string,
-  client: GatewayClient,
-  childSessionKey?: string,
-  isCurrent?: () => boolean,
-) {
+export function admission(runId: string, client: GatewayClient, childSessionKey?: string) {
   return cronAdmission.resolveGatewayCronCreatorAuthorityAdmission({
     runId,
     resolvedSessionKey: SESSION,
     sessionId: SESSION_ID,
     client,
-    isCurrent,
     request: { message: "Update the maintenance automation", idempotencyKey: runId },
     inputProvenance: childSessionKey
       ? {
@@ -99,7 +94,6 @@ export function admission(
           sourceSessionKey: childSessionKey,
         }
       : undefined,
-    hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
   });
 }
@@ -107,7 +101,7 @@ export function admission(
 export type RequesterRun<T> = (
   identity: AgentRuntimeIdentity,
   admittedRun: runContext.AdmittedRunContext,
-  creator?: cronAuthority.CronCreatorAuthorityCapability,
+  creator?: CronCreatorAuthorityCapability,
 ) => Promise<T>;
 
 export async function inRun<T>(
@@ -140,7 +134,7 @@ export async function inRun<T>(
       ...caller,
       delegatedAuthority: { kind: "local", ...authority },
     };
-    const execute = (creator?: cronAuthority.CronCreatorAuthorityCapability) =>
+    const execute = (creator?: CronCreatorAuthorityCapability) =>
       gatewayCaller.withGatewayToolCallerIdentity({ ...caller, approvalAuthority: authority }, () =>
         run(identity, admittedRun, creator),
       );
@@ -206,7 +200,7 @@ export async function createCreatorTransportTools(params: {
   requesterOrigin?: RequesterOrigin;
   config: OpenClawConfig;
   admitted: runContext.AdmittedRunContext;
-  creator?: cronAuthority.CronCreatorAuthorityCapability;
+  creator?: CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;

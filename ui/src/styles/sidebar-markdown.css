@@ -4,6 +4,10 @@
   color: var(--text);
   font-size: var(--control-ui-text-md);
   line-height: 1.6;
+  /* Long-form reading text keeps macOS stem darkening; the app-wide
+     `antialiased` smoothing (base.css body) stays on app chrome. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .sidebar-markdown :where(h1) {

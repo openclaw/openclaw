@@ -1,9 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   resolveAgentCredentialMapFromStore,
@@ -26,11 +29,12 @@ import type {
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { runWithPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.synthetic-auth.js";
 
 // Startup captures each CLI login once; ordinary reads recheck it after this window.
 const NATIVE_LOGIN_RECHECK_MS = 60_000;
+const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 // A single honored response does not prove capacity recovered; retain the last downgrade for a minute.
 const SERVICE_TIER_OBSERVATION_TTL_MS = 60_000;
@@ -460,8 +464,11 @@ export async function prepareInitialModelCatalogAuth(
   };
 }
 
-type PreparedModelCatalogAuthOwner = {
-  pluginGeneration: PreparedModelRuntimeCatalogAccessParams["pluginGeneration"];
+type PreparedModelCatalogAuthOwner = Pick<
+  PreparedModelRuntimeCatalogAccessParams,
+  "pluginGeneration" | "retirementSignal"
+> & {
+  agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input" | "env">;
   accountCatalog: PreparedAccountCatalogAccess;
   normalizeProvider: (provider: string) => string;
   assertCurrent: () => void;
@@ -476,9 +483,6 @@ async function refreshScopedModelCatalogAuth(
   { providerIds, profileIds }: PreparedModelRuntimeAuthScope,
 ): Promise<PreparedModelCatalogAuth> {
   owner.assertCurrent();
-  await using _ = {
-    [Symbol.asyncDispose]: retainPreparedPluginGeneration(owner.pluginGeneration),
-  };
   const refreshed = await owner.refreshAuth({
     providerIds,
     ...(profileIds?.length ? { profileIds } : {}),
@@ -495,17 +499,17 @@ export async function loadScopedModelCatalogAuth(
   owner: PreparedModelCatalogAuthOwner,
   scope: PreparedModelRuntimeAuthScope,
 ): Promise<PreparedModelRuntimeAuth> {
-  const { authStore, authModes } = await refreshScopedModelCatalogAuth(owner, scope);
+  // The refresh holds only the plugins it calls, so a hung auth hook defers no other reload.
+  owner.assertCurrent();
+  const { authStore, authModes } = await runWithPreparedPluginGeneration(owner, () =>
+    refreshScopedModelCatalogAuth(owner, scope),
+  );
   return { authStore, authModes: Object.freeze(authModes) };
 }
 
 /** Rechecks CLI backend logins on demand and publishes only a changed result. */
 export function createNativeLoginRecheck(
   owner: PreparedModelCatalogAuthOwner,
-  params: {
-    agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input" | "env">;
-    retirementSignal: AbortSignal;
-  },
   eligibleProviders: readonly string[],
   publish: (auth: PreparedModelCatalogAuth) => void,
 ): (options?: { force?: boolean }) => void | Promise<void> {
@@ -518,11 +522,8 @@ export function createNativeLoginRecheck(
   let pending: Promise<void> | undefined;
   const recheck = async () => {
     owner.assertCurrent();
-    await using _ = {
-      [Symbol.asyncDispose]: retainPreparedPluginGeneration(owner.pluginGeneration),
-    };
-    const { input, env } = params.agentFacts;
-    const signal = AbortSignal.any([params.retirementSignal, AbortSignal.timeout(180_000)]);
+    const { input, env } = owner.agentFacts;
+    const signal = AbortSignal.any([owner.retirementSignal, AbortSignal.timeout(180_000)]);
     await withPluginRuntimeGenerationScope(
       {
         metadataSnapshot: owner.pluginGeneration.pluginMetadataSnapshot,
@@ -571,8 +572,21 @@ export function createNativeLoginRecheck(
       return undefined;
     }
     checkedAt = now;
-    pending = recheck()
-      .catch(() => undefined)
+    // The owner publishes after the triggering read returns; that caller's closed
+    // plugin invocation scope must not own the probe or the publication.
+    // The probe holds only the plugins it calls, so a hung login probe defers no other reload.
+    pending = runInDetachedAsyncContext(async () => {
+      owner.assertCurrent();
+      await runWithPreparedPluginGeneration(owner, recheck);
+    })
+      .catch((error: unknown) => {
+        if (
+          !owner.retirementSignal.aborted &&
+          !(error instanceof PreparedModelRuntimePublicationSupersededError)
+        ) {
+          log.warn(`native login recheck failed: ${formatErrorMessage(error)}`);
+        }
+      })
       .finally(() => {
         pending = undefined;
       });

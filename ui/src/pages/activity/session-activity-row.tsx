@@ -31,13 +31,13 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { ActivitySessionGit } from "./session-activity-git.tsx";
-import { ActivitySessionMedia } from "./session-activity-media.tsx";
 import { isUnresolvedPerson, UnknownPersonAvatar } from "./session-activity-people.tsx";
 import { ACTIVITY_PHONE_QUERY, sessionActivityOwner } from "./session-activity.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
 export function SessionLinkView(props: {
+  elementRef?: (key: string) => (element: HTMLDivElement) => void;
   row: GatewaySessionRow;
   onSummaryRetry?: (row: GatewaySessionRow) => void;
   presentationRevision?: number;
@@ -154,6 +154,7 @@ export function SessionLinkView(props: {
   );
   return (
     <div
+      ref={[props.elementRef?.(props.row.key)]}
       class={[
         "activity-feed__session-row",
         { "activity-feed__session-row--link": Boolean(target()) },
@@ -282,13 +283,6 @@ export function SessionLinkView(props: {
         context={context}
         sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
         agentId={agentId()}
-      />
-      <ActivitySessionMedia
-        context={context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-        revision={props.row.updatedAt ?? 0}
-        session={props.row}
       />
       {phone() ? undefined : <InspectRun />}
     </div>

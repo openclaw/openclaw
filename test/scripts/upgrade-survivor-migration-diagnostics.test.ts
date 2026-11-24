@@ -103,19 +103,26 @@ function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "
 }
 
 it.each([
-  { name: "update.json", prefix: "", failure: { exitCode: 1 } },
-  { name: "recovery-update.json", prefix: "", failure: { exitCode: null, termination: "timeout" } },
+  { name: "update.json", prefix: "", status: "ok", failure: { exitCode: 1 } },
+  { name: "update.json", prefix: "", status: "error", failure: { exitCode: 1 } },
+  {
+    name: "recovery-update.json",
+    prefix: "",
+    status: "error",
+    failure: { exitCode: null, termination: "timeout" },
+  },
   {
     name: "update.json",
     prefix: "Update warning before JSON\n",
+    status: "error",
     failure: { exitCode: 0, outputLimitExceeded: true },
   },
 ])(
-  "keeps a later failed update step visible before successful output exhausts $name ($failure)",
-  ({ name, prefix, failure }) => {
+  "keeps a later failed update step visible before successful output exhausts $name ($status, $failure)",
+  ({ name, prefix, status, failure }) => {
     const f = fixture();
     const update = {
-      status: "error",
+      status,
       reason: "runtime-verification-failed",
       steps: [
         {
@@ -670,6 +677,68 @@ it("retains failed rollback producer evidence without converting qualified omiss
   expect(report.logs["backup-rollback-restore.json.err"]).not.toContain(secret);
   expect(report.logs["backup-rollback-create.json.err"]).toBeNull();
   expect(report.omissions["backup-rollback-create.json.err"]).toBe("missing or unsafe file");
+});
+
+it("retains rejected advisory step coordinates through bounded diagnostic publication", () => {
+  const f = fixture();
+  const updateFile = path.join(f.artifacts, "update.json");
+  write(updateFile, {
+    status: "ok",
+    after: { version: "2026.9.5" },
+    steps: [
+      { name: "package-install", exitCode: 0, stdoutTail: "Package output\n".repeat(4000) },
+      {
+        name: `rejected inspection token=${secret}`,
+        exitCode: 1,
+        advisory: { kind: "other" },
+        termination: "exit",
+        signal: null,
+        killed: false,
+        outputLimitExceeded: false,
+        failureFacts: [{ message: "private failure detail" }],
+        doctorLintFindings: Array.from({ length: 10 }, (_, index) => ({
+          checkId: `core/doctor/check-${index}`,
+          severity: "warning",
+          target: index === 0 ? `token=${secret}` : `survivor/${"x".repeat(200)}`,
+          message: "private Doctor finding detail",
+        })),
+      },
+    ],
+    postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+  });
+  const checked = runNode(f, [
+    path.resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs"),
+    "assert-successful-update-json",
+    updateFile,
+    "2026.9.5",
+    f.artifacts,
+  ]);
+  expect(checked.status).toBe(1);
+  expect(checked.stderr).toContain("successful update contained a failed core step");
+  const report = capture(f);
+  expect(report.omissions["update.json"]).toContain("truncated at a complete line");
+  expect(report.successfulUpdateCheck).toMatchObject({
+    availability: "captured",
+    outcome: "failed",
+  });
+  expect(report.successfulUpdateCheck.message).toContain("step 2 of 2");
+  expect(report.successfulUpdateCheck.message).toContain("rejected inspection");
+  expect(report.successfulUpdateCheck.message).toContain("exitCode=1");
+  expect(report.successfulUpdateCheck.message).toContain('advisory="other"');
+  expect(report.successfulUpdateCheck.message).toContain('"termination":"exit"');
+  expect(report.successfulUpdateCheck.message).toContain('"signal":"null"');
+  expect(report.successfulUpdateCheck.message).toContain('"killed":false');
+  expect(report.successfulUpdateCheck.message).toContain('"outputLimitExceeded":false');
+  expect(report.successfulUpdateCheck.message).toContain('"failureFactsCount":1');
+  expect(report.successfulUpdateCheck.message).toContain('"doctorFindingsCount":10');
+  expect(report.successfulUpdateCheck.message).toContain('"checkId":"core/doctor/check-7"');
+  expect(report.successfulUpdateCheck.message).toContain('"severity":"warning"');
+  expect(report.successfulUpdateCheck.message).toContain(`"target":"survivor/${"x".repeat(151)}"`);
+  expect(report.successfulUpdateCheck.message).not.toContain(`survivor/${"x".repeat(152)}`);
+  expect(report.successfulUpdateCheck.message).not.toContain(secret);
+  expect(report.successfulUpdateCheck.message).not.toContain("core/doctor/check-8");
+  expect(report.successfulUpdateCheck.message).not.toContain("private failure detail");
+  expect(report.successfulUpdateCheck.message).not.toContain("private Doctor finding detail");
 });
 
 it.each([

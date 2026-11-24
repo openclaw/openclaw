@@ -44,7 +44,6 @@ export async function normalizeAnthropicInlineContent(
   if (!content.some((block) => block.type === "image")) {
     return content.filter((block): block is TextContent => block.type === "text");
   }
-  measureInlineImagesWithinBudget(content, budget);
   const normalized: Array<TextContent | ImageContent> = [];
   for (const block of content) {
     if (block.type !== "image") {

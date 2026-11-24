@@ -92,7 +92,7 @@ export function projectBundleMcpServerCatalog({
     safeServerName,
     launchSummary: launchDescription,
     pluginId,
-    title: serverVersion?.title,
+    title: serverVersion?.title ?? serverVersion?.name,
     icons: readMcpAppIcons(serverVersion?.icons),
     ...(instructions ? { instructions } : {}),
     settings: readMcpAppSettingsCapability(serverCapabilities),

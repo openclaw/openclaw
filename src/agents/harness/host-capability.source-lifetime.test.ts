@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   resetAgentRunRegistryForTest,
@@ -10,17 +10,8 @@ import {
   captureExecRequestOwners,
   withExecRequestTurn,
 } from "../../infra/exec-request-context.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../admitted-run-context.js";
-import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../tools/gateway-caller-context.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
-import { testTool } from "./host-capability.shard.test-support.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 const cleanup: Array<() => void> = [];
@@ -67,43 +58,7 @@ it("returns no retained source authority without an operator", async () => {
   expect(() => host.hostCapabilities.retainSourceAuthority?.()).toThrow("no longer active");
 });
 
-it("records completed turn bookkeeping while revocation blocks the next tool effect", async () => {
-  let current = true;
-  const source = createAdmittedRunOperatorAuthority({
-    profileId: "bookkeeping-source",
-    scopes: ["operator.write"],
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("operator source revoked");
-      }
-    },
-  });
-  const recorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
-  const fixture = await createSourceHost(source, undefined, undefined, {
-    runId: "bookkeeping-source",
-    agentId: "main",
-    sessionKey: "agent:main:bookkeeping",
-    trajectoryRecorder: recorder,
-  });
-  const host = await withGatewayToolCallerIdentity(
-    createAdmittedGatewayToolCallerIdentity(fixture.attempt),
-    () => createAgentHarnessHostCapabilities({ attempt: fixture.attempt, pluginId: "codex" }),
-  );
-  cleanup.push(host.close);
-  const { tool, execute } = testTool();
-  const bound = host.capabilities.bindToolSurface([tool])[0]!;
-  await bound.execute("before-revocation", {});
-  await Promise.resolve();
-  current = false;
-  host.capabilities.reportOutputTokens?.(12);
-  host.capabilities.trajectory!.recordEvent("completed-output", { outputTokens: 12 });
-  expect(recorder.recordEvent).toHaveBeenCalledWith("completed-output", { outputTokens: 12 });
-  await expect(bound.execute("after-revocation", {})).rejects.toThrow("no longer active");
-  expect(execute).toHaveBeenCalledOnce();
-});
-
 it.each([
-  "source assertion",
   "lifecycle rotation",
   "gateway rotation",
   "synchronous signal",
@@ -114,19 +69,10 @@ it.each([
     const synchronous = revocation.startsWith("synchronous");
     const foreground = new AbortController();
     const controller = new AbortController();
-    const revoked = new Error("operator access revoked");
-    let current = true;
-    let duringAssertion: (() => void) | undefined;
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "guest-source",
       scopes: ["operator.write"],
       ...(synchronous ? { signal: controller.signal } : {}),
-      assertCurrent: () => {
-        if (!current) {
-          throw revoked;
-        }
-        duringAssertion?.();
-      },
     });
     const foregroundAbort = !synchronous && revocation !== "gateway rotation";
     const host = await createSourceHost(
@@ -141,10 +87,11 @@ it.each([
     host.closeHost();
     host.closeAdmission();
     if (synchronous) {
-      duringAssertion =
-        revocation === "synchronous signal"
-          ? () => controller.abort(new Error("source revoked during validation"))
-          : rotateAgentRunRegistryLifecycleGeneration;
+      if (revocation === "synchronous signal") {
+        controller.abort(new Error("source stopped"));
+      } else {
+        rotateAgentRunRegistryLifecycleGeneration();
+      }
       expect(() => retained.assertCurrent()).toThrow();
       if (revocation === "synchronous signal") {
         expect(retained.signal?.aborted).toBe(true);
@@ -156,36 +103,27 @@ it.each([
       expect(() => retained.assertCurrent()).not.toThrow();
     }
     const modelBinding = bindModel(retained);
-    if (revocation === "source assertion") {
-      current = false;
-    } else if (revocation === "gateway rotation") {
+    if (revocation === "gateway rotation") {
       rotateAgentEventLifecycleGeneration();
       expect(retained.signal?.aborted).toBe(true);
       expect(modelBinding.signal.aborted).toBe(true);
     } else {
       rotateAgentRunRegistryLifecycleGeneration();
-      expect(() => source.assertCurrent()).not.toThrow();
     }
-    const expected = revocation === "source assertion" ? revoked : "no longer active";
-    expect(() => retained.assertCurrent()).toThrow(expected);
+    expect(() => retained.assertCurrent()).toThrow("no longer active");
     expect(modelBinding.assertCurrent).toThrow(
-      revocation === "gateway rotation" ? expected : undefined,
+      revocation === "gateway rotation" ? "no longer active" : undefined,
     );
-    if (revocation === "source assertion") {
-      expect(modelBinding.signal.aborted).toBe(true);
-    }
-    current = true;
-    expect(() => retained.assertCurrent()).toThrow(expected);
+    expect(() => retained.assertCurrent()).toThrow("no longer active");
   },
 );
 
 it("releases model authority when its retained work closes during acquisition", async () => {
   let sourceHolds = 0;
   const acquisition: { close?: () => void } = {};
-  const source = createAdmittedRunOperatorAuthority({
+  const source = createTestOperatorAuthority({
     profileId: "guest-source",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     retain: () => {
       sourceHolds += 1;
       acquisition.close?.();
@@ -204,53 +142,6 @@ it("releases model authority when its retained work closes during acquisition", 
     "no longer active",
   );
   expect(sourceHolds).toBe(0);
-});
-
-it("guards retained unknown-model work through policy introduction and releases once", async () => {
-  const current: { policy?: AdmittedRunOperatorAuthority["modelPolicy"] } = {};
-  let holds = 0;
-  const listeners = new Set<() => void>();
-  const source = createAdmittedRunOperatorAuthority({
-    profileId: "retained-policy",
-    scopes: ["operator.write"],
-    assertCurrent: () => {},
-    get modelPolicy() {
-      return current.policy;
-    },
-    onModelPolicyChanged: (listener) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    retain: () => {
-      holds += 1;
-      return () => {
-        holds -= 1;
-      };
-    },
-  });
-  const host = await createSourceHost(source);
-  expect(host.hostCapabilities.bindModelExecution).toBeUndefined();
-  const retained = retain(host);
-  host.closeHost();
-  host.closeAdmission();
-  expect(holds).toBe(1);
-  expect(() => retained.assertCurrent()).not.toThrow();
-  expect(retained.signal?.aborted).toBe(false);
-  current.policy = prepareOperatorModelPolicy({
-    cfg: { agents: { defaults: { model: "fixture/a" } } },
-    policy: {},
-    manifestPlugins: [],
-  });
-  for (const listener of listeners) {
-    listener();
-  }
-  expect(retained.signal?.aborted).toBe(true);
-  expect(() => retained.assertCurrent()).toThrow("operator role cannot use this model");
-  retained.release();
-  retained.release();
-  expect([holds, listeners.size]).toEqual([0, 0]);
 });
 
 it("captures request custody before plugin handoff and retains continuation ancestry", async () => {

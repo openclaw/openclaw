@@ -108,6 +108,47 @@ it("keeps bounded installation and redacted runtime logging", () => {
   expect(script).not.toContain('cat "$run_log"');
 });
 
+it("prints redacted hotpath failures outside the failed command's log", () => {
+  const root = mkTempRoot();
+  const log = path.join(root, "openclaw-npm-telegram-codex-install.log");
+  const redactor = writeFixture(
+    root,
+    "redactor.mjs",
+    'export const redactSensitiveText = (text) => text.replaceAll("fixture-secret", "***");',
+  );
+  const diagnostics = script
+    .slice(
+      script.search(/\ndump_(?:hotpath_logs|debug_logs)\(\) \{/u),
+      script.indexOf('\ntest -x "$sut_command"'),
+    )
+    .replaceAll("/tmp/openclaw-npm-telegram-", `${root}/openclaw-npm-telegram-`);
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      `set -Eeuo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
+${diagnostics}
+openclaw_e2e_run_command /bin/sh -c 'echo "actionable failure fixture-secret"; exit 42' >"$FAILURE_LOG" 2>&1`,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAILURE_LOG: log,
+        OPENCLAW_E2E_COMMAND_TIMEOUT: "0",
+        OPENCLAW_E2E_REDACTOR_MODULE: redactor,
+      },
+    },
+  );
+  expect(result.status).toBe(42);
+  expect(result.stderr).toContain("hot path failed with exit code 42");
+  expect(result.stderr).toContain("actionable failure ***");
+  expect(result.stderr).not.toContain("fixture-secret");
+  expect(read(log)).toBe("actionable failure fixture-secret\n");
+});
+
 it("uses unique direct-run output dirs by default", () => {
   const root = mkTempRoot();
   const firstDir = testing.resolvePackageTelegramOutputDir({}, root);
@@ -545,7 +586,14 @@ function captureDocker(env: NodeJS.ProcessEnv = {}) {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'run' && args.includes('-i')) fs.readFileSync(0);
+if (args[0] === 'run' && args.includes('-i') && process.env.CHECK_WRITABLE_PREFIX === '1') {
+  const mount = args.find(arg => arg.endsWith(':/npm-global'));
+  const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
+  if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
+}
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
+if (args.includes('--cidfile')) process.exit(Number(process.env.SUITE_EXIT_CODE || 0));
+if (args.includes('/output')) process.exit(Number(process.env.ARTIFACT_EXIT_CODE || 0));
 `,
   );
   const result = run({
@@ -571,6 +619,11 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
   return { root, candidate, result, runs };
 }
 
+it("makes the disposable npm prefix writable to the container user", () => {
+  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+  expect(result.status, result.stderr).toBe(0);
+});
+
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
   const { root, candidate, result, runs } = captureDocker({
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: upgrade ? scenario : "",
@@ -590,8 +643,10 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
       `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
       `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
     ]),
+    expect.arrayContaining(["--network", "none", `${path.join(root, "output")}:/output`]),
   ]);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
+  expect(runs[2]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);
   expect(runs[0]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(false);
   expect(runs[1]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(upgrade);
@@ -606,6 +661,19 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
   expect(runs[1]?.some((arg) => arg.startsWith(`${repoRoot}:/app`))).toBe(false);
   expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toBe(
     "schema=1\nexit_code=0\nlive_output=job_log\n",
+  );
+});
+
+it.each([0, 7])("reports artifact handoff failure without masking suite exit %s", (suiteExit) => {
+  const { root, result } = captureDocker({
+    SUITE_EXIT_CODE: String(suiteExit),
+    ARTIFACT_EXIT_CODE: "23",
+  });
+  const expectedExit = suiteExit || 1;
+  expect(result.status, result.stderr).toBe(expectedExit);
+  expect(result.stderr).toContain("Could not return Telegram artifacts to the host user.");
+  expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toContain(
+    `exit_code=${expectedExit}\n`,
   );
 });
 

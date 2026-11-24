@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { MessageReactionSummary } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -23,10 +26,13 @@ export interface ControlUiMockGatewayScenario
   /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
   awaitInitialRoster?: boolean;
   pluginAssetsRequireAuth?: boolean;
+  openclawIdEnabled?: boolean;
   pluginSurfaceUrls?: Record<string, string>;
   attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
+  /** OpenClaw demos use the bundled lobster; an empty string exercises the generated fallback. */
+  assistantAvatar?: string;
   assistantName?: string;
   automaticallyFetchFavicons?: boolean;
   communityInvite?: boolean;
@@ -151,11 +157,17 @@ export type NormalizedControlUiMockGatewayScenario = Required<
   >
 > &
   Pick<ControlUiMockGatewayScenario, "bootstrapPreferences" | "profileActivityViewerId"> & {
+    assistantAvatarStatus: "data" | "local" | "none";
     operatorRolePolicy: ReturnType<typeof normalizeControlUiMockAuth>["operatorRolePolicy"];
     controlUiPluginHello: ControlUiPluginHello;
     /** Running-Gateway identity in hello; unset commit and build time are omitted. */
     serverRelease: { version: string; commit?: string; builtAt?: string };
   };
+
+// Inline the canonical asset so all demo surfaces work without an avatar HTTP endpoint.
+const DEFAULT_MOCK_ASSISTANT_AVATAR = `data:image/svg+xml;base64,${readFileSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/favicon.svg"),
+).toString("base64")}`;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -184,16 +196,26 @@ export function normalizeScenario(
     basePathWithSlash.length > 1 && basePathWithSlash.endsWith("/")
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
+  const assistantName = scenario.assistantName?.trim() || "OpenClaw";
+  const assistantAvatar =
+    scenario.assistantAvatar ?? (assistantName === "OpenClaw" ? DEFAULT_MOCK_ASSISTANT_AVATAR : "");
   return {
     bootstrapPreferences: scenario.bootstrapPreferences,
     pluginAssetsRequireAuth: scenario.pluginAssetsRequireAuth ?? true,
+    openclawIdEnabled: scenario.openclawIdEnabled ?? false,
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
     communityInvite: scenario.communityInvite ?? false,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
-    assistantName: scenario.assistantName?.trim() || "OpenClaw",
+    assistantAvatar,
+    assistantAvatarStatus: assistantAvatar.startsWith("data:")
+      ? "data"
+      : assistantAvatar.startsWith("/")
+        ? "local"
+        : "none",
+    assistantName,
     basePath,
     controlUiPluginHello: {
       controlUiTabs: scenario.controlUiTabs ?? [],

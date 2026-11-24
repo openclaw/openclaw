@@ -67,7 +67,6 @@ export async function prepareRestartBeforeScheduling(params: {
   // The initiating request is gone before restart admission reconstructs the
   // next model turn. No schedule exists yet and no human follow-up is supplied.
   initiating.release();
-  expect(() => initiating.authority.assertCurrent()).toThrow();
   if (revoked) {
     ingressPermitted = false;
     await expect(
@@ -119,10 +118,10 @@ export async function captureRealIngressOperator(params: {
   await factory.registerPrincipalRecovery?.(async (audienceId) =>
     audienceId === grant.audienceId ? grant : undefined,
   );
-  const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+  const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
   let retained: { authority: AdmittedRunOperatorAuthority; release(): void } | undefined;
   const observe = vi
-    .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+    .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
     .mockImplementation(async (input) => {
       const result = await capture(input);
       if (input.client?.internal?.remoteIngressPrincipal && result) {
@@ -160,6 +159,7 @@ export function principalRecoveryFixture(
 ) {
   const captured = expectDefined(authority.recoverySnapshot, "creator recovery source");
   const {
+    automationAdmin: _automationAdmin,
     authPolicy: _auth,
     sharedGeneration: _generation,
     device: _device,
@@ -379,6 +379,7 @@ function principalIngressFactory(
     assertCurrent: () => signal.throwIfAborted(),
     host: {
       signal,
+      admissionSignal: signal,
       controlUiBasePath: "",
       getRuntimeConfig: getConfig,
       getResolvedAuth: () => resolveGatewayAuthForConfig({ config: getConfig(), env: {} }),

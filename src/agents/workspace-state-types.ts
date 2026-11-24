@@ -5,6 +5,8 @@ export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
 export type WorkspaceSetupState = {
   version: typeof WORKSPACE_SETUP_STATE_VERSION;
   bootstrapSeededAt?: string;
+  /** A Template initializer, not ordinary workspace preparation, owns seeding. */
+  bootstrapDeferred?: boolean;
   setupCompletedAt?: string;
 };
 

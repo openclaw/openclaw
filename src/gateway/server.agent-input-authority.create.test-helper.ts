@@ -26,7 +26,7 @@ import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as userTurnOwner from "./server-methods/chat-user-turn-recorder.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -130,7 +130,7 @@ export async function runIndependentCreationInputCase(
     );
     const sourceRevocation = new AbortController();
     const operator = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {
@@ -156,7 +156,7 @@ export async function runIndependentCreationInputCase(
     const participants = createReplyTurnParticipants({ operatorAuthority: operator.authority });
     cleanup.push(() => participants.close());
     const steering = boundary.startsWith("participant")
-      ? await captureGatewayOperatorRunAuthority({
+      ? await prepareGatewayOperatorRunAuthority({
           client: createOperatorClient({ profileName: randomUUID(), scopes: ["operator.admin"] }),
           context,
         })
@@ -396,7 +396,7 @@ export async function runIndependentCreationInputCase(
     }
     const persist = () => {
       input.abortSignal.throwIfAborted();
-      expectDefined(input.sourceAdapter?.authority, "accepted source authority").assertCurrent();
+      expectDefined(input.sourceAdapter?.authority, "accepted source authority").assertCurrent?.();
       return recorder.persistApproved();
     };
     if (
@@ -404,7 +404,8 @@ export async function runIndependentCreationInputCase(
       boundary === "after acceptance" ||
       boundary === "guest after acceptance" ||
       boundary === "participant after creation" ||
-      boundary === "participant after acceptance"
+      boundary === "participant after acceptance" ||
+      boundary === "operator revocation"
     ) {
       const persisted = await persist();
       expect(persisted).toMatchObject({

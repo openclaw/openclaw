@@ -8,7 +8,6 @@ import "./components/chat-detail-panel.tsx";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
-import * as videoPosters from "../../lib/media/video-poster.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
@@ -120,7 +119,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it("renders and updates the workspace rail inside the Files panel", async () => {
+it("renders and updates the shared workspace catalog inside the Files panel", async () => {
   const { list, mount, renderPanels, sessions, state, query } = createReviewFixture();
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
   loadSessionWorkspace(state, getSessionWorkspace(state), true);
@@ -132,11 +131,11 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   });
   await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
   await renderPanels();
-  const rail = element(mount, "openclaw-chat-files-panel .chat-workspace-rail");
+  const rail = element(mount, "openclaw-chat-files-panel .workspace-desktop");
   expect(rail.querySelector('button[aria-label="notes.txt"]')).not.toBeNull();
   getSessionWorkspace(state).browserSearch = "notes";
   await renderPanels();
-  expect(query(".chat-workspace-rail")).toBe(rail);
+  expect(query(".workspace-desktop")).toBe(rail);
   expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
   element(rail, 'button[aria-label="notes.txt"]').click();
   await vi.waitFor(() =>
@@ -342,6 +341,7 @@ it.each(["ready", "unavailable", "error"] as const)(
     const attachment = videoAttachment(source, {
       sizeBytes: 574_000,
       artifactId: `artifact_${attachmentId}`,
+      playback: "native",
     });
     let rerender = () => {};
     mountSolid(
@@ -444,7 +444,6 @@ it.each(["history", "stream"] as const)(
   "reuses attachment metadata when Open shows %s content in Files",
   async (surface) => {
     installTranscriptDomMocks();
-    vi.spyOn(videoPosters, "requestVideoPoster").mockResolvedValue(null);
     const { context, mount, state, query } = createReviewFixture();
     const transcript = document.body.appendChild(document.createElement("div"));
     const fetchMetadata = vi.fn(() =>
@@ -463,16 +462,18 @@ it.each(["history", "stream"] as const)(
         return url.searchParams.get("meta") === "1" ? fetchMetadata() : fetchContent(input, init);
       }),
     );
-    const filename = surface === "history" ? "recording.mp4" : "report.pdf";
+    const filename = "report.pdf";
     const source = `/tmp/preview-cache-${surface}/${filename}`;
+    const attachment: AttachmentItem = {
+      type: "attachment",
+      attachment: { kind: "document", label: filename, mimeType: "application/pdf", url: source },
+    };
     const controller = createTestTranscript();
     const chat = {
       ...threadProps(
         `attachment-preview-${surface}`,
         state.sessionKey,
-        surface === "history"
-          ? [{ role: "user", content: [videoAttachment(source, { label: filename })] }]
-          : [],
+        surface === "history" ? [{ role: "user", content: [attachment] }] : [],
       ),
       stream: surface === "stream" ? `MEDIA:${source}` : null,
       streamStartedAt: surface === "stream" ? 1 : null,
@@ -524,33 +525,27 @@ it.each(["history", "stream"] as const)(
       );
       await query("openclaw-chat-detail-panel")?.updateComplete;
       expect(fetchMetadata).toHaveBeenCalledOnce();
-      if (surface === "history") {
-        expect(mount.textContent).toContain(filename);
-        expect(query("openclaw-chat-video-player")).not.toBeNull();
-        expect(fetchContent).not.toHaveBeenCalled();
-      } else {
-        await contentRequested.promise;
-        expect(fetchContent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("/__openclaw__/assistant-media?"),
-          expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
-        );
-        await new Promise<void>((resolve) => {
-          const settle = () => {
-            if (query(".sidebar-pdf-preview [role=alert]")) {
-              observer.disconnect();
-              resolve();
-            }
-          };
-          const observer = new MutationObserver(settle);
-          onTestFinished(() => observer.disconnect());
-          observer.observe(mount, { childList: true, subtree: true });
-          settle();
-        });
-        expect(mount.textContent).toContain("Preview unavailable");
-        expect(query(".sidebar-pdf-preview")?.getAttribute("aria-label")).toBe(filename);
-        expect(fetchMetadata).toHaveBeenCalledOnce();
-        expect(query<HTMLAnchorElement>("a[download]")?.download).toBe(filename);
-      }
+      await contentRequested.promise;
+      expect(fetchContent).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("/__openclaw__/assistant-media?"),
+        expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+      );
+      await new Promise<void>((resolve) => {
+        const settle = () => {
+          if (query(".sidebar-pdf-preview [role=alert]")) {
+            observer.disconnect();
+            resolve();
+          }
+        };
+        const observer = new MutationObserver(settle);
+        onTestFinished(() => observer.disconnect());
+        observer.observe(mount, { childList: true, subtree: true });
+        settle();
+      });
+      expect(mount.textContent).toContain("Preview unavailable");
+      expect(query(".sidebar-pdf-preview")?.getAttribute("aria-label")).toBe(filename);
+      expect(fetchMetadata).toHaveBeenCalledOnce();
+      expect(query<HTMLAnchorElement>("a[download]")?.download).toBe(filename);
     } finally {
       view.unmount();
       controller.dispose();

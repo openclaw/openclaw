@@ -89,7 +89,7 @@ const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
 export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
   const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
-    readMicrosoftProviderConfig(providerConfig).enabled;
+    asBoolean(providerConfig.enabled) ?? true;
   return {
     id: "microsoft",
     label: "Microsoft",

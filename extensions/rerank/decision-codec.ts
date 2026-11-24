@@ -1,42 +1,20 @@
-import type {
-  DecisionAnswerV2,
-  DecisionBatchV2,
-  DecisionProviderContextV2,
-} from "openclaw/plugin-sdk/decisions";
-
-type DecisionCapabilities = NonNullable<
-  NonNullable<DecisionProviderContextV2["model"]["inference"]>["decision"]
->;
-
-/** Declared for configured rerank rows that do not author their own Decision facts. */
-export const RERANK_DECISION_CAPABILITIES = {
-  protocol: "rerank",
-  input: ["text"],
-  questions: {
-    boolean: { probabilities: "boolean", abstention: false },
-    choice: { probabilities: "independent", abstention: false, minOptions: 2 },
-    sort: { probabilities: "none", abstention: false, minOptions: 1 },
-  },
-  confidence: "none",
-} satisfies DecisionCapabilities;
+import type { DecisionAnswerV2, DecisionBatchV2 } from "openclaw/plugin-sdk/decisions";
 
 /** One `/rerank` call: a query scored against documents. */
-export type RerankRequest = { readonly query: string; readonly documents: readonly string[] };
+type RerankRequest = { readonly query: string; readonly documents: readonly string[] };
 
 /** Where each scored document lands in the Decision answers. */
 type Slot =
-  | { readonly kind: "boolean"; readonly question: string; readonly request: number }
+  | { readonly kind: "boolean"; readonly question: string }
   | {
       readonly kind: "choice";
       readonly question: string;
       readonly label: string;
-      readonly request: number;
     }
   | {
       readonly kind: "sort";
       readonly question: string;
       readonly id: string;
-      readonly request: number;
     };
 
 export type RerankPlan = {
@@ -94,7 +72,7 @@ export function planRerankDecision(batch: DecisionBatchV2): RerankPlan | undefin
         return undefined;
       }
       const request = requestFor(query);
-      add(request, render(document), { kind: "boolean", question, request });
+      add(request, render(document), { kind: "boolean", question });
       continue;
     }
     if (spec.type === "choice") {
@@ -109,7 +87,6 @@ export function planRerankDecision(batch: DecisionBatchV2): RerankPlan | undefin
           kind: "choice",
           question,
           label,
-          request,
         });
       }
       continue;
@@ -124,7 +101,7 @@ export function planRerankDecision(batch: DecisionBatchV2): RerankPlan | undefin
       }
       const request = requestFor(sortQuery);
       for (const item of batch.state.items) {
-        add(request, render(item.content), { kind: "sort", question, id: item.id, request });
+        add(request, render(item.content), { kind: "sort", question, id: item.id });
       }
       continue;
     }

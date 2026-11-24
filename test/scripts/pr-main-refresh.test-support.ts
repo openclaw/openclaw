@@ -417,7 +417,7 @@ case "$*" in 'branch --force --no-track '*) instrument=true ;; esac
 for arg in "$@"; do
   case "$arg" in
     fetch|checkout|push|--no-lazy-fetch) instrument=true ;;
-    merge-base|diff|update-ref) decision=true ;;
+    merge-base|diff|update-ref|cat-file) decision=true ;;
   esac
 done
 if [ "$instrument" = true ]; then

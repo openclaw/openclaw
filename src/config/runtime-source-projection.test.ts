@@ -13,6 +13,7 @@ import {
 } from "./resolution-facts.js";
 import { captureRuntimeConfigWithSource } from "./runtime-config-capture-state.js";
 import {
+  clearRuntimeConfigSnapshot,
   createRuntimeConfigReader as createReader,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot as setSnapshot,
@@ -145,6 +146,39 @@ it("reuses a frozen source capture while preserving edits before freezing and pr
   expect(repaired).not.toBe(rebound);
   expect(getConfigResolutionFacts(repaired)).toBe(facts);
   expect(capture(source)).toBe(repaired);
+});
+
+it("retains live ownership across publication without changing captured payloads", () => {
+  const initial: OpenClawConfig = { gateway: { port: 19001 } };
+  setSnapshot(initial);
+  const captured = capture(initial);
+  const replacement: OpenClawConfig = { gateway: { port: 19002 } };
+  setSnapshot(replacement);
+  const read = createReader(captured);
+  expect(read()).toBe(replacement);
+  clearRuntimeConfigSnapshot();
+  expect(read()).toBe(captured);
+  const reloaded: OpenClawConfig = { gateway: { port: 19003 } };
+  setSnapshot(reloaded);
+  expect(read()).toBe(reloaded);
+  expect(captured).toEqual(initial);
+});
+
+it("keeps authored projection pinned while a late runtime reader follows publication", () => {
+  const source: OpenClawConfig = { gateway: { port: 19001 } };
+  const runtime: OpenClawConfig = { gateway: { port: 19001, mode: "local" } };
+  setSnapshot(runtime, source);
+  const captured = capture(runtime);
+  const authored = projectSource(captured);
+  const replacement: OpenClawConfig = { gateway: { port: 19002, mode: "local" } };
+  setSnapshot(replacement, { gateway: { port: 19002 } });
+  expect(createReader(captured)()).toBe(replacement);
+  expect(createReader(authored)()).toBe(authored);
+  expect(projectSource(captured)).toBe(authored);
+  expect(captured).toEqual({ gateway: { port: 19001, mode: "local" } });
+  expect(authored).toEqual({ gateway: { port: 19001 } });
+  expect(Object.isFrozen(captured.gateway)).toBe(true);
+  expect(Object.isFrozen(authored.gateway)).toBe(true);
 });
 
 function expectIsolatedCopy(copy: OpenClawConfig, original: OpenClawConfig) {

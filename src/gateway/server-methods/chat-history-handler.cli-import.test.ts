@@ -17,6 +17,7 @@ import { readLoggingConfig } from "../../logging/config.js";
 import { applyLoggingConfig } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -45,6 +46,7 @@ async function seedCliHistory(
   sessionKey: string,
   incognito = false,
   entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+  projectsDir = path.join(state.home, ".claude", "projects"),
 ) {
   await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionKey, sessionId: randomUUID() };
@@ -59,7 +61,7 @@ async function seedCliHistory(
     cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
     ...entry,
   });
-  const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
+  const projectDir = path.join(projectsDir, "synthetic-history");
   await fs.mkdir(projectDir, { recursive: true });
   const sourcePath = path.join(projectDir, `${cliSessionId}.jsonl`);
   return {
@@ -77,7 +79,7 @@ function cliMessage(
   sessionId: string,
   uuid: string,
   role: string,
-  content: string,
+  content: string | Record<string, unknown>[],
   timestamp: number,
   parentUuid: string | null = null,
 ) {
@@ -207,6 +209,57 @@ function expectMissingAnchor(page: HistoryPage) {
     expect(page).not.toHaveProperty(key);
   }
 }
+
+it("reports Claude CLI tool results with the same outcomes as the live stream", async () => {
+  await withCliHistory(async ({ scope, timestamp, native, write }) => {
+    await write([
+      native(
+        "calls",
+        "assistant",
+        ["ok", "error", "missing"].map((id) => ({
+          type: "tool_use",
+          id,
+          name: "Bash",
+          input: { command: "pwd" },
+        })),
+        timestamp,
+      ),
+      native(
+        "results",
+        "user",
+        [
+          { type: "tool_result", tool_use_id: "ok", content: [{ type: "text", text: "/tmp" }] },
+          { type: "tool_result", tool_use_id: "error", content: "Denied", is_error: true },
+        ],
+        timestamp + 1,
+      ),
+    ]);
+    const read = await rpcReader(scope.sessionKey, "chat.history");
+    expect((await read({})).activity).toMatchObject([
+      {
+        items: [
+          { toolCallId: "ok", status: "completed" },
+          { toolCallId: "error", status: "failed" },
+          { toolCallId: "missing", unpairedCall: true },
+        ],
+      },
+    ]);
+  });
+});
+
+it("imports Claude history from CLAUDE_CONFIG_DIR", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const configDir = path.join(state.home, "claude-config");
+    await withEnvAsync({ CLAUDE_CONFIG_DIR: configDir }, async () => {
+      const key = "agent:main:cli-history-config-dir";
+      const projectsDir = path.join(configDir, "projects");
+      const { timestamp, native, write } = await seedCliHistory(state, key, false, {}, projectsDir);
+      const nativeId = randomUUID();
+      await write([native(nativeId, "user", "Configured-root question", timestamp)]);
+      expect(ids(await (await historyReader(key))({ limit: 10 }))).toContain(nativeId);
+    });
+  });
+});
 
 it.each([false, true])("reads imported full messages (incognito=%s)", async (incognito) => {
   const text = "Imported full-message content. ".repeat(350);

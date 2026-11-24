@@ -1,3 +1,7 @@
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
@@ -12,6 +16,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
@@ -29,6 +34,7 @@ import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { WORKSPACE_RESULT_LIMIT_ERROR_CODE } from "../worker-environments/workspace-inventory-limits.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
@@ -135,13 +141,23 @@ type PendingDispatchLifecycleError = {
 };
 
 function resolveDesktopChatSendErrorNotice(error: unknown): string | undefined {
+  // Provisioning preserves the typed cause; never expose its paths or raw diagnostics.
+  if (
+    collectNestedErrorCandidates(error).some(
+      (candidate) => extractErrorCode(candidate) === WORKSPACE_RESULT_LIMIT_ERROR_CODE,
+    )
+  ) {
+    return "This workspace exceeds OpenClaw's file or size limits.";
+  }
   const storageFailure = classifyGatewayStorageFailure(error);
   const notice =
-    storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"
-      ? "The request was interrupted because OpenClaw storage is busy."
-      : (resolveChatSendStorageErrorMessage(error) ??
-        renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
-        renderFailoverCodeUserCopy(describeFailoverError(error).code));
+    error instanceof ProjectCloneError
+      ? error.message
+      : storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"
+        ? "The request was interrupted because OpenClaw storage is busy."
+        : (resolveChatSendStorageErrorMessage(error) ??
+          renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
+          renderFailoverCodeUserCopy(describeFailoverError(error).code));
   // Desktop notices state the failure, without the following recovery advice.
   return notice?.split(/(?<=[.!?])\s+|\r?\n/u, 1)[0];
 }
@@ -448,6 +464,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         endedAt: Date.now(),
         error: errorMessage,
         errorKind,
+        notice: err instanceof ProjectCloneError ? err.message : undefined,
         desktopNotice,
         sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
         lifecycleRevision:
@@ -492,7 +509,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         });
         broadcastError({ errorMessage, errorKind, stopReason: terminationFields.stopReason });
       };
-      if (pendingDispatchLifecycleError) {
+      if (pendingDispatchLifecycleError || params.isReplyDispatchRun?.()) {
         // agent.wait consumes the cached terminal immediately. Commit the lifecycle
         // first so registry completion cannot race it with a later start timestamp.
         publishDispatchError = publish;
@@ -564,9 +581,11 @@ export function createChatSendDispatchErrorLifecycle(params: {
    * failure before any runtime lifecycle exists. Record it as this run's durable
    * terminal so history and other clients show the outcome, not only the live broadcast.
    */
+  let unstartedNotice: string | undefined;
   let unstartedDesktopNotice: string | undefined;
   const captureUnstartedFailure = (error: unknown): never => {
     // Source completion flattens this error before delivering the unstarted terminal.
+    unstartedNotice = error instanceof ProjectCloneError ? error.message : undefined;
     unstartedDesktopNotice = resolveDesktopChatSendErrorNotice(error);
     throw error;
   };
@@ -581,7 +600,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       endedAt: Date.now(),
       ...failure,
       errorKind: resolveStateContentionPresentation(failure.error)?.errorKind,
-      notice: failure.notice,
+      notice: failure.notice ?? unstartedNotice,
       desktopNotice: unstartedDesktopNotice,
       sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
       lifecycleRevision:
@@ -590,7 +609,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     });
   };
 
-  const finalize = async () => {
+  const settleTerminalPersistence = async () => {
     if (params.isReplyDispatchRun?.() && activeRunAbort.entry) {
       // Accepted lifecycle delivery still needs this exact registration and run context.
       await waitForChatAbortTerminalPersistence(activeRunAbort.entry).catch((error: unknown) => {
@@ -599,6 +618,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
         );
       });
     }
+  };
+
+  const finalize = async () => {
+    await settleTerminalPersistence();
     const dispatchError = pendingDispatchLifecycleError;
     // Commands and reply-dispatch runtimes have already published their terminal.
     // Native agent events keep ownership until their own terminal delivery completes.
@@ -666,5 +689,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
     finalize,
     handleError,
     recordUnstartedFailure,
+    settleTerminalPersistence,
   };
 }

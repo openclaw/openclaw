@@ -7,11 +7,13 @@ import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
+import type { CommandInputOptions } from "./command-stdin-file.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import {
   CommandProcessCleanupError,
   createSanitizedCommandError,
   hasCommandProcessCleanupError,
+  readCommandProcessCleanup,
   readCommandProcessFailure,
 } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
@@ -33,15 +35,13 @@ export { resolveCommandEnv, shouldSpawnWithShell, spawnCommand } from "./exec-sp
 
 const DEFAULT_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
 
-export type RunExecOptions = {
+export type RunExecOptions = CommandInputOptions & {
   timeoutMs?: number;
   maxBuffer?: number;
   logOutput?: boolean;
   cwd?: string;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
-  input?: string | Uint8Array;
-  stdinFileDescriptor?: number;
   signal?: AbortSignal;
   /** Observe received bytes without changing buffering, completion or cancellation. */
   onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => void;
@@ -64,7 +64,8 @@ export async function runExec(
       ? resolveTimerTimeoutMs(resolvedOptions.timeoutMs, 1)
       : undefined;
   const maxBuffer = resolvedOptions.maxBuffer ?? DEFAULT_EXEC_MAX_BUFFER_BYTES;
-  if (resolvedOptions.input !== undefined && resolvedOptions.stdinFileDescriptor !== undefined) {
+  const { input, stdinFile, stdinFileDescriptor } = resolvedOptions;
+  if (input !== undefined && stdinFileDescriptor !== undefined) {
     throw new Error("runExec accepts either input or stdinFileDescriptor, not both");
   }
   let acceptingOutput = true;
@@ -80,19 +81,20 @@ export async function runExec(
       executionTimeoutMs: timeout,
       env: resolvedOptions.env,
       forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
-      ...(resolvedOptions.input !== undefined ? { input: resolvedOptions.input } : {}),
+      input,
       maxBuffer,
       reject: true,
-      ...(resolvedOptions.stdinFileDescriptor === undefined
-        ? { stdin: resolvedOptions.input === undefined ? "ignore" : undefined }
-        : {
-            // Execa forwards arbitrary numeric stdin descriptors to Node, but its type narrows them to fd 0.
-            stdin: resolvedOptions.stdinFileDescriptor as 0,
-          }),
+      stdinFile,
+      stdin:
+        (stdinFileDescriptor as 0 | undefined) ??
+        (input === undefined && !stdinFile ? "ignore" : undefined),
       stripFinalNewline: false,
     });
+    // A file caller can release the pinned inode as soon as this operation returns.
     const startupCanceled =
-      subprocess.nodeChildProcess instanceof BrokerChild && subprocess.pid === undefined
+      !stdinFile &&
+      subprocess.nodeChildProcess instanceof BrokerChild &&
+      subprocess.pid === undefined
         ? createDeferredCore<never>()
         : undefined;
     const signal = resolveCommandProcessSignal(resolvedOptions.signal);
@@ -265,6 +267,8 @@ export type BufferedCommandOptions = {
   input?: string | Uint8Array;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv. */
+  preparedEnv?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   maxOutputBytes?: number | { stdout?: number; stderr?: number };
   maxCombinedOutputBytes?: number;
@@ -343,6 +347,7 @@ export async function runCommandBuffered(
       executionIntent: options.executionIntent,
       executionScopeKey: options.executionScopeKey,
       baseEnv: options.baseEnv,
+      preparedEnv: options.preparedEnv,
       cwd: options.cwd,
       env: options.env,
       input: options.input,
@@ -362,6 +367,15 @@ export async function runCommandBuffered(
     const termination: BufferedCommandResult["termination"] = result.outputLimitExceeded
       ? "output-limit"
       : result.termination;
+    const pendingCleanup = readCommandProcessCleanup(result);
+    const cleanupError = pendingCleanup
+      ? await pendingCleanup.then(
+          (cleanup) => (cleanup === "uncertain" ? new CommandProcessCleanupError() : undefined),
+          (cause: unknown) => new CommandProcessCleanupError({ cause }),
+        )
+      : result.cleanup === "uncertain"
+        ? new CommandProcessCleanupError()
+        : undefined;
     return {
       stdout: capturedOutput("stdout"),
       stderr: capturedOutput("stderr"),
@@ -371,7 +385,7 @@ export async function runCommandBuffered(
       termination,
       ...(outputLimitStream ? { outputLimitStream } : {}),
       ...(result.outputErrorStream ? { errorStream: result.outputErrorStream } : {}),
-      ...(result.cleanup === "uncertain" ? { error: new CommandProcessCleanupError() } : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
     };
   } catch (error) {
     const commandError = error instanceof Error ? error : new Error("Command execution failed");

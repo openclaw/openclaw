@@ -1,5 +1,6 @@
 import type { PluginOperatorGrants } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { AgentConfig } from "../config/types.agents.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type {
@@ -8,12 +9,7 @@ import type {
   TemplateDiagnostic,
   TemplateSourceIdentity,
 } from "./manifest-contract.js";
-import type {
-  TemplateManifest,
-  TemplateOpenClawExtension,
-  TemplateOpenClawProfile,
-  TemplatePackage,
-} from "./schema.js";
+import type { TemplateManifest, TemplatePackage, TemplateDependency } from "./schema.js";
 
 export { TEMPLATE_BOOTSTRAP_FILE_NAMES, type TemplateDiagnostic } from "./manifest-contract.js";
 export type { TemplateSourceIdentity } from "./manifest-contract.js";
@@ -22,20 +18,51 @@ export type {
   TemplateCronJob,
   TemplateManifest,
   TemplateMcpServer,
-  TemplateOpenClawExtension,
-  TemplateOpenClawProfile,
   TemplatePackage,
+  TemplateDependency,
+  TemplateBundledDependency,
 } from "./schema.js";
 
 export const TEMPLATE_ADD_PLAN_SCHEMA_VERSION = "openclaw.templateAddPlan.v1" as const;
 export const TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION = "openclaw.templateInspect.v1" as const;
 export const TEMPLATE_OUTPUT_STABILITY = "experimental" as const;
 
-type TemplateExtensionFormat = TemplateOpenClawExtension["format"];
+export type TemplateAddPlanContext = {
+  config?: OpenClawConfig;
+  /** Validated zone from the adding device; otherwise keep each declared zone. */
+  deviceTimeZone?: string;
+  agentId?: string;
+  workspace?: string;
+  existingAgentIds?: Iterable<string>;
+  existingWorkspacePaths?: Iterable<string>;
+  /** Workspace owned by the caller's exact pending ordinary creation receipt. */
+  admittedWorkspace?: string;
+  existingMcpServerNames?: Iterable<string>;
+  existingMcpServers?: Record<string, Record<string, unknown>>;
+  packagePreflight?: TemplatePackagePreflight;
+  sourceReferenceRoot?: string;
+  /**
+   * Maps the Template's preferred model to a model this host offers, or undefined.
+   * Absent resolver means the preference cannot be verified and is not applied.
+   */
+  resolvePreferredModel?: (
+    requested: string,
+    agentId: string,
+  ) => Promise<string | undefined> | string | undefined;
+};
+
+type TemplateExtensionFormat = TemplateAppliedExtension["format"];
 
 export type ResolvedTemplatePackage = TemplatePackage & {
   integrity: string;
   extension?: TemplateAppliedExtension;
+};
+
+export type TemplateBundledSourceSnapshot = {
+  kind: "skill" | "plugin";
+  path: string;
+  name?: string;
+  snapshot: import("./dependency-directory.js").TemplateDirectorySnapshot;
 };
 
 export type TemplatePluginCapabilityGrantsById = Record<string, PluginOperatorGrants>;
@@ -46,11 +73,16 @@ export type TemplatePackagePreflightResult = {
   integrity?: string;
   installId?: string;
   warning?: string;
+  installPolicyWarningDigest?: string;
   installedIntegrity?: string;
   installedAt?: string;
   installedVersion?: string;
+  name?: string;
+  snapshot?: import("./dependency-directory.js").TemplateDirectorySnapshot;
   code?: string;
   message?: string;
+  /** Runtime plugin id to add to plugins.allow when only the allowlist blocks the plugin. */
+  allowlistPluginId?: string;
   requirements?: TemplateLocalPrerequisite[];
   detectedFormat?: TemplateExtensionFormat;
   mapped?: string[];
@@ -62,8 +94,12 @@ export type TemplatePackagePreflightResult = {
 };
 
 export type TemplatePackagePreflight = (
-  pkg: TemplatePackage,
+  pkg: TemplateDependency,
   workspace: string,
+  source?: {
+    packageRoot: string;
+    snapshot?: import("./dependency-directory.js").TemplateDirectorySnapshot;
+  },
 ) => Promise<TemplatePackagePreflightResult>;
 
 export type TemplateWorkspaceSourceSnapshot = {
@@ -78,13 +114,9 @@ type TemplateSourceFileSnapshot = {
   digest: string;
 };
 
-type TemplateProfileSourceSnapshot = TemplateSourceFileSnapshot & {
-  sourcePath: string;
-};
-
 type TemplateSourceSnapshot = {
   manifest: TemplateSourceFileSnapshot;
-  openClawProfile?: TemplateProfileSourceSnapshot;
+  bundledSources?: TemplateBundledSourceSnapshot[];
   workspaceSources: TemplateWorkspaceSourceSnapshot[];
   packageBootstrap?: TemplateWorkspaceSourceSnapshot;
 };
@@ -95,7 +127,6 @@ export type TemplateReadResult =
       manifest: TemplateManifest;
       templateMarkdownBody?: Buffer;
       packageBootstrap?: TemplateWorkspaceSourceSnapshot;
-      openClawProfile?: TemplateOpenClawProfile;
       source: TemplateSourceIdentity;
       snapshot: TemplateSourceSnapshot;
       diagnostics: TemplateDiagnostic[];
@@ -111,28 +142,14 @@ export type TemplateAddPlanAction = {
   action: "create" | "write" | "install" | "reuse" | "configure" | "schedule";
   target: string;
   source?: string;
-  sourceKind?: "templateMarkdownBody";
+  /** Bytes other than a declared workspace source: the CLAW.md body, or the whole manifest file. */
+  sourceKind?: "templateMarkdownBody" | "templateManifest";
   digest?: string;
   details?: Record<string, unknown>;
   automation?: CronJobCreate;
   scratch?: string;
   blocked: boolean;
   reason?: string;
-};
-
-export type TemplateExtensionPlan = TemplateOpenClawExtension & {
-  detectedFormat?: TemplateExtensionFormat;
-  integrity?: string;
-  installId?: string;
-  ownerAction?: "install" | "reuse";
-  requirementState: "satisfied" | "missing-installable" | "conflicting" | "setup-required";
-  mapped: string[];
-  unavailable: string[];
-  adapterIdentity?: string;
-  declaredCapabilities?: PluginAcceptedDeclaredSurface;
-  capabilityGrants?: PluginOperatorGrants;
-  capabilityGrantsByPluginId?: TemplatePluginCapabilityGrantsById;
-  blocked: boolean;
 };
 
 export type TemplateAddCapabilityChange = {
@@ -188,7 +205,6 @@ export type TemplateAddPlan = {
     ready: boolean;
     requirements: TemplateLocalPrerequisite[];
   };
-  extensions?: TemplateExtensionPlan[];
   blockers: TemplateDiagnostic[];
   diagnostics: TemplateDiagnostic[];
 };

@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   createModelCatalogDecisions,
   prepareModelCatalogDecisions,
@@ -64,7 +65,8 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   pendingProviders?: readonly string[];
   providers: string[];
-  resolvedDefault: { provider: string; model: string };
+  /** Undefined when the agent has no configured model. */
+  resolvedDefault?: { provider: string; model: string };
   modelNames: Map<string, string>;
   modelMenu?: ModelsMenu;
   refreshWarning?: string;
@@ -126,6 +128,8 @@ export async function loadModelsProviderData(
   });
   // The owner records refresh outcomes; a sent menu must not wait for acquisition or be rewritten.
   void owner.loadFullModelCatalog?.().catch(() => undefined);
+  // Channel pickers, like models.list, pick up a CLI sign-in made after Gateway start.
+  void owner.recheckNativeLogin?.();
   const cfg = owner.config;
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
@@ -133,6 +137,7 @@ export async function loadModelsProviderData(
     agentId,
     ...runtimeNormalization,
   });
+  const defaultProvider = resolvedDefault?.provider ?? DEFAULT_PROVIDER;
   const workspaceDir =
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
@@ -146,7 +151,7 @@ export async function loadModelsProviderData(
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
-    defaultProvider: resolvedDefault.provider,
+    defaultProvider,
     defaultModel: resolvedDefault,
     agentId,
     ...runtimeNormalization,
@@ -177,7 +182,9 @@ export async function loadModelsProviderData(
   const decisions = await prepareModelCatalogDecisions(decisionParams);
   // Selecting the default clears the session runtime pin; other model callbacks retain it.
   const defaultDecisions =
-    decisionParams.runtimeOverride && resolveModelRuntimeRoute(resolvedDefault.provider)
+    decisionParams.runtimeOverride &&
+    resolvedDefault &&
+    resolveModelRuntimeRoute(resolvedDefault.provider)
       ? createModelCatalogDecisions({
           ...decisionParams,
           preparedPersonalCatalog: decisions.preparedPersonalCatalog,
@@ -185,7 +192,7 @@ export async function loadModelsProviderData(
         })
       : decisions;
   const decisionsForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-    normalizeProviderId(entry.provider) === resolvedDefault.provider &&
+    normalizeProviderId(entry.provider) === resolvedDefault?.provider &&
     entry.id === resolvedDefault.model
       ? defaultDecisions
       : decisions;
@@ -220,6 +227,7 @@ export async function loadModelsProviderData(
             entry,
             evaluation,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisionsForEntry(entry).resolveOpenAIProviderRoutes,
           })
         : undefined;
     // An unavailable canonical row must not hide the only usable CLI choice.
@@ -249,7 +257,7 @@ export async function loadModelsProviderData(
     cfg,
     metadataSnapshot: owner.metadataSnapshot,
     catalog,
-    defaultProvider: resolvedDefault.provider,
+    defaultProvider,
     defaultModel: resolvedDefault,
     selectedModel: resolvedDefault,
     agentId,
@@ -272,7 +280,7 @@ export async function loadModelsProviderData(
 
   const aliasIndex = buildModelAliasIndex({
     cfg,
-    defaultProvider: resolvedDefault.provider,
+    defaultProvider,
     agentId,
     ...runtimeNormalization,
   });
@@ -307,21 +315,21 @@ export async function loadModelsProviderData(
     if (!trimmed) {
       return;
     }
-    const defaultProvider = !trimmed.includes("/")
+    const rawDefaultProvider = !trimmed.includes("/")
       ? resolveBareModelDefaultProvider({
           cfg,
           catalog,
           model: trimmed,
-          defaultProvider: resolvedDefault.provider,
+          defaultProvider,
           agentId,
           manifestPlugins: runtimeNormalization.manifestPlugins,
         })
-      : resolvedDefault.provider;
+      : defaultProvider;
     const resolved = resolveModelRefFromString({
       cfg,
       agentId,
       raw: trimmed,
-      defaultProvider,
+      defaultProvider: rawDefaultProvider,
       aliasIndex,
       ...runtimeNormalization,
     });
@@ -364,6 +372,7 @@ export async function loadModelsProviderData(
   }
 
   if (
+    resolvedDefault &&
     !incompatibleModelKeys.has(
       resolveModelCatalogIdentityKey({
         provider: resolvedDefault.provider,

@@ -1,8 +1,4 @@
 import {
-  readSessionMessageIdentity,
-  reduceSessionProjection,
-} from "@openclaw/gateway-client/browser";
-import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
@@ -10,7 +6,6 @@ import { t } from "../../i18n/index.ts";
 import {
   nativeHistoryMessageSourceIdentity,
   oldestNativeHistoryMessage,
-  prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -23,6 +18,10 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import {
+  hasAutomationActivity,
+  loadAutomationProjection,
+} from "./chat-automation-projection-loader.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
@@ -34,24 +33,14 @@ import {
   type StagedOlderHistoryPage,
 } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
-import {
-  commitCurrentChatHistorySnapshot,
-  reopenChatHistoryBoundary,
-  resolveChatHistoryPagination,
-  type ChatHistoryResult,
-} from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
   retireChatHistoryRead,
 } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
-import {
-  loadChatHistory,
-  reloadChatHistoryWindow,
-  requiresChatHistoryReload,
-  resumePendingChatHistoryLoad,
-} from "./chat-history.ts";
+import { loadChatHistory, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
@@ -64,16 +53,7 @@ import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
-import {
-  getChatSessionProjection,
-  publishChatSessionProjectionMessages,
-  retireChatSubmissionDisplay,
-} from "./history-merge.ts";
-import {
-  captureChatSessionScrollPosition,
-  saveChatSessionScrollPosition,
-  scheduleChatScroll,
-} from "./scroll.ts";
+import { captureChatSessionScrollPosition, saveChatSessionScrollPosition } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
@@ -354,20 +334,25 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   }
 
   protected handleTranscriptHistoryIntent(event: Event): void {
-    const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    const upward = this.historyInput.isUpward(event);
+    const root = this.transcript.scrollElement;
+    const upward = this.historyInput.isUpward(event, root);
+    // Initial placement may not emit a scroll; native input establishes the jump's origin.
+    if (root && upward) {
+      this.transcriptScrollTop = root.scrollTop;
+    }
     if (
       !root ||
       !this.presented ||
       !this.visuallyPresented ||
-      !this.transcript.isPositionSettled ||
-      this.transcript.isProgrammaticScroll ||
       !upward ||
       root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
       this.history.loadingOlder ||
-      !this.hasOlderMessages() ||
-      !this.consumeHistoryIntent()
+      !this.hasOlderMessages()
     ) {
+      return;
+    }
+    this.transcript.cancelScroll();
+    if (!this.transcript.isPositionSettled || !this.consumeHistoryIntent()) {
       return;
     }
     this.historyAutoLoadBlocked = false;
@@ -381,9 +366,12 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     const load = (async () => {
       // A sparse or overlapping page is cursor progress, not a visible result.
-      // Keep boot autofill to one page; reader actions may cross three pages,
-      // then yield so a long hidden interval cannot monopolize the connection.
-      for (let page = 0; page < (readerIntent ? 3 : 1); page += 1) {
+      // A trimmed cache needs a boundary probe before its one boot-fill page.
+      // Reader actions may cross three pages, then yield so a long hidden
+      // interval cannot monopolize the connection.
+      const pagination = this.state?.chatHistoryPagination;
+      const limit = readerIntent ? 3 : pagination?.hasMore && pagination.needsBoundary ? 2 : 1;
+      for (let page = 0; page < limit; page += 1) {
         const loaded = await this.performOlderMessagesLoad(readerIntent);
         if (loaded !== "empty") {
           return loaded;
@@ -424,16 +412,24 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     // boundary shows no shimmer flash for an instant prepend.
     let prepended = false;
     let visible = true;
-    const contributesContent = (messages: unknown[]) =>
-      !readerIntent || hasVisibleOlderHistoryPage(state, this.paneId, messages);
     try {
       if (catalogKey) {
         const count = this.history.catalogMessages.length;
         this.history.loadingOlder = true;
         prepended = await this.loadCatalogSession(catalogKey, true);
-        visible = contributesContent(
-          this.history.catalogMessages.slice(0, this.history.catalogMessages.length - count),
+        const page = this.history.catalogMessages.slice(
+          0,
+          this.history.catalogMessages.length - count,
         );
+        if (readerIntent) {
+          const projector = page.some(hasAutomationActivity)
+            ? await loadAutomationProjection()
+            : undefined;
+          if (!isCurrent()) {
+            return false;
+          }
+          visible = hasVisibleOlderHistoryPage(state, this.paneId, page, projector);
+        }
       } else {
         let result = this.takeStagedOlderPage(state);
         if (!result && this.stagedOlder.load) {
@@ -446,7 +442,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
           result = this.takeStagedOlderPage(state);
         }
         const pagination = state.chatHistoryPagination;
-        if (!pagination.hasMore || (!readerIntent && pagination.needsBoundary)) {
+        if (!pagination.hasMore) {
           return false;
         }
         const expectedSessionId = state.currentSessionId?.trim() ?? "";
@@ -472,68 +468,30 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
           this.history.olderError = t("chat.thread.earlierInterrupted");
           return false;
         }
-        if (requiresChatHistoryReload(result, expectedSessionId, boundary)) {
-          this.stagedOlder.controller.abort();
-          this.stagedOlder = { controller: new AbortController(), page: null, load: null };
-          await reloadChatHistoryWindow(state);
-          prepended = true;
-          return true;
+        const { applyOlderHistoryPage } = await import("./chat-older-history-page.ts");
+        if (!isCurrent()) {
+          return false;
         }
-        const nextPagination = resolveChatHistoryPagination(result, pagination.totalMessages);
-        if (boundary) {
-          // Probe rows never enter presentation. This attempt spends one of the
-          // same three reader slots; the next attempt consumes the reopened edge.
-          reopenChatHistoryBoundary(state, boundary, nextPagination);
-          prepended = true;
-          visible = false;
-          return nextPagination.hasMore ? "empty" : true;
+        const applied = await applyOlderHistoryPage({
+          state,
+          paneId: this.paneId,
+          result,
+          expectedSessionId,
+          boundary,
+          requestedCursor,
+          totalMessages: pagination.totalMessages,
+          readerIntent,
+          isCurrent,
+          clearStaged: () => {
+            this.stagedOlder.controller.abort();
+            this.stagedOlder = { controller: new AbortController(), page: null, load: null };
+          },
+        });
+        if (!applied || !isCurrent()) {
+          return false;
         }
-        if (nextPagination.hasMore && nextPagination.olderCursor === requestedCursor) {
-          throw new Error("History returned the same older boundary. Reload the session to retry.");
-        }
-        const messages = Array.isArray(result.messages) ? result.messages : [];
-        const projection = getChatSessionProjection(state);
-        const pendingRunIds = projection.entries.flatMap((entry) =>
-          entry.pending && entry.identity?.role === "user" && entry.pendingRunId
-            ? [entry.pendingRunId]
-            : [],
-        );
-        if (pendingRunIds.length) {
-          const canonicalUsers = messages.filter((message) => {
-            const identity = readSessionMessageIdentity(message);
-            return (
-              identity?.role === "user" &&
-              !identity.isImported &&
-              (identity.id !== null || identity.sequence !== null)
-            );
-          });
-          // Use canonical adoption without reseeding the existing tail's live
-          // provenance or changing the raw order of older-page projections.
-          const adopted = reduceSessionProjection(projection, {
-            type: "snapshotLoaded",
-            messages: canonicalUsers,
-            scope: projection.scope,
-          });
-          const remaining = new Set(
-            adopted.entries
-              .filter((entry) => entry.pending && entry.identity?.role === "user")
-              .map((entry) => entry.pendingRunId),
-          );
-          retireChatSubmissionDisplay(
-            state,
-            new Set(pendingRunIds.filter((runId) => !remaining.has(runId))),
-          );
-        }
-        const previousCount = state.chatMessages.length;
-        const next = prependUniqueNativeMessages(messages, state.chatMessages);
-        visible = contributesContent(next.slice(0, next.length - previousCount));
-        publishChatSessionProjectionMessages(state, next);
-        const grew = state.chatMessages.length > previousCount;
-        state.chatHistoryPagination = nextPagination;
-        commitCurrentChatHistorySnapshot(state);
-        scheduleChatScroll(state, false);
-        prepended = grew || nextPagination.hasMore;
-        if (nextPagination.hasMore && readerIntent) {
+        ({ prepended, visible } = applied);
+        if (applied.stage) {
           this.stageNextOlderPage(state);
         }
       }

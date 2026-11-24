@@ -26,7 +26,7 @@ import type {
 } from "../../infra/system-agent-approvals.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
-import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
+import type { SystemAgentOperatorProposal } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
@@ -37,7 +37,7 @@ import type {
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import type { HealthSummary } from "../health/types.js";
+import type { HealthSummary, ReadinessChecker } from "../health/types.js";
 import type { LiveTextProjectionText } from "../live-text-continuity.js";
 import type { MentionInbox } from "../mention-inbox.contracts.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
@@ -152,7 +152,7 @@ export type GatewaySystemAgentSession = {
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
-    getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
+    getPendingOperatorProposal: () => SystemAgentOperatorProposal | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
@@ -230,12 +230,7 @@ type GatewayKernelContext = {
   forwardSystemAgentApprovalRequest?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
   forwardSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
   execApprovalIosPushDelivery?: {
-    handleRequested?: (
-      request: ExecApprovalRequest,
-      opts?: {
-        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-      },
-    ) => Promise<boolean>;
+    handleRequested?: (record: ExecApprovalRecord) => Promise<boolean>;
     handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
     handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
   };
@@ -246,10 +241,7 @@ type GatewayKernelContext = {
   };
   pluginApprovalIosPushDelivery?: {
     handleRequested?: (
-      request: PluginApprovalRequest,
-      opts?: {
-        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-      },
+      record: ExecApprovalRecord<PluginApprovalRequestPayload>,
     ) => Promise<boolean>;
     handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
   };
@@ -291,7 +283,7 @@ type GatewayKernelContext = {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
   getHealthCache: () => HealthSummary | null;
-  getReadiness?: import("../server/readiness.js").ReadinessChecker;
+  getReadiness?: ReadinessChecker;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   publishPresence: () => void;
@@ -362,7 +354,8 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
-  disconnectClientsForUserProfile?: (profileId: string) => void;
+  /** With `roleOnly`, current owner devices stay: their certificate, not the role, bounds them. */
+  disconnectClientsForUserProfile?: (profileId: string, opts?: { roleOnly?: boolean }) => void;
   invalidateClientsForDevice?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
@@ -477,7 +470,7 @@ export type GatewayRequestContext = GatewayKernelContext &
     /** Entry-only access; the kernel owns closure. Absent in embedded-only contexts. */
     requestEntryLifetime?: Pick<
       import("../server-request-entry.js").GatewayRequestEntryLifetime,
-      "enter" | "signal"
+      "enter" | "signal" | "retainedSignal"
     >;
   };
 
@@ -511,6 +504,11 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  /** Reuse the exact retained target's membership at synchronous mutation fences. */
+  readTargetSharing?: (target: {
+    sessionKey: string;
+    agentId?: string;
+  }) => import("../session-sharing-read.js").PreparedMutationSharing;
   /** Release the request's retained sharing facts after its final effect. */
   release?: () => void;
   /** Retain these facts until a detached effect settles, independently of the request. */
@@ -624,12 +622,12 @@ export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
 
 export type SessionEventProjection = {
   payload: unknown;
-  /** Certifies a publication-owned envelope and stable row bytes; identical envelopes share encoding. */
-  serializeSession?: () => string;
+  /** Delivery-owned UTF-8 session field, including the closing payload brace. */
+  serializeSession?: () => Buffer;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
-  /** Producer-owned payload fragment; three segments preserve the shared message compression boundary. */
-  serializePayload?: () => readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
+  /** Producer-owned payload fragments preserve shared message and session byte identity. */
+  serializePayload?: () => readonly Buffer[];
   delivered?: (client: GatewayClient) => void;
 };
 

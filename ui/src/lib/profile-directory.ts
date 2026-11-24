@@ -106,7 +106,11 @@ class ProfileDirectory {
       profileAvatarUrl:
         identity.profileAvatarUrl?.trim() ||
         (self?.identity?.id === identity.identity.id ? self.avatarUrl : undefined) ||
-        profileAvatarUrl(this.get(identity.identity.id)),
+        profileAvatarUrl(this.get(identity.identity.id)) ||
+        // Restricted readers can render an explicitly identified person without enumerating profiles.
+        (!hasOperatorReadAccess(this.gateway.snapshot.hello?.auth ?? null)
+          ? buildControlUiUserAvatarPath(identity.identity.id)
+          : undefined),
     };
   }
 

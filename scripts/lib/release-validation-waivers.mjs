@@ -1,97 +1,145 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
+import { parseNodeFailureReport } from "./ci-node-test-evidence.mjs";
+import defaultWaiverPolicy from "./release-validation-waivers.json" with { type: "json" };
 
-// Reviewed release-tooling policy, loaded from P, never the candidate checkout.
-// Add an exact version, child role, job name, and reason here to grant a waiver.
-/** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
-export const RELEASE_VALIDATION_WAIVERS = [
-  {
-    targetVersion: "2026.9.37",
-    childRole: "productPerformance",
-    jobName: "Kova mock provider performance",
-    evidence: { runId: "42361846301", runAttempt: 1 },
-    qualificationExemption: {
-      targetSha: "5ca478fb3d02d7d988ce09cfcc214ec1eed46ab8",
-      runId: 42361846301,
-      runAttempt: 1,
-      workflowRef: "release-ci/5ca478fb3d02-110230586240863827911794045203864",
-      sourceParentRunId: "42361691019",
-      sourceParentAttempt: 1,
-      artifactId: 13570296857,
-      artifactDigest: "sha256:3d4c6c1be8b31c2fac6dc636d4b72e5e920d5feaca80711d1f81fca6f737bfe6",
-      artifactSizeBytes: 1104,
-      receiptSha256: "5f52379d07a1cef385b598142889ec56514c99afc4575f1643442227bd5a53be",
-    },
-    reason:
-      "Dallin Romney authorized the 2026.9.37 performance exception on " +
-      "2026-11-07 at 17:08 UTC (FRV 42361691019/1; C/Q " +
-      "5ca478fb3d02d7d988ce09cfcc214ec1eed46ab8). The retained report " +
-      "kova-261107-095817-423747 has only the bundled-plugin-startup " +
-      "gateway maxCpuPercent breach (483 > 360). Only this reviewed child " +
-      "attempt is waived; retain its raw failure and report. Other failures, " +
-      "missing evidence, and later attempts remain blocking. At 17:49 UTC " +
-      "the operator additionally authorized a new candidate qualification " +
-      "with performance explicitly waived-not-run. The old receipt supports " +
-      "that exception only; it does not measure or qualify the new candidate.",
-  },
-  {
-    targetVersion: "2026.11.2",
-    childRole: "productPerformance",
-    jobName: "Kova mock provider performance",
-    reason:
-      "Dallin Romney authorized 2026.11.2-only Kova CPU/RSS threshold leniency on " +
-      "2026-11-07 at 00:28 UTC (FRV 42308858515, kova-261106-230743-bd1e4d). " +
-      "Retain raw failed performance evidence; crash, correctness, isolation, " +
-      "data-integrity, and install/update failures remain blocking.",
-  },
-  {
-    targetVersion: "2026.11.1",
-    childRole: "productPerformance",
-    jobName: "Kova mock provider performance",
-    reason:
-      "Operator-authorized 2026.11.1-only leniency: Kova CPU and RSS thresholds exceeded " +
-      "(FRV 41800680256 run kova-261104-084310-8bd049); crash, correctness, isolation, " +
-      "data-integrity, and install/update failures stay blocking and are checked in the report.",
-  },
-  {
-    targetVersion: "2026.11.1",
-    childRole: "releaseChecksIndependent",
-    jobName: "Run repo/live E2E validation / validate_release_live_cache",
-    reason:
-      "OpenRouter returned HTTP 402 for the release key (FRV 41881174354 job on C 3a4983e15f96); " +
-      "billing failure at the last provider, tracked in the 2026.11.1 release handoff.",
-  },
-];
+export const RELEASE_VALIDATION_WAIVERS_PATH = "scripts/lib/release-validation-waivers.json";
+export function readReleaseValidationWaivers(readSource) {
+  return parseReleaseValidationWaivers(readSource(RELEASE_VALIDATION_WAIVERS_PATH));
+}
+
+export async function readReleaseValidationWaiversAsync(readSource) {
+  return parseReleaseValidationWaivers(await readSource(RELEASE_VALIDATION_WAIVERS_PATH));
+}
+
+function waiverEvidenceRunId(value) {
+  return typeof value === "string" && /^[1-9][0-9]*$/u.test(value)
+    ? value
+    : Number.isSafeInteger(value) && value > 0
+      ? String(value)
+      : undefined;
+}
+
+export function releaseWaiverEvidenceMatches(evidence, runId, runAttempt) {
+  const id = waiverEvidenceRunId(evidence?.runId);
+  return (
+    id !== undefined &&
+    id === runId &&
+    Number.isSafeInteger(evidence.runAttempt) &&
+    evidence.runAttempt > 0 &&
+    evidence.runAttempt === runAttempt
+  );
+}
+
+export function parseReleaseValidationWaivers(source) {
+  const policy = JSON.parse(source);
+  if (
+    policy?.schema !== "openclaw.release-validation-waivers/v1" ||
+    !Array.isArray(policy.waivers) ||
+    policy.waivers.length > 512
+  ) {
+    throw new Error("Invalid release waiver policy");
+  }
+  for (const waiver of policy.waivers) {
+    if (
+      !waiver ||
+      !["targetVersion", "childRole", "jobName", "reason"].every(
+        (key) => typeof waiver[key] === "string" && waiver[key].length > 0,
+      ) ||
+      (waiver.targetSha !== undefined && !/^[a-f0-9]{40}$/u.test(waiver.targetSha)) ||
+      (waiver.evidence !== undefined &&
+        (waiverEvidenceRunId(waiver.evidence?.runId) === undefined ||
+          !Number.isSafeInteger(waiver.evidence.runAttempt) ||
+          waiver.evidence.runAttempt <= 0)) ||
+      (waiver.cancelledStep !== undefined &&
+        (typeof waiver.cancelledStep !== "string" ||
+          waiver.cancelledStep.length === 0 ||
+          waiver.testFailures !== undefined)) ||
+      !Array.isArray(waiver.aggregates) ||
+      waiver.aggregates.some(
+        (aggregate) =>
+          !aggregate ||
+          typeof aggregate.jobName !== "string" ||
+          typeof aggregate.stepName !== "string" ||
+          !Array.isArray(aggregate.causes) ||
+          !aggregate.causes.every((cause) => typeof cause === "string") ||
+          (aggregate.exactCauses !== undefined && typeof aggregate.exactCauses !== "boolean") ||
+          (aggregate.logSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(aggregate.logSha256)),
+      )
+    ) {
+      throw new Error("Invalid release waiver entry");
+    }
+  }
+  return policy.waivers;
+}
+
+// Only immutable Q data crosses the verifier boundary, never Q executable code.
+export function decodeReleaseValidationSource(payload, sourcePath) {
+  if (
+    payload?.path !== sourcePath ||
+    payload.type !== "file" ||
+    payload.encoding !== "base64" ||
+    !Number.isSafeInteger(payload.size) ||
+    payload.size < 1 ||
+    payload.size > 1024 * 1024 ||
+    typeof payload.content !== "string"
+  ) {
+    throw new Error("Invalid immutable Q waiver source");
+  }
+  const bytes = Buffer.from(payload.content, "base64");
+  const header = "blob " + bytes.length + "\0";
+  if (
+    bytes.length !== payload.size ||
+    createHash("sha1").update(header).update(bytes).digest("hex") !== payload.sha
+  ) {
+    throw new Error("Q waiver source blob mismatch");
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+const RELEASE_VALIDATION_WAIVERS = parseReleaseValidationWaivers(
+  process.env.OPENCLAW_RELEASE_WAIVERS_PATH
+    ? readFileSync(process.env.OPENCLAW_RELEASE_WAIVERS_PATH, "utf8")
+    : JSON.stringify(defaultWaiverPolicy),
+);
 
 // This is an explicit not-run disposition for a new C/Q, not reuse of the old
 // measurement. Only P may seal it into independently authenticated coverage.
-export function releaseQualificationExemptions(targetVersion, profile) {
+export function releaseQualificationExemptions(
+  targetVersion,
+  profile,
+  waivers = RELEASE_VALIDATION_WAIVERS,
+) {
   if (!["stable", "full"].includes(profile)) {
     return [];
   }
-  return RELEASE_VALIDATION_WAIVERS.filter(
-    (waiver) => waiver.targetVersion === targetVersion && waiver.qualificationExemption,
-  ).map((waiver) => ({
-    childRole: waiver.childRole,
-    targetVersion: waiver.targetVersion,
-    disposition: "waived-not-run",
-    reason: waiver.reason,
-    supportingEvidence: waiver.qualificationExemption,
-  }));
+  return waivers
+    .filter((waiver) => waiver.targetVersion === targetVersion && waiver.qualificationExemption)
+    .map((waiver) => ({
+      childRole: waiver.childRole,
+      targetVersion: waiver.targetVersion,
+      disposition: "waived-not-run",
+      reason: waiver.reason,
+      supportingEvidence: waiver.qualificationExemption,
+    }));
 }
 
-export function validateQualificationExemptions(exemptions, targetVersion, profile) {
-  if (!isDeepStrictEqual(exemptions, releaseQualificationExemptions(targetVersion, profile))) {
+export function validateQualificationExemptions(
+  exemptions,
+  targetVersion,
+  profile,
+  waivers = RELEASE_VALIDATION_WAIVERS,
+) {
+  if (
+    !isDeepStrictEqual(exemptions, releaseQualificationExemptions(targetVersion, profile, waivers))
+  ) {
     throw new Error("Qualification exemptions differ from current release-tooling policy");
   }
 }
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
-const RELEASE_CHECK_ROLES = new Set([
-  "releaseChecks",
-  "releaseChecksIndependent",
-  "releaseChecksCandidate",
-]);
 
 export function isFailedReleaseJob(job) {
   return job.status === "completed" && !SUCCESSFUL_CONCLUSIONS.has(job.conclusion);
@@ -139,74 +187,44 @@ export function releaseChildAdvisories(child) {
     .toSorted((left, right) => compareAscii(left.job, right.job));
 }
 
-const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
-
-function aggregateCauses(waiver) {
-  if (waiver.childRole === "npmTelegram" && waiver.jobName === "Run package Telegram E2E") {
-    return [];
-  }
-  if (waiver.childRole === "productPerformance" && waiver.jobName === KOVA_PERFORMANCE_JOB) {
-    return [];
-  }
-  if (RELEASE_CHECK_ROLES.has(waiver.childRole)) {
-    let cause;
-    const aggregates = [];
-    if (waiver.jobName.startsWith("Run repo/live E2E validation / ")) {
-      cause = "live_repo_e2e_release_checks ended with failure";
-    } else if (waiver.jobName === "Run QA Lab live Telegram lane") {
-      cause = "qa_live_telegram_release_checks ended with failure";
-    } else if (
-      waiver.jobName ===
-      "Run package acceptance / Telegram package acceptance / Run package Telegram E2E"
-    ) {
-      cause = "package_acceptance_release_checks ended with failure";
-      aggregates.push({
-        jobName: "Run package acceptance / Verify package acceptance",
-        stepName: "Verify package acceptance results",
-        causes: ["package_telegram ended with failure"],
-      });
-    }
-    if (cause) {
-      return [
-        ...aggregates,
-        {
-          jobName: "Verify release checks",
-          stepName: "Verify release check results",
-          causes: [cause],
-        },
-      ];
-    }
-  }
-  throw new Error(`Release waiver is not a live-provider/Telegram job: ${waiver.jobName}`);
-}
-
 // Raw leaf and workflow conclusions are never rewritten. The caller owns the
 // aggregate validation verdict and must also authenticate failed aggregate logs.
-export function evaluateReleaseChildPolicy({ child, targetVersion }) {
-  const waivers = RELEASE_VALIDATION_WAIVERS.filter(
+export function evaluateReleaseChildPolicy({
+  child,
+  targetVersion,
+  targetSha,
+  waiverPolicy = RELEASE_VALIDATION_WAIVERS,
+}) {
+  const matches = waiverPolicy.filter(
     (waiver) =>
       waiver.targetVersion === targetVersion &&
+      (waiver.targetSha === undefined || waiver.targetSha === targetSha) &&
       waiver.childRole === child.key &&
       // A reviewed historical failure never grants leniency to a new execution.
       (!waiver.evidence ||
-        (waiver.evidence.runId === child.runId &&
-          waiver.evidence.runAttempt === child.runAttempt)) &&
+        releaseWaiverEvidenceMatches(waiver.evidence, child.runId, child.runAttempt)) &&
       child.jobs.some(
         (job) =>
-          job.name === waiver.jobName && job.status === "completed" && job.conclusion === "failure",
+          job.name === waiver.jobName &&
+          job.status === "completed" &&
+          job.conclusion === (waiver.cancelledStep ? "cancelled" : "failure"),
       ),
   );
   const aggregates = new Map();
-  for (const waiver of waivers) {
-    for (const aggregate of aggregateCauses(waiver)) {
+  for (const waiver of matches) {
+    for (const aggregate of waiver.aggregates ?? []) {
       const existing = aggregates.get(aggregate.jobName);
       if (existing) {
         existing.causes = [...new Set([...existing.causes, ...aggregate.causes])];
       } else {
-        aggregates.set(aggregate.jobName, aggregate);
+        // Union only this evaluation; the immutable Q policy is reused by siblings.
+        aggregates.set(aggregate.jobName, { ...aggregate, causes: [...aggregate.causes] });
       }
     }
   }
+  // Preserve the established manifest shape; aggregate declarations are Q policy,
+  // not a replacement for authenticated original aggregate logs.
+  const waivers = matches.map(({ aggregates: _aggregates, ...waiver }) => waiver);
   const waivedJobNames = new Set([
     ...waivers.map((row) => row.jobName),
     ...child.jobs
@@ -248,7 +266,80 @@ export function evaluateReleaseChildPolicy({ child, targetVersion }) {
 // not excuse a second failure in that same aggregate job.
 export class ReleaseAggregateValidationError extends Error {}
 
+// Ignore echoed shell source, not error records: only line-leading runner
+// annotations (after a timestamp and optional color) are observed causes.
+function exactAggregateCauses(log) {
+  return log.split(/\r?\n/u).flatMap((line) => {
+    const record = line
+      // eslint-disable-next-line no-control-regex -- Only SGR color is removed; other controls fail closed.
+      .replace(/\u001b\[[0-9;]*m/gu, "")
+      .replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /u, "");
+    const match = /^(?:##\[error\]|::error(?: title=CI job did not succeed)?::)(.*)$/u.exec(record);
+    if (match) {
+      return match[1] === "Process completed with exit code 1." ? [] : [match[1]];
+    }
+    // Malformed error records and remaining control characters fail closed.
+    return /^(?:##\[error|::error)/u.test(record) ||
+      // eslint-disable-next-line no-control-regex -- Reject controls that could conceal an error record.
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u.test(record)
+      ? [record]
+      : [];
+  });
+}
+
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
+  for (const waiver of policy.waivers) {
+    if (waiver.cancelledStep) {
+      const matches = jobs.filter((job) => job.name === waiver.jobName);
+      const job = matches[0];
+      const incompleteSteps = job?.steps?.filter(
+        (step) => !["success", "skipped"].includes(step.conclusion),
+      );
+      if (
+        matches.length !== 1 ||
+        job.status !== "completed" ||
+        job.conclusion !== "cancelled" ||
+        incompleteSteps?.length !== 1 ||
+        incompleteSteps[0].name !== waiver.cancelledStep ||
+        incompleteSteps[0].conclusion !== "cancelled"
+      ) {
+        throw new ReleaseAggregateValidationError(
+          `Release test job has a non-policy cancellation: ${waiver.jobName}`,
+        );
+      }
+      continue;
+    }
+    if (!waiver.testFailures) {
+      continue;
+    }
+    const matches = jobs.filter((job) => job.name === waiver.jobName);
+    const job = matches[0];
+    const failedSteps = job?.steps?.filter(
+      (step) => !["success", "skipped"].includes(step.conclusion),
+    );
+    if (
+      matches.length !== 1 ||
+      job.status !== "completed" ||
+      job.conclusion !== "failure" ||
+      failedSteps?.length !== 1 ||
+      failedSteps[0].conclusion !== "failure" ||
+      failedSteps[0].name !== waiver.testFailures.stepName
+    ) {
+      throw new ReleaseAggregateValidationError(
+        `Release test job has a non-policy failure: ${waiver.jobName}`,
+      );
+    }
+    const signatures = parseNodeFailureReport(String(await getJobLog(job.id)), true);
+    if (
+      ![waiver.testFailures.signatures, ...(waiver.testFailures.alternativeSignatures ?? [])].some(
+        (accepted) => isDeepStrictEqual(signatures, accepted),
+      )
+    ) {
+      throw new ReleaseAggregateValidationError(
+        `Release test job has an unwaived or incomplete failure: ${waiver.jobName}`,
+      );
+    }
+  }
   for (const aggregate of policy.aggregates) {
     const matches = jobs.filter((job) => job.name === aggregate.jobName);
     if (matches.length !== 1 || matches[0].status !== "completed") {
@@ -273,14 +364,29 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       );
     }
     const log = String(await getJobLog(job.id));
-    const causes = log
-      .split(/\r?\n/u)
-      .filter((line) => !line.includes("\u001b"))
-      .flatMap((line) => {
-        const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
-        return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
-      });
-    if (causes.length === 0 || causes.some((cause) => !aggregate.causes.includes(cause))) {
+    if (aggregate.logSha256) {
+      if (createHash("sha256").update(log).digest("hex") !== aggregate.logSha256) {
+        throw new ReleaseAggregateValidationError(
+          "Release aggregate differs from reviewed evidence: " + aggregate.jobName,
+        );
+      }
+      continue;
+    }
+    const causes = aggregate.exactCauses
+      ? exactAggregateCauses(log)
+      : log
+          .split(/\r?\n/u)
+          .filter((line) => !line.includes("\u001b"))
+          .flatMap((line) => {
+            const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
+            return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
+          });
+    if (
+      causes.length === 0 ||
+      causes.some((cause) => !aggregate.causes.includes(cause)) ||
+      (aggregate.exactCauses &&
+        (causes.length !== aggregate.causes.length || new Set(causes).size !== causes.length))
+    ) {
       throw new ReleaseAggregateValidationError(
         `Release aggregate has an unwaived failure: ${aggregate.jobName}`,
       );

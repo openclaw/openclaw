@@ -11,6 +11,7 @@ import { hasModalSurface, registryFor } from "../../components/overlay-registry.
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   PANE_SESSION_HANDOFF_TTL_MS,
@@ -191,6 +192,42 @@ function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
   );
 }
 
+/**
+ * Escape anywhere in the visible pane stops its run, as it does in the composer.
+ * Callers listen on window, after the event bubbles past every element and document
+ * owner, so menus, fields, panels and replies keep Escape.
+ */
+export function stopChatRunFromEscape(
+  root: HTMLElement,
+  event: KeyboardEvent,
+  stopRun: (() => boolean) | null,
+): void {
+  const doc = root.ownerDocument;
+  const target = event.target;
+  if (
+    event.key !== "Escape" ||
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.keyCode === 229 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.shiftKey ||
+    // A reload or a closed panel leaves focus on the page itself.
+    !(target === doc.body || (target instanceof Node && root.contains(target))) ||
+    openDropdownOwnsKey(root, event.key) ||
+    registryFor(doc).stack.length > 0 ||
+    keyboardEventPathHasInteractiveTarget(event) ||
+    root.closest("[inert]") ||
+    hasModalSurface(doc)
+  ) {
+    return;
+  }
+  if (stopRun?.()) {
+    event.preventDefault();
+  }
+}
+
 export function focusChatComposerFromKeydown(
   root: HTMLElement,
   event: KeyboardEvent,
@@ -220,8 +257,8 @@ export function focusChatComposerFromKeydown(
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
-  // Keep the native default: paste must reach this textarea with its original clipboard data.
+  // Keep the native default: paste must reach the composer with its original clipboard data.
   // Block old-target dropdown typeahead from cancelling the transferred input.
-  composer.focus({ preventScroll: true });
+  focusComposerInput(composer, { preventScroll: true });
   event.stopImmediatePropagation();
 }

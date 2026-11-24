@@ -25,8 +25,9 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
+    state: {},
     ...overrides,
-  } as CronJob;
+  };
 }
 
 export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
@@ -44,27 +45,11 @@ export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): Cron
 export function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
   const retired = new Promise<void>(() => {});
   return {
-    loading: false,
-    hasLoaded: true,
     listError: null,
     canManage: true,
     connected: true,
-    jobsLoadingMore: false,
-    status: {
-      enabled: true,
-      triggersEnabled: true,
-      jobs: Math.max(overrides.jobsTotal ?? 0, overrides.jobs?.length ?? 0),
-    },
+    status: { enabled: true, triggersEnabled: true, jobs: overrides.jobs?.length ?? 0 },
     jobs: [],
-    jobsTotal: 0,
-    jobsHasMore: false,
-    jobsQuery: "",
-    jobsEnabledFilter: "all",
-    jobsScheduleKindFilter: "all",
-    jobsLastStatusFilter: "all",
-    jobsTriggerFilter: "all",
-    jobsSortBy: "nextRunAtMs",
-    jobsSortDir: "asc",
     error: null,
     notice: null,
     busy: false,
@@ -74,8 +59,9 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
+    cloning: false,
     createOpen: false,
-    listTab: "tasks",
+    activityOpen: false,
     detailTab: "settings",
     channels: [],
     channelLabels: {},
@@ -87,19 +73,17 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     runsDeliveryStatuses: [],
     runsQuery: "",
     runsSortDir: "desc",
-    agentSuggestions: [],
-    modelSuggestions: [],
-    thinkingSuggestions: [],
+    agentsList: null,
+    models: { catalog: undefined, agent: undefined },
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
     failureAlertToSuggestions: [],
     accountSuggestions: [],
-    onListTabChange: () => undefined,
     onDetailTabChange: () => undefined,
+    onCancelEdit: () => undefined,
     onFormChange: () => undefined,
     onRefresh: () => Promise.resolve(),
     onSubmit: () => undefined,
-    onSubmitRunNow: () => undefined,
     onSelectJob: () => undefined,
     onOpenCreate: () => undefined,
     onClosePanel: () => undefined,
@@ -107,9 +91,6 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onToggle: () => undefined,
     onRun: () => undefined,
     onRemove: async () => undefined,
-    onLoadMoreJobs: () => undefined,
-    onJobsFiltersChange: () => undefined,
-    onJobsFiltersReset: () => undefined,
     onLoadMoreRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
@@ -145,7 +126,7 @@ export function getButtonByText(container: Element, text: string): HTMLButtonEle
 }
 
 export function getElement<T extends Element>(
-  container: Element,
+  container: Pick<ParentNode, "querySelector">,
   selector: string,
   constructor: new () => T,
 ): T {
@@ -157,8 +138,21 @@ export function getElement<T extends Element>(
   return element;
 }
 
-export function selectSegmented(control: HTMLElement) {
-  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
+const SENTENCE_FREQUENCY: Record<string, string> = {
+  at: "once",
+  every: "every",
+  cron: "custom",
+  event: "event",
+};
+
+/** Chooses a schedule kind from the frequency menu. */
+export function chooseSchedule(root: Pick<ParentNode, "querySelector">, kind: string) {
+  getElement(root, '[data-test-id="cron-schedule-frequency"]', HTMLElement).click();
+  getElement(
+    root,
+    `[data-test-id="cron-schedule-frequency-${SENTENCE_FREQUENCY[kind] ?? kind}"]`,
+    HTMLButtonElement,
+  ).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {

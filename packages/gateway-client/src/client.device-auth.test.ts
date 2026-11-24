@@ -196,6 +196,36 @@ const hello = {
 };
 
 describe("GatewayClient host token storage", () => {
+  it.each([
+    ["grant-revoked", false],
+    ["plugin-lifetime-retired", true],
+  ] as const)(
+    "handles post-hello access close %s without a reconnect loop",
+    async (cause, retry) => {
+      const { socket, onClose, onReconnectPaused } = connect({});
+      await vi.advanceTimersByTimeAsync(0);
+      socket.respond({ type: "hello-ok", protocol: PROTOCOL_VERSION });
+      await vi.advanceTimersByTimeAsync(0);
+      const reason = `Gateway access stopped [access-cause=${cause}]; synthetic guidance`;
+      socket.close(4001, reason);
+      expect(onClose).toHaveBeenCalledWith(
+        4001,
+        reason,
+        expect.objectContaining({
+          phase: "post-hello",
+          connectError: expect.objectContaining({
+            details: { code: "OPERATOR_ACCESS_DENIED", accessCause: cause },
+          }),
+        }),
+      );
+      expect(onReconnectPaused).toHaveBeenCalledTimes(retry ? 0 : 1);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(MockWebSocket.instances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(retry ? 2 : 1);
+    },
+  );
+
   it("rejects connection authority retired by socket registration and cleans the registration", () => {
     const authority = connectionAuthority();
     const onConnectError = vi.fn();

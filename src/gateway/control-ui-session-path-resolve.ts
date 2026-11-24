@@ -82,9 +82,13 @@ export async function resolveControlUiSessionPath(params: {
   };
   let result: SessionsResolveResult;
   if (target.kind === "main") {
-    result = await resolve({
-      key: resolveAgentMainSessionKey({ cfg: projection.state.cfg, agentId: target.agentId }),
-    });
+    const key = resolveAgentMainSessionKey({ cfg: projection.state.cfg, agentId: target.agentId });
+    result = await resolve({ key });
+    // The main session is stored with its first message. Absent and hidden rows give the
+    // same answer, so an authenticated reader opens the app for both, as the app at "/" does.
+    if (params.client && !params.publicOnly && result.ok && "missing" in result) {
+      return { key, agentId: target.agentId, isCurrent: () => params.isCurrent?.() !== false };
+    }
   } else if (target.kind === "short") {
     result = await resolve({ shortId: target.shortId, slugHint: target.slugHint });
     if (result.ok && "missing" in result) {

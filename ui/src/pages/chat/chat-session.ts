@@ -11,6 +11,7 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { resolveDaybreakModelSwitch } from "../../lib/chat/daybreak-access-program.ts";
 import {
   buildCatalogDisplayLookup,
   buildQualifiedChatModelValue,
@@ -386,8 +387,38 @@ export async function switchChatModel(
   const ownsModelOverride = () =>
     !isUiSelectedGlobalSessionKey(host, targetSessionKey) ||
     resolveUiSelectedGlobalAgentId(host) === modelOwnerAgentId;
+  const nextValue = splitTrailingAuthProfile(nextModel).model || defaultModel;
+  const currentValue = splitTrailingAuthProfile(currentOverride).model || defaultModel;
+  const nextEntry = host.chatModelCatalog.find(
+    (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === nextValue,
+  );
+  const nextRuntime = resolveModelRuntimeEntry(
+    nextEntry,
+    runtimeSelection === undefined && isSessionRuntimePinned(activeRow?.agentRuntime)
+      ? activeRow?.agentRuntime?.id
+      : runtimeSelection,
+  );
+  const nextPrograms = nextRuntime?.availableAccessPrograms?.cyber;
+  let remap: CyberAccessProgram | undefined;
+  if (nextPrograms !== undefined && (nextValue !== currentValue || !runtimeUnchanged)) {
+    const currentEntry = resolveModelRuntimeEntry(
+      host.chatModelCatalog.find(
+        (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
+      ),
+      activeRow?.agentRuntime?.id,
+    );
+    const storedProgram =
+      host.sessions.settingsPreview(targetSessionKey, agentScope.agentId)?.cyberAccessProgram ??
+      activeRow?.cyberAccessProgram;
+    remap = resolveDaybreakModelSwitch(
+      nextPrograms,
+      storedProgram ?? currentEntry?.cyberAccessProgramDefault,
+      storedProgram,
+    );
+  }
   const patch: SessionPatch = {
     model: nextModel || null,
+    ...(remap !== undefined ? { cyberAccessProgram: remap } : {}),
     ...(runtimeSelection !== undefined ? { agentRuntime: runtimeSelection } : {}),
   };
   const canDispatch = () =>
@@ -405,17 +436,6 @@ export async function switchChatModel(
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      const nextValue = splitTrailingAuthProfile(nextModel).model || defaultModel;
-      const currentValue = splitTrailingAuthProfile(currentOverride).model || defaultModel;
-      const nextEntry = host.chatModelCatalog.find(
-        (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === nextValue,
-      );
-      const nextRuntime = resolveModelRuntimeEntry(
-        nextEntry,
-        runtimeSelection === undefined && isSessionRuntimePinned(activeRow?.agentRuntime)
-          ? activeRow?.agentRuntime?.id
-          : runtimeSelection,
-      );
       const hasHistory = host.chatMessages?.some((message) => {
         const role = asOptionalRecord(message)?.role;
         return role === "user" || role === "assistant";
@@ -429,6 +449,7 @@ export async function switchChatModel(
             buildCatalogDisplayLookup(host.chatModelCatalog),
           );
         const confirmed = await showConfirmDialog({
+          compact: true,
           title: t("chat.modelControls.switchTitle", { new: nextLabel }),
           message: t("chat.modelControls.switchWarning", { new: nextLabel }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
@@ -459,14 +480,7 @@ export async function switchChatModel(
       }
       try {
         const { recoverChatModelSwitch } = await import("./chat-model-recovery.runtime.ts");
-        return await recoverChatModelSwitch(
-          host,
-          err,
-          targetSessionKey,
-          nextModel,
-          runtimeSelection,
-          selection,
-        );
+        return await recoverChatModelSwitch(host, err, targetSessionKey, patch, selection);
       } catch (error) {
         if (ownsSelection()) {
           setChatError(host, t("chat.settingErrors.model", { error: formatUiError(error) }));

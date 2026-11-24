@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import { getAiTransportHost } from "@openclaw/ai";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isCompactionSummaryRequest } from "../../test/helpers/compaction-summary-request.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -183,31 +186,35 @@ describe("stored session model selections in scheduled session turns", () => {
   const userSelection = { modelOverrideSource: "user" } as const;
   const pinned = { provider: "pinned", model: "model-x" };
   const primary = { provider: "primary", model: "model-a" };
+  const a = ["primary/model-a"];
+  // Columns: reload, status, provider requests, target preparations, hook effects.
+  // Config edits after the occurrence starts (a hook ran or a model request began) apply
+  // to the next turn; only unstarted occurrences are refused or re-admitted.
   const policyCases = [
-    ["unrelated", "ok", 1, 1, 0],
-    ["logging-only", "ok", 1, 1, 0],
-    ["unrelated-mcp", "ok", 1, 1, 0],
-    ["unrelated-mcp-hook", "ok", 1, 1, 1],
-    ["unrelated-model-provider", "ok", 1, 1, 0],
-    ["provider-setup-sequence", "ok", 1, 1, 0],
-    ["selected-model-denied", "error", 0, 1, 0],
-    ["policy", "ok", 1, 2, 0],
-    ["in-place-policy", "ok", 1, 2, 0],
-    ["other-agent", "ok", 1, 1, 0],
-    ["unrelated-auth", "ok", 1, 1, 0],
-    ["provider-auth", "ok", 1, 2, 0],
-    ["unrelated-auth-hook", "ok", 1, 1, 1],
-    ["provider-auth-hook", "error", 0, 1, 1],
-    ["fallback-auth", "error", 1, 1, 0],
-    ["agent-policy", "ok", 1, 2, 0],
-    ["channel-defaults", "ok", 1, 2, 0],
-    ["bootstrap-effect", "error", 0, 1, 1],
-    ["hook-effect", "error", 0, 1, 1],
-    ["model-hook-effect", "error", 0, 1, 1],
-    ["revoked", "error", 0, 1, 0],
-    ["cancelled", "error", 0, 1, 0],
-    ["unknown-effect", "error", 1, 1, 0],
-    ["text-only", "error", 0, 1, 0],
+    ["unrelated", "ok", a, 1, 0],
+    ["logging-only", "ok", a, 1, 0],
+    ["unrelated-mcp", "ok", a, 1, 0],
+    ["unrelated-mcp-hook", "ok", a, 1, 1],
+    ["unrelated-model-provider", "ok", a, 1, 0],
+    ["provider-setup-sequence", "ok", a, 1, 0],
+    ["selected-model-denied", "error", [], 1, 0],
+    ["policy", "ok", a, 2, 0],
+    ["in-place-policy", "ok", a, 2, 0],
+    ["other-agent", "ok", a, 1, 0],
+    ["unrelated-auth", "ok", a, 1, 0],
+    ["provider-auth", "ok", a, 2, 0],
+    ["unrelated-auth-hook", "ok", a, 1, 1],
+    ["provider-auth-hook", "ok", a, 1, 1],
+    ["fallback-auth", "ok", ["primary/model-a", "fallback/model-b"], 2, 0],
+    ["agent-policy", "ok", a, 2, 0],
+    ["channel-defaults", "ok", a, 2, 0],
+    ["bootstrap-effect", "ok", a, 1, 1],
+    ["hook-effect", "ok", a, 1, 1],
+    ["model-hook-effect", "ok", a, 1, 1],
+    ["revoked", "error", [], 1, 0],
+    ["cancelled", "error", [], 1, 0],
+    ["unknown-effect", "ok", a, 1, 0],
+    ["text-only", "error", [], 1, 0],
   ] as const;
   async function runWithFailingPinnedModel(params: {
     reload?: (typeof policyCases)[number][0];
@@ -336,7 +343,7 @@ describe("stored session model selections in scheduled session turns", () => {
         }
         const raw = await request.text();
         const body = JSON.parse(raw) as { model?: string };
-        if (params.preflightCompactionWatchdog && raw.includes("context summarization assistant")) {
+        if (params.preflightCompactionWatchdog && isCompactionSummaryRequest(raw)) {
           summaryRequests++;
           await vi.advanceTimersByTimeAsync(60_001);
         }
@@ -517,6 +524,11 @@ describe("stored session model selections in scheduled session turns", () => {
             }
           : {}),
       };
+      // All turns in this fixture share the baseline; the next store starts fresh.
+      using sessionResources = {
+        [Symbol.dispose]: () => cleanupSessionResources(conversation.sessionId),
+      };
+      void sessionResources;
       const entryFor = (
         pin: { provider: string; model: string } | null,
         selection: Pick<SessionEntry, "modelOverrideSource"> = userSelection,
@@ -541,10 +553,18 @@ describe("stored session model selections in scheduled session turns", () => {
           },
           state.workspaceDir,
         );
+        // The seeded history alone crosses the shared 85% compaction trigger of the 128k
+        // window, so the first scheduled request compacts; the summary request stays below it.
+        const triggerTokens = resolveCompactionThreshold({
+          contextWindowTokens: 128_000,
+          reserveTokensFloor: 0,
+        });
+        const detail = "Background detail. ";
+        const detailRepeat = Math.ceil(((triggerTokens + 4_000) * 4) / 12 / detail.length);
         for (let turn = 0; turn < 12; turn++) {
           await seed.appendMessageAsync({
             role: "user",
-            content: `Earlier question ${turn}. ${"Background detail. ".repeat(250)}`,
+            content: `Earlier question ${turn}. ${detail.repeat(detailRepeat)}`,
             timestamp: turn + 1,
           });
           await seed.appendMessageAsync(
@@ -742,7 +762,7 @@ describe("stored session model selections in scheduled session turns", () => {
         expect(authorityRefusal).toContain("Session event configuration changed");
       }
       expect(result?.status, result?.error).toBe(status);
-      expect(requests).toEqual(calls ? ["primary/model-a"] : []);
+      expect(requests).toEqual(calls);
       expect(preparations).toBe(attempts);
     },
   );

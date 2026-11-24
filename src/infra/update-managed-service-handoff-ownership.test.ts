@@ -737,3 +737,10 @@ describe("managed service update handoff state ownership and sentinel persistenc
     });
   });
 });
+
+vi.mock("./update-managed-service-handoff-worker.js", async (original) => ({
+  ...(await original<typeof import("./update-managed-service-handoff-worker.js")>()),
+  prepareManagedHandoffParentStore: (
+    await import("./update-managed-service-handoff-worker.test-support.js")
+  ).prepareManagedHandoffParentStoreForTest,
+}));

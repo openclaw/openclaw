@@ -8,10 +8,9 @@ import {
   settingsRow,
 } from "./config-composer-fixtures.test-support.ts";
 const suite = createConfigSuite("Control UI curated settings defaults mocked Gateway E2E");
-const thinkingDefaultExplanation =
-  "Uses the selected model's thinking policy instead of saving a global thinking override.";
+const thinkingDefaultExplanation = "Default: use the model’s own effort setting.";
 const fastModeDefaultExplanation =
-  "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.";
+  "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.";
 function configResponse(config: Record<string, unknown>, hash: string) {
   return { ...configSnapshot(config, hash), appliedConfigHash: hash };
 }
@@ -89,15 +88,14 @@ suite.define(() => {
           },
         },
         browser: { enabled: false },
-        tools: {
-          codeMode: { enabled: "auto" },
-          profile: "minimal",
-        },
+        gateway: { controlUi: { experimental: { chatBubbles: true } } },
+        tools: { profile: "minimal" },
       };
       const afterLabsReset = {
         agents: initialConfig.agents,
         browser: initialConfig.browser,
-        tools: { codeMode: {}, profile: "minimal" },
+        gateway: { controlUi: { experimental: {} } },
+        tools: initialConfig.tools,
       };
       const afterThinkingReset = {
         agents: {
@@ -117,24 +115,26 @@ suite.define(() => {
       });
 
       expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
-      const codeModeRow = settingsRow(page, "Code Mode");
-      const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
-      await codeModeSwitch.waitFor();
-      expect(await codeModeSwitch.isChecked()).toBe(true);
-      await expectQuietDefault(codeModeRow);
+      const bubblesRow = settingsRow(page, "Speech bubbles");
+      const bubblesSwitch = bubblesRow.getByRole("switch", { name: "Speech bubbles", exact: true });
+      await expect.poll(() => bubblesSwitch.isEnabled()).toBe(true);
+      await expect.poll(() => bubblesSwitch.isChecked()).toBe(true);
+      await expectQuietDefault(bubblesRow);
 
       const configGetsBeforeLabsReset = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.patch");
-      await codeModeSwitch.click();
+      await bubblesSwitch.click();
       const labsPatch = requestRaw(await gateway.waitForRequest("config.patch"));
-      expect(labsPatch).toEqual({ tools: { codeMode: { enabled: null } } });
+      expect(labsPatch).toEqual({
+        gateway: { controlUi: { experimental: { chatBubbles: null } } },
+      });
 
       await finishPatch(gateway, afterLabsReset, "curated-defaults-2");
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(configGetsBeforeLabsReset + 1);
-      await expectQuietDefault(codeModeRow);
-      expect(await codeModeSwitch.isChecked()).toBe(false);
+      await expectQuietDefault(bubblesRow);
+      expect(await bubblesSwitch.isChecked()).toBe(false);
 
       expect((await page.goto(`${suite.server.baseUrl}settings/security`))?.status()).toBe(200);
       const browserRow = settingsRow(page, "Browser tools");
@@ -142,7 +142,7 @@ suite.define(() => {
       const profileSelect = profileRow.getByRole("combobox", { name: "Available tools" });
       await browserRow.getByRole("switch", { name: "Browser tools", exact: true }).waitFor();
       await expectQuietDefault(browserRow);
-      expect(await profileSelect.inputValue()).toBe("minimal");
+      await expect.poll(() => profileSelect.inputValue()).toBe("minimal");
 
       const securitySavesBefore = (await gateway.getRequests("config.set")).length;
       await browserRow.locator(".settings-row__title").click();
@@ -213,6 +213,8 @@ suite.define(() => {
       expect(await page.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
 
       expect((await page.reload())?.status()).toBe(200);
+      // Back to defaults, the advanced rows start folded again.
+      await page.locator("[data-models-more-settings]").click();
       const reloadedThinkingRow = settingsRow(page, "Effort");
       const reloadedFastModeRow = settingsRow(page, "Speed");
       await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
@@ -221,13 +223,13 @@ suite.define(() => {
       expect(await radio(reloadedFastModeRow, /^Default/u).isChecked()).toBe(true);
 
       expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
-      const reloadedCodeModeRow = settingsRow(page, "Code Mode");
-      await expectQuietDefault(reloadedCodeModeRow);
+      const reloadedBubblesRow = settingsRow(page, "Speech bubbles");
+      await expectQuietDefault(reloadedBubblesRow);
       expect(
-        await reloadedCodeModeRow
-          .getByRole("switch", { name: "Code Mode", exact: true })
+        await reloadedBubblesRow
+          .getByRole("switch", { name: "Speech bubbles", exact: true })
           .isChecked(),
-      ).toBe(true);
+      ).toBe(false);
     });
   });
 });

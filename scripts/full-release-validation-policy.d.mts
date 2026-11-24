@@ -1,5 +1,11 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
-export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseRecord[];
+export function validateReleaseManifestAdvisoryJobs(
+  manifest: unknown,
+  options?: {
+    deferWaiverPolicy?: boolean;
+    waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[];
+  },
+): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
@@ -22,6 +28,13 @@ export function assertReleasePublicationKnownBudget(
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
+export function resolveReleaseQualificationScope(input: ReleaseRecord): {
+  coveragePolicy: "npm-beta-v1" | "npm-stable-v1" | undefined;
+  ciReleaseScope: string;
+  skipPackageTelegramE2e: boolean;
+  npmDistTag: string;
+  releaseCandidateBranch: string;
+};
 export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
@@ -43,6 +56,7 @@ export interface ReleaseExecutionPlan extends ReleaseRecord {
   candidateRequest?: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateRequest;
   qualificationCoverage?: import("./release-qualification-admission.mjs").QualificationCoverage;
   qualificationInputs?: import("./release-qualification-admission.mjs").QualificationInputs;
+  publicationArtifactSource?: import("./full-release-publication-contract.mjs").PublicationSourceFact;
   sourceAdmissionContract?: "1";
   sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
   publicationAdmissionContract?: "1";
@@ -72,6 +86,11 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function evidenceReadRetryDelay(
+  args: readonly string[],
+  error: unknown,
+  attempt: number,
+): number;
 export function isReleaseGhServerError(error: unknown): boolean;
 export function readReleaseJobListing<T>(
   readListing: (perPage: number, options: { smallerPageFallback: boolean }) => Promise<T>,
@@ -115,11 +134,17 @@ export function validateReleaseExecutionPlanArtifact(
 export function releaseExecutionPlanSha256(plan: ReleaseRecord): string;
 export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
+export function resolveReleaseAttemptJobs<T extends ReleaseRecord>(
+  jobs: T[],
+  runAttempt: number,
+  options?: { allowRunning?: boolean },
+): T[];
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
   expected: {
     effectiveRunAttempt: number;
     effectiveRunStatus?: string;
+    recordedJobs?: ReleaseRecord[];
     plannedRunAttempt: number;
   },
 ): {
@@ -129,13 +154,19 @@ export function composeReleaseAttemptJobs(
   sha256: string;
 };
 export function composeReleaseChildAttemptEvidence(input: {
+  recordedJobs?: ReleaseRecord[];
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>;
   expected: ReleaseRecord;
   run: ReleaseRecord;
 }): ReleaseRecord;
 
 export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
-export function terminalPolicyPass(child: ReleaseRecord, targetVersion?: string): boolean;
+export function terminalPolicyPass(
+  child: ReleaseRecord,
+  targetVersion?: string,
+  targetSha?: string,
+  waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[],
+): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];
@@ -173,3 +204,16 @@ export function affectedActiveRunIds(
   blockers: ReleaseRecord[],
   cancelledRunIds?: Set<string>,
 ): string[];
+
+export function resolveAdmittedQualificationScope(
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+): ReturnType<typeof resolveReleaseQualificationScope> & {
+  releaseProfile: string;
+  runReleaseSoak: boolean;
+};
+export function qualificationChildDispatchInputs(
+  role: string,
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+  binding: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateBinding,
+  workflowSource: string,
+): Record<string, string>;

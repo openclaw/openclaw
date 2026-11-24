@@ -17,6 +17,7 @@ import {
   DEFAULT_GOOGLE_MUSIC_MODEL,
   GOOGLE_MAX_INPUT_IMAGES,
   GOOGLE_PRO_MUSIC_MODEL,
+  resolveGoogleMusicSupportedFormats,
 } from "./generation-provider-metadata.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
 import { resolveGoogleGenerativeAiSdkHttpOptions } from "./src/google-api-base-url.js";
@@ -49,7 +50,7 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
 
     const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_MUSIC_MODEL;
     if (req.format) {
-      const supportedFormats = model === GOOGLE_PRO_MUSIC_MODEL ? ["mp3", "wav"] : ["mp3"];
+      const supportedFormats = resolveGoogleMusicSupportedFormats(model);
       if (!supportedFormats.includes(req.format)) {
         throw new Error(
           `Google music generation model ${model} supports ${supportedFormats.join(", ")} output.`,

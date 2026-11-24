@@ -1,5 +1,6 @@
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
+  agentControlText,
   legacyInteractiveReplyToPresentation,
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
@@ -41,6 +42,7 @@ type TelegramInlineButton = {
   callback_data?: string;
   url?: string;
   web_app?: { url: string };
+  disabled?: Record<string, never>;
   style?: TelegramButtonStyle;
 };
 
@@ -54,6 +56,7 @@ export type TelegramDroppedControl = {
   label: string;
   reason:
     | "callback_data_too_long"
+    | "disabled_unsupported"
     | "invalid_action"
     | "question_context_unavailable"
     | "web_app_unavailable";
@@ -62,6 +65,8 @@ export type TelegramDroppedControl = {
 
 export type TelegramButtonBuildOptions = {
   allowWebAppButtons?: boolean;
+  /** Native disabled buttons; older clients show the whole message as unsupported. */
+  supportsDisabled?: boolean;
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: AskUserQuestionOptionIndices;
 };
@@ -114,6 +119,13 @@ function toTelegramInlineButton(
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
     return recordDroppedControl(button, options, "invalid_action");
+  }
+  // A disabled control never produces a callback or launch: it renders as a native
+  // disabled button where supported, otherwise as fallback label text.
+  if (button.disabled === true) {
+    return options?.supportsDisabled === true
+      ? { text: button.label, disabled: {}, style }
+      : recordDroppedControl(button, options, "disabled_unsupported");
   }
   if (action.type === "url") {
     return { text: button.label, url: action.url, style };
@@ -168,13 +180,15 @@ function toTelegramInlineButton(
       (parseExecApprovalCommandText(command) ? sanitizeTelegramCallbackData(command) : undefined);
     return callbackButton(callbackData, "invalid_action", nativeCandidate);
   }
-  // Reserve the full approval prefix, including malformed values, so legacy
-  // plugin callbacks cannot be consumed by the approval handler.
+  // Agent-authored values carry their own mark and travel raw. Reserve the full
+  // approval prefix, including malformed values, so legacy plugin callbacks
+  // cannot be consumed by the approval handler.
   const normalizedCallbackValue = action.value.trim();
   const needsOpaqueEnvelope =
-    Boolean(button.action) ||
-    hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
-    hasTelegramQuestionCallbackPrefix(normalizedCallbackValue);
+    !agentControlText(normalizedCallbackValue) &&
+    (Boolean(button.action) ||
+      hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
+      hasTelegramQuestionCallbackPrefix(normalizedCallbackValue));
   const callbackDataCandidate = needsOpaqueEnvelope
     ? buildTelegramOpaqueCallbackData(action.value)
     : action.value;
@@ -257,13 +271,7 @@ export function resolveTelegramButtonsFromParams(
   presentation = normalizeMessagePresentation(params.presentation),
   options?: TelegramButtonBuildOptions,
 ) {
-  return resolveTelegramInlineButtons(
-    {
-      presentation,
-      interactive: params.interactive,
-    },
-    options,
-  );
+  return resolveTelegramInlineButtons({ presentation, interactive: params.interactive }, options);
 }
 export function buildTelegramControlDegradation(
   controls: readonly TelegramDroppedControl[],

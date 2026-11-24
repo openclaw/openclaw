@@ -2,8 +2,10 @@
 
 ## Decoupling
 
-npm + ClawHub publication is the priority path. Native app publication
-(macOS, Windows, Linux, Android) runs in parallel and never gates it: a native
+Successful plugin npm publication precedes core npm. ClawHub runs
+independently from its existing dispatch point and does not gate core, GitHub
+finalization, main closeout, or the retrospective PR. Native app publication
+(macOS, Windows, Linux, Android) runs in parallel and never gates npm: a native
 failure is classified and fixed in parallel, not a reason to re-cut or re-run
 npm validation. Each native lane starts as soon as its own prerequisites
 exist, alongside npm publication rather than queued behind it: macOS from the
@@ -13,8 +15,9 @@ tag and exact source; the Linux and Windows publishers from
 Apps are independent publication tasks. They do not block npm, Docker, GitHub
 release finalization, or stable main closeout. Record pending platforms
 explicitly and call each complete only after its assets and updater evidence
-verify. Beta skips native publication unless requested; extended-stable never
-inherits these platforms.
+verify. Beta automatically requests Gateway MSIX prereleases and Store
+Development-flight delivery; other native publication remains opt-in.
+Extended-stable never inherits these platforms.
 
 ## macOS
 
@@ -153,6 +156,78 @@ other writers, revalidate release/source/inventory and immutable bytes, and
 read back both endpoints. Version/hash inputs or current Gateway `latest` alone
 cannot establish forward order. Stop on ambiguous history.
 
+## Windows Gateway MSIX
+
+Regular stable publication to npm `latest` and beta publication to npm `beta`
+request `Windows Gateway Release Request` after GitHub activation, through both
+`OpenClaw Release Publish` and `OpenClaw Release Button`. Alpha and extended-stable
+do not request Gateway MSIX publication.
+
+The detached request dispatches `gateway-msix.yml` from packaging `main` with
+`signing_mode=official`, `publish_release=true`, and
+`request_store_publication=true` for both stable and beta. It supplies the signed
+tag's full source SHA as `openclaw_ref`. Beta additionally sets
+`release_channel=beta` and the exact published `gateway_version`, rather than
+following a moving beta selector. Stable leaves `gateway_version` unset: that
+stable input selects an older compatibility payload, not the current release.
+Opted-in packaging preflight rejects a captured payload that differs from its
+release identity, including a stable selector that advanced before capture.
+
+Packaging owns source and artifact authorization, installed upgrade proof,
+protected Azure signing, and permanent x64, ARM64, and bundle assets. Stable
+publishes a GitHub release eligible for Latest; beta publishes a prerelease, never
+Latest. Packaging serializes publication and compares Windows package versions
+against current Latest so a delayed older build cannot move it backward. Both
+retain the separate unsigned Store bundle and attempt-bound witness.
+
+Core finishes after recording the accepted build run. It does not poll the build
+or dispatch the central Store publisher. Packaging's completion-triggered adapter
+runs only after the entire build succeeds. Before acquiring its request token,
+it checks the canonical main-branch build and its unique current-attempt witness,
+including the explicit automatic opt-in, run ID, attempt, packaging commit, and
+stable/beta channel. Ordinary manual builds and old witnesses do not opt in.
+The adapter requests `{product: gateway, run_id: <build>, channel: development
+| production, automatic: true}` from `openclaw/releases`; beta never targets
+Production. The central publisher independently validates the source snapshot,
+release identity, published release, exact artifact, and bundle hash. No Store
+credential or package bytes pass through core's request job.
+
+Core requests a token scoped to core and packaging, with Actions write and
+Contents read. Packaging separately requests an Actions-write token scoped to
+releases. The release GitHub App must be installed on those repositories. The existing
+`GH_APP_PRIVATE_KEY` supplies the scoped installation tokens; no PAT is needed.
+The central publisher owns source run/attempt,
+artifact, and bundle-hash validation, Store credentials, and the
+`microsoft-store-gateway` environment requiring release-manager approval for
+**both** destinations. It also owns the configured Development flight and the
+operational activation flag for automatic Development requests. A disabled flag
+is a recorded non-delivery outcome, not proof that a beta reached the flight.
+Core has no Store credential, flight GUID, or second activation policy. Central
+workflow and publisher code require release-manager review.
+
+Land packaging's `request_store_publication` input and completion adapter before
+this core caller; an older packaging workflow rejects the new input. Enable only
+after [packaging beta support](https://github.com/openclaw/openclaw-windows-packaging/pull/246),
+[current-attempt Store artifacts](https://github.com/openclaw/openclaw-windows-packaging/pull/247),
+[packaging's request-only cutover](https://github.com/openclaw/openclaw-windows-packaging/pull/212),
+and the [central publisher](https://github.com/openclaw/releases/pull/48) plus its
+administrative setup are ready. Configure central
+protection and exclusive Store federation and revoke the old repository's Store
+federation. Cut updated protected release tooling for both core release entry
+points; merging core alone does not update an existing frozen tooling cut.
+
+A successful core request means the packaging build was dispatched, not that a
+GitHub release, Store approval, or delivery succeeded. Follow the linked packaging
+run and its completion request, then the central run for activation status,
+release-manager approval, and its Store receipt. Certification and delivery
+availability need separate verification. Neither core/npm publication nor the
+detached request waits for MSIX builds, approval, or Store acceptance. There is
+no fixed-duration polling window that can abandon a longer build.
+Repeated publication reuses the original request, including failed requests.
+Recover the retained packaging run and inspect existing central requests before
+using the manual Store adapter; do not rerun the core request or blindly retry
+an ambiguous dispatch. Evidence is retained for 90 days.
+
 ## Windows Hub
 
 The optional parent inputs `windows_node_tag` and
@@ -208,9 +283,11 @@ verify a `latest` redirect before relying on it.
 
 ## Android
 
-Pin the train before tagging under [preparation](preparation.md). Approval,
-build and publication remain independent; record a skipped or failed Android
-child without masking npm/GitHub results.
+Current Android releases use the independent Play workflow. Current source has
+no Android version manifest, so Gateway publication skips Android. Legacy
+tagged-source recovery retains its existing pin eligibility, qualification,
+protected approval, signing, and verification requirements. APK builds without
+a legacy manifest derive their defaults from the root package version.
 
 ## Website
 

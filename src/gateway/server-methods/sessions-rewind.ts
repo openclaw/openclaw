@@ -18,7 +18,6 @@ import {
 import type { SessionMessageCutResult as MessageCutMutationResult } from "../../config/sessions/session-message-cut.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import {
   captureSessionTarget,
   isCompetingSessionControllerWorkActive,
@@ -50,7 +49,6 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
-import { LocalWorkspaceConflictError } from "../worker-environments/local-workspace-conflict-error.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
@@ -61,6 +59,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
+import { rejectSessionMessageCutFailure } from "./session-rewind-failure-log.js";
 import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entries.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
@@ -170,7 +169,8 @@ async function mutatePreparedSessionAtMessage({
   const reject = (message: string, code: ErrorCode = ErrorCodes.INVALID_REQUEST) =>
     respond(false, undefined, errorShape(code, message));
   const { sessionMutationCommitGuard, sessionMutationAuthorization } = options;
-  const commitGuard = () => {
+  const assertMutationCurrent = () => {
+    assertSourceCurrent();
     sessionMutationCommitGuard?.();
     sessionMutationAuthorization?.assertCurrent();
   };
@@ -180,8 +180,7 @@ async function mutatePreparedSessionAtMessage({
     withGatewaySessionEntryReadOnly(
       { key: sessionKey, cfg, agentId: requestedAgentId, excludeInternalEffects: true },
       async (current) => {
-        assertSourceCurrent();
-        commitGuard();
+        assertMutationCurrent();
         return current;
       },
     );
@@ -210,10 +209,6 @@ async function mutatePreparedSessionAtMessage({
       return;
     }
   }
-  const assertMutationCurrent = () => {
-    assertSourceCurrent();
-    commitGuard();
-  };
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
   const upstreamContext = captureSessionUpstreamLinkReadSource();
@@ -228,7 +223,7 @@ async function mutatePreparedSessionAtMessage({
     if (error instanceof SessionMutationAuthorizationChangedError) {
       throw error;
     }
-    reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+    rejectSessionMessageCutFailure(action, "upstream presence", error, reject);
     return;
   }
   using preparedUpstream = upstreamPresence;
@@ -462,7 +457,7 @@ async function mutatePreparedSessionAtMessage({
       }
       const forkWorkspace =
         action === "fork"
-          ? prepareSessionForkFilesystemRoot({
+          ? await prepareSessionForkFilesystemRoot({
               cfg,
               parent: current.entry,
               targetAgentId: current.agentId,
@@ -470,6 +465,7 @@ async function mutatePreparedSessionAtMessage({
               sandboxRequired: sandbox === "required",
             })
           : undefined;
+      assertMutationCurrent();
       if (forkWorkspace && !forkWorkspace.ok) {
         respond(false, undefined, forkWorkspace.error);
         return;
@@ -578,15 +574,7 @@ async function mutatePreparedSessionAtMessage({
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        if (error instanceof ModelSelectionLockedError) {
-          reject(error.message);
-          return;
-        }
-        if (error instanceof LocalWorkspaceConflictError) {
-          reject(error.message, ErrorCodes.UNAVAILABLE);
-          return;
-        }
-        reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+        rejectSessionMessageCutFailure(action, "local mutation", error, reject);
         return;
       } finally {
         if (forkRepository && !repositoryForkCommitted) {
@@ -614,7 +602,7 @@ async function mutatePreparedSessionAtMessage({
           "already-active": `branch is already active: ${entryId}`,
           "not-user-message": `entry is not a user message: ${entryId}`,
           "off-active-path": `message entry is not on the active path: ${entryId}`,
-          "unsupported-storage": `session transcript storage does not support ${actionLabel}`,
+          "unsupported-storage": `chat history storage does not support ${actionLabel}`,
           failed: `failed to ${actionLabel} session`,
         }[result.status];
         reject(

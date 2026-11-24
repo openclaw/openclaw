@@ -7,6 +7,7 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
@@ -19,7 +20,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
-import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool-creator-cap.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -85,7 +86,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolsEnabled &&
     params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
-    !params.isRawModelRun;
+    !params.isRawModelRun &&
+    runtimeCapabilityProfile.policy.globalPolicy?.deny?.some((name) => name.trim() === "*") !==
+      true;
   let clientTools = auxiliaryToolsEnabled ? params.attempt.clientTools : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
@@ -149,6 +152,17 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
         agentId: params.setup.sessionAgentId,
+        operatorConnect: params.attempt.config
+          ? {
+              cfg: params.attempt.config,
+              metadata: bundleMetadataSnapshot,
+              senderIsOwner: params.attempt.senderIsOwner,
+              chatType: params.attempt.chatType,
+              isTurnTainted: params.attempt.isTurnTainted,
+              toolOverrides: params.attempt.toolOverrides,
+              toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
+            }
+          : undefined,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -222,19 +236,21 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         preserveToolNames: localModelLeanPreserveToolNames,
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+      // Listed tools this turn refuses are never delegated or captured as authority.
+      const executable = schemaProjection.tools.filter(isAgentToolExecutionAvailable);
       // Cron is constructed before bundled tools; capture only the executable
       // surface that survived provider normalization and schema quarantine.
       captureFinalEffectiveCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
         cronCreatorToolAllowlistCaptureRef,
-        schemaProjection.tools,
+        executable,
         (tool) => getPluginToolMeta(tool),
       );
       if (inheritedToolAllowlist?.length) {
         // Runtime availability limits this turn; independently approved workspace
         // capabilities remain delegable under the same final runtime cap.
         replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
-          ...schemaProjection.tools,
+          ...executable,
           ...applyEmbeddedAttemptToolsAllow(
             toolsEnabled ? additionalInheritedToolNamesRef.map((name) => ({ name })) : [],
             effectiveToolsAllow,
@@ -249,7 +265,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         sessionId: params.attempt.sessionId,
       });
-      return schemaProjection.tools;
+      // Presentation-only absence must not become a delegated capability denial.
+      // Capture after final policy/quarantine, then omit from the model surface,
+      // unless the session lists one fixed set (the call then fails visibly).
+      return !params.preparedToolBase.messageToolAvailable && !params.preparedToolBase.fixedListing
+        ? schemaProjection.tools.filter((tool) => tool.name !== "message")
+        : schemaProjection.tools;
     };
     phases.mark("attempt.bundle-tools.project");
     const uncompactedEffectiveTools = await withRuntimeToolSchemaQuarantine((record) =>

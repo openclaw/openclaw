@@ -8,7 +8,7 @@ const idleBridges = new Map<
 const maxIdleBridges = 2;
 const idleBridgeTimeoutMs = 3 * 60_000;
 // A backend terminated within this burst window can still fail the next statement.
-const idleValidationMs = 1000;
+export const POSTGRES_IDLE_VALIDATION_MS = 1000;
 
 function closeBridge(bridge: PostgresBridge): void {
   // Closing this logical endpoint releases only its independently owned socket.
@@ -56,7 +56,10 @@ export function takeIdlePostgresBridge(key: string) {
     closeBridge(idle.bridge);
     return undefined;
   }
-  return { bridge: idle.bridge, validate: performance.now() - idle.releasedAt >= idleValidationMs };
+  return {
+    bridge: idle.bridge,
+    validate: Date.now() - idle.releasedAt >= POSTGRES_IDLE_VALIDATION_MS,
+  };
 }
 
 export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): void {
@@ -79,5 +82,5 @@ export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): v
     }
   }, idleBridgeTimeoutMs);
   timeout.unref();
-  idleBridges.set(key, { bridge, timeout, releasedAt: performance.now() });
+  idleBridges.set(key, { bridge, timeout, releasedAt: Date.now() });
 }

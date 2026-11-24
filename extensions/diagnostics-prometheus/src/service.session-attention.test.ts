@@ -11,6 +11,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 describe("session attention observations", () => {
   it("counts repeated stalls and long-running observations without exposing identities", () => {
     const metrics = createMetricsHarness();
+    const heartbeat = { trusted: false, internal: true };
     const base = {
       state: "processing" as const,
       ageMs: 900_000,
@@ -27,8 +28,8 @@ describe("session attention observations", () => {
         reason: "blocked_tool_call",
         activeWorkKind: "tool_call" as const,
       };
-      metrics.record(blocked);
-      metrics.record(blocked);
+      metrics.record(blocked, heartbeat);
+      metrics.record(blocked, heartbeat);
       metrics.record(blocked, untrusted);
       metrics.record({
         ...base,
@@ -37,13 +38,16 @@ describe("session attention observations", () => {
         reason: "active_work_without_progress",
         activeWorkKind: "embedded_run",
       });
-      metrics.record({
-        ...base,
-        type: "session.long_running",
-        classification: "long_running",
-        reason: "active_model_call_without_progress",
-        activeWorkKind: "model_call",
-      });
+      metrics.record(
+        {
+          ...base,
+          type: "session.long_running",
+          classification: "long_running",
+          reason: "active_model_call_without_progress",
+          activeWorkKind: "model_call",
+        },
+        heartbeat,
+      );
       metrics.record({
         ...base,
         type: "session.stuck",

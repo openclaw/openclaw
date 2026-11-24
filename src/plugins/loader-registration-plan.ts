@@ -15,11 +15,16 @@ function createRegistrationPlan(mode: PluginRegistrationMode) {
     loadSetupEntry,
     /** Setup flow also needs the runtime channel entry for runtime setters/plugin shape. */
     loadSetupRuntimeEntry: mode === "setup-runtime",
-    /** Apply runtime capability policy such as memory-slot selection. */
-    runRuntimeCapabilityPolicy: !loadSetupEntry,
+    /** Apply runtime capability policy such as memory-slot selection; backends take no part. */
+    runRuntimeCapabilityPolicy: !loadSetupEntry && mode !== "memory-backend",
     /** Register metadata that only belongs to live activation. */
     runFullActivationOnlyRegistrations: mode === "full",
   };
+}
+
+/** The passive registration a slot-owner backend receives instead of its base plan. */
+export function memoryBackendPlan(): PluginRegistrationPlan {
+  return createRegistrationPlan("memory-backend");
 }
 
 /** Converts loader intent into explicit entrypoint and activation behavior. */

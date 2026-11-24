@@ -10,7 +10,12 @@ import type {
 import { isImageWithMediaPayload } from "./media-payload.js";
 import { preparedRequestSuffix } from "./provider-options.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
-import type { ProviderContext, ProviderMessage, ProviderModel } from "./provider-types.js";
+import {
+  NATIVE_HISTORICAL_TOOL_CALL,
+  type ProviderContext,
+  type ProviderMessage,
+  type ProviderModel,
+} from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
@@ -62,7 +67,7 @@ export function convertMessages(
   const supportsTools = options.supportsTools !== false;
   const declaredToolNames =
     options.declaredToolNames ?? new Set(context.tools?.map((tool) => tool.name));
-  const toolNamesByCallId = new Map<string, string>();
+  const nativeToolCalls = new Map<string, boolean>();
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -93,8 +98,11 @@ export function convertMessages(
     const role = useDeveloperRole ? "developer" : "system";
     let systemPrompt: string;
     if (options.preserveSystemPromptCacheBoundary) {
-      // Explicit message breakpoints retain the existing system layout.
-      systemPrompt = stripSystemPromptRelocatableBoundary(context.systemPrompt);
+      // Verified Anthropic routes need the producer's Runtime seam until the
+      // transport places its shared checkpoint, then strips it before egress.
+      systemPrompt = compat.cacheControlSharedSystem
+        ? context.systemPrompt
+        : stripSystemPromptRelocatableBoundary(context.systemPrompt);
     } else {
       const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
       if (split && split.relocatable.length > 0) {
@@ -159,7 +167,7 @@ export function convertMessages(
         }
         userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
-      if (hasRuntimeContextMarker(msg)) {
+      if (hasRuntimeContextMarker(msg) || msg.cacheCheckpoint === false) {
         options.cacheOptOutIndexes?.add(params.length);
       }
       params.push(userParam);
@@ -178,8 +186,11 @@ export function convertMessages(
         } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
-          toolNamesByCallId.set(block.id, block.name);
-          if (supportsTools && declaredToolNames.has(block.name)) {
+          const native =
+            declaredToolNames.has(block.name) ||
+            Reflect.get(block, NATIVE_HISTORICAL_TOOL_CALL) === true;
+          nativeToolCalls.set(block.id, native);
+          if (supportsTools && native) {
             toolCalls.push(block);
           } else {
             assistantTexts.push(
@@ -277,13 +288,11 @@ export function convertMessages(
         const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
         const normalizedId = normalizeToolCallId(toolMsg.toolCallId);
-        const pairedToolName =
-          toolNamesByCallId.get(toolMsg.toolCallId) ?? toolNamesByCallId.get(normalizedId);
         const isNativeResult =
-          pairedToolName !== undefined
-            ? declaredToolNames.has(pairedToolName)
-            : preparedRequestSuffix.hasToolCall(context, toolMsg.toolCallId) ||
-              preparedRequestSuffix.hasToolCall(context, normalizedId);
+          nativeToolCalls.get(toolMsg.toolCallId) ??
+          nativeToolCalls.get(normalizedId) ??
+          (preparedRequestSuffix.hasToolCall(context, toolMsg.toolCallId) ||
+            preparedRequestSuffix.hasToolCall(context, normalizedId));
         if (supportsTools && isNativeResult) {
           const toolResultMsg: ChatCompletionToolMessageParam = {
             role: "tool",

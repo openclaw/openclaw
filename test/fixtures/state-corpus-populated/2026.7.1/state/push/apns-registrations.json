@@ -1,0 +1,12 @@
+{
+  "registrationsByNodeId": {
+    "corpus-node-1": {
+      "nodeId": "corpus-node-1",
+      "transport": "direct",
+      "token": "abcd1234abcd1234abcd1234abcd1234",
+      "topic": "ai.openclaw.ios",
+      "environment": "sandbox",
+      "updatedAtMs": 1794580635760
+    }
+  }
+}

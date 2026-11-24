@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveGatewayInteractiveSurfaceAuth as interactiveAuth,
@@ -29,6 +29,37 @@ const remoteTokenRef = missingSecretRef("MISSING_REMOTE_TOKEN");
 const remotePasswordRef = missingSecretRef("MISSING_REMOTE_PASSWORD");
 const remoteToken = params({ remote: { token: remoteTokenRef } }, "remote");
 const remotePassword = params({ remote: { password: remotePasswordRef } }, "remote");
+
+it("loads secret providers only when selected Gateway credentials use a ref", async () => {
+  const loadProviders = vi.fn(() => ({
+    resolveSecretRefValues: vi.fn(async () => new Map([["env:default:TEST_TOKEN", "ref-token"]])),
+  }));
+  vi.resetModules();
+  // mock-isolation: Observe provider initialization without loading the real provider graph.
+  vi.doMock("../secrets/resolve.js", loadProviders);
+  try {
+    const { resolveGatewayInteractiveSurfaceAuth } = await import("./auth-surface-resolution.js");
+    await expect(
+      resolveGatewayInteractiveSurfaceAuth(
+        params({ auth: { mode: "token", token: "plain-token" } }),
+      ),
+    ).resolves.toMatchObject({ token: "plain-token" });
+    await expect(
+      resolveGatewayInteractiveSurfaceAuth(params({ auth: { mode: "token" } })),
+    ).resolves.toMatchObject({ token: "ambient-token" });
+    expect(loadProviders).not.toHaveBeenCalled();
+
+    await expect(
+      resolveGatewayInteractiveSurfaceAuth(
+        params({ auth: { mode: "token", token: missingSecretRef("TEST_TOKEN") } }),
+      ),
+    ).resolves.toMatchObject({ token: "ref-token" });
+    expect(loadProviders).toHaveBeenCalledOnce();
+  } finally {
+    vi.doUnmock("../secrets/resolve.js");
+    vi.resetModules();
+  }
+});
 
 it.each([
   ["local token mode", params({ auth: { mode: "token", token } }), "gateway.auth.token"],

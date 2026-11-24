@@ -1,9 +1,15 @@
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { cronFailureTimestamp } from "../../../packages/gateway-protocol/src/schema/cron-failure-dismissals.ts";
+import type { CronCompactJob, CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
 import { clampText, formatTimeAgo } from "../lib/format.ts";
-import { isMonitoredAuthProvider, listEffectiveModelAuthProviders } from "../lib/model-auth.ts";
+import {
+  hasRoutineOAuthExpiry,
+  isMonitoredAuthProvider,
+  listEffectiveModelAuthProviders,
+} from "../lib/model-auth.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 
 registerSidebarAttentionEnglish();
@@ -20,6 +26,95 @@ export type CronAttentionJob = Pick<
     "lastRunStatus" | "lastStatus" | "lastRunAtMs" | "nextRunAtMs" | "runningAtMs" | "autoDisabled"
   >;
 };
+
+function isCronAttentionJob(job: unknown): job is CronAttentionJob {
+  if (
+    !isRecord(job) ||
+    typeof job.id !== "string" ||
+    !job.id ||
+    typeof job.name !== "string" ||
+    typeof job.enabled !== "boolean" ||
+    typeof job.updatedAtMs !== "number" ||
+    (job.agentId !== undefined && typeof job.agentId !== "string") ||
+    !isRecord(job.state)
+  ) {
+    return false;
+  }
+  const state = job.state;
+  const disabled = state.autoDisabled;
+  return (
+    [job.updatedAtMs, state.nextRunAtMs, state.lastRunAtMs, state.runningAtMs].every(
+      (value) =>
+        value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+    ) &&
+    [state.lastRunStatus, state.lastStatus].every(
+      (value) => value === undefined || value === "ok" || value === "error" || value === "skipped",
+    ) &&
+    (disabled === undefined ||
+      (isRecord(disabled) &&
+        (disabled.reason === "consecutive-failures" || disabled.reason === "schedule-errors") &&
+        typeof disabled.atMs === "number" &&
+        Number.isFinite(disabled.atMs) &&
+        disabled.atMs >= 0 &&
+        typeof disabled.consecutiveErrors === "number" &&
+        Number.isSafeInteger(disabled.consecutiveErrors) &&
+        disabled.consecutiveErrors > 0))
+  );
+}
+
+export function applyCronAttentionEvent(jobs: CronAttentionJob[], payload: unknown): boolean {
+  if (
+    !isRecord(payload) ||
+    typeof payload.action !== "string" ||
+    !["removed", "started", "finished", "scheduled"].includes(payload.action) ||
+    !isCronAttentionJob(payload.job) ||
+    payload.jobId !== payload.job.id
+  ) {
+    return false;
+  }
+  const job = payload.job;
+  const index = jobs.findIndex((entry) => entry.id === job.id);
+  // Events do not establish list membership: even All agents can be access-
+  // filtered, and completion can carry a removed job's historical snapshot.
+  if (index < 0) {
+    return false;
+  }
+  if (payload.action === "removed") {
+    jobs.splice(index, 1);
+  } else {
+    const { id, name, agentId, enabled, updatedAtMs } = job;
+    const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
+      job.state;
+    // Retain attention facts only; event jobs also contain full task payloads.
+    const attention = {
+      id,
+      name,
+      agentId,
+      enabled,
+      updatedAtMs,
+      state: { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled },
+    };
+    jobs[index] = attention;
+  }
+  return true;
+}
+
+export function compactCronAttentionJob(job: CronCompactJob): CronAttentionJob {
+  return {
+    id: job.id,
+    name: job.name,
+    agentId: job.agentId,
+    enabled: job.enabled,
+    updatedAtMs: job.updatedAtMs,
+    state: {
+      nextRunAtMs: job.nextRunAtMs ?? undefined,
+      lastRunAtMs: job.lastRunAtMs ?? undefined,
+      lastRunStatus: job.lastRunStatus ?? undefined,
+      runningAtMs: job.runningAtMs,
+      autoDisabled: job.autoDisabled,
+    },
+  };
+}
 
 export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean | null): number {
   return schedulerEnabled !== false &&
@@ -42,11 +137,16 @@ export function buildSidebarAttentionEntries(params: {
   const attentionEntry = (
     item: Omit<SidebarAttentionItem, "category" | "dismissal" | "requiresAction" | "type">,
     category: SidebarAttentionItem["category"],
+    failedAtMs?: number,
   ): SidebarAttentionItem => ({
     ...item,
     type: "attention",
     category,
-    dismissal: { kind: item.kind, signature: item.signature },
+    dismissal: {
+      kind: item.kind,
+      signature: item.signature,
+      ...(failedAtMs !== undefined ? { failedAtMs } : {}),
+    },
     requiresAction: true,
   });
 
@@ -54,7 +154,9 @@ export function buildSidebarAttentionEntries(params: {
     isMonitoredAuthProvider,
   );
   const expired = monitored.filter(
-    (provider) => provider.status === "expired" || provider.status === "missing",
+    (provider) =>
+      provider.status === "missing" ||
+      (provider.status === "expired" && !hasRoutineOAuthExpiry("expired", provider.profiles)),
   );
   for (const provider of expired) {
     // Auth is agent-scoped; one agent's dismissal must not hide another's warning.
@@ -167,6 +269,7 @@ export function buildSidebarAttentionEntries(params: {
             signature: failed ? job.id : `${job.id}@${job.state?.nextRunAtMs}`,
           },
           "automations",
+          failed ? cronFailureTimestamp(job) : undefined,
         ),
       );
     }

@@ -32,7 +32,10 @@ export type TranscriptCallbacks = {
   getComposerFloat?: () => HTMLElement | null;
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
+  /** Explicit keys report direction; undefined reconciles geometry or neutral contact. */
   onReaderScroll?: (towardEnd?: boolean) => void;
+  /** Plain End uses the pane's manual Latest action and its follow policy. */
+  onRequestEnd?: () => void;
   onNativeScroll?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
@@ -64,6 +67,9 @@ export type ChatTranscriptSession = {
   readonly contentElement: HTMLDivElement | null;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
+  readonly canFollowEnd: boolean;
+  /** Retain the visible message through a structural change inside its existing row. */
+  preserveReaderPosition(): void;
   readonly scrollElementRef: (element?: Element) => void;
   render<T>(
     rows: readonly TranscriptRow<T>[],
