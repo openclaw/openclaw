@@ -20,6 +20,14 @@ import * as realtimeTalkInput from "./talk/input.ts";
 const discoverRealtimeTalkInputsMock = vi.fn();
 const openMicrophoneMock = vi.fn();
 
+function dictationSessionFixture() {
+  return {
+    sessionId: "dictation-1",
+    transcriptionSessionId: "dictation-1",
+    audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+  };
+}
+
 describe("composer typing lifecycle", () => {
   it("shares the active caret on input and selection-only changes", () => {
     const draft = "First line\n😀 second line\nLast line  ";
@@ -227,7 +235,12 @@ describe("renderChatComposer controls", () => {
     document.body.append(container);
     const composerProps = props({
       gatewayClient: {
-        request: vi.fn(async () => ({ transcription: { ready: true } })),
+        addEventListener: vi.fn(() => () => undefined),
+        request: vi.fn(async (method: string) =>
+          method === "talk.session.create"
+            ? dictationSessionFixture()
+            : { transcription: { ready: true } },
+        ),
       } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
     });
@@ -437,11 +450,7 @@ describe("renderChatComposer controls", () => {
         return { transcription: { ready: true } };
       }
       if (method === "talk.session.create") {
-        return {
-          sessionId: "dictation-1",
-          transcriptionSessionId: "dictation-1",
-          audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
-        };
+        return dictationSessionFixture();
       }
       return { ok: true };
     });
@@ -548,10 +557,19 @@ describe("renderChatComposer controls", () => {
       if (method === "talk.catalog") {
         return { realtime: { ready: true }, transcription: { ready: true } };
       }
+      if (method === "talk.session.create") {
+        return dictationSessionFixture();
+      }
+      if (method === "talk.session.close") {
+        return { ok: true };
+      }
       throw new Error(`unexpected request: ${method}`);
     });
     const { container } = mountComposer({
-      gatewayClient: { request } as unknown as GatewayBrowserClient,
+      gatewayClient: {
+        addEventListener: vi.fn(() => () => undefined),
+        request,
+      } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
     });
     await vi.waitFor(() =>
