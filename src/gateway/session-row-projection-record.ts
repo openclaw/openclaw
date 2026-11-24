@@ -213,11 +213,18 @@ export const identity = (row: RowTarget) =>
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
 export const logicalSessionRowIdentity = (agentId: string, key: string) =>
   `logical:${agentId}\0${key}`;
-export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
-  return new Set([
-    ...(byParent.get(logicalSessionRowIdentity(row.agentId, row.key)) ?? []),
-    ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
-  ]);
+export function dependents(
+  row: Row,
+  byParent: ReadonlyMap<string, Set<string>>,
+  referenced?: (reference: string) => Row | undefined,
+): Iterable<string> {
+  const read = (ref: string) => {
+    const children = byParent.get(ref);
+    return children && (!referenced || referenced(ref) === row) ? children : undefined;
+  };
+  const logical = read(logicalSessionRowIdentity(row.agentId, row.key));
+  const local = read(physical(row.storeTarget.storePath, row.key));
+  return logical && local ? new Set([...logical, ...local]) : (logical ?? local ?? []);
 }
 export function markRelated(
   row: Row,
@@ -477,18 +484,6 @@ export function first(candidates: Row[], storePaths: Iterable<string>) {
     }
   }
   return undefined;
-}
-
-export function firstReferenced(
-  ref: string,
-  rows: ReadonlyMap<string, Row>,
-  byKey: ReadonlyMap<string, ReadonlySet<string>>,
-  storePaths: Iterable<string>,
-) {
-  return first(
-    [...(byKey.get(ref) ?? [])].flatMap((id) => rows.get(id) ?? []),
-    storePaths,
-  );
 }
 
 export function present(

@@ -72,7 +72,6 @@ it.for(["active", "revoked", "non-owner"] as const)(
         profileId: GATEWAY_OWNER_PROFILE_ID,
         scopes: ["operator.admin"],
         signal: lifetime.signal,
-        assertCurrent: () => lifetime.signal.throwIfAborted(),
       });
       const operationalRunInstance = createOperationalRunInstanceRef("owner-role-write-run");
       const approvalAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -144,7 +143,6 @@ it.for(["active", "revoked", "non-owner"] as const)(
                   operationalRunInstance,
                   approvalAuthority,
                   operatorAuthority: authority,
-                  receiptAuthority: authority.assertCurrent,
                   gatewayContextResolver: () => context,
                 },
                 async () => {

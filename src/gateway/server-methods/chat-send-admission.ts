@@ -577,7 +577,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     return { ok: false as const };
   }
   assertSourceAuthority = () => {
-    capturedOperator.authority?.assertCurrent();
     assertAcceptedInputAuthority?.();
     assertSessionTargetCurrent();
     if (!gatewayWorkAdmission?.isActive()) {

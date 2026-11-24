@@ -431,7 +431,6 @@ describe("spawn input ownership transfer", () => {
           { ...entry, archivedAt: Date.now() },
         );
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
-        expect(() => operator.authority.assertCurrent()).not.toThrow();
         release.resolve();
         const result = await pending;
         expect(result.details).toMatchObject({

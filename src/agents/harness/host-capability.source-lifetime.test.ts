@@ -12,7 +12,6 @@ import {
 } from "../../infra/exec-request-context.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
-import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 const cleanup: Array<() => void> = [];
@@ -73,7 +72,6 @@ it.each([
     const source = createTestOperatorAuthority({
       profileId: "guest-source",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       ...(synchronous ? { signal: controller.signal } : {}),
     });
     const foregroundAbort = !synchronous && revocation !== "gateway rotation";
@@ -111,7 +109,6 @@ it.each([
       expect(modelBinding.signal.aborted).toBe(true);
     } else {
       rotateAgentRunRegistryLifecycleGeneration();
-      expect(() => source.assertCurrent()).not.toThrow();
     }
     expect(() => retained.assertCurrent()).toThrow("no longer active");
     expect(modelBinding.assertCurrent).toThrow(
@@ -127,7 +124,6 @@ it("releases model authority when its retained work closes during acquisition", 
   const source = createTestOperatorAuthority({
     profileId: "guest-source",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     retain: () => {
       sourceHolds += 1;
       acquisition.close?.();
@@ -146,53 +142,6 @@ it("releases model authority when its retained work closes during acquisition", 
     "no longer active",
   );
   expect(sourceHolds).toBe(0);
-});
-
-it("keeps retained unknown-model work admitted through policy introduction and releases once", async () => {
-  const current: { policy?: AdmittedRunOperatorAuthority["modelPolicy"] } = {};
-  let holds = 0;
-  const listeners = new Set<() => void>();
-  const source = createTestOperatorAuthority({
-    profileId: "retained-policy",
-    scopes: ["operator.write"],
-    assertCurrent: () => {},
-    get modelPolicy() {
-      return current.policy;
-    },
-    onModelPolicyChanged: (listener) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    retain: () => {
-      holds += 1;
-      return () => {
-        holds -= 1;
-      };
-    },
-  });
-  const host = await createSourceHost(source);
-  expect(host.hostCapabilities.bindModelExecution).toBeUndefined();
-  const retained = retain(host);
-  host.closeHost();
-  host.closeAdmission();
-  expect(holds).toBe(1);
-  expect(() => retained.assertCurrent()).not.toThrow();
-  expect(retained.signal?.aborted).toBe(false);
-  current.policy = prepareOperatorModelPolicy({
-    cfg: { agents: { defaults: { model: "fixture/a" } } },
-    policy: {},
-    manifestPlugins: [],
-  });
-  for (const listener of listeners) {
-    listener();
-  }
-  expect(retained.signal?.aborted).toBe(false);
-  expect(() => retained.assertCurrent()).not.toThrow();
-  retained.release();
-  retained.release();
-  expect([holds, listeners.size]).toEqual([0, 0]);
 });
 
 it("captures request custody before plugin handoff and retains continuation ancestry", async () => {

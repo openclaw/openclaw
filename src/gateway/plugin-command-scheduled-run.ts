@@ -301,14 +301,11 @@ export async function runPluginCommandScheduledTurn(params: {
       });
       assertParent();
       const operatorAuthority = restored.authority;
-      const assertCurrent = composeSessionSourceAssertion(
-        [assertParent, operatorAuthority.assertCurrent],
-        (assertSources) => {
-          assertSources();
-          inference?.assertCurrent();
-          modelLease?.assertCurrent();
-        },
-      );
+      const assertCurrent = composeSessionSourceAssertion([assertParent], (assertSources) => {
+        assertSources();
+        inference?.assertCurrent();
+        modelLease?.assertCurrent();
+      });
       assertCurrent();
       const model = resolveSessionModelRef(cfg, entry, schedule.parent.agentId);
       modelLease = bindOperatorModelExecution(operatorAuthority, model);

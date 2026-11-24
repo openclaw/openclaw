@@ -150,7 +150,6 @@ it("retains each accepted input's scope ceiling when the same person sends throu
   dispatchInboundMessageMock.mockImplementation(async (input) => {
     const authority = input.replyOptions?.operatorAuthority;
     expect(authority).toBeDefined();
-    authority?.assertCurrent();
     dispatchedScopes.push([...(authority?.scopes ?? [])]);
     await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
     return {};

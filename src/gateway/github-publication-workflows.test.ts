@@ -65,7 +65,6 @@ function invokeTool<T>(
           agentId: "main",
           sessionKey: SESSION_KEY,
           operationalRunInstance: { instanceId: "publication-tool", runId: "publication-run" },
-          receiptAuthority: () => caller.operatorAuthority?.assertCurrent(),
           gatewayContextResolver: () => context,
           ...caller,
         },
