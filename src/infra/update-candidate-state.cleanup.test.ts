@@ -13,6 +13,7 @@ import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import * as logging from "../logging/logger.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -24,6 +25,7 @@ import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { removeTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingDirectorySync } from "./sqlite-snapshot-staging.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
@@ -312,6 +314,33 @@ it.each([
       fault.mockRestore();
       expect(removeTempDirectory(staging)).toBe(true);
     }
+  },
+);
+
+it.each(["payload", "unsettled"] as const)(
+  "retains interrupted inspection staging when %s custody is unresolved",
+  async (reason) => {
+    const staging = createSqliteSnapshotStagingDirectorySync(root);
+    const nested = await fs.mkdtemp(path.join(staging, "openclaw-sqlite-readonly-v2-"));
+    const payload = path.join(nested, "database.sqlite");
+    if (reason === "payload") {
+      await fs.writeFile(payload, "unowned payload");
+    }
+    await expect(
+      withStateInspectionCleanup(staging, async () => {
+        if (reason === "unsettled") {
+          throw new CommandProcessCleanupError();
+        }
+      }),
+    ).rejects.toThrow(
+      reason === "payload" ? "snapshot cleanup failed" : "Confirm that update workers have stopped",
+    );
+    expect(await fs.readdir(nested)).toEqual(reason === "payload" ? ["database.sqlite"] : []);
+    if (reason === "payload") {
+      expect(await fs.readFile(payload, "utf8")).toBe("unowned payload");
+    }
+    await fs.rm(nested, { recursive: true });
+    expect(removeTempDirectory(staging)).toBe(true);
   },
 );
 

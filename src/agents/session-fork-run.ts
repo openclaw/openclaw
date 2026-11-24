@@ -1,5 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
@@ -23,7 +24,7 @@ import {
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { getBackgroundOwnerLane } from "../process/background-work.js";
 import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
@@ -51,6 +52,7 @@ import {
   type SessionForkRequester,
 } from "./session-fork-requester.js";
 import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
+import { resolveSessionModelRef } from "./session-model-ref.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "./spawned-context.js";
 
@@ -83,6 +85,12 @@ type SessionForkRunParams = {
   timeoutMs: number;
   /** Output token limit; the session's own when omitted. */
   maxTokens?: number;
+  /**
+   * Send one read-only prewarm of the session's cached prefix (`StreamOptions.cachePrewarm`):
+   * no output, no tools, the session's own tool choice, never a CLI turn. Refused without the
+   * session's pinned prompt, since a rebuilt prompt would write a new prefix instead.
+   */
+  cachePrewarm?: true;
   abortSignal?: AbortSignal;
   /** The caller's own liveness, rechecked with the source fences (for example, a feature switch). */
   assertCallerCurrent?: () => void;
@@ -105,7 +113,7 @@ type SessionForkTurn = {
 
 /**
  * Facts of the turn a fork reads through: the requester its initiating user message recorded and
- * the model its last assistant message ran on. The search stops at that turn's initiating input,
+ * the model its last provider response ran on. The search stops at that turn's initiating input,
  * within a bounded window. Returns undefined when that window no longer holds the input
  * (too large or compacted mid-turn), so callers refuse instead of guessing the requester.
  */
@@ -124,13 +132,16 @@ export async function readSessionForkTurn(
       continue;
     }
     const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    // Delivery mirrors and other OpenClaw-authored rows are assistant messages no provider
+    // answered; taking their marker as the model sends the fork to a model that does not exist.
     if (
       !model &&
       message.role === "assistant" &&
       typeof message.provider === "string" &&
       typeof message.model === "string" &&
       message.provider &&
-      message.model
+      message.model &&
+      !isTranscriptArtifactProvider(message.provider)
     ) {
       model = { provider: message.provider, model: message.model };
     }
@@ -146,6 +157,34 @@ export async function readSessionForkTurn(
     return { ...(requester ? { requester } : {}), ...(model ? { model } : {}) };
   }
   return undefined;
+}
+
+/**
+ * The model a fork runs on: the anchored turn's (else the session's), on the credential the
+ * session's own turns use when the provider matches (a user pin or an automatic rotation). The
+ * fork's internal session has no stored selection, so without this it could bill another
+ * profile and miss the turn's cache.
+ */
+export function resolveSessionForkModel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry;
+  turnModel?: { provider: string; model: string };
+}) {
+  const sessionModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const turnModel = params.turnModel ?? sessionModel;
+  const sessionProfile =
+    turnModel && sessionModel && turnModel.provider === sessionModel.provider
+      ? params.entry.authProfileOverride?.trim()
+      : undefined;
+  return {
+    sessionModel,
+    turnModel,
+    model: turnModel && {
+      ...turnModel,
+      ...(sessionProfile ? { authProfileId: sessionProfile } : {}),
+    },
+  };
 }
 
 /**
@@ -265,7 +304,7 @@ async function readSessionForkPin(
 async function markRunningToolCalls(manager: SessionManager): Promise<void> {
   // The latest batch is the last assistant message plus the tool results recorded after it.
   const completed = new Set<string>();
-  let batch: AssistantMessage | undefined;
+  let batch: AssistantHistoryMessage | undefined;
   for (const entry of manager.getBranch().toReversed()) {
     if (entry.type !== "message") {
       continue;
@@ -435,7 +474,9 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   const assertScopeCurrent = () => {
     assertPhysicalCurrent();
     if (sourceLifetime.entry && !sourceLifetime.entry.isCurrent()) {
-      throw new SessionTranscriptReadFenceError("Session fork authority changed");
+      throw new SessionTranscriptReadFenceError(
+        "Session fork source changed. Retry in a new turn.",
+      );
     }
     params.assertCallerCurrent?.();
   };
@@ -533,6 +574,10 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
   // request carry the session's system prompt and tool definitions too.
   const pin = await readSessionForkPin(sessionManager, scoped, params.model, abortSignal);
+  if (params.cachePrewarm && (live || !pin || params.tools.length > 0)) {
+    // A live run keeps its own cache warm; without the pin the rebuilt prompt is a new prefix.
+    throw new Error("Cache prewarm needs a settled session with its pinned prompt and no tools.");
+  }
   await markRunningToolCalls(sessionManager);
   // Background runs stay out of the Control UI and never project into a user session.
   registerAgentRunContext(runId, {
@@ -588,8 +633,15 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       retryTransientErrors: false,
       allowAuthProfileFallback: false,
       authProfileFailurePolicy: "local_transient",
+      // A subscription login runs on its own CLI, within plan limits; API keys keep the replay.
+      // A prewarm reads the cache the session's own embedded turns wrote, so it stays embedded.
+      ...(params.cachePrewarm ? {} : { cliBackendDispatch: "subscription-auth" as const }),
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
+      // The source's prewarms count on the cache-TTL clock, so the copy prunes as the source would.
+      ...(entry?.promptCacheKeepWarm ? { promptCacheKeepWarm: entry.promptCacheKeepWarm } : {}),
+      // A prewarm is one request; it never compacts the copy it reads.
+      ...(params.cachePrewarm ? { disableCompactionRecovery: true } : {}),
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.
       // exec is not on the owner-only list, so a fork runs it only on the owner's own turn.
       toolExecutionAllow: params.tools.filter(
@@ -599,6 +651,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
         ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
         ...(pin ? { pin } : {}),
         ownOutputLimit: params.maxTokens !== undefined,
+        ...(params.cachePrewarm ? { cachePrewarm: true as const } : {}),
       },
       ...(live?.promptCacheKey ? { promptCacheKey: live.promptCacheKey } : {}),
       ...(params.maxTokens !== undefined ? { streamParams: { maxTokens: params.maxTokens } } : {}),

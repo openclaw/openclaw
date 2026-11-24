@@ -151,20 +151,14 @@ describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () =>
     draw();
     const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
     preview.style.width = "400px";
-    const actions = preview.querySelector<HTMLElement>(".chat-tool-card__preview-actions")!;
-    const expectPlacement = async () => {
+    const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
+    const expectPlacement = async (edge: "top" | "right") => {
       await vi.waitFor(() => {
-        const actual = actions.getBoundingClientRect();
-        const header = preview
-          .querySelector<HTMLElement>(".widget-header")!
-          .getBoundingClientRect();
-        expect(actual.left).toBeGreaterThanOrEqual(header.left);
-        expect(actual.right).toBeLessThanOrEqual(header.right);
-        expect(actual.top).toBeGreaterThanOrEqual(header.top);
-        expect(actual.bottom).toBeLessThanOrEqual(header.bottom);
+        const actual = actions.getBoundingClientRect()[edge === "top" ? "bottom" : "left"];
+        expect(actual).toBe(preview.getBoundingClientRect()[edge]);
       });
     };
-    await expectPlacement();
+    await expectPlacement("top");
 
     let rerendered = false;
     const rerenderObserver = new ResizeObserver(() => {
@@ -177,9 +171,12 @@ describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () =>
     await vi.waitFor(() => expect(rerendered).toBe(true));
 
     // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
-    for (const width of [480, 420]) {
+    for (const [width, edge] of [
+      [480, "right"],
+      [420, "top"],
+    ] as const) {
       container.style.width = `${width}px`;
-      await expectPlacement();
+      await expectPlacement(edge);
     }
     expect(errors).toEqual([]);
   });

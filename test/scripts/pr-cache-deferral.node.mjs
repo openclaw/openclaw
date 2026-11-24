@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -104,6 +105,47 @@ async function operation() {
   );
   assert.equal(realpathSync(join(destination, "tsx")), join(entry, "node_modules/tsx"));
 
+  if (mode === "admission") {
+    const materializer = resolve("scripts/pr-lib/materialize-dependencies.mjs");
+    const refusingHelper = join(process.env.HOME, "refusing-helper.mjs");
+    writeFileSync(
+      refusingHelper,
+      `import { DatabaseSync } from "node:sqlite";
+import { writeFileSync } from "node:fs";
+import { withDependencyCacheLock } from ${JSON.stringify(pathToFileURL(owner).href)};
+// Invalidate only this fixture's hold after the caller's successful preflight.
+withDependencyCacheLock(${JSON.stringify(cache)}, () => {
+  const db = new DatabaseSync(${JSON.stringify(join(cache, "lifetime.sqlite"))});
+  try { db.prepare("DELETE FROM holds WHERE anchor_path = ?").run(${JSON.stringify(anchorPath)}); }
+  finally { db.close(); }
+});
+writeFileSync(${JSON.stringify(join(entry, "node_modules/tsx/package.json"))}, "{");
+process.on("exit", code => console.error("selected-helper-exit=" + code));
+await import(${JSON.stringify(pathToFileURL(materializer).href)});
+`,
+    );
+    const bootstrap = readFileSync("scripts/pr", "utf8")
+      .split("<<'EOF_TOOLING'\n")[1]
+      .split("\nEOF_TOOLING")[0];
+    const refused = run(
+      ["--input-type=module", "-", refusingHelper, process.env.HOME, destination, "", owner],
+      {
+        ...process.env,
+        OPENCLAW_PR_GIT: "git",
+        OPENCLAW_PR_CACHE_COLLECTION_PID: String(process.pid),
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+      { input: bootstrap },
+    );
+    assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+    assert.match(refused.stderr, /selected-helper-exit=1\b/);
+    assert.match(refused.stderr, /Private cache donor has no matching anchor lifetime hold/);
+    assert.doesNotMatch(refused.stderr, /Cannot resolve installed|Installing frozen/);
+    assert.equal(realpathSync(join(destination, "tsx")), join(entry, "node_modules/tsx"));
+    return;
+  }
+
   if (mode === "retire-owned") {
     let retired = false;
     api.retireAnchorDependencies(anchor, () => {
@@ -176,13 +218,38 @@ if (process.argv[2] === "operation") {
     }
   });
 
+  test("missing and mismatched packages still request frozen dependency installation", (t) => {
+    const f = fixture(t);
+    const modules = join(f.root, "source/node_modules");
+    const anchor = join(f.root, "anchor");
+    const args = [
+      resolve("scripts/pr-lib/materialize-dependencies.mjs"),
+      modules,
+      join(anchor, "node_modules"),
+    ];
+    const missing = run(args, f.env);
+    assert.equal(missing.status, 78, missing.stderr);
+    assert.match(missing.stderr, /Cannot resolve installed scripts\/pr dependency 'tsx'/);
+    mkdirSync(join(modules, "tsx"), { recursive: true });
+    mkdirSync(anchor);
+    writeFileSync(join(modules, "tsx/package.json"), '{"version":"1.0.0"}');
+    writeFileSync(join(anchor, "package.json"), '{"dependencies":{"tsx":"2.0.0"}}');
+    const mismatch = run(args, f.env);
+    assert.equal(mismatch.status, 78, mismatch.stderr);
+    assert.match(mismatch.stderr, /has version 1\.0\.0; the trust anchor requires 2\.0\.0/);
+    assert.equal(existsSync(join(anchor, "node_modules")), false);
+  });
+
   for (const [mode, value] of [
     ["collect", "1"],
     ["collect", undefined],
     ["retire-owned", "1"],
+    ["admission", "1"],
   ]) {
     test(
-      `${mode} with deferral ${value ?? "unset"} preserves donor and lifetime ownership`,
+      mode === "admission"
+        ? "lifetime rejection survives selected-helper admission without becoming dependency drift"
+        : `${mode} with deferral ${value ?? "unset"} preserves donor and lifetime ownership`,
       { skip: process.platform === "win32" },
       (t) => {
         const f = fixture(t, value);

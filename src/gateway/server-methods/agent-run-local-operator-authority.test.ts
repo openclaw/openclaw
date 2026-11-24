@@ -151,9 +151,7 @@ it.each(["agent", "chat"] as const)(
       await runWithCronCreatorAuthorityCapability(capability, async () => {
         const grant = mintCronCreatorAuthorityGrant(capability);
         invalidateGatewayDeviceRevocation(context, "original-device", "operator");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-          "cron authority is no longer active",
-        );
+        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("cron access has ended");
       });
     } finally {
       caller.release();
@@ -173,6 +171,25 @@ it.each([
   expect(isDirectGatewayChatUserTurn(params)).toBe(true);
   expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
   expect(isDirectGatewayChatUserTurn({ ...params, isDirectExternalUser: false })).toBe(false);
+});
+
+it.each([
+  ["channel origin", { hasExplicitOrigin: true }],
+  ["channel ingress", { isDirectExternalUser: false }],
+  ["non-WebChat client", { client: createClient() }],
+  ["supervised child", { isUncontrolledDashboardChild: false }],
+  ["internal input", { isSystemGenerated: true }],
+  ["resumed input", { isReconnectResume: true }],
+  ["incognito", { isIncognito: true }],
+] as const)("keeps %s outside the dashboard handoff exception", (_label, overrides) => {
+  const params = createChatParams({
+    spawnedBy: "agent:main:parent",
+    isUncontrolledDashboardChild: true,
+    client: createClient({ authenticatedControlUi: true }),
+    ...overrides,
+  });
+  expect(isDirectGatewayChatUserTurn(params)).toBe(false);
+  expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
 });
 
 it.each([true, undefined] as const)(

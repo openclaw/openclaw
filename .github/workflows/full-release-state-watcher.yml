@@ -6,6 +6,7 @@ on:
       mode:
         type: string
         required: true
+      # Retained for callers pinned to the existing reusable-workflow interface.
       runner_label:
         type: string
         required: true
@@ -73,12 +74,11 @@ jobs:
       (github.workflow_ref == 'openclaw/openclaw/.github/workflows/full-release-validation.yml@refs/heads/main' ||
       startsWith(github.workflow_ref, 'openclaw/openclaw/.github/workflows/full-release-validation.yml@refs/heads/release-ci/')) &&
       (inputs.mode == 'decision' || inputs.mode == 'drain')
-    runs-on: >-
-      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
-      toJSON(inputs.runner_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404')) }}
+    # Release-only routing: normal CI and nightly keep their existing backend.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 720
     env:
+      OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
       RELEASE_STATE_SCRIPT: ${{ inputs.qualification_workflow_sha != '' && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -91,12 +91,9 @@ jobs:
       performance_conclusion: ${{ steps.state.outputs.productPerformance_conclusion }}
     steps:
       - name: Checkout release state tooling
-        if: ${{ inputs.qualification_workflow_sha == '' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Checkout admitted qualification verifier
@@ -105,8 +102,6 @@ jobs:
         with:
           ref: ${{ inputs.qualification_workflow_sha }}
           path: qualification-verifier
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -122,6 +117,38 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - name: Setup qualification verifier dependencies
+        if: inputs.qualification_workflow_sha == ''
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: ./package.json
+          lockfile-path: ./pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        if: inputs.qualification_workflow_sha == ''
+        working-directory: .
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Setup qualification verifier dependencies
+        if: inputs.qualification_workflow_sha != ''
+        uses: ./qualification-verifier/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: qualification-verifier/package.json
+          lockfile-path: qualification-verifier/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        if: inputs.qualification_workflow_sha != ''
+        working-directory: qualification-verifier
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Evaluate release state
         id: state

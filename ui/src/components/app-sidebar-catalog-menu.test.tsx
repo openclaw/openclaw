@@ -39,6 +39,7 @@ function fixture(beforeOpen = () => {}) {
     basePath: "",
     getRouteSessionKey: () => "",
     onNavigate: vi.fn(),
+    prepareSessionNavigation: vi.fn(),
     terminalAvailable: true,
     sessionDataContext: undefined,
     sessionData: {

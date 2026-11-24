@@ -92,7 +92,7 @@ export async function resolveAgentRuntimePrompt(params: {
       arch: params.remoteWorkspace ? "" : os.arch(),
       node: params.remoteWorkspace ? "" : process.version,
       model: params.model,
-      defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
+      defaultModel: defaultModel && `${defaultModel.provider}/${defaultModel.model}`,
       shell: params.remoteWorkspace ? undefined : detectRuntimeShell(),
       channel: runtimeChannel,
       chatType: external ? external.origin.chatType : params.chatType,

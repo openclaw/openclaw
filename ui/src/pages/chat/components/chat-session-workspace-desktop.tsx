@@ -42,7 +42,7 @@ import {
   type SessionFileEntry,
 } from "./chat-session-workspace-session-files.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
-import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
+import { hasTranscriptAttachments, representedArtifactIds } from "./chat-transcript-attachments.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
 import { FileDisclosure } from "./file-disclosure.tsx";
@@ -156,11 +156,19 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const searching = () =>
     defaultCatalog() ? Boolean(props.workspace.browserSearch.trim()) : navigation()?.searchOpen;
   const root = () => props.workspace.browserPath;
+  const searchArtifacts = createMemo(() =>
+    representedArtifactIds(
+      props.workspace.transcriptAttachments?.entries,
+      props.workspace.browserSearch,
+    ),
+  );
   const searchResults = createMemo(() =>
     workspaceCatalogSearch(
       props.workspace.list,
       props.workspace.browserSearch,
       defaultCatalog() ? "session" : "project",
+    ).filter(
+      (file) => defaultCatalog() || !file.artifactId || !searchArtifacts().has(file.artifactId),
     ),
   );
   // Browser rows belong to the accepted native snapshot, not the requested query.

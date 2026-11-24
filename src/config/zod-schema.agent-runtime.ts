@@ -632,7 +632,7 @@ const GatewayToolPolicySchema = z.strictObject({
     .optional(),
 });
 
-export const ToolsSchema = z
+const ToolsObjectSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
     gatewayPolicy: GatewayToolPolicySchema.optional(),
@@ -708,5 +708,8 @@ export const ToolsSchema = z
     createAllowAlsoAllowConflictValidator(
       "tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
     ),
-  )
-  .optional();
+  );
+
+// Keep the root config declaration pointing at this schema instead of inlining its entire shape.
+export type OptionalToolsSchema = z.ZodOptional<typeof ToolsObjectSchema>;
+export const ToolsSchema: OptionalToolsSchema = ToolsObjectSchema.optional();

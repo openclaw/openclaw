@@ -45,6 +45,7 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "./model-selection-config.js";
 import { preparedModelRuntimeConfigsMatch } from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
@@ -105,6 +106,9 @@ export async function runBtwSideQuestion(
     )
       ? { provider: params.provider, model: params.model }
       : resolveSessionModelRef(preparedModelRuntime.config, params.sessionEntry, sessionAgentId);
+    if (!preparedModelRef) {
+      throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+    }
     // BTW policy, model selection, directories, auth, and catalog must come from one generation.
     // A reload may have committed while the command waited for its transcript/session lookup.
     // Rebind every later policy/auth/dispatch read to the generation returned above.
@@ -522,7 +526,8 @@ export async function runBtwSideQuestion(
         : undefined);
     if (cliProvider) {
       if (params.sessionFork) {
-        throw new Error(`Session forks are not supported for CLI runtime ${cliProvider}.`);
+        // The fork owner runs subscription logins through the CLI backend itself.
+        return await params.sessionFork();
       }
       return runCliBtwSideQuestion({
         cfg: params.cfg,

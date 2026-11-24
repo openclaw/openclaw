@@ -1,16 +1,16 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
-import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
-import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import {
   buildSlackNativeDataAccessibilityText,
   createSlackNativeDataBaseTextConsumer,
   hasSlackNativeDataBlock,
+  renderSlackBlockFallbackText,
   renderSlackNativeDataPlainTextBlock,
   SLACK_MALFORMED_NATIVE_DATA_FALLBACK,
   stripSlackNativeDataBlocks,
-} from "./native-data-blocks.js";
+} from "./blocks-fallback.js";
+import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
+import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import { truncateSlackText } from "./truncate.js";
 
 const SLACK_SECTION_PLAIN_TEXT_MAX = 3_000;

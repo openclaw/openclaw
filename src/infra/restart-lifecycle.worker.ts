@@ -1,9 +1,11 @@
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import { patchOpenClawStateLeasePayloadInTransaction } from "../state/openclaw-state-lease-store.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
+import { gatewayOwnerKey } from "./gateway-owner-lease.read.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,6 +18,19 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 
 export const restartLifecycleOperations = {
+  "restartLifecycle.publishExternalRestartReceipt": (
+    { owner, externalRestartReceipt }: { owner: string; externalRestartReceipt: string },
+    { writeAdmitted },
+  ) =>
+    writeAdmitted(
+      ({ db }) =>
+        patchOpenClawStateLeasePayloadInTransaction(
+          db,
+          { ...gatewayOwnerKey, owner },
+          { externalRestartReceipt },
+        ),
+      { operationLabel: "gateway.owner-lease.external-restart" },
+    ),
   "restartLifecycle.consumeIntent": (_input: undefined, { write }) =>
     write(
       ({ db }) => {

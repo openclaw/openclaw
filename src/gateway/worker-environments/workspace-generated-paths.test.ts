@@ -42,28 +42,25 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
-  ".npm/_cacache",
-  ".npm/_logs",
-  ".cache/pip",
-  ".cache/uv",
+  ...["_cacache", "_logs"].map((name) => `.npm/${name}`),
+  ...["pip", "uv", "bun-transpiler", "vitest"].map((name) => `.cache/${name}`),
+  ...["openclaw/bun", "ms-playwright", "convex/binaries"].map((name) => `.cache/${name}`),
   ".pnpm-store",
   ".bun/install/cache",
-  ".cargo/registry",
-  ".cargo/git",
+  ...["registry", "git"].map((name) => `.cargo/${name}`),
   ".gradle/caches",
+  ...["http-cache", "v3-cache"].map((name) => `.local/share/NuGet/${name}`),
+  ".nuget/packages",
   ".local/share/pnpm/store",
   "artifacts/task-environment/local/share/pnpm/store",
   ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
-  ".cache/openclaw/bun",
-  ".cache/ms-playwright",
-  ".cache/bun-transpiler",
-  ".artifacts/vitest-worker-cache",
-  ".artifacts/vitest-workers",
-  ".cache/vitest",
+  ...["vitest-worker-cache", "vitest-workers"].map((name) => `.artifacts/${name}`),
   ".artifacts/dist-artifacts.lock",
 ];
 const generatedPaths = [
   ...cacheRoots.map((root) => `${root}/cache.bin`),
+  ...["intermediates/x", "outputs/apk/x.apk", "outputs/bundle/x.aab"].map((p) => `m/build/${p}`),
+  ...["bin/Debug", "bin/Release", "obj/Debug", "obj/Release"].map((p) => `m/${p}/x`),
   ".artifacts/vitest-shard-timings.json",
 ];
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
@@ -82,6 +79,8 @@ const userFiles = {
   ".npm/npmrc": "user configuration\n",
   ".cargo/config.toml": "user configuration\n",
   ".gradle/gradle.properties": "user configuration\n",
+  "m/build/reports/summary.txt": "user report\n",
+  "m/bin/tool.sh": "user script\n",
   ...Object.fromEntries(
     cacheRoots.flatMap((root) => [
       [`${root}-notes`, "user notes\n"],

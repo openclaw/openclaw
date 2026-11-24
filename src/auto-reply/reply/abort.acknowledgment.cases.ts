@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerChatAbortController } from "../../gateway/chat-abort.js";
@@ -365,12 +365,11 @@ export function registerAbortAcknowledgmentCases({
         sessionId: state.entry.sessionId,
         config: state.cfg,
       };
-      queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      queued.operatorAuthority = createTestOperatorAuthority({
         profileId: "guest",
         scopes: ["operator.read", "operator.write"],
         source: {},
         signal: authorityController.signal,
-        assertCurrent: () => authorityController.signal.throwIfAborted(),
         retain: () => releaseAuthority,
       });
       queued.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned, onSettled };

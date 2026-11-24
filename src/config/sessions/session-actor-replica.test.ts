@@ -20,7 +20,12 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
-import { loadSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptMessageSync,
+  loadSessionEntry,
+  readSessionTranscriptMessageEvents,
+  waitForSessionTranscriptProjection,
+} from "./session-accessor.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   deleteSessionEntryRows,
@@ -42,6 +47,7 @@ import type {
   SessionActorReceipt,
 } from "./session-actor-contract.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
+import * as replicaReceipts from "./session-actor-replica-receipts.js";
 import {
   createSessionActorReplica,
   readSessionActorEntryFacts,
@@ -563,6 +569,26 @@ it("shares committed facts across released handles and retires them for writes a
   }, "agent:main:matrix:group:!Room:server");
 });
 
+it("leaves reset-window history presence to the history reader", async ({ fixture }) => {
+  const target = { ...fixture.scope, sessionId: "replica-session" };
+  expect(
+    appendTranscriptMessageSync(target, {
+      eventId: "saved",
+      message: { role: "user", content: "Before reset" },
+    }).ok,
+  ).toBe(true);
+  hydrate(fixture);
+  const rowTarget = { path: fixture.database.path, sessionKey: fixture.scope.sessionKey };
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBe(true);
+  expect(
+    appendTranscriptEventSync(target, { type: "reset", id: "reset", parentId: "saved" }).ok,
+  ).toBe(true);
+  await waitForSessionTranscriptProjection(target);
+  expect(readSessionTranscriptMessageEvents(target)).toEqual([]);
+  hydrate(fixture);
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBeUndefined();
+});
+
 it("retains session entry facts across tool-usage-only commits", ({ fixture }) => {
   const { database, scope, replica } = fixture;
   const initial = hydrate(fixture);
@@ -815,6 +841,66 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       after.transcript.watermark,
     );
   });
+});
+
+it("bounds exact row lookups by matching keys while retaining physical store isolation", async () => {
+  await withReplica((fixture) => {
+    const { database, scope } = fixture;
+    const state = hydrate(fixture);
+    const target = sessionActorFileTarget(database, scope.sessionKey);
+    const other = openOpenClawAgentDatabase({ agentId: "other", env: scope.env });
+    const otherTarget = sessionActorFileTarget(other, scope.sessionKey);
+    retainSessionActorEntryFacts(
+      otherTarget.database,
+      [
+        {
+          sessionKey: scope.sessionKey,
+          facts: {
+            entry: entry("other store", 1, "other-session"),
+            snapshots: "full",
+            projection: { hasBoard: true },
+          },
+        },
+      ],
+      readOpenClawAgentDatabaseIdentity(other).incarnation,
+    );
+    retainSessionActorEntryFacts(
+      target.database,
+      Array.from({ length: 80 }, (_, index) => ({
+        sessionKey: `agent:main:unrelated-${index}`,
+        facts: {
+          entry: entry("unrelated", 1, `unrelated-${index}`),
+          snapshots: "full" as const,
+          projection: { hasBoard: false },
+        },
+      })),
+      readOpenClawAgentDatabaseIdentity(database).incarnation,
+    );
+    let visited = 0;
+    const select = replicaReceipts.sessionActorReplicaCellsForPath;
+    using lookup = vi.spyOn(replicaReceipts, "sessionActorReplicaCellsForPath");
+    lookup.mockImplementation(function* (cells, databasePath) {
+      yield* select(
+        (function* () {
+          for (const cell of cells) {
+            visited++;
+            yield cell;
+          }
+        })(),
+        databasePath,
+      );
+    });
+    expect(
+      readSessionActorRowFacts({ path: other.path, sessionKey: scope.sessionKey }),
+    ).toMatchObject({ entry: { sessionId: "other-session" }, hasBoard: true });
+    expect(
+      readSessionActorRowFacts({ path: database.path, sessionKey: scope.sessionKey }),
+    ).toMatchObject({ entry: state.entry, hasBoard: false });
+    expect(
+      readSessionActorRowFacts({ path: database.path, sessionKey: "agent:main:absent" }),
+    ).toBeUndefined();
+    expect(visited).toBeLessThanOrEqual(4);
+  }, "agent:main:bounded-row-lookup");
 });
 
 it("invalidates pending custody for staging, promotion, terminal completion and withdrawal", ({

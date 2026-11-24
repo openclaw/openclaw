@@ -6,6 +6,7 @@ import {
   encodeMemoryEmbedding,
   hashText,
   MEMORY_CHUNKING_VERSION,
+  normalizeExtraMemoryPathEntries,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -14,7 +15,11 @@ import {
 import { expect, it, vi } from "vitest";
 import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import { MEMORY_INDEX_PROVENANCE_VERSION, type MemoryIndexMeta } from "./manager-reindex-state.js";
+import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
+  resolveConfiguredScopeHash,
+  type MemoryIndexMeta,
+} from "./manager-reindex-state.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const embeddings = await import("./embeddings.js");
@@ -29,6 +34,11 @@ const versionKeys = ["chunkingVersion", "provenanceVersion"] as const;
 const versions = {
   chunkingVersion: MEMORY_CHUNKING_VERSION,
   provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
+};
+const stableMultimodal = {
+  enabled: false,
+  modalities: [] as Array<"image" | "audio" | "all">,
+  maxFileBytes: 20 * 1024 * 1024,
 };
 type VersionKey = keyof typeof versions;
 async function closeManager(manager: Awaited<ReturnType<typeof fixture.getFreshManager>>) {
@@ -57,6 +67,22 @@ function readMeta(db: DatabaseSync): MemoryIndexMeta {
 function updateMeta(db: DatabaseSync, meta: MemoryIndexMeta) {
   db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
     JSON.stringify(meta),
+  );
+}
+function legacyLocaleScopeHash(workspaceDir: string, extraPaths: string[]) {
+  const normalizedPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths)
+    .map((entry) => {
+      const normalizedPath = entry.path.replaceAll("\\", "/");
+      return entry.pattern ? { path: normalizedPath, pattern: entry.pattern } : normalizedPath;
+    })
+    // v2026.11.5 used the process locale; zh-CN recreates the persisted ordering
+    // that differs from the canonical en-US ordering for these CJK paths.
+    .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right), "zh-CN"));
+  return hashText(
+    JSON.stringify({
+      extraPaths: normalizedPaths,
+      multimodal: { ...stableMultimodal, modalities: [...stableMultimodal.modalities].toSorted() },
+    }),
   );
 }
 async function publishIndex(
@@ -110,6 +136,80 @@ it("keeps status inspection read-only during an upgrade", async () => {
     owner: "openclaw",
   });
   expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+});
+
+it("rebuilds a persisted v2026.11.5 CJK scope hash on normal search", async () => {
+  const extraPaths = ["notes/备", "notes/阿"];
+  const cfg = fixture.createConfig({
+    extraPaths,
+    multimodal: stableMultimodal,
+    vectorEnabled: false,
+  });
+  const dbPath = await publishIndex(cfg);
+  const persistedLegacyHash = legacyLocaleScopeHash(fixture.paths.workspace, extraPaths);
+  const configuredHash = resolveConfiguredScopeHash({
+    workspaceDir: fixture.paths.workspace,
+    extraPaths,
+    multimodal: stableMultimodal,
+  });
+  expect(persistedLegacyHash).not.toBe(configuredHash);
+  withDatabase(dbPath, (db) => updateMeta(db, { ...readMeta(db), scopeHash: persistedLegacyHash }));
+  const previousChunkCount = withDatabase(
+    dbPath,
+    (db) => db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()?.count,
+  );
+
+  const manager = await fixture.getFreshManager(cfg, "default");
+  expect(await manager.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
+  expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  expect(withDatabase(dbPath, readMeta).scopeHash).toBe(configuredHash);
+  expect(
+    withDatabase(
+      dbPath,
+      (db) => db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()?.count,
+    ),
+  ).toBe(previousChunkCount);
+  await closeManager(manager);
+
+  const reopened = await fixture.getFreshManager(cfg, "default");
+  expect(await reopened.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
+  expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  await closeManager(reopened);
+});
+
+it("rebuilds changed extra-path scope without serving stale rows", async () => {
+  const oldPath = path.join(fixture.paths.workspace, "notes", "old");
+  const newPath = path.join(fixture.paths.workspace, "notes", "new");
+  await fs.mkdir(oldPath, { recursive: true });
+  await fs.mkdir(newPath, { recursive: true });
+  await fs.writeFile(path.join(oldPath, "entry.md"), "Retired quokka token.");
+  await fs.writeFile(path.join(newPath, "entry.md"), "Current wibble token.");
+  const oldConfig = fixture.createConfig({
+    extraPaths: [oldPath],
+    multimodal: stableMultimodal,
+    vectorEnabled: false,
+  });
+  const dbPath = await publishIndex(oldConfig);
+  const newConfig = fixture.createConfig({
+    extraPaths: [newPath],
+    multimodal: stableMultimodal,
+    vectorEnabled: false,
+  });
+
+  const manager = await fixture.getFreshManager(newConfig, "default");
+  expect(await manager.search("quokka", { lexicalOnly: true })).toEqual([]);
+  expect(await manager.search("wibble", { lexicalOnly: true })).toEqual(
+    expect.arrayContaining([expect.objectContaining({ path: "notes/new/entry.md" })]),
+  );
+  expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  expect(withDatabase(dbPath, readMeta).scopeHash).toBe(
+    resolveConfiguredScopeHash({
+      workspaceDir: fixture.paths.workspace,
+      extraPaths: [newPath],
+      multimodal: stableMultimodal,
+    }),
+  );
+  await closeManager(manager);
 });
 
 it.each(

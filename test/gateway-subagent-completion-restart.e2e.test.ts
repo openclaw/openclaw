@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { readTranscriptExportSnapshotReadOnlySync } from "../src/config/sessions/session-accessor.sqlite-export-read.js";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -20,6 +21,7 @@ import {
   restartProviderServer,
   restartToolNames,
   writeRestartJsonText,
+  writeRestartPlugin,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
@@ -33,8 +35,11 @@ it
     "nested",
     "captured",
     "announcing",
+    "preparing-announcing",
     "announcing-crash",
     "private-announcing",
+    "private-queued-announcing",
+    "spawned-private-announcing",
     "private-announcing-crash",
     "busy-requester",
     "retrying-requester",
@@ -45,13 +50,21 @@ it
   { timeout: 180_000 },
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
-    const privateContinuation = kind.startsWith("private-announcing");
+    const preparingAnnounce = kind === "preparing-announcing";
+    const rewriteRequesterMarkers =
+      kind === "unmarked-requester" || kind === "stale-settle-requester";
+    const holdCompletionPreparation = preparingAnnounce || rewriteRequesterMarkers;
+    const queuedPrivateAnnounce = kind === "private-queued-announcing";
+    const unconsumedAnnounce = preparingAnnounce || queuedPrivateAnnounce;
+    const privateContinuation = kind.includes("private-");
+    const spawnedRequester = kind === "spawned-private-announcing";
     const busyRequester = kind === "busy-requester";
     const retryingRequester = kind === "retrying-requester";
-    const rootKey = "agent:main:dashboard:restart-hub";
+    let rootKey = "agent:main:dashboard:restart-hub";
     let childKey: string | undefined;
     let siblingKey: string | undefined;
     let leaf: { runId: string; childSessionKey: string } | undefined;
+    let spawnedRoot: { runId: string; childSessionKey: string } | undefined;
     let initialized: { runId: string; childSessionKey: string }[] = [];
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -64,169 +77,234 @@ it
     let finishCaptured: (() => void) | undefined;
     let finishChild: (() => void) | undefined;
     let announcing = false;
-    let completedReplies = 0;
+    let releasePreparation: (() => void) | undefined;
     let rootReceivedRecovery = false;
+    let rootReceivedChildError = false;
     let resumedChildRequests = 0;
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
       createListener: () =>
-        restartProviderServer(failed, async (_request, response, body) => {
-          const input = Array.isArray(body.input) ? body.input : [];
-          const text = JSON.stringify(input);
-          const tools = restartToolNames(body);
-          const ordinal = ++sequence;
-          const reply = (value: string) =>
-            body.stream === false
-              ? writeRestartJsonText(response, value, String(ordinal))
-              : writeOpenAiResponsesText(response, {
-                  text: value,
-                  messageId: `msg_custody_${ordinal}`,
-                  responseId: `resp_custody_${ordinal}`,
-                });
-          const call = (name: string, args: object) => {
-            const wireName = tools.includes(name) ? name : "dispatch_action";
-            expect(tools).toContain(wireName);
-            writeRestartToolCall(
-              response,
-              "custody",
-              wireName,
-              wireName === name ? args : { id: name, args },
-              ordinal,
-            );
-          };
-          if (!tools.length) {
-            reply("Synthetic restart custody session");
-            return;
-          }
-          if (text.includes("CUSTODY_ROOT_TASK")) {
-            rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
-            const receipts = input.flatMap((item) =>
-              isRecord(item) && item.type === "function_call_output"
-                ? findSubagentRecords(
-                    item.output,
-                    (value) =>
-                      value.status === "accepted" &&
-                      typeof value.runId === "string" &&
-                      typeof value.sessionKey === "string",
-                  )
-                : [],
-            );
-            const childReceipt = receipts.find((value) => value.sessionKey === childKey);
-            const siblingReceipt = receipts.find((value) => value.sessionKey === siblingKey);
-            if (typeof childReceipt?.runId === "string") {
-              childRunId ??= childReceipt.runId;
+        restartProviderServer(
+          failed,
+          async (request, response, body) => {
+            if (request.url === "/hold-completion-preparation") {
+              if (restarted) {
+                response.end("{}");
+              } else {
+                announcing = true;
+                releasePreparation = () => response.end("{}");
+              }
+              return;
             }
-            if (typeof siblingReceipt?.runId === "string") {
-              capturedRunId ??= siblingReceipt.runId;
+            const input = Array.isArray(body.input) ? body.input : [];
+            const text = JSON.stringify(input);
+            const capturedCompletionInputs = input.filter((item) => {
+              const content = JSON.stringify(item);
+              return (
+                content.includes("[Internal task completion event]") &&
+                content.includes("CAPTURED_CUSTODY_RESULT")
+              );
+            });
+            const tools = restartToolNames(body);
+            const ordinal = ++sequence;
+            const reply = (value: string) =>
+              body.stream === false
+                ? writeRestartJsonText(response, value, String(ordinal))
+                : writeOpenAiResponsesText(response, {
+                    text: value,
+                    messageId: `msg_custody_${ordinal}`,
+                    responseId: `resp_custody_${ordinal}`,
+                  });
+            const call = (name: string, args: object) => {
+              const wireName = tools.includes(name) ? name : "dispatch_action";
+              expect(tools).toContain(wireName);
+              writeRestartToolCall(
+                response,
+                "custody",
+                wireName,
+                wireName === name ? args : { id: name, args },
+                ordinal,
+              );
+            };
+            if (!tools.length) {
+              reply("Synthetic restart custody session");
+              return;
             }
-            if (
-              text.includes("CAPTURED_CUSTODY_RESULT") &&
-              (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
-            ) {
-              if (retryingRequester && !restarted) {
-                response.writeHead(400, { "content-type": "application/json" });
-                response.end(
-                  JSON.stringify({ error: { message: "Synthetic announce unavailable" } }),
-                );
+            if (text.includes("CUSTODY_ROOT_TASK")) {
+              rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
+              rootReceivedChildError ||= text.includes("Gateway stopped");
+              const latestUserInput = input.findLast(
+                (item) =>
+                  isRecord(item) &&
+                  item.role === "user" &&
+                  !JSON.stringify(item).includes("OpenClaw runtime context:"),
+              );
+              if (
+                unconsumedAnnounce &&
+                capturedCompletionInputs.length === 0 &&
+                JSON.stringify(latestUserInput).includes(
+                  "The Gateway restarted while you were working.",
+                )
+              ) {
+                // Recovery can show pending-result context before the separate completion arrives.
+                reply("HUB_RESUMED_WAITING_FOR_COMPLETION");
                 return;
               }
-              if (interruptAnnounce && !restarted) {
+              const receipts = input.flatMap((item) =>
+                isRecord(item) && item.type === "function_call_output"
+                  ? findSubagentRecords(
+                      item.output,
+                      (value) =>
+                        value.status === "accepted" &&
+                        typeof value.runId === "string" &&
+                        typeof value.sessionKey === "string",
+                    )
+                  : [],
+              );
+              const childReceipt = receipts.find((value) => value.sessionKey === childKey);
+              const siblingReceipt = receipts.find((value) => value.sessionKey === siblingKey);
+              if (typeof childReceipt?.runId === "string") {
+                childRunId ??= childReceipt.runId;
+              }
+              if (typeof siblingReceipt?.runId === "string") {
+                capturedRunId ??= siblingReceipt.runId;
+              }
+              if (queuedPrivateAnnounce && !restarted && text.includes("NESTED_CHILD_RECONCILED")) {
                 announcing = true;
                 return;
               }
-              completedReplies++;
-              reply("HUB_RECEIVED_RESTART_COMPLETION");
-            } else if (!childRunId) {
-              call("sessions_send", {
-                sessionKey: childKey,
-                message: "CUSTODY_CHILD_TASK",
-                timeoutSeconds: 0,
-              });
-            } else if (!capturedRunId) {
-              call("sessions_send", {
-                sessionKey: siblingKey,
-                message: "CUSTODY_SIBLING_TASK",
-                timeoutSeconds: 0,
-              });
-            } else if (busyRequester || retryingRequester) {
-              if (restarted || retryingRequester) {
+              if (
+                text.includes("CAPTURED_CUSTODY_RESULT") &&
+                (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
+              ) {
+                if (retryingRequester && !restarted) {
+                  response.writeHead(400, { "content-type": "application/json" });
+                  response.end(
+                    JSON.stringify({ error: { message: "Synthetic announce unavailable" } }),
+                  );
+                  return;
+                }
+                if (interruptAnnounce && !restarted) {
+                  announcing = true;
+                  return;
+                }
+                if (spawnedRequester) {
+                  expect(capturedCompletionInputs).toHaveLength(1);
+                }
+                reply("HUB_RECEIVED_RESTART_COMPLETION");
+              } else if (!childRunId) {
+                call("sessions_send", {
+                  sessionKey: childKey,
+                  message: "CUSTODY_CHILD_TASK",
+                  timeoutSeconds: 0,
+                });
+              } else if (!capturedRunId) {
+                call("sessions_send", {
+                  sessionKey: siblingKey,
+                  message: "CUSTODY_SIBLING_TASK",
+                  timeoutSeconds: 0,
+                });
+              } else if (busyRequester || retryingRequester) {
+                if (restarted || retryingRequester) {
+                  reply("HUB_WAITING_FOR_OWNED_RESULTS");
+                }
+              } else if (
+                privateContinuation ||
+                text.includes("already_pending") ||
+                text.includes("nothing_pending")
+              ) {
                 reply("HUB_WAITING_FOR_OWNED_RESULTS");
+              } else {
+                call("sessions_yield", {});
               }
-            } else if (
-              privateContinuation ||
-              text.includes("already_pending") ||
-              text.includes("nothing_pending")
-            ) {
-              reply("HUB_WAITING_FOR_OWNED_RESULTS");
-            } else {
-              call("sessions_yield", {});
+              return;
             }
-            return;
-          }
-          if (text.includes("CUSTODY_SETUP_TASK")) {
-            initialized = input.flatMap((item) => {
-              if (!isRecord(item) || item.type !== "function_call_output") {
-                return [];
+            if (text.includes("CUSTODY_CREATE_REQUESTER")) {
+              spawnedRoot ??= input.flatMap((item) => {
+                const receipt =
+                  isRecord(item) && item.type === "function_call_output"
+                    ? findSubagentSpawnReceipt(item.output)
+                    : undefined;
+                return receipt ? [receipt] : [];
+              })[0];
+              if (spawnedRoot) {
+                reply("REQUESTER_READY");
+              } else {
+                call("sessions_spawn", {
+                  task: "INITIALIZE_CUSTODY_SESSION",
+                  context: "isolated",
+                  visible: true,
+                  expectsCompletionMessage: false,
+                });
               }
-              const receipt = findSubagentSpawnReceipt(item.output);
-              return receipt ? [receipt] : [];
-            });
-            childKey = initialized[0]?.childSessionKey;
-            siblingKey = initialized[1]?.childSessionKey;
-            if (initialized.length < 2) {
-              call("sessions_spawn", {
-                task: "INITIALIZE_CUSTODY_SESSION",
-                context: "isolated",
-                visible: true,
-                expectsCompletionMessage: false,
+              return;
+            }
+            if (text.includes("CUSTODY_SETUP_TASK")) {
+              initialized = input.flatMap((item) => {
+                if (!isRecord(item) || item.type !== "function_call_output") {
+                  return [];
+                }
+                const receipt = findSubagentSpawnReceipt(item.output);
+                return receipt ? [receipt] : [];
               });
-            } else {
-              reply("CUSTODY_SETUP_COMPLETE");
-            }
-            return;
-          }
-          if (text.includes("CUSTODY_CHILD_TASK")) {
-            childStarted = true;
-            if (restarted) {
-              resumedChildRequests++;
-              reply("NESTED_CHILD_RECONCILED");
+              childKey = initialized[0]?.childSessionKey;
+              siblingKey = initialized[1]?.childSessionKey;
+              if (initialized.length < 2) {
+                call("sessions_spawn", {
+                  task: "INITIALIZE_CUSTODY_SESSION",
+                  context: "isolated",
+                  visible: true,
+                  expectsCompletionMessage: false,
+                });
+              } else {
+                reply("CUSTODY_SETUP_COMPLETE");
+              }
               return;
             }
-            if (kind !== "nested") {
-              finishChild = () => reply("NESTED_CHILD_RECONCILED");
+            if (text.includes("CUSTODY_CHILD_TASK")) {
+              childStarted = true;
+              if (restarted) {
+                resumedChildRequests++;
+                reply("NESTED_CHILD_RECONCILED");
+                return;
+              }
+              if (kind !== "nested") {
+                finishChild = () => reply("NESTED_CHILD_RECONCILED");
+                return;
+              }
+              leaf ??= input.flatMap((item) => {
+                const receipt =
+                  isRecord(item) && item.type === "function_call_output"
+                    ? findSubagentSpawnReceipt(item.output)
+                    : undefined;
+                return receipt ? [receipt] : [];
+              })[0];
+              call(
+                leaf ? "sessions_yield" : "sessions_spawn",
+                leaf
+                  ? {}
+                  : {
+                      task: "CUSTODY_LEAF_TASK",
+                      context: "isolated",
+                      expectsCompletionMessage: true,
+                    },
+              );
               return;
             }
-            leaf ??= input.flatMap((item) => {
-              const receipt =
-                isRecord(item) && item.type === "function_call_output"
-                  ? findSubagentSpawnReceipt(item.output)
-                  : undefined;
-              return receipt ? [receipt] : [];
-            })[0];
-            call(
-              leaf ? "sessions_yield" : "sessions_spawn",
-              leaf
-                ? {}
-                : {
-                    task: "CUSTODY_LEAF_TASK",
-                    context: "isolated",
-                    expectsCompletionMessage: true,
-                  },
-            );
-            return;
-          }
-          if (text.includes("CUSTODY_SIBLING_TASK")) {
-            finishCaptured = () => reply("CAPTURED_CUSTODY_RESULT");
-            return;
-          }
-          if (text.includes("INITIALIZE_CUSTODY_SESSION")) {
-            reply("SESSION_READY");
-            return;
-          }
-          assert(text.includes("CUSTODY_LEAF_TASK"), "Unexpected synthetic request");
-          leafStarted = true;
-        }),
+            if (text.includes("CUSTODY_SIBLING_TASK")) {
+              finishCaptured = () => reply("CAPTURED_CUSTODY_RESULT");
+              return;
+            }
+            if (text.includes("INITIALIZE_CUSTODY_SESSION")) {
+              reply("SESSION_READY");
+              return;
+            }
+            assert(text.includes("CUSTODY_LEAF_TASK"), "Unexpected synthetic request");
+            leafStarted = true;
+          },
+          { ignoreAborted: true },
+        ),
     });
     const model = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${reservation.claim.port}/v1`);
     const base = restartResumeConfig(model);
@@ -237,8 +315,40 @@ it
         ...base,
         tools: { ...base.tools, allow: ["sessions_send", "sessions_spawn", "sessions_yield"] },
       },
-      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_GATEWAY_RESTART_TRACE: "1" },
     });
+    if (holdCompletionPreparation) {
+      const pluginDir = instance.state.path("held-completion-preparation");
+      await writeRestartPlugin(
+        pluginDir,
+        {
+          id: "held-completion-preparation",
+          activation: { onStartup: true },
+          configSchema: { type: "object", properties: {} },
+        },
+        `export default { id: "held-completion-preparation", register(api) {
+        api.on("before_model_resolve", async (event, ctx) => {
+          if (ctx.sessionKey === ${JSON.stringify(rootKey)} && event.prompt.includes("CAPTURED_CUSTODY_RESULT"))
+            await fetch(${JSON.stringify(`http://127.0.0.1:${reservation.claim.port}/hold-completion-preparation`)}, { method: "POST", body: "{}" });
+        });
+      } };`,
+      );
+      await instance.state.writeConfig({
+        ...asRecord(JSON.parse(await readFile(instance.configPath, "utf8"))),
+        plugins: {
+          enabled: true,
+          load: { paths: [pluginDir] },
+          allow: ["held-completion-preparation", "openai"],
+          slots: { memory: "none" },
+          entries: {
+            "held-completion-preparation": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      });
+    }
     vi.stubEnv("OPENCLAW_STATE_DIR", instance.stateDir);
     onTestFinished(() => {
       vi.unstubAllEnvs();
@@ -259,7 +369,7 @@ it
         db.close();
       }
     };
-    const readCapturedInputs = () => {
+    const readRequesterEvents = () => {
       const agentDir = instance.state.agentDir("main");
       const session = readRestartSession(agentDir, rootKey);
       assert(typeof session?.sessionId === "string");
@@ -268,7 +378,10 @@ it
         sessionKey: rootKey,
         sessionId: session.sessionId,
         storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-      })?.events.filter((event) => {
+      })?.events;
+    };
+    const readCapturedInputs = () =>
+      readRequesterEvents()?.filter((event) => {
         if (!isRecord(event)) {
           return false;
         }
@@ -304,7 +417,6 @@ it
             : undefined;
         return message && JSON.stringify(message.content).includes("CAPTURED_CUSTODY_RESULT");
       });
-    };
     let client: GatewayClient | undefined;
     let phase = "startup";
     onTestFailed(() => {
@@ -315,6 +427,25 @@ it
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         await client.request("sessions.create", { key: rootKey, agentId: "main" });
+        if (spawnedRequester) {
+          const create = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: rootKey,
+            message: "CUSTODY_CREATE_REQUESTER",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          expect(
+            await client.request("agent.wait", { runId: create.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+          assert(spawnedRoot);
+          expect(
+            await client.request("agent.wait", { runId: spawnedRoot.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+          rootKey = spawnedRoot.childSessionKey;
+          expect(readRestartSession(instance.state.agentDir("main"), rootKey)).toMatchObject({
+            createdVia: "spawn",
+          });
+        }
         const setup = await client.request<{ runId: string }>("chat.send", {
           sessionKey: rootKey,
           message: "CUSTODY_SETUP_TASK",
@@ -373,7 +504,12 @@ it
           assert(finishChild);
           finishChild();
           await vi.waitFor(
-            () => expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } }),
+            () =>
+              expect(readRun(childRunId!)).toMatchObject({
+                delivery: queuedPrivateAnnounce
+                  ? { status: "pending", requesterDelivery: { state: "consumed" } }
+                  : { status: "delivered" },
+              }),
             { timeout: 15_000 },
           );
         }
@@ -417,11 +553,13 @@ it
           );
         }
         if (interruptAnnounce) {
-          phase = "requester announce in flight";
           assert(finishChild);
           if (!privateContinuation) {
             finishChild();
           }
+        }
+        if (interruptAnnounce || holdCompletionPreparation) {
+          phase = "requester announce in flight";
           await vi.waitFor(() => expect(announcing).toBe(true), { timeout: 15_000 });
           await vi.waitFor(
             () =>
@@ -429,8 +567,8 @@ it
                 delivery: {
                   status: "pending",
                   requesterDelivery: {
-                    state: "consumed",
-                    runId: expect.any(String),
+                    state: unconsumedAnnounce || rewriteRequesterMarkers ? "waiting" : "consumed",
+                    ...(queuedPrivateAnnounce ? {} : { runId: expect.any(String) }),
                   },
                 },
               }),
@@ -450,34 +588,58 @@ it
         if (kind.endsWith("-crash") || retryingRequester) {
           await instance.crashGateway();
         } else {
-          await instance.stopGateway();
+          const stopping = instance.stopGateway();
+          if (holdCompletionPreparation) {
+            await vi.waitFor(
+              () => expect(instance.logs()).toContain("restart.close.session-abort "),
+              {
+                timeout: 15_000,
+              },
+            );
+            assert(releasePreparation);
+            releasePreparation();
+          }
+          await stopping;
         }
         await client.stopAndWait();
         client = undefined;
         expect(readRun(capturedRunId)).toMatchObject({
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
-          // Shutdown can checkpoint custody before terminal delivery settlement finishes.
+          // Ready child partitions can settle during graceful shutdown. A committed
+          // result must already have its one captured input; pending custody stays owed.
           delivery: {
-            status: interruptAnnounce
-              ? expect.stringMatching(/^(pending|delivered)$/)
-              : retryingRequester
-                ? "delivered"
-                : "pending",
+            status: retryingRequester
+              ? "delivered"
+              : expect.stringMatching(/^(pending|delivered)$/),
           },
         });
-        if (interruptAnnounce) {
+        if (asRecord(readRun(capturedRunId).delivery).status === "delivered") {
+          expect(readCapturedInputs()).toHaveLength(1);
+        }
+        if (unconsumedAnnounce) {
+          expect(readCapturedInputs()).toHaveLength(0);
+          expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
+        }
+        if (interruptAnnounce && !unconsumedAnnounce) {
           expect(readRun(capturedRunId)).toMatchObject({
             delivery: { requesterDelivery: { state: "consumed" } },
           });
+        }
+        if (spawnedRequester) {
+          expect(readCapturedInputs()).toHaveLength(1);
+          expect(
+            readRestartSession(instance.state.agentDir("main"), rootKey)?.resumeAfterRestart,
+          ).toBeUndefined();
         }
         if (kind === "captured") {
           expect(readRun(childRunId)).toMatchObject({
             execution: { outcome: { status: "error", error: "Gateway stopped" } },
           });
         }
-        if (kind === "unmarked-requester" || kind === "stale-settle-requester") {
+        if (rewriteRequesterMarkers) {
           // Recreate the persisted incident state: a settled, unmarked requester still owes
-          // this real child result. Change only the stopped fixture's requester markers.
+          // this real child result. The preparation barrier prevents graceful shutdown
+          // from delivering it before we change the stopped fixture's requester markers.
           const db = openNodeSqliteDatabase(
             path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
           );
@@ -510,12 +672,27 @@ it
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         phase = "completion delivery after restart";
+        if (spawnedRequester) {
+          // Spawned sessions resume through their root. A later turn must see the
+          // consumed private input from its transcript, without another delivery.
+          const followup = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: rootKey,
+            message: "Continue from the child result you already received.",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          expect(
+            await client.request("agent.wait", { runId: followup.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+        }
         await vi.waitFor(
           async () => {
+            expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+            expect(readCapturedInputs()).toHaveLength(1);
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
               sessionKey: rootKey,
             });
-            if (!retryingRequester) {
+            if (!retryingRequester && !queuedPrivateAnnounce) {
               expect(JSON.stringify(history.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
               expect(history.messages).not.toEqual(
                 expect.arrayContaining([
@@ -523,15 +700,39 @@ it
                 ]),
               );
             }
-            expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             if (busyRequester || retryingRequester) {
               expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             }
-            expect(readCapturedInputs()).toHaveLength(1);
-            if (interruptAnnounce) {
-              expect(completedReplies).toBe(1);
-              expect(rootReceivedRecovery).toBe(true);
+            if (kind === "captured" || kind === "stale-settle-requester") {
+              expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+              // A stopped-child outcome may be a notice instead of another model request.
+              // Batch metadata names one member; match this child's rendered status.
+              expect(
+                rootReceivedChildError ||
+                  readRequesterEvents()?.some(
+                    (event) =>
+                      isRecord(event) &&
+                      event.type === "custom_message" &&
+                      event.display === true &&
+                      typeof event.content === "string" &&
+                      (event.content.includes(
+                        `(run ${childRunId})\nInterrupted by Gateway restart; not resumed.`,
+                      ) ||
+                        event.content.includes(
+                          `(run ${childRunId})\n\nInterrupted by Gateway restart; not resumed.`,
+                        )),
+                  ),
+              ).toBe(true);
             }
+            if (interruptAnnounce && !unconsumedAnnounce) {
+              expect(rootReceivedRecovery).toBe(!spawnedRequester);
+            }
+            // Later child partitions legitimately run with earlier results in history.
+            // Join those turns before the second restart tests settled-receipt idempotence.
+            const requester = readRestartSession(instance.state.agentDir("main"), rootKey);
+            expect(requester).toBeDefined();
+            expect(requester?.lifecycleRunId).toBeUndefined();
+            expect(requester?.resumeAfterRestart).toBeUndefined();
           },
           { timeout: 30_000 },
         );
@@ -544,7 +745,7 @@ it
         const after = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        if (!retryingRequester) {
+        if (!retryingRequester && !queuedPrivateAnnounce) {
           expect(JSON.stringify(after.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
         }
         expect(readRun(capturedRunId)).toMatchObject({ delivery: { status: "delivered" } });
@@ -557,14 +758,12 @@ it
           expect(rootReceivedRecovery).toBe(false);
         }
         expect(readCapturedInputs()).toHaveLength(1);
-        if (interruptAnnounce) {
-          expect(completedReplies).toBe(1);
-        } else if (kind === "captured") {
-          expect(rootReceivedRecovery).toBe(true);
+        if (kind === "captured") {
           expect(resumedChildRequests).toBe(0);
         }
       },
       async () => {
+        releasePreparation?.();
         await client?.stopAndWait();
       },
       instance.cleanup,

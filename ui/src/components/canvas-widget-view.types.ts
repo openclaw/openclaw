@@ -1,5 +1,3 @@
-import type { WidgetPreviewControl } from "../../../src/shared/widget-preview-controls.ts";
-
 export type CanvasWidgetViewProps = {
   docId: string;
   sessionKey: string;
@@ -10,5 +8,4 @@ export type CanvasWidgetViewProps = {
   connectionGeneration: number;
   presentationActive: boolean;
   allowScripts: boolean;
-  onPreviewControlsChange?: (controls: WidgetPreviewControl[]) => void;
 };

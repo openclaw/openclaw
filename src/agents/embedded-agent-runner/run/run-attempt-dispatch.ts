@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -98,7 +97,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
 
   params.assertModelInput?.(effectiveModel);
 
-  await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
   }
@@ -297,7 +295,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     params.execOverrides ??= {};
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
-  const { extraSystemPrompt, gitCoauthorPrompt } = await prepareAttemptSystemPromptAdditions({
+  const admittedEntry = runInput.sessionAdmission?.entry;
+  const entry = admittedEntry?.sessionId === sessionId ? admittedEntry : undefined;
+  const promptAdditions = await prepareAttemptSystemPromptAdditions({
+    entry,
+    senderIsOwner: params.senderIsOwner,
+    admittedRunContext: params.admittedRunContext,
     agentId: workspaceResolution.agentId,
     authProfileId: runtime.lastProfileId,
     config: params.config,
@@ -401,10 +404,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
-    toolUsageRankingSeed:
-      runInput.sessionAdmission?.entry.sessionId === sessionId
-        ? runInput.sessionAdmission.entry.toolUsageRankingSeed
-        : undefined,
+    toolUsageRankingSeed: entry?.toolUsageRankingSeed,
+    // A fork reads another session's row; its caller passes that session's prewarm.
+    promptCacheKeepWarm: params.promptCacheKeepWarm ?? entry?.promptCacheKeepWarm,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
@@ -607,9 +609,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt,
+    ...promptAdditions,
     extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
-    gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     messageToolFinalByDefault: params.messageToolFinalByDefault,
@@ -644,6 +645,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,
+    providerStateScope: params.providerStateScope,
     // The host loop settles all completed counts, including default/SDK runs.
     compactionCountOwner: "caller",
     onContextAccountingEvent: params.onContextAccountingEvent,

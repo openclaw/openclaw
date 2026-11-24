@@ -15,8 +15,12 @@ Each row retains the root Node worker limit of three; Chromium uses its project
 default. The shards preserve the complete four-project inventory and each
 project's isolation and cleanup policy. Exact-target dispatches using the current
 shard runner retain all three shards, including Full Release Validation's complete
-Node and Bun passes. Only compatibility targets using the historical package test
-command keep their singleton, unsharded envelope. The window.open lint runs once
+Node and Bun passes. Default Node compatibility targets use three native partitions
+only when their own CI workflow already advertises UI sharding. They retain the
+historical package command, 30-second test timeout, file isolation, and project
+worker defaults; the current group runner is not substituted. Unknown targets
+and explicit runtime overrides keep their singleton, unsharded envelope.
+The window.open lint runs once
 in row one. Each row retains its 20-minute deadline and the matrix admits at most
 three rows concurrently.
 The extra two jobs add two Blacksmith registrations per selected automatic run

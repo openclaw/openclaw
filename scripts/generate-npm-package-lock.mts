@@ -20,7 +20,7 @@ import { Worker } from "node:worker_threads";
 import { parsePkgAndParentSelector, type PackageSelector } from "@pnpm/parse-overrides";
 import pMap from "p-map";
 import semver from "semver";
-import { list as listTar } from "tar";
+import { list as listTar } from "tar/raw";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { resolveRuntimeToolingEntrypointUrl } from "../src/infra/runtime-process-manifest.ts";

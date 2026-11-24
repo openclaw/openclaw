@@ -92,6 +92,9 @@ selecting PostgreSQL alone is not a warning.
 | `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.   |
 
+OpenClaw rejects the prefix `pg` and any prefix starting with `pg_` because
+both produce names reserved for PostgreSQL system schemas.
+
 Shared state, agent databases, Workboard, Logbook, and Team Reports support PostgreSQL.
 Before its first shared-state read, the Gateway resolves the effective family
 map and, if needed, the shared PostgreSQL connection once on the host. Reader,
@@ -191,11 +194,15 @@ Do not remove existing data to switch engines.
 Before porting SQLite stores to PostgreSQL, run `openclaw doctor --fix` while
 those stores still use SQLite. The port preflight refuses pending declared
 legacy migrations and names the repairs required before retrying the port.
-A scoped `--family` port checks only migrations declared for that family.
+A scoped `--family` port checks for pending migrations only in that family.
 This includes native Codex task assignments, Matrix inbound dedupe, and legacy
 memory index sidecars.
 Fresh Matrix account roots without legacy inbound-dedupe rows do not need a
 migration completion receipt before porting.
+
+If a selected plugin's Doctor migration contract fails to load, preflight stops
+before copying any stores and reports the plugin and the load error. Fix or
+remove the named plugin, then retry the port.
 
 These migrations are SQLite-only. On PostgreSQL, Doctor records that they are
 not applicable instead of opening the local engine anchor as an application
@@ -354,7 +361,7 @@ qualification limits, including signed macOS app and native Windows flows.
 | Retained `agent exec --state-dir` | Uses the effective configured engines; temporary and `--isolated` runs use SQLite. See [agent exec](/cli/agent#agent-exec).                                                                         | [#188420](https://github.com/openclaw/openclaw/pull/188420) |
 | iMessage with PostgreSQL state    | Recovery cursors use the selected shared-state engine without NUL-containing keys.                                                                                                                  | [#184919](https://github.com/openclaw/openclaw/pull/184919) |
 | Store-backed Gateway credentials  | Local CLI RPC commands resolve `gateway.auth.*` refs from the configured state engine. See the [store provider](/gateway/secrets/secretref-contract#store-provider).                                | [#185238](https://github.com/openclaw/openclaw/pull/185238) |
-| Archive backup creation           | `backup create` works while the Gateway runs; generic PostgreSQL snapshots, Git backups, and restore still require offline custody.                                                                 | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
+| Archive backup creation           | `backup create` and Git capture work while the Gateway runs; generic PostgreSQL snapshots and restore still require offline custody.                                                                | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
 | Retained agent creation           | Missing, uninitialized, or mismatched namespaces refuse reuse; new anchors publish after initialization commits. See [retained-store recovery](/gateway/postgresql#recover-a-retained-agent-store). | [#188350](https://github.com/openclaw/openclaw/pull/188350) |
 
 ## Search on PostgreSQL
@@ -374,6 +381,12 @@ including its vector dimension, is refused with `SearchExtensionDefinitionChange
 restore the previous definition until the owning component provides a derived-index
 rebuild. Canonical embeddings remain unchanged. SQLite registration only binds
 the existing capability and leaves its FTS5 and vec0 lifecycle unchanged.
+
+Memory provides that owner-controlled rebuild through `openclaw memory index --force`.
+On PostgreSQL, new vector dimensions are installed in the same transaction that
+publishes the rebuilt chunks and index metadata. Failed publication preserves the
+previous projection. Tokenizer changes update the memory trigram indexes at
+admission without replacing source text or the full-text columns.
 
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:
@@ -850,7 +863,8 @@ and [`engine opener`](https://github.com/openclaw/openclaw/blob/main/src/infra/d
 
 Use `openclaw backup create` to capture PostgreSQL stores together with the
 SQLite stores that still hold the rest of the installation. It runs while the
-Gateway serves requests. Generic local snapshots and Git backups whose selected
+Gateway serves requests. Git capture, including scheduled Git backups, uses the
+same online per-store snapshots. Generic local snapshots and restore whose selected
 source is PostgreSQL require the Gateway stopped; if it is running, they refuse:
 “stop through the service owner, then rerun.” They never stop the Gateway
 automatically. `openclaw backup sqlite` refuses a PostgreSQL anchor and directs

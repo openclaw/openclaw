@@ -7,8 +7,8 @@ import {
   buildProjectedAgentRunIndex,
   readAgentRunIndexVersion,
 } from "../infra/agent-run-registry.js";
+import { captureModelCostPricing } from "../model-catalog/usage-pricing.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
-import { captureModelCostPricing } from "../utils/usage-format.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import * as records from "./session-row-projection-record.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";

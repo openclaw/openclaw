@@ -7,10 +7,6 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  readWidgetPreviewControls,
-  type WidgetPreviewControl,
-} from "../../../src/shared/widget-preview-controls.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
@@ -29,10 +25,11 @@ import {
 } from "./canvas-widget-inspection.ts";
 import { isCanvasWidgetLoadRetryEvent } from "./canvas-widget-view-events.ts";
 import {
-  loadCanvasView,
   forgetPendingCanvasView,
+  isTerminalCanvasViewError,
+  loadCanvasView,
   type CanvasWidgetViewBinding,
-} from "./canvas-widget-view-load.ts";
+} from "./canvas-widget-view-requests.ts";
 import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 
@@ -108,6 +105,7 @@ export function createCanvasWidget(
     view?: CanvasDocumentViewResult;
     error: string;
     accessDenied: boolean;
+    unavailable: boolean;
     awaitingResult: boolean;
     runtimeError: string;
     resourceError: boolean;
@@ -115,17 +113,16 @@ export function createCanvasWidget(
     sandboxGeneration: number;
     scriptFrameAdmitted: boolean;
     pending: boolean;
-    previewControls: WidgetPreviewControl[];
   } = {
     error: "",
     accessDenied: false,
+    unavailable: false,
     awaitingResult: false,
     runtimeError: "",
     resourceError: false,
     sandboxGeneration: 0,
     scriptFrameAdmitted: false,
     pending: false,
-    previewControls: [],
   };
   let reportedHeight: number | undefined;
   let activeBinding: ViewBinding | undefined;
@@ -154,33 +151,12 @@ export function createCanvasWidget(
       configurable: true,
       get: () => (frameElement?.isConnected ? frameElement : undefined),
     },
-    previewControls: { configurable: true, get: () => state.previewControls },
     startInspection: {
       configurable: true,
       value: (receive: WidgetInspectionListener) =>
         promptPort && props.presentationActive && props.allowScripts && isCurrent(validatedBinding)
           ? inspect.start(promptPort, receive)
           : undefined,
-    },
-    setPreviewControl: {
-      configurable: true,
-      value: (id: string, value: string) => {
-        if (
-          !props.presentationActive ||
-          !props.allowScripts ||
-          !isCurrent(validatedBinding) ||
-          !state.previewControls.some(
-            (control) =>
-              control.id === id && control.options.some((option) => option.value === value),
-          )
-        ) {
-          return;
-        }
-        frameElement?.contentWindow?.postMessage(
-          { type: "openclaw:widget-preview-change", id, value },
-          sandboxOrigin,
-        );
-      },
     },
   });
   function clearRetry(): void {
@@ -200,7 +176,12 @@ export function createCanvasWidget(
       return;
     }
     stopRetryEvents = context.gateway.subscribeEvents((event) => {
-      if (!isCurrent(binding) || state.view || !isCanvasWidgetLoadRetryEvent(event, binding)) {
+      if (
+        !isCurrent(binding) ||
+        state.view ||
+        retryTimer !== undefined ||
+        !isCanvasWidgetLoadRetryEvent(event, binding)
+      ) {
         return;
       }
       // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
@@ -229,7 +210,7 @@ export function createCanvasWidget(
       },
       resolveSafeTimeoutDelayMs(Math.max(retryDelayMs, retryAfterMs)),
     );
-    retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+    retryDelayMs *= 2;
   }
 
   function retireScriptPolicy(): void {
@@ -245,6 +226,7 @@ export function createCanvasWidget(
     forgetPendingCanvasView(activeBinding);
     releaseCanvasViewInterest();
     clearRetry();
+    retryDelayMs = 1_000;
     state.awaitingResult = false;
     validatedBinding = undefined;
     ownerBinding = undefined;
@@ -258,8 +240,6 @@ export function createCanvasWidget(
 
   function clearSandbox(): void {
     inspect.reset();
-    state.previewControls = [];
-    props.onPreviewControlsChange?.([]);
     cancelFrameAdmission?.();
     cancelFrameAdmission = undefined;
     state.scriptFrameAdmitted = false;
@@ -331,6 +311,7 @@ export function createCanvasWidget(
       activeBinding = undefined;
       releaseCanvasViewInterest();
       clearRetry();
+      retryDelayMs = 1_000;
       validatedBinding = undefined;
       inspect.stop();
       sandboxHost?.setActive(false);
@@ -362,6 +343,7 @@ export function createCanvasWidget(
     validatedBinding = undefined;
     state.error = "";
     state.accessDenied = false;
+    state.unavailable = false;
     const binding: ViewBinding = {
       client,
       docId: props.docId,
@@ -424,12 +406,16 @@ export function createCanvasWidget(
           error instanceof GatewayProtocolRequestError &&
           asOptionalRecord(error.details)?.type === "canvas_widget_pending";
         if (
-          isAwaitingGatewayFailure(error, gateway.snapshot) ||
-          error instanceof GatewayProtocolRequestTimeoutError ||
-          (error instanceof GatewayProtocolRequestError &&
-            error.gatewayCode === "UNAVAILABLE" &&
-            error.retryable)
+          retryDelayMs <= 16_000 &&
+          (isAwaitingGatewayFailure(error, gateway.snapshot) ||
+            error instanceof GatewayProtocolRequestTimeoutError ||
+            (error instanceof GatewayProtocolRequestError &&
+              error.gatewayCode === "UNAVAILABLE" &&
+              error.retryable))
         ) {
+          if (!state.awaitingResult) {
+            releaseRetryEvents();
+          }
           scheduleRetry(
             binding,
             error instanceof GatewayProtocolRequestError ? error.retryAfterMs : undefined,
@@ -443,8 +429,14 @@ export function createCanvasWidget(
         state.pending = false;
         state.accessDenied =
           error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+        state.unavailable = isTerminalCanvasViewError(error);
         state.error = formatUiError(error);
-        watchRetryEvents(binding);
+        if (!state.accessDenied) {
+          releaseRetryEvents();
+          releaseCanvasViewInterest();
+        } else {
+          watchRetryEvents(binding);
+        }
       })
       .finally(notify);
   }
@@ -585,15 +577,6 @@ export function createCanvasWidget(
     }
     host.handleMessage(event);
     const data = asOptionalRecord(event.data);
-    if (data?.type === "openclaw:widget-preview-controls" && props.allowScripts && host.loaded) {
-      const controls = readWidgetPreviewControls(data.controls);
-      if (controls) {
-        state.previewControls = controls;
-        props.onPreviewControlsChange?.(controls);
-        notify();
-      }
-      return;
-    }
     if (
       data?.type === "openclaw:widget-scroll" &&
       scrollNonce &&
@@ -685,7 +668,7 @@ export function createCanvasWidget(
       return;
     }
     // The isolated proxy forwards only the wrapper's first offer. Inline views
-    // adopt its prompt channel only; pinning never lends them dashboard grants.
+    // adopt its private inline channel only; pinning never lends them dashboard grants.
     promptPort = port;
     releasePromptPort = listen(port, "message", (message) => {
       if (

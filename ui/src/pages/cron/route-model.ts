@@ -8,6 +8,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
   runId: string | null;
+  settings?: true;
   /** `?new` opens the create panel, as the sidebar's New automation does. */
   create?: true;
   /** `?activity` opens every automation's run history, as the sidebar's Activity does. */
@@ -18,6 +19,9 @@ export function resolveCronRouteData(search: string): {
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
+    ...(jobId && !params.has("run") && params.get("tab") === "settings"
+      ? { settings: true as const }
+      : {}),
     ...(!jobId && params.has("new") ? { create: true as const } : {}),
     ...(!jobId && params.has("activity") ? { activity: true as const } : {}),
   };
@@ -64,8 +68,8 @@ export function createCronRouteSelection() {
     }
   }
 
-  function select(jobId: string, runId: string | null) {
-    selection.target = { jobId, runId };
+  function select(jobId: string, runId: string | null, settings?: true) {
+    selection.target = { jobId, runId, settings };
     selection.requested = true;
   }
   return Object.assign(selection, { bind, resolve, select });
@@ -78,7 +82,10 @@ export function failedRunId(job: CronJob): string | null {
     : null;
 }
 
-/** An automation opens on its prompt and history; its settings open from Edit. */
-export function resolveCronDetailTab(job: CronJob | null): "history" | "settings" {
-  return job ? "history" : "settings";
+/** Ordinary job links keep the prompt and history; an explicit settings link opens the editor. */
+export function resolveCronDetailTab(
+  job: CronJob | null,
+  target: ReturnType<typeof resolveCronRouteData> | null,
+): "history" | "settings" {
+  return !job || (target?.jobId === job.id && target.settings) ? "settings" : "history";
 }

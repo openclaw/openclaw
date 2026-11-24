@@ -41,14 +41,12 @@ export type BrowserAnnotationEvent = CustomEvent<BrowserAnnotationDraft> & {
  */
 export function dispatchBrowserAnnotation(
   draft: BrowserAnnotationDraft,
-  target: EventTarget = window,
 ): BrowserAnnotationDispatchResult {
   const event = new CustomEvent<BrowserAnnotationDraft>(BROWSER_ANNOTATION_EVENT, {
     detail: draft,
     cancelable: true,
-    bubbles: true,
   }) as BrowserAnnotationEvent;
-  target.dispatchEvent(event);
+  window.dispatchEvent(event);
   return event.defaultPrevented ? "accepted" : event.rejection ? "rejected" : "unhandled";
 }
 

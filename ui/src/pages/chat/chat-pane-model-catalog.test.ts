@@ -276,17 +276,16 @@ describe("chat pane composer controls", () => {
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
     expect(picker.open).toBe(true);
     await menuReady(container);
-    container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!.click();
-    flush();
-    expect(container.querySelector('[data-chat-account-option="loading"]')).not.toBeNull();
+    const account = container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!;
+    const spinner = () => account.querySelector(".chat-controls__account-spinner");
+    await waitForSolid(() => expect(spinner()).not.toBeNull());
+    expect(account.disabled).toBe(true);
 
     container.querySelector<HTMLElement>("[data-chat-model-select]")!.click();
     flush();
     expect(picker.open).toBe(false);
     accounts.resolve({ profileId: "owner", links: [], accounts: [] });
-    await waitForSolid(() =>
-      expect(container.querySelector('[data-chat-account-option="loading"]')).toBeNull(),
-    );
+    await waitForSolid(() => expect(spinner()).toBeNull());
     expect(picker.open).toBe(false);
   });
 

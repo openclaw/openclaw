@@ -378,7 +378,7 @@ function collectSandboxContainerEnvIssues(
 }
 
 /**
- * Validates config without applying runtime defaults.
+ * Validates config as loaded (with the implicit `main` roster) without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
  */
 export function validateConfigObjectRaw(
@@ -393,7 +393,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    raw,
+    applyImplicitAgentRosterDefaults(raw),
     opts?.preservedLegacyRootKeys,
   );
   const rosterIssues = findLegacyConfigRuleIssues(normalizedRaw, LEGACY_AGENT_ROSTER_RULES);
@@ -476,7 +476,7 @@ export function validateConfigObject(
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(raw), opts);
+  const result = validateConfigObjectRaw(raw, opts);
   if (!result.ok) {
     return result;
   }

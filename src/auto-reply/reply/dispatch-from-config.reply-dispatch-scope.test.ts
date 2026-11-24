@@ -15,7 +15,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
@@ -353,7 +353,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     clearAgentHarnesses();
   });
 
-  it.each(["allow-live", "wait", "database-replaced", "revoked", "cancelled"] as const)(
+  it.each(["allow-live", "wait", "database-replaced", "cancelled"] as const)(
     "retains the accepted input and physical owner across independent %s mutation",
     async (scenario) => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
@@ -367,15 +367,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       const captured = createDeferred();
       const release = createDeferred();
       const abort = new AbortController();
-      let authorityCurrent = true;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "retry-operator",
         scopes: ["operator.write"],
-        assertCurrent: () => {
-          if (!authorityCurrent) {
-            throw new Error("Original source authority revoked");
-          }
-        },
       });
       let paused = false;
       sessionStoreMocks.databaseEntryLoader = async (...args) => {
@@ -408,11 +402,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           scope: mockSessionStorePath,
           identities: [sessionKey],
           kind: "read-marker",
-          policy: scenario === "allow-live" || scenario === "revoked" ? "allow-live" : "wait",
+          policy: scenario === "allow-live" ? "allow-live" : "wait",
           run: async () => {
-            if (scenario === "revoked") {
-              authorityCurrent = false;
-            }
             if (scenario === "cancelled") {
               abort.abort();
             }
@@ -431,12 +422,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         release.resolve();
         if (scenario === "database-replaced") {
           await expect(pending).rejects.toThrow(/Session store.*changed/);
-          expect(replyResolver).not.toHaveBeenCalled();
-        } else if (scenario === "revoked") {
-          await pending.catch((error: unknown) => {
-            expect(error).toBeInstanceOf(Error);
-          });
-          expect(authorityCurrent).toBe(false);
           expect(replyResolver).not.toHaveBeenCalled();
         } else if (scenario === "cancelled") {
           await pending.catch((error: unknown) => {

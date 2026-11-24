@@ -106,8 +106,11 @@ that question. It uses existing tables and indexes.
   hold messages it never showed, so the agent can refer to things the user did
   not see. Run history already answers "what did that job send?".
 - **Keep recipient mirrors and awareness notes.** Rejected: several writers, best
-  effort, no wait for an active turn, no idempotency, and the model sees a note
-  about the message instead of its own message.
+  effort, no wait for an active turn, and no idempotency. The single writer keeps
+  the delivered text itself. Model context shows that text as labelled user input
+  ("you sent this from a separate background run"), not as an assistant turn:
+  the conversation's model did not produce it, and a series of unprompted
+  assistant turns led the model to continue the series with invented reports.
 
 ## Status and order
 

@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -19,7 +20,7 @@ import {
   type FenceFixtureOperations,
 } from "./sqlite-source-fence.test-support.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
-import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
+import { readSqliteWorkerMonotonicNs, type SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { observeSqliteWorkerCommittedFacts } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
@@ -182,7 +183,7 @@ function persist(
     destination: destination.value,
     sources: [source.value, ...(command.alias ? [source.value] : [])],
     signal: controller.signal,
-    deadlineNs: options.deadlineNs ?? process.hrtime.bigint() + 30_000_000_000n,
+    deadlineNs: options.deadlineNs ?? readSqliteWorkerMonotonicNs() + 30_000_000_000n,
   });
   const result = fixture.broker.runOperation(
     fixture.store,
@@ -414,5 +415,40 @@ it.each(["before-commit-exit", "after-commit-exit"] as const)(
       expect.objectContaining({ kind: "unknown", nativeStopped: true }),
     ]);
     await fixture.broker.close();
+  },
+);
+
+it("keeps fence deadlines on the captured clock when host hrtime is replaced", async () => {
+  const clock = vi.spyOn(process, "hrtime").mockReturnValue([2 ** 30, 0]);
+  Object.assign(process.hrtime, { bigint: () => 2n ** 62n });
+  try {
+    await expect(persist(forward, { id: "replaced-clock" }).result).resolves.toEqual(
+      fact("replaced-clock"),
+    );
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1")(
+  "expires cross-store writes after delayed Bun worker startup without losing settlement",
+  () => {
+    const home = dirs.make("source-fence-bun-");
+    const result = spawnSync(
+      process.env.BUN_BIN ?? "bun",
+      [
+        "--no-install",
+        "--conditions=openclaw-custom",
+        fileURLToPath(new URL("./sqlite-source-fence.bun.test-support.ts", import.meta.url)),
+        home,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 60_000,
+        env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: home },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
   },
 );

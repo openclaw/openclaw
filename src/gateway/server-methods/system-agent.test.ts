@@ -840,33 +840,21 @@ describe("openclaw.chat", () => {
     expect((await invoke({ limit: 501 }))?.ok).toBe(false);
   });
 
-  it.each(["revoked", "rejected"] as const)(
-    "does not disclose %s pending history",
-    async (outcome) => {
-      const read =
-        createDeferred<Awaited<ReturnType<typeof transcriptStoreMocks.readTranscriptTailAsync>>>();
-      transcriptStoreMocks.readTranscriptTailAsync.mockReturnValueOnce(read.promise);
-      let current = true;
-      const { calls, respond } = makeRespond();
-      const pending = systemAgentHandler("openclaw.chat.history")({
-        params: {},
-        respond,
-        hasCurrentClientAuthority: () => current,
-      } as never);
-      expect(calls).toEqual([]);
-      const error =
-        outcome === "revoked" ? "Gateway requester authority changed" : "history reader refused";
-      const rejected = expect(pending).rejects.toThrow(error);
-      if (outcome === "revoked") {
-        current = false;
-        read.resolve([{ role: "assistant", text: "private history", at: 1 }]);
-      } else {
-        read.reject(new Error(error));
-      }
-      await rejected;
-      expect(calls).toEqual([]);
-    },
-  );
+  it("does not disclose rejected pending history", async () => {
+    const read =
+      createDeferred<Awaited<ReturnType<typeof transcriptStoreMocks.readTranscriptTailAsync>>>();
+    transcriptStoreMocks.readTranscriptTailAsync.mockReturnValueOnce(read.promise);
+    const { calls, respond } = makeRespond();
+    const pending = systemAgentHandler("openclaw.chat.history")({
+      params: {},
+      respond,
+    } as never);
+    expect(calls).toEqual([]);
+    const rejected = expect(pending).rejects.toThrow("history reader refused");
+    read.reject(new Error("history reader refused"));
+    await rejected;
+    expect(calls).toEqual([]);
+  });
 
   it("reuses a live session, then requires fresh fallback verification after failure", async () => {
     stubEngineOverview();

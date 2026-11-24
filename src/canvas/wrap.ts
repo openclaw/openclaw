@@ -1,7 +1,6 @@
 import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
-import { readWidgetPreviewControls } from "../shared/widget-preview-controls.js";
 import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
 // Serialized into the trusted wrapper before any widget-authored script runs.
@@ -310,23 +309,8 @@ export function buildWidgetDocument(
     'const inline=()=>{promptPost({type:"openclaw:widget-prompt",prompt:value});resolve(true);};' +
     'if(inlinePromptReady)inline();else if(hostInitExpired)reject(new ErrorCtor("widget prompt host unavailable"));' +
     "else push.call(promptWaiting,{send,inline,reject});});};" +
-    // Local preview controls use no request channel, ticket, prompt, or grant.
-    // Embed the same self-contained reader that validates publications in the host.
-    `const readControls=(${readWidgetPreviewControls.toString()});` +
-    "let previewControls=[];let previewChange=null;" +
-    'const publishControls=()=>post({type:"openclaw:widget-preview-controls",controls:previewControls},"*");' +
-    "const setControls=(controls,onChange)=>{const next=readControls(controls);" +
-    'if(!next||typeof onChange!=="function")throw new ErrorCtor("invalid widget preview controls");' +
-    "previewControls=next;previewChange=onChange;publishControls();};" +
-    'listen("message",event=>{if(event.source!==parent)return;const data=apply(dataOf,event,[]);' +
-    'if(data?.type==="openclaw:widget-chat-host"){publishControls();return;}' +
-    'if(data?.type!=="openclaw:widget-preview-change"||typeof data.id!=="string"||typeof data.value!=="string")return;' +
-    "for(const control of previewControls){if(control.id!==data.id)continue;" +
-    "for(const option of control.options){if(option.value!==data.value)continue;control.value=data.value;publishControls();" +
-    "if(previewChange)previewChange({id:data.id,value:data.value});return;}return;}});" +
     'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
     "const api=freeze({host," +
-    "preview:freeze({setControls})," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
     'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params}),query:queryName=>request("data.query",{queryName:stringify(queryName)})}),' +
     'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
@@ -392,12 +376,7 @@ export function buildWidgetDocument(
     "const replace=Node.prototype.replaceChild;" +
     'const getParent=Object.getOwnPropertyDescriptor(Node.prototype,"parentNode")?.get;' +
     "const names=Element.prototype.getAttributeNames;const getAttr=Element.prototype.getAttribute;" +
-    "const setAttr=Element.prototype.setAttribute;const removeAttr=Element.prototype.removeAttribute;" +
-    'const text=Object.getOwnPropertyDescriptor(Node.prototype,"textContent");' +
-    'const inputValue=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").get;' +
-    'const checked=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"checked").get;' +
-    'const textareaValue=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").get;' +
-    'const selected=Object.getOwnPropertyDescriptor(HTMLOptionElement.prototype,"selected").get;' +
+    "const setAttr=Element.prototype.setAttribute;" +
     "const serializer=new XMLSerializer();const serialize=serializer.serializeToString.bind(serializer);" +
     "const create=document.createElement.bind(document);const styles=getComputedStyle.bind(window);" +
     "const getProperty=CSSStyleDeclaration.prototype.getPropertyValue;" +
@@ -419,13 +398,6 @@ export function buildWidgetDocument(
     'const root=clone.call(document.documentElement,true);const scripts=query.call(root,"script");' +
     "for(let index=scripts.length-1;index>=0;index--){const script=item.call(scripts,index);" +
     "if(script&&getParent){const owner=getParent.call(script);if(owner)remove.call(owner,script);}}" +
-    // cloneNode retains default form attributes, not necessarily their live state.
-    'const liveFields=queryDocument("input,textarea,option");const clonedFields=query.call(root,"input,textarea,option");' +
-    "for(let index=0;index<liveFields.length;index++){const live=item.call(liveFields,index);const cloned=item.call(clonedFields,index);if(!live||!cloned)continue;" +
-    'if(live.localName==="input"){setAttr.call(cloned,"value",inputValue.call(live));' +
-    'if(checked.call(live))setAttr.call(cloned,"checked","");else removeAttr.call(cloned,"checked");}' +
-    'else if(live.localName==="textarea")text.set.call(cloned,textareaValue.call(live));' +
-    'else if(selected.call(live))setAttr.call(cloned,"selected","");else removeAttr.call(cloned,"selected");}' +
     'const liveCanvases=queryDocument("canvas");const clonedCanvases=query.call(root,"canvas");' +
     "for(let index=0;index<liveCanvases.length;index++){const live=item.call(liveCanvases,index);" +
     "const cloned=item.call(clonedCanvases,index);if(!live||!cloned||!getParent||!setSrc)continue;" +
@@ -445,8 +417,7 @@ export function buildWidgetDocument(
     'const context=getContext.call(canvas,"2d");if(!context||!setFill)throw new ErrorCtor("widget snapshot canvas unavailable");' +
     'setFill.call(context,getProperty.call(styles(document.documentElement),"--surface"));' +
     "fill.call(context,0,0,canvasWidth,canvasHeight);draw.call(context,image,0,0,canvasWidth,canvasHeight);" +
-    'const reply={type:"openclaw:widget-snapshot",id:data.id,dataUrl:toDataURL.call(canvas,"image/png"),width,height};' +
-    'post(reply,"*");' +
+    'post({type:"openclaw:widget-snapshot",id:data.id,dataUrl:toDataURL.call(canvas,"image/png"),width,height},"*");' +
     '}catch(error){post({type:"openclaw:widget-snapshot",id:data.id,error:stringify(error)},"*");}})();});})();</script>';
   const connectSources = options.connectOrigins?.length
     ? options.connectOrigins.join(" ")

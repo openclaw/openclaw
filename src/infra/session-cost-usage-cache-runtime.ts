@@ -653,6 +653,7 @@ async function runQueuedUsageCostRefresh(
             databasePath: state.databasePath,
             storePath: state.storePath,
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
+            background: true,
             maxFiles: USAGE_COST_REFRESH_BATCH_SIZE,
             onRemaining: (files) => {
               for (const { sessionFile, rollupId } of files) {

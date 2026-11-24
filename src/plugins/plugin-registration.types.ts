@@ -288,6 +288,16 @@ export type OpenClawPluginNodeInvokePolicyResult =
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
+   * Admit an exact MCP tool to same-node execution without running handle.
+   * Only an explicit true permits local execution; otherwise the Gateway handles it.
+   */
+  allowLocalMcpTool?: (ctx: {
+    nodeId: string;
+    server: string;
+    tool: string;
+    pluginConfig?: Record<string, unknown>;
+  }) => boolean;
+  /**
    * Platforms where these node-handled commands should be allowlisted by default.
    * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */
@@ -516,6 +526,8 @@ export type OpenClawPluginChannelRegistration<
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
+ * - `memory-backend`: passive memory backend for the slot owner; only
+ *   `registerMemoryCapability({ providerRuntime })` is honored.
  */
 export type PluginRegistrationMode =
   | "full"
@@ -523,7 +535,8 @@ export type PluginRegistrationMode =
   | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
-  | "cli-metadata";
+  | "cli-metadata"
+  | "memory-backend";
 
 export type {
   PluginServiceSessionWorkV1,

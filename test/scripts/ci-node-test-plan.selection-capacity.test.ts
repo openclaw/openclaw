@@ -415,7 +415,7 @@ it("shares selected serial setup within the shortest contributing timeout", () =
   });
   expect(serial.timeoutMinutes ?? 60).toBe(60);
   for (const group of serial.groups) {
-    expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe(
+    expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe(
       group.configs.includes("test/vitest/vitest.gateway-methods.config.ts") ? "4" : "2",
     );
   }

@@ -21,13 +21,14 @@ import {
 } from "./github-personal-publication.test-support.js";
 import { registerPublicationCredentialFixture } from "./github-publication-credential.test-helpers.js";
 import { prepareGitHubPublicationWorkerIdentity } from "./github-publication-execution-identity.js";
-import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
+  capturePublicationGuest,
   createRequesterPublicationFixture,
   publicationGuestEmail as email,
 } from "./github-publication-requester.test-support.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
 import type { PrepareRepositoryPublicationIntegration } from "./repository-publication-integration.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import { createNodeWorkerBundleTestNode } from "./worker-environments/node-worker-bundle.test-support.js";
@@ -414,9 +415,13 @@ describe("combined native publication proof", () => {
         await native.revokeCustody();
       }
       const restarted = f.restart();
-      const retry = restarted.requestForSessionV2(
-        f.request("combined-retry", scenario === "different-requester" ? f.maintainer : f.guest),
-      );
+      const retry = (async () => {
+        const requester =
+          scenario === "different-requester"
+            ? f.maintainer
+            : (await capturePublicationGuest(f)).requester;
+        return restarted.requestForSessionV2(f.request("combined-retry", requester));
+      })();
       if (scenario === "allowed" || scenario === "read-throttled") {
         await expect(retry).resolves.toMatchObject({
           status: "published",
@@ -454,7 +459,8 @@ describe("combined native publication proof", () => {
         } else if (scenario === "different-requester") {
           await expect(retry).rejects.toThrow("different requester");
         } else {
-          await expect(retry).rejects.toBeInstanceOf(GitHubPublicationRequesterUnavailableError);
+          // A fresh caller must pass admission before it can reopen the accepted request.
+          await expect(retry).rejects.toBeInstanceOf(GatewayOperatorAccessDeniedError);
         }
         expect(native.readRef()).toBe(beforeRef);
         expect(native.observed.physicalCas).toBe(0);
@@ -508,7 +514,7 @@ describe("personal publisher credential custody", () => {
   });
   it.each([
     "allowed",
-    "requester-revoked",
+    "requester-disconnected",
     "execution-reselected",
     "cancelled-before",
     "cancelled-after",
@@ -617,11 +623,11 @@ describe("personal publisher credential custody", () => {
     mocks.prepareRepositoryIntegration.mockImplementation(async (identity, input) => {
       integrationSignal = input.signal;
       negativeExercised ||= [
-        "requester-revoked",
+        "requester-disconnected",
         "execution-reselected",
         "cancelled-before",
       ].includes(scenario);
-      if (scenario === "requester-revoked") {
+      if (scenario === "requester-disconnected") {
         person.runtime.live = false;
       }
       if (scenario === "execution-reselected") {
@@ -684,6 +690,8 @@ describe("personal publisher credential custody", () => {
       .catch(() => ({ status: "rejected" as const }));
     if (scenario !== "allowed") {
       expect(negativeExercised).toBe(true);
+    }
+    if (scenario !== "allowed" && scenario !== "requester-disconnected") {
       if (scenario === "execution-unavailable") {
         expect(result).toMatchObject({
           status: "failed",
@@ -742,6 +750,11 @@ describe("personal publisher credential custody", () => {
     expect(personalApiCalls).toBeGreaterThan(0);
     expect(personalAtWorker).toBe(false);
     expect(sharedAtWorker).toBe(true);
+    if (scenario === "requester-disconnected") {
+      await expect(preparePersonalPublicationFixtureAction(person)).rejects.toThrow(
+        "current authenticated human Gateway connection",
+      );
+    }
   });
 });
 

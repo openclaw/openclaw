@@ -123,29 +123,23 @@ beforeEach(() => {
 });
 afterEach(() => closeOpenClawAgentDatabases());
 
-it("admits the actual plugin RPC through ambient run authority and fences a retained caller after revocation", async () => {
+it("admits the actual plugin RPC through ambient run authority", async () => {
   const { options, respond, invoke } = createRpc();
   await expect(resolveSessionEnvironmentCaller(options)).rejects.toThrow(
     "authenticated operator or admitted agent run",
   );
-  let live = true;
-  await runAsCaller(
-    async () => {
-      const caller = await resolveSessionEnvironmentCaller(options);
-      await expect(
-        resolveSessionEnvironmentCaller(options, { sessionKey: "agent:main:other" }),
-      ).rejects.toThrow("only manage its own");
-      await invoke();
-      expectReply(respond, { environment: { status: "available" } });
-      live = false;
-      expect(caller.assertCurrent).toThrow("no longer active");
-      caller.release();
-    },
-    { receiptAuthority: () => live },
-  );
+  await runAsCaller(async () => {
+    const caller = await resolveSessionEnvironmentCaller(options);
+    await expect(
+      resolveSessionEnvironmentCaller(options, { sessionKey: "agent:main:other" }),
+    ).rejects.toThrow("only manage its own");
+    await invoke();
+    expectReply(respond, { environment: { status: "available" } });
+    caller.release();
+  });
 });
 
-it("opens a portal through ambient plugin authority and closes an unused carrier when that authority ends", async () => {
+it("opens a portal through ambient plugin authority", async () => {
   const { attachment } = await create();
   const { environmentId, ownerEpoch } = attachment;
   const portalService = createGatewayPortalService({
@@ -153,14 +147,9 @@ it("opens a portal through ambient plugin authority and closes an unused carrier
     httpServers: [],
   });
   const closeConnection = vi.fn(async () => {});
-  let live = true;
-  let revokeDuringDiscovery = false;
-  const openNodePortal = vi.spyOn(service, "openNodePortal").mockImplementation(async () => {
-    if (revokeDuringDiscovery) {
-      live = false;
-    }
-    return { connect: vi.fn(), close: closeConnection };
-  });
+  const openNodePortal = vi
+    .spyOn(service, "openNodePortal")
+    .mockImplementation(async () => ({ connect: vi.fn(), close: closeConnection }));
   const { context } = createRpc({}, { portalService, broadcast: vi.fn() });
   const open = async (target: string, port: number) => {
     const rpc = createRpc({ environmentId: target, port }, {}, "portal.open", context);
@@ -174,12 +163,9 @@ it("opens a portal through ambient plugin authority and closes an unused carrier
         expect(portalService.listWorkerPortals(environmentId, ownerEpoch)).toHaveLength(1);
         expect(await open("worker:another-conversation", 3000)).toBe(false);
         expect(openNodePortal).toHaveBeenCalledTimes(1);
-        revokeDuringDiscovery = true;
-        expect(await open(environmentId, 3001)).toBe(false);
-        expect(closeConnection).toHaveBeenCalledOnce();
-        expect(portalService.list()).toHaveLength(1);
+        expect(closeConnection).not.toHaveBeenCalled();
       },
-      { receiptAuthority: () => live, gatewayContextResolver: () => context },
+      { gatewayContextResolver: () => context },
     );
   } finally {
     await portalService.closeAll();
@@ -296,7 +282,6 @@ it("cancels creations registered while Stop is awaiting the inventory", async ()
 
 it.each([
   { phase: "installation", authority: "allowed" },
-  { phase: "installation", authority: "run-revoked" },
   { phase: "provider", authority: "screen-revoked" },
 ] as const)(
   "checks $authority after deferred $phase preparation before allocation without an abort",
@@ -334,7 +319,6 @@ it.each([
           new Set(!filter || filter(requester) ? [requester.connId!] : []),
       },
     );
-    let runCurrent = true;
     await runAsCaller(
       async () => {
         const creation = invoke();
@@ -346,9 +330,6 @@ it.each([
         expect(allocate).not.toHaveBeenCalled();
         const reserved = service.getSessionAttachmentStatus(identity.sessionId)!;
         const queuedRecovery = service.reconcileOnce(reserved.attachment.environmentId);
-        if (authority === "run-revoked") {
-          runCurrent = false;
-        }
         if (authority === "screen-revoked") {
           state.config.tools = { deny: ["screen"] };
         }
@@ -356,7 +337,7 @@ it.each([
         await Promise.all([creation, queuedRecovery]);
       },
       {
-        receiptAuthority: () => runCurrent,
+        receiptAuthority: () => true,
         assertToolAllowed: () => {},
         approvalSignals: [signalOwner.signal],
         gatewayUiCommandTarget: { connId: requester.connId! },

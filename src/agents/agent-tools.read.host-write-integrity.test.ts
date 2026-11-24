@@ -3,13 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
-import {
-  afterFileRead,
-  asSource,
-  hostFileTools,
-  interceptOpen,
-} from "./agent-tools.mutation.test-support.js";
+import { hostFileTools, interceptOpen } from "./agent-tools.mutation.test-support.js";
 import type { createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 
@@ -41,66 +35,95 @@ describe("unrestricted host tool writes", () => {
       : tools.edit(filePath, "original", "replacement");
   }
 
-  it.each([
-    { kind: "write", authority: "aborted" },
-    { kind: "edit", authority: "revoked" },
-    { kind: "apply_patch", authority: "budget-revoked" },
-    { kind: "apply_patch", authority: "active" },
-  ] as const)(
-    "checks $authority authority for $kind after asynchronous file preparation",
-    async ({ kind, authority }) => {
+  it.each([false, true])(
+    "refuses creation and removal after database retirement (workspace-only: %s)",
+    async (workspaceOnly) => {
       const filePath = await createFile("original content\n");
-      const generation = new AbortController();
-      const originalClaim = {};
-      let currentClaim: object | undefined = originalClaim;
-      let budgetCurrent = true;
-      const budget = createAgentToolExecutionBudget({
-        signal: generation.signal,
-        abort: (error) => generation.abort(error),
-        isCurrent: () => budgetCurrent,
-      });
-      let prepared = false;
-      afterFileRead(filePath, () => {
-        prepared = true;
-        if (authority === "aborted") {
-          generation.abort(new Error("Permission change"));
-        } else if (authority === "revoked") {
-          currentClaim = undefined;
-        } else if (authority === "budget-revoked") {
-          budgetCurrent = false;
-        }
-      });
-      const options = { workspaceOnly: false, abortSignal: generation.signal };
-      const execute = () => {
-        if (kind === "apply_patch") {
-          return createApplyPatchTool({ cwd: tempDir, ...options }).execute("permission-write", {
-            input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
-          });
-        }
-        return mutate(kind, filePath, "replacement content\n", options);
+      const newPath = path.join(tempDir, "new.txt");
+      const prepareHostFileMutation = async () => {
+        throw new Error("Database retired");
       };
+      await expect(
+        hostFileTools(tempDir, {
+          workspaceOnly,
+          prepareHostFileMutation,
+        }).write(newPath, "new content"),
+      ).rejects.toThrow("Database retired");
+      await expect(fs.access(newPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        createApplyPatchTool({
+          cwd: tempDir,
+          workspaceOnly,
+          prepareHostFileMutation,
+        }).execute("retired-database", {
+          input: `*** Begin Patch\n*** Delete File: ${filePath}\n*** End Patch`,
+        }),
+      ).rejects.toThrow("Database retired");
+      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
+    },
+  );
 
-      const pending = budget.run(() =>
-        asSource("source-file-authority", () => currentClaim === originalClaim, execute),
-      );
-      if (authority === "active") {
-        await expect(pending).resolves.toBeDefined();
-      } else {
-        await expect(pending).rejects.toThrow(
-          authority === "aborted"
-            ? "Permission change"
-            : authority === "budget-revoked"
-              ? "execution scope is no longer active"
-              : "authority is no longer active",
-        );
-      }
-      expect(prepared).toBe(true);
-      expect(generation.signal.aborted).toBe(
-        authority === "aborted" || authority === "budget-revoked",
-      );
-      expect(await fs.readFile(filePath, "utf8")).toBe(
-        authority === "active" ? "replacement content\n" : "original content\n",
-      );
+  it.each(["write", "edit", "apply_patch"] as const)(
+    "preserves the original when %s loses database custody during rollback preparation",
+    async (kind) => {
+      const filePath = await createFile("original content\n");
+      let current = true;
+      interceptOpen(filePath, (handle) => {
+        const read = handle.read.bind(handle);
+        handle.read = (async (...args: Parameters<typeof read>) => {
+          const result = await read(...args);
+          current = false;
+          return result;
+        }) as typeof handle.read;
+      });
+      const prepareHostFileMutation = async () => ({
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Database custody changed");
+          }
+        },
+      });
+      const pending =
+        kind === "apply_patch"
+          ? createApplyPatchTool({
+              cwd: tempDir,
+              workspaceOnly: false,
+              prepareHostFileMutation,
+            }).execute("replaced-database", {
+              input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
+            })
+          : mutate(kind, filePath, "replacement content\n", { prepareHostFileMutation });
+      await expect(pending).rejects.toThrow("Database custody changed");
+      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
+    },
+  );
+
+  it.each(["write", "apply_patch"] as const)(
+    "preserves the original when %s is cancelled during rollback preparation",
+    async (kind) => {
+      const filePath = await createFile("original content\n");
+      const controller = new AbortController();
+      const cancelled = new Error("File operation cancelled");
+      interceptOpen(filePath, (handle) => {
+        const read = handle.read.bind(handle);
+        handle.read = (async (...args: Parameters<typeof read>) => {
+          const result = await read(...args);
+          controller.abort(cancelled);
+          return result;
+        }) as typeof handle.read;
+      });
+      const pending =
+        kind === "write"
+          ? mutate(kind, filePath, "replacement content\n", { abortSignal: controller.signal })
+          : createApplyPatchTool({ cwd: tempDir, workspaceOnly: false }).execute(
+              "cancelled-patch",
+              {
+                input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
+              },
+              controller.signal,
+            );
+      await expect(pending).rejects.toThrow(cancelled.message);
+      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
     },
   );
 

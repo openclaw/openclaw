@@ -328,6 +328,13 @@ When sender identity is available, agent hook contexts also include:
 - `ctx.channelContext.chat.id` - the same conversation ID as `ctx.chatId`,
   under a channel-owned object plugins can extend with channel-specific
   fields.
+- `ctx.requesterDeviceId` - the paired device id of the Gateway connection
+  that sent the turn, set only after the Gateway verified that device's
+  signature. It never comes from request params or the client's declared
+  name, and it is absent for runs that did not start from a device
+  connection. It is also absent once another device or a device-less
+  source steers input into the run, so it always names the device that
+  wrote the input, or nothing.
 
 Core only defines the nested `id` fields. Channel plugins that pass richer
 sender or chat metadata through the inbound helper can augment
@@ -536,6 +543,15 @@ The event is `{ runtime, requestKind, payload, provider, model, messages }`:
   turn's (or steered input's) user message last. Editing it does not change the
   request. Use that metadata, not text inside a message, to decide sender
   trust.
+- Some requests resend history as text, so `messages` does not map one to one
+  onto `payload`. A `"compaction"` summary request is the summary call itself:
+  the older history is serialized into one user message inside `payload`, and
+  `messages` holds only that request, with no per-message sender metadata. A CLI
+  `"side_question"` carries the conversation as text inside `payload.prompt`;
+  `messages` holds that history with its metadata, followed by the side question.
+  A handler that decides trust from metadata must locate that text in the
+  payload itself, and cannot tell outside content apart inside a compaction
+  summary request.
 
 The hook context carries the usual agent fields (`agentId`, `sessionKey`,
 `sessionId`, `runId`, channel and sender fields when known) plus

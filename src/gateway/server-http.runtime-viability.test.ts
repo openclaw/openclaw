@@ -1,11 +1,6 @@
 import fsp from "node:fs/promises";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  nextEventLoopTurn,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { readHttp } from "./control-ui-fixture.test-support.js";
@@ -29,6 +24,7 @@ it("serves repeated readyz probes without synchronous runtime filesystem checks"
     response: createMockServerResponse(),
   }));
   const handled: boolean[] = [];
+  using runtimeStats = vi.spyOn(fsp, "stat");
   let syncCalls: number;
   let apis: Record<string, number>;
   {
@@ -60,15 +56,13 @@ it("serves repeated readyz probes without synchronous runtime filesystem checks"
     });
   }
   expect(syncCalls, JSON.stringify(apis)).toBe(0);
+  expect(runtimeStats.mock.calls.filter(([file]) => file === process.execPath)).toHaveLength(0);
 });
 
-it("serves HTTP liveness while runtime IO is held and publishes current draining state", async ({
-  signal,
-}) => {
+it("serves all HTTP probes while runtime IO is held and reports draining", async ({ signal }) => {
   const entered = createDeferred();
   const resume = createDeferred();
   let draining = false;
-  let readyResponded = false;
   const getReadiness = createReadinessChecker({
     startedAt: Date.now(),
     getGatewayDraining: () => draining,
@@ -99,27 +93,17 @@ it("serves HTTP liveness while runtime IO is held and publishes current draining
           }
           return identity;
         });
-        const ready = probe("/readyz").then((response) => {
-          readyResponded = true;
-          return response;
-        });
+        const inspection = getReadiness.prepare();
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              entered.promise,
-              ready,
-              "Readiness skipped async runtime preparation",
-            ),
-            signal,
-          );
-          await withinTest(nextEventLoopTurn(), signal);
-          const live = await withinTest(probe("/healthz"), signal);
-          expect(live.status).toBe(200);
-          expect(live.json()).toEqual({ ok: true, status: "live" });
-          expect(readyResponded).toBe(false);
+          await withinTest(entered.promise, signal);
+          for (const pathname of ["/healthz", "/startupz", "/readyz"]) {
+            const response = await readHttp(new URL(pathname, origin).href, {
+              signal: AbortSignal.any([signal, AbortSignal.timeout(1_000)]),
+            });
+            expect(response.status).toBe(200);
+          }
           draining = true;
-          resume.resolve();
-          const response = await withinTest(ready, signal);
+          const response = await probe("/readyz");
           expect(response.status).toBe(503);
           expect(response.json()).toMatchObject({
             ready: false,
@@ -128,7 +112,7 @@ it("serves HTTP liveness while runtime IO is held and publishes current draining
           });
         } finally {
           resume.resolve();
-          await Promise.allSettled([ready]);
+          await inspection;
         }
       } finally {
         server.closeAllConnections();

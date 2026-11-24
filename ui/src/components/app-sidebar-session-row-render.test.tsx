@@ -308,7 +308,7 @@ it("keeps hidden child activity off the idle parent row", () => {
   expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
 });
 
-it("keeps an idle child owner's glyph hidden until the run starts", () => {
+it("keeps the same child row and owner glyph through run start and completion", () => {
   const { dom, session, setCurrent } = mountRow(
     {
       key: "agent:main:child",
@@ -317,14 +317,23 @@ it("keeps an idle child owner's glyph hidden until the run starts", () => {
     },
     { isChild: true },
   );
-  expect(
-    dom.present(".session-glyph", "openclaw-session-owner-chip", ".sidebar-child-session__status"),
-  ).toEqual([false, false, true]);
-
-  setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
-  flush();
-  expect(dom.query(".session-glyph--running.session-glyph--bare")).not.toBeNull();
-  expect(dom.query("openclaw-session-owner-chip")).toBeNull();
+  const row = dom.query(".sidebar-recent-session");
+  const owner = dom.query("openclaw-session-owner-chip");
+  expect(owner).not.toBeNull();
+  expect(dom.query('[aria-label="Done"]')).toBeNull();
+  for (const active of [true, false]) {
+    setCurrent({
+      ...session,
+      status: active ? "running" : "done",
+      hasActiveRun: active,
+      isRunVisuallyActive: active,
+    });
+    flush();
+    expect(dom.query(".sidebar-recent-session")).toBe(row);
+    expect(dom.query("openclaw-session-owner-chip")).toBe(owner);
+    expect(Boolean(dom.query(".session-glyph--running"))).toBe(active);
+    expect(dom.query('[aria-label="Done"]')).toBeNull();
+  }
 });
 
 it.each([false, null, undefined])(

@@ -143,6 +143,64 @@ it.each([
   });
 });
 
+it.each([
+  { mode: "plain", args: ["--utc", "--plain"], time: "2025-01-01T12:00:00.000Z" },
+  { mode: "pretty", args: ["--utc"], time: "12:00:00+00:00" },
+])(
+  "renders blank positional messages in $mode output without the raw record and keeps other records raw",
+  async ({ args, time }) => {
+    await withTty(process.stdout, async () => {
+      const singleObject = JSON.stringify({
+        event: "example-event",
+        time: "2025-01-01T12:00:00.000Z",
+        _meta: { logLevelName: "WARN", name: "openclaw" },
+      });
+      const emptyError = JSON.stringify({
+        name: "Error",
+        message: "",
+        stack: [{ fileNameWithLine: "example.js:1", method: "exampleMethod" }],
+        time: "2025-01-01T12:00:00.000Z",
+        _meta: { logLevelName: "ERROR", name: "openclaw" },
+      });
+      const positionalMessage = JSON.stringify({
+        0: "example",
+        message: "",
+        time: "2025-01-01T12:00:00.000Z",
+        _meta: { logLevelName: "INFO", name: "openclaw" },
+      });
+      callGatewayFromCli.mockResolvedValueOnce(
+        logPage([
+          JSON.stringify({
+            0: "",
+            _meta: {
+              runtime: "node",
+              hostname: "example-host",
+              logLevelName: "INFO",
+              name: "openclaw",
+              path: { fullFilePath: "file:///home/example-user/.openclaw/entry.js" },
+            },
+            time: "2025-01-01T12:00:00.000Z",
+            hostname: "example-host",
+          }),
+          JSON.stringify({ unrecognized: true }),
+          singleObject,
+          emptyError,
+          positionalMessage,
+        ]),
+      );
+      const { stdout } = await run(["--no-color", ...args]);
+      expect(stdout.trim().split("\n")).toEqual([
+        "Log file: /tmp/openclaw.log",
+        `${time} info`,
+        '{"unrecognized":true}',
+        `${time} warn ${singleObject}`,
+        `${time} error ${emptyError}`,
+        `${time} info ${positionalMessage}`,
+      ]);
+    });
+  },
+);
+
 it("rejects combining --local-time with --utc", async () => {
   const flags = ["--local-time", "--utc"];
   const failure = await runLogsCli(["logs", ...flags]).catch((error: unknown) => error);

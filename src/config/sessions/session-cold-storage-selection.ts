@@ -9,7 +9,10 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type { SessionColdBatchInput } from "./session-accessor.sqlite-archive-types.js";
+import type {
+  SessionColdBatchInput,
+  SessionColdCleanupCursor,
+} from "./session-accessor.sqlite-archive-types.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
@@ -108,15 +111,16 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
               database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
             );
           }
-          const cleanupSessionIds = selectSessionColdCleanupSessions(
+          const cleanup = selectSessionColdCleanupSessions(
             database,
             input.maxTranscripts,
+            input.cleanupCursor,
           );
           return {
             plans,
             externalizations,
             freePages,
-            cleanupSessionIds,
+            ...cleanup,
             needsReconcile: plans.some(({ sessionId }) =>
               sessionTranscriptIndexNeedsReconcile(database.db, sessionId),
             ),
@@ -128,19 +132,30 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
   );
 }
 
-/** Discover interrupted cleanup outside writer admission; the cold marker owns recovery. */
+/** Bound discovery even when no archive needs cleanup; cursors wrap to revisit interrupted work. */
 function selectSessionColdCleanupSessions(
   database: Pick<OpenClawAgentDatabase, "db">,
   limit: number,
-): string[] {
+  cursor?: SessionColdCleanupCursor,
+): { cleanupSessionIds: string[]; cleanupCursor?: SessionColdCleanupCursor } {
   const db = getNodeSqliteKysely<DB>(database.db);
   const pending: string[] = [];
+  let remainingRows = 65_536;
+  let cleanupCursor: SessionColdCleanupCursor | undefined;
+  let archives = 0;
   for (const cold of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_transcript_cold_archives as cold")
       .select("cold.session_id")
       .where("cold.storage", "=", "file")
+      .$if(cursor !== undefined, (query) =>
+        query.where(
+          "cold.session_id",
+          cursor?.afterSeq === undefined ? ">" : ">=",
+          cursor!.sessionId,
+        ),
+      )
       .select((eb) =>
         eb
           .or([
@@ -160,24 +175,31 @@ function selectSessionColdCleanupSessions(
           ])
           .as("hasCleanup"),
       )
-      .orderBy("cold.session_id"),
+      .orderBy("cold.session_id")
+      .limit(limit),
   )) {
+    archives++;
+    cleanupCursor = { sessionId: cold.session_id };
     let needsCleanup = Boolean(cold.hasCleanup);
     if (!needsCleanup) {
       for (const row of iterateSqliteQuerySync(
         database.db,
         db
           .selectFrom("transcript_events")
-          .select(["event_json", "event_zstd", "event_utf8_bytes", "navigation_json"])
+          .select(["seq", "event_json", "event_zstd", "event_utf8_bytes"])
+          .select((eb) => eb("navigation_json", "is not", null).as("hasNavigation"))
           .where("session_id", "=", cold.session_id)
-          .where((eb) =>
-            eb.or([eb("event_json", "is not", null), eb("event_zstd", "is not", null)]),
-          ),
+          .where("seq", ">", cursor?.sessionId === cold.session_id ? (cursor.afterSeq ?? -1) : -1)
+          .orderBy("seq")
+          .limit(remainingRows),
       )) {
+        remainingRows--;
+        cleanupCursor.afterSeq = row.seq;
         if (
-          row.navigation_json !== null ||
-          prepareColdTranscriptPayload(database.db, readTranscriptPayload(row)).navigation_json !==
-            null
+          (row.event_json !== null || row.event_zstd !== null) &&
+          (row.hasNavigation ||
+            prepareColdTranscriptPayload(database.db, readTranscriptPayload(row))
+              .navigation_json !== null)
         ) {
           needsCleanup = true;
           break;
@@ -187,11 +209,15 @@ function selectSessionColdCleanupSessions(
     if (needsCleanup) {
       pending.push(cold.session_id);
     }
-    if (pending.length >= limit) {
-      break;
+    if (remainingRows === 0) {
+      return { cleanupSessionIds: pending, cleanupCursor };
     }
+    cleanupCursor = { sessionId: cold.session_id };
   }
-  return pending;
+  return {
+    cleanupSessionIds: pending,
+    cleanupCursor: archives === limit ? cleanupCursor : undefined,
+  };
 }
 
 /** Keys whose live admissions protect any selected generation, including entry references. */

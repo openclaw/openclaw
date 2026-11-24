@@ -50,7 +50,7 @@ export async function runOfflineDatabaseBackup<T>(
         /** Replaces only the captured `database.postgres.connection` with this env var for this run. */
         postgresConnectionEnv?: string;
       },
-  /** Archive capture reads a running owner's stores through per-store snapshots. */
+  /** User backup capture reads a running owner's stores through per-store snapshots. */
   options?: { online?: true },
 ): Promise<T> {
   const existing = offlineBackup.getStore();
@@ -222,6 +222,12 @@ export async function captureGitPostgresBackup(params: {
   if ((params.physicalEngine ?? readBackupEngine(params.snapshotPath).engine) !== "postgres") {
     return undefined;
   }
+  const { captureRuntimeConfigAsyncReader } = await import("../config/config.js");
+  const capturedConfig = await captureRuntimeConfigAsyncReader({
+    observe: false,
+    skipPluginValidation: true,
+  })();
+  const selection = await resolveDatabaseEngineSelection(capturedConfig);
   await fs.mkdir(params.outputPath, { mode: 0o700 });
   const exported = await runOfflineDatabaseBackup(
     params.snapshotPath,
@@ -234,6 +240,8 @@ export async function captureGitPostgresBackup(params: {
         assertCurrent,
         ...(params.excludeSecrets ? { gitIdentity: params.identity } : {}),
       }),
+    { config: capturedConfig, selection },
+    { online: true },
   );
   const { gitBackupRedaction } = await import("./git-backup-sanitizer.js");
   const redaction = gitBackupRedaction(

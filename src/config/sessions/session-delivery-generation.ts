@@ -195,6 +195,16 @@ async function prepareSessionGenerationLease(
         // store, current permissions, and actual closure remain checked below.
         return;
       }
+      if (
+        change.scope === "sessions" &&
+        change.factsInvalidated === undefined &&
+        change.runtimeSession === undefined &&
+        retained
+      ) {
+        // Committed writers install entry and membership before this catalog notification;
+        // the next assertion still checks the retained source and current facts.
+        return;
+      }
       if (typeof change.scope === "object") {
         if (change.scope.agentId && change.scope.agentId !== generation.agentId) {
           return;
@@ -579,6 +589,27 @@ async function prepareSessionGenerationLease(
       [workerSource ?? assertCurrent],
       checkGenerationCurrent,
     );
+    assertGenerationCurrent.prepareSessionSourceStorageEffect = async () => {
+      const storageSource = source;
+      const assertStorageCurrent = () => {
+        if (!active || (admission && !admission.isCurrent())) {
+          throw diag.unavailable("effect-source");
+        }
+      };
+      try {
+        if (!storageSource) {
+          throw diag.unavailable("effect-source");
+        }
+        assertStorageCurrent();
+        await prepareSessionStoreCandidatesInWorker({
+          validate: { candidates, sources: [storageSource] },
+        });
+        assertStorageCurrent();
+        return { assertCurrent: assertStorageCurrent };
+      } catch (error) {
+        return refuseCurrent(error);
+      }
+    };
     assertGenerationCurrent.prepareSessionSourceEffect = async () => {
       let releaseEffect: PreparedSessionSourceEffect["release"];
       try {

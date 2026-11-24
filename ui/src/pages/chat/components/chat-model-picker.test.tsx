@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { findMenuShortcut } from "../../../components/menu-shortcuts.ts";
-import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
@@ -41,6 +40,7 @@ function accountSection(
   selectionKind: "automatic" | "personal" = "automatic",
 ) {
   return {
+    prefetch: undefined,
     onClose() {},
     viewProps: (startIndex: number) => ({
       selectionKind,
@@ -50,6 +50,8 @@ function accountSection(
       currentValue: "current",
       open,
       error: null,
+      loading: null,
+      onNextPage: undefined,
       startIndex,
       onToggle() {},
       onSelect,
@@ -213,10 +215,33 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
     ],
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
-    providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["claude-cli", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
-      ["anthropic", { kind: "api", label: "API" }],
-    ]),
+    authProfileId: "claude-cli:personal",
+    modelAuthStatusResult: {
+      ts: 1,
+      providers: [
+        {
+          provider: "claude-cli",
+          displayName: "Claude CLI",
+          status: "ok",
+          profiles: [
+            {
+              profileId: "claude-cli:personal",
+              type: "oauth",
+              status: "ok",
+              displayName: "Claude Max",
+              email: "you@example.com",
+            },
+          ],
+        },
+        {
+          provider: "anthropic",
+          displayName: "Anthropic",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env" },
+        },
+      ],
+    },
   });
   await waitForMenu(container);
   const provider = (value: string) =>
@@ -536,7 +561,10 @@ it.each(["missing-auth", "auth-failed"] as const)(
         option("openai", "two", { disabled: true, unavailableReason }),
       ],
       selectedModelValue: "openai/one",
-      providerAuth: new Map([["openai", { kind: "missing", label: "Sign-in needed" }]]),
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }],
+      },
       modelCatalogState: { hasSnapshot: true, status: "ready" },
       onModelSetup,
       onModelSelect,

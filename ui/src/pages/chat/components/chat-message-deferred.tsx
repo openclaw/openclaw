@@ -31,6 +31,20 @@ export function ChatPermissionCard(
   );
 }
 
+const CreatedAutomations = lazy(() => import("./chat-created-automations.tsx"), {
+  export: "ChatCreatedAutomations",
+});
+
+export function AutomationCreationCard(
+  props: Parameters<typeof import("./chat-created-automations.tsx").ChatCreatedAutomations>[0],
+) {
+  return (
+    <ChatLazyBoundary>
+      <CreatedAutomations {...props} />
+    </ChatLazyBoundary>
+  );
+}
+
 const TemplatePluginReceipt = lazy(() => import("./chat-template-plugin-card.tsx"), {
   export: "ChatTemplatePluginCards",
 });
@@ -93,9 +107,8 @@ export function ToolPreview(
               <div
                 class="chat-tool-card__preview"
                 aria-hidden="true"
-                data-content-kind={preview().mcpApp ? "mcp-app" : "canvas-html"}
                 style={{
-                  "min-height": `calc(${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px + var(--widget-header-height) + ${preview().mcpApp ? 0 : 2}px)`,
+                  "min-height": `${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px`,
                 }}
               />
             )}

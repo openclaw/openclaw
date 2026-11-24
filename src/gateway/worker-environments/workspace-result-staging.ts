@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
+import {
+  nativeWorktreeFilesystem,
+  prepareWorktreeFilesystemMutation,
+} from "../../agents/worktrees/filesystem-native.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import {
   composeSessionSourceAssertion,
@@ -296,7 +299,7 @@ async function withMaterializedWorkerWorkspaceResult<Snapshot, T>(
     return await use({ ...snapshot, stagingRoot });
   } finally {
     await runBestEffortCleanup({
-      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      cleanup: () => nativeWorktreeFilesystem.remove(stagingRoot, { commitGuard: () => {} }),
       onError: (error) =>
         workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
     });

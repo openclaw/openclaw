@@ -72,6 +72,10 @@ import type { runReleasePublishPreflight } from "../../scripts/release-publish-p
 import { isShaPinnedReleaseValidationBranch } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimJavaScriptPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const publishWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
@@ -256,10 +260,11 @@ describe("release candidate checklist", () => {
       const toolingTag = `release-publish/${sha.slice(0, 12)}-123`;
       const bin = join(root, "bin");
       mkdirSync(bin);
-      const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+      const realGit = resolveGitOutsideFixtures();
       writeFileSync(
         join(bin, "git"),
         `#!/usr/bin/env node
+${gitPathShimJavaScriptPrelude()}
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 if (args[0] === "ls-remote") process.exit(2);
@@ -595,7 +600,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
 
   type QualificationCase = {
     tag?: string;
-    pin?: string;
+    pin?: string | null;
     expected?: "passed" | "warning";
     failedRegistry?: string;
     launch?: "fresh" | "reuse" | "saved-full" | "saved-npm" | "mismatch";
@@ -635,6 +640,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       savedToolingTag: "release-publish/aaaaaaaaaaaa-100",
     },
     { workflowSha: "c".repeat(40) },
+    { pin: null },
     { pin: "2026.7.4", expected: "warning" },
     ...["normal", "prepared"].map<QualificationCase>((publicationRoute) => ({
       publicationRoute,
@@ -703,12 +709,21 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
-        "apps/android/version.json": JSON.stringify({ version: pin, versionCode: 2026070401 }),
+        ...(pin === null
+          ? {}
+          : {
+              "apps/android/version.json": JSON.stringify({
+                version: pin,
+                versionCode: 2026070401,
+              }),
+            }),
         "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
       const targetSha = git("rev-parse", "HEAD");
       // The target ref is authoritative even if another checkout has prepared a newer pin.
-      writeJson(join(targetRoot, "apps/android/version.json"), { version: "2099.1.1" });
+      if (pin !== null) {
+        writeJson(join(targetRoot, "apps/android/version.json"), { version: "2099.1.1" });
+      }
       const candidateArgv = candidateArgs({
         tag,
         "publication-route": publicationRoute,
@@ -1187,7 +1202,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
         return;
       }
       expect(updateState).toHaveBeenCalledWith(statePath, expect.anything(), "completed");
-      if (tag.includes("-beta.")) {
+      if (tag.includes("-beta.") || pin === null) {
         expect(evidence.androidVersionCheck).toBeUndefined();
         return;
       }
@@ -1798,7 +1813,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
             publicationAuthority: independentQ
               ? { admission: { request: { qualificationSha: "b".repeat(40) } } }
               : undefined,
-            // Verifier tooling must come from authenticated Q, not an incidental run head.
+            // A receipt-recovery parent runs at P, not at its authenticated Q.
             run: { headSha: independentQ ? "d".repeat(40) : "c".repeat(40) },
           },
           targetSha: "c".repeat(40),
@@ -2358,12 +2373,19 @@ describe("GitHub API public fallback", () => {
   );
 });
 
-describe("release checklist requires ordinary qualification", () => {
+describe("receipt recovery checklist consumption", () => {
   it.each([
-    ["Full Release Validation", ".github/workflows/full-release-validation.yml", true],
-    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", false],
-    ["Full Release Receipt Recovery", ".github/workflows/unrelated.yml", false],
-    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", false],
+    [
+      "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
+      ".github/workflows/full-release-receipt-recovery.yml",
+      true,
+    ],
+    [
+      "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
+      ".github/workflows/unrelated.yml",
+      false,
+    ],
+    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", true],
   ])("binds workflow %s to its exact path %s", async (workflowName, workflowPath, accepted) => {
     const result = runInNewContext(
       stripNodeTypeScriptTypes(

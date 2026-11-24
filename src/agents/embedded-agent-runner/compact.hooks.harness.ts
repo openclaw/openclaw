@@ -30,8 +30,10 @@ import {
   mockCompactHooksPluginMetadata,
   resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
+  wrapCompactHooksEntryPoints,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
+import { mockNonDurableCompactionRuntime } from "./compact.hooks.non-durable-mocks.test-support.js";
 import {
   mockCompactHooksSkills,
   mockCompactHooksTools,
@@ -568,9 +570,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   if (!options.durableSession) {
-    vi.doMock("../sessions/model-registry-runtime.js", () => ({
-      getModelRegistryRuntime: getModelRegistryRuntimeMock,
-    }));
+    mockNonDurableCompactionRuntime(getModelRegistryRuntimeMock);
   }
 
   vi.doMock("../../hooks/internal-hooks.js", async () => {
@@ -661,7 +661,6 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
-    resolveModelAuthModeAsync: vi.fn(() => "env"),
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
@@ -915,14 +914,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   return {
     ...compactModule,
-    compactEmbeddedAgentSession: (params, host = {}) =>
-      compactQueuedModule.compactQueuedEmbeddedAgentSession(params, {
-        ...host,
-        sourceAuthority: host.sourceAuthority ?? {
-          assertActive: host.assertActive ?? (() => {}),
-          operatorAuthority: undefined,
-        },
-      }),
+    ...wrapCompactHooksEntryPoints(compactModule, compactQueuedModule),
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };

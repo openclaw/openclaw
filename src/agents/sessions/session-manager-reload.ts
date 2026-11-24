@@ -1,27 +1,18 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import type {
-  SessionTranscriptBoundedActiveContext,
-  SessionTranscriptContextVersion,
-} from "../../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionTranscriptBoundedActiveContext } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import type { SessionPreparedCompactionValue } from "../../config/sessions/session-compaction-prepared.types.js";
 import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
-import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
 import type {
   PreparedSessionTranscriptReload,
-  SessionManagerBoundedContext,
   SessionManagerBoundedContextLimits,
   SessionManagerPersistenceTarget,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
-
-/** @internal Adopt a bounded prepared cut under the caller's existing writer. */
-export const adoptPreparedCompaction = Symbol("adoptPreparedCompaction");
 
 /** Both open paths capture, hydrate, and construct under the same source and truncation rules. */
 export async function openSessionManagerBoundedView<T extends object>(
@@ -143,43 +134,4 @@ export function readCommittedSessionManagerReload(
       expectedIdentity,
     }),
   );
-}
-
-/** Adopt only the private reader's retained cut, under existing writer authority. */
-export function createPreparedCompactionAdopter<T>(
-  create: (
-    cwd: string,
-    target: SessionManagerPersistenceTarget,
-    entries: readonly unknown[],
-    bounded: SessionManagerBoundedContext,
-    version: SessionTranscriptContextVersion,
-  ) => T,
-) {
-  return (
-    target: SessionTranscriptRuntimeTarget,
-    prepared: Extract<SessionPreparedCompactionValue, { status: "prepared" }>,
-    cwd: string,
-  ): T => {
-    const captured = captureSessionTranscriptTargetBinding(target);
-    captureOwnedTranscriptWriteAssertion(captured)();
-    const entries = prepared.plan.retained;
-    return create(
-      cwd,
-      captured,
-      [prepared.header, ...entries],
-      {
-        version: prepared.version,
-        activeLeafEntryId: prepared.leafEntryId,
-        parents: new Map(entries.map((entry, index) => [entry.id, entries[index - 1]?.id ?? null])),
-        opaqueParents: new Map(),
-        firstKeptRanges: new Map(),
-        cacheTtlProjectionPrefixes: prepared.cacheTtlProjectionPrefixes,
-        limits: { compaction: true },
-        boundaryCount: prepared.boundaryCount,
-        persistedSuffixStartSeq: prepared.persistedSuffixStartSeq,
-        transcriptMutationAt: prepared.transcriptMutationAt,
-      },
-      prepared.version,
-    );
-  };
 }

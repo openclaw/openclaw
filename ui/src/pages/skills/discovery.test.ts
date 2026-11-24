@@ -1,4 +1,6 @@
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -24,6 +26,17 @@ function renderDiscovery(
   );
   return container;
 }
+
+/** Installed skills sit in one summary line until the Installed chip lists them. */
+function showInstalled(container: HTMLElement) {
+  [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")]
+    .find((chip) => chip.textContent === "Installed")!
+    .click();
+  flush();
+}
+
+const shelfText = (container: HTMLElement) =>
+  container.querySelector(".skill-installed-shelf")?.textContent ?? "";
 
 const remoteSkill = (owner = "alice", slug = "repo", displayName = "Repo") => ({
   score: 1,
@@ -51,7 +64,7 @@ describe("unified skill discovery", () => {
       expect(container.querySelector('[data-skill-id="remote:@alice/repo"]')).not.toBeNull();
 
       // An accepted empty library remains known during later refreshes or failures.
-      renderDiscovery({ ...props, libraryEntries: [] }, container);
+      renderDiscovery({ ...props, libraryEntries: [], readCategories: () => null }, container);
       expect(container.querySelector(".settings-empty")?.textContent).toBe(
         clawhubQuery ? "No skills match your search." : "No skills yet. Search ClawHub to add one.",
       );
@@ -120,30 +133,61 @@ describe("unified skill discovery", () => {
       mounted.publishRouteData(result);
     });
     try {
-      await waitForFast(() =>
-        expect(
-          mounted.container.querySelector('[data-skill-id="library:' + entry.skillId + '"]'),
-        ).not.toBeNull(),
-      );
-      expect(
-        mounted.container.querySelector('[data-skill-id="local:prefetched-status"]'),
-      ).toBeNull();
+      await waitForFast(() => expect(shelfText(mounted.container)).toContain(entry.slug));
+      expect(shelfText(mounted.container)).not.toContain("Prefetched status");
     } finally {
       status.resolve(report);
       await route;
     }
-    await waitForFast(() =>
-      expect(
-        mounted.container.querySelector('[data-skill-id="local:prefetched-status"]'),
-      ).not.toBeNull(),
-    );
+    await waitForFast(() => expect(shelfText(mounted.container)).toContain("Prefetched status"));
+    showInstalled(mounted.container);
+    expect(
+      mounted.container.querySelector('[data-skill-id="library:' + entry.skillId + '"]'),
+    ).not.toBeNull();
+    expect(
+      mounted.container.querySelector('[data-skill-id="local:prefetched-status"]'),
+    ).not.toBeNull();
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
+  });
+
+  it("keeps the feed usable without category support, and retries a failed taxonomy independently", async () => {
+    const research = { slug: "research", label: "Research" };
+    const categories = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Directory unavailable"))
+      .mockResolvedValue({ categories: [research] });
+    const feed = vi.fn(() => ({ results: [{ ...remoteSkill(), categories: [research.slug] }] }));
+    const sources: Record<string, () => unknown> = {
+      "skills.categories": categories,
+      "skills.search": feed,
+      "skills.library.list": () => personalLibrary,
+    };
+    const { container, context, connection } = mountSkills(
+      async (method) => sources[method]?.() ?? {},
+    );
+    const section = () =>
+      container
+        .querySelector('[data-skill-id="remote:@alice/repo"]')
+        ?.closest<HTMLElement>("[data-catalog-section]")?.dataset.catalogSection;
+    await waitForFast(() => expect(section()).toBe("clawhub"));
+    expect(categories).not.toHaveBeenCalled();
+    connection.publish({
+      ...context.gateway.snapshot,
+      hello: gatewayHelloForMethods(["skills.categories"]),
+    });
+    const alert = () => container.querySelector('[role="alert"]');
+    await waitForFast(() => expect(alert()?.textContent).toContain("Directory unavailable"));
+    expect(section()).toBe("clawhub");
+    const reads = feed.mock.calls.length;
+    alert()!.querySelector("button")!.click();
+    await waitForFast(() => expect(section()).toBe("category-research"));
+    expect(feed).toHaveBeenCalledTimes(reads);
   });
 
   it("keeps cards visible without a loading label while loading", () => {
     const container = document.createElement("div");
     for (const loading of [true, false]) {
-      renderDiscovery({ loading }, container);
+      renderDiscovery({ loading, clawhubQuery: "repo" }, container);
       expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
       expect(container.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe(
         String(loading),
@@ -159,12 +203,78 @@ describe("unified skill discovery", () => {
       onLibraryOpen,
       skill: { name: libraries[0]!.name, source: "openclaw-library" },
     });
+    showInstalled(container);
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(3);
     const cards = [...container.querySelectorAll(".plugin-catalog-card")];
     expect(cards[0]?.textContent).toContain("Alice");
     expect(cards[1]?.textContent).toContain("Bob");
     cards[1]?.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!.click();
     expect(onLibraryOpen).toHaveBeenCalledWith(libraries[1]!.skillId);
+  });
+
+  it("reports an empty category independently of installed matches or pending inventory", () => {
+    const container = renderDiscovery({
+      clawhubCategory: { slug: "research", label: "Research" },
+      clawhubQuery: "repo",
+      clawhubResults: [],
+      libraryEntries: undefined,
+      loading: true,
+    });
+    expect(container.querySelector(".plugin-catalog-card")).toBeNull();
+    expect(container.querySelector(".settings-empty")?.textContent).toBe(
+      "No skills match your filters.",
+    );
+  });
+
+  it("previews only advertised memberships in taxonomy order, with a flat remainder", () => {
+    const alpha = { slug: "lab-a", label: "Field work" };
+    const beta = { slug: "lab-b", label: "On call" };
+    const tagged = Array.from({ length: 6 }, (_, index) => ({
+      ...remoteSkill("alice", "row-" + index, "Row " + index),
+      categories: index ? [alpha.slug] : [alpha.slug, beta.slug, beta.slug],
+    }));
+    const uncategorized = [
+      remoteSkill("alice", "old"),
+      { ...remoteSkill("alice", "unknown"), categories: ["unadvertised"] },
+    ];
+    const onCategoryChange = vi.fn();
+    const props = { clawhubResults: [...tagged, ...uncategorized], onCategoryChange };
+    const container = renderDiscovery({ ...props, readCategories: () => null });
+    expect(shelfText(container)).toBe("");
+    expect(container.querySelector("[data-skill-id]")).toBeNull();
+    showInstalled(container);
+    expect(
+      container.querySelector('[data-catalog-section="installed"] [data-skill-id]'),
+    ).not.toBeNull();
+    container.querySelector<HTMLButtonElement>(".plugin-catalog-chip")!.click();
+    flush();
+    onCategoryChange.mockClear();
+    renderDiscovery({ ...props, connected: false, readCategories: () => null }, container);
+    expect(shelfText(container)).not.toBe("");
+    const categories = [beta, alpha, { slug: "empty", label: "Empty" }];
+    renderDiscovery({ ...props, readCategories: () => ({ categories }) }, container);
+    expect(shelfText(container)).not.toBe("");
+    const sections = [...container.querySelectorAll("[data-catalog-section]")];
+    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+      "On call",
+      "Field work",
+      "ClawHub",
+    ]);
+    const ids = (section: Element) =>
+      [...section.querySelectorAll("[data-skill-id]")].map((el) =>
+        el.getAttribute("data-skill-id"),
+      );
+    expect(ids(sections[0]!)).toEqual(["remote:@alice/row-0"]);
+    expect(ids(sections[1]!)).toEqual(tagged.slice(0, 4).map((row) => "remote:" + row.installRef));
+    expect(ids(sections[2]!)).toEqual(uncategorized.map((row) => "remote:" + row.installRef));
+    const chip = [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")].find(
+      (button) => button.textContent === alpha.label,
+    )!;
+    const focus = vi.spyOn(chip, "focus");
+    sections[1]!.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(onCategoryChange).toHaveBeenCalledExactlyOnceWith(alpha);
+    expect(sections[2]!.querySelector(".plugin-catalog-section__view-all")).toBeNull();
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {
@@ -175,7 +285,9 @@ describe("unified skill discovery", () => {
       },
       clawhubResults: [remoteSkill()],
     });
-    expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(2);
+    // The local namesake stays an installed skill; the registry row keeps its own Add action.
+    expect(shelfText(container)).toContain("Repo");
+    expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
     expect(container.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(1);
   });
   it("combines installed and remote skills in one search with exclusive status/install actions", () => {
@@ -192,11 +304,9 @@ describe("unified skill discovery", () => {
     const inputs = container.querySelectorAll<HTMLInputElement>('input[type="search"]');
     expect(inputs).toHaveLength(1);
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(2);
-    expect(
-      container.querySelectorAll(
-        "input.settings-toggle__input, .skills-group, .plugin-catalog-chips",
-      ),
-    ).toHaveLength(0);
+    expect(container.querySelectorAll("input.settings-toggle__input, .skills-group")).toHaveLength(
+      0,
+    );
     const local = container.querySelector('[data-skill-id="local:repo-skill"]')!;
     expect(local.querySelector('[role="img"]')?.getAttribute("title")).toContain("Ready");
     expect(local.querySelector(".plugin-catalog-card__install")).toBeNull();

@@ -9,6 +9,10 @@ import { parse } from "yaml";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 // Each case owns its checkout and process trees; bound subprocess pressure on CI.
 beforeAll(() => {
@@ -196,12 +200,13 @@ function writeGitProxy(
   body: string,
 ): { binDir: string; realGit: string } {
   const binDir = join(fixture.root, name);
-  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const realGit = resolveGitOutsideFixtures();
   mkdirSync(binDir);
   writeFileSync(
     join(binDir, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
+${gitPathShimShellPrelude()}
 ${body}
 `,
   );

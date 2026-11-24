@@ -253,6 +253,44 @@ openclaw-browser-panel {
   .bp-toolbar[data-mobile="true"] .bp-url {
     font-size: 16px;
   }
+  .bp-annotatebar .bp-btn > svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+  .bp-annotatebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+  }
+  .bp-annotatebar__hint {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bp-btn {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+    border-radius: var(--radius-sm);
+    padding: 3px 10px;
+  }
+  .bp-btn:hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+  .bp-btn--primary {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
   .bp-viewport {
     position: relative;
     display: flex;
@@ -271,6 +309,16 @@ openclaw-browser-panel {
     flex: 1 1 auto;
     min-height: 100px;
   }
+  .bp-native-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top left;
+    pointer-events: none;
+    user-select: none;
+  }
   .bp-native-loading {
     display: block;
     padding: var(--space-2);
@@ -283,6 +331,16 @@ openclaw-browser-panel {
     height: auto;
     user-select: none;
     -webkit-user-drag: none;
+  }
+  .bp-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+  }
+  .bp-overlay--annotate {
+    cursor: crosshair;
   }
   .bp-input {
     box-sizing: border-box;
@@ -298,6 +356,46 @@ openclaw-browser-panel {
   }
   .bp-overlay--inspect {
     cursor: default;
+  }
+  .bp-tooltip {
+    position: absolute;
+    z-index: 3;
+    max-width: 320px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    box-shadow: var(--shadow-md);
+    font-size: 12px;
+    pointer-events: none;
+  }
+  .bp-tooltip__title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    justify-content: space-between;
+  }
+  .bp-tooltip__selector {
+    color: var(--accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+  }
+  .bp-tooltip__size {
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .bp-tooltip__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 4px;
+    color: var(--muted);
+  }
+  .bp-tooltip__row span:last-child {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .bp-status {
     display: flex;
@@ -319,6 +417,27 @@ openclaw-browser-panel {
   }
   .bp-note--error {
     color: var(--danger);
+
+    > div {
+      display: inline-block;
+      max-inline-size: 100%;
+      padding-inline-end: 0.5em;
+      overflow-wrap: anywhere;
+
+      /* The shared text baseline keeps this gap below the copy when the toggle wraps. */
+      &:not(:last-child) {
+        margin-block-end: 6px;
+      }
+    }
+
+    /* Keep the toggle in the message line; expanded diagnostics take a full line. */
+    .lazy-view-error__details {
+      display: inline;
+    }
+
+    .lazy-view-error__summary {
+      margin-block-start: 0;
+    }
   }
 }
 
