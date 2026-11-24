@@ -13,7 +13,6 @@ import {
   buildChannelInboundEventContext,
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
-  formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatInboundFromLabel,
   logInboundDrop,
@@ -77,7 +76,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
-import { formatSignalMediaText } from "../media-text.js";
+import { formatSignalMediaText, formatSignalUnavailableMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
@@ -1076,7 +1075,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-    const attachments = dataMessage.attachments ?? [];
+    const viewOnce = dataMessage.viewOnce === true;
+    // View-once media never enters download, agent, history, or native reply handling.
+    const attachments = viewOnce ? [] : (dataMessage.attachments ?? []);
     const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
       const contentType = attachment?.contentType ?? undefined;
       return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
@@ -1191,14 +1192,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    let bodyText = messageText;
-    if (unavailableAttachmentCount > 0) {
-      const attachmentLabel = unavailableAttachmentCount === 1 ? "attachment" : "attachments";
-      bodyText = formatInboundMediaUnavailableText({
-        body: bodyText,
-        notice: `[signal ${unavailableAttachmentCount > 1 ? `${unavailableAttachmentCount} ` : ""}${attachmentLabel} unavailable]`,
-      });
-    }
+    const bodyText = formatSignalUnavailableMediaText({
+      body: messageText,
+      viewOnce,
+      unavailableAttachmentCount,
+    });
     if (!bodyText && mediaFacts.length === 0 && !visibleQuoteText) {
       return;
     }

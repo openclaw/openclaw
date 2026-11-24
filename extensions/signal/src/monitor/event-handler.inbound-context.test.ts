@@ -999,6 +999,34 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ReplyToIsQuote).toBe(true);
   });
 
+  it.each([false, true])(
+    "withholds view-once media (ignoreAttachments=%s)",
+    async (ignoreAttachments) => {
+      const fetchAttachment = vi.fn<SignalEventHandlerDeps["fetchAttachment"]>(async () => ({
+        path: "/synthetic/photo.dat",
+        contentType: "image/png",
+      }));
+      const dispatched = captureNextSignalDispatch(dispatchInboundMessageMock);
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: { messages: { inbound: { debounceMs: 0 } } },
+          ignoreAttachments,
+          fetchAttachment,
+        }),
+      );
+      const dataMessage = {
+        message: "",
+        viewOnce: true,
+        attachments: [{ id: "photo", contentType: "image/png" }],
+      };
+      await receiveMessage(handler, dataMessage);
+      expect(fetchAttachment).not.toHaveBeenCalled();
+      const context = await dispatched;
+      expect(context.MediaPaths).toBeUndefined();
+      expect(context.BodyForAgent).toBe("[signal view-once media not shown]");
+    },
+  );
+
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({
       cfg: createDirectConfig(),
