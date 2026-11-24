@@ -77,35 +77,52 @@ describe("buildOpenAISpeechProvider", () => {
     vi.restoreAllMocks();
   });
 
-  it("delivers PCM before the response body closes and cancels upstream on stop", async () => {
-    vi.stubEnv("OPENAI_TTS_BASE_URL", "");
-    const cancel = vi.fn();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        expect(parseRequestBody(init).response_format).toBe("pcm");
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new Uint8Array([1, 2]));
-            },
-            cancel,
-          }),
+  it.each(["cancel", "release"] as const)(
+    "delivers PCM before EOF and leaves the next request usable after %s",
+    async (stop) => {
+      vi.stubEnv("OPENAI_TTS_BASE_URL", "");
+      const cancel = vi.fn();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          expect(parseRequestBody(init).response_format).toBe("pcm");
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2]));
+              },
+              cancel,
+            }),
+          );
+        }),
+      );
+      const result = await provider.streamSynthesize!(speechRequest());
+      expect(result).toMatchObject({ outputFormat: "pcm", sampleRate: 24_000 });
+      const reader = result.audioStream.getReader();
+      try {
+        expect(await reader.read()).toEqual({ done: false, value: new Uint8Array([1, 2]) });
+      } finally {
+        if (stop === "cancel") {
+          await reader.cancel();
+        } else {
+          await result.release?.();
+        }
+        reader.releaseLock();
+        await result.release?.();
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+
+      mockSpeechFetch({ response_format: "pcm" });
+      const next = await provider.streamSynthesize!(speechRequest());
+      try {
+        expect(new Uint8Array(await new Response(next.audioStream).arrayBuffer())).toEqual(
+          new Uint8Array([1, 2, 3]),
         );
-      }),
-    );
-    const result = await provider.streamSynthesize!(speechRequest());
-    expect(result).toMatchObject({ outputFormat: "pcm", sampleRate: 24_000 });
-    const reader = result.audioStream.getReader();
-    try {
-      expect(await reader.read()).toEqual({ done: false, value: new Uint8Array([1, 2]) });
-    } finally {
-      await reader.cancel();
-      reader.releaseLock();
-      await result.release?.();
-    }
-    expect(cancel).toHaveBeenCalledOnce();
-  });
+      } finally {
+        await next.release?.();
+      }
+    },
+  );
 
   it("accepts a complete WAV response from a buffered compatibility endpoint", async () => {
     const fetchMock = mockSpeechFetch({ response_format: "wav" });
