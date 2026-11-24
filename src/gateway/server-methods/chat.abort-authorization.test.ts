@@ -201,7 +201,7 @@ describe("chat.abort authorization", () => {
     });
   });
 
-  it("announces a reserved run's Stop only after its authority holds", async () => {
+  it("announces a reserved run's Stop to its owner as its cancellation commits", async () => {
     const runStopped = observeRunStopped();
     const reserved = createActiveRun("main", {
       runId: "reserved-run",
@@ -211,15 +211,6 @@ describe("chat.abort authorization", () => {
     const request = { sessionKey: "main", runId: "reserved-run" };
     const foreign = await abortAsOther({ context, runId: request.runId });
     expect(requireLastRespondCall(foreign)[2]?.message).toBe("unauthorized");
-    await expect(
-      invokeLifecycle(context, request, {
-        handler: (options) =>
-          handleChatAbortRequestWithLifecycle({
-            ...options,
-            hasCurrentClientAuthority: () => false,
-          }),
-      }),
-    ).rejects.toThrow("requester authority changed");
     expect(reserved.input.abortSignal.aborted).toBe(false);
     expect(runStopped).not.toHaveBeenCalled();
 

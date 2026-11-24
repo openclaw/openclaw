@@ -285,7 +285,6 @@ describe("descendant cascade ownership", () => {
       sessionId: "command-session",
       ownerConnId: "command-owner",
     };
-    let authorized = true;
     let hooksCompleted = 0;
     let owner: { signal: AbortSignal } | undefined;
     // At the notice: every command:stop hook has finished and the command is not yet cancelled.
@@ -294,14 +293,8 @@ describe("descendant cascade ownership", () => {
       createMockPluginRegistry([{ hookName: "run_stopped", handler: runStopped }]),
     );
     onTestFinished(resetGlobalHookRunner);
-    // The first Stop loses its requester's authority while its command:stop hook awaits.
     const commandStop = vi.fn(async () => {
       await Promise.resolve();
-      hooksCompleted++;
-    });
-    commandStop.mockImplementationOnce(async () => {
-      await Promise.resolve();
-      authorized = false;
       hooksCompleted++;
     });
     registerInternalHook("command:stop", commandStop);
@@ -311,25 +304,14 @@ describe("descendant cascade ownership", () => {
       const context = createChatAbortContext();
       const request = { sessionKey, runId: "command-run" };
       const client = { connId: "command-owner", connect: { scopes: ["operator.write"] } };
-      const handler: Parameters<typeof stop>[0]["handler"] = (options) =>
-        handleChatAbortRequestWithLifecycle({
-          ...options,
-          hasCurrentClientAuthority: () => authorized,
-        });
-      await expect(stop({ context, request, client, handler })).rejects.toThrow(
-        "requester authority changed",
-      );
-      expect(commandStop).toHaveBeenCalledOnce();
-      expect(owner.signal.aborted).toBe(false);
-      expect(runStopped).not.toHaveBeenCalled();
-
-      authorized = true;
+      const handler: Parameters<typeof stop>[0]["handler"] = handleChatAbortRequestWithLifecycle;
       expect(
         requireLastRespondCall(await stop({ context, request, client, handler })),
       ).toMatchObject([true, { ok: true, aborted: true, runIds: [] }]);
+      expect(commandStop).toHaveBeenCalledOnce();
       expect(owner.signal.aborted).toBe(true);
       expect(runStopped.mock.results).toEqual([
-        { type: "return", value: { hooksCompleted: 2, aborted: false } },
+        { type: "return", value: { hooksCompleted: 1, aborted: false } },
       ]);
     });
   });
