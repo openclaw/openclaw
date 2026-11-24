@@ -8,10 +8,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
+  PluginServiceExportCatalog,
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import type { PluginServiceExportCatalog } from "openclaw/plugin-sdk/session-catalog";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, assert, vi } from "vitest";
@@ -167,7 +167,7 @@ export function createBeamTestCatalog(
           ...(params.hostCursor ? { nextCursor: params.hostCursor } : {}),
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
-            ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
+            sourceHomeId: session.sourceHomeId,
             exportPolicy:
               session.exportPolicy === null
                 ? undefined

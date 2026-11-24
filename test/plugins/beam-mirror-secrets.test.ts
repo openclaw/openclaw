@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import beamPlugin from "../../extensions/beam/index.js";
+import { getRuntimeConfig } from "../../src/config/io.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   createGatewaySchedulerClock,
@@ -123,7 +124,7 @@ async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvi
     registry: builder.registry,
     signal: scheduler.signal,
     assertActive: () => scheduler.signal.throwIfAborted(),
-    getConfig: () => api.runtime.config.current(),
+    getConfig: getRuntimeConfig,
   });
   await service.start({ config, stateDir: "/unused", scheduler, logger, catalogExports });
   return { clock, scheduler, logger };
