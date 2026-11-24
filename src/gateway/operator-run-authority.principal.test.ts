@@ -197,7 +197,8 @@ it.each([
 ])("commits $change under the admitted principal and checks fresh starts", ({ patch, allowed }) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { admit } = fixture();
-    using _accepted = await admit();
+    using accepted = await admit();
+    expect(accepted.authority.profileId).toBeDefined();
     const committed = await patchSessionEntryCore(scope, () => patch, {
       skipMaintenance: true,
     });

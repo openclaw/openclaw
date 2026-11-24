@@ -774,7 +774,7 @@ src/gateway/control-ui-session-prs-checks.ts	1
 src/gateway/control-ui-session-task-prs.ts	4
 src/gateway/conversation-route-ownership.ts	1
 src/gateway/conversation-turn.ts	1
-src/gateway/cron-creator-authority-grant.ts	13
+src/gateway/cron-creator-authority-grant.ts	12
 src/gateway/cron-stream-sandbox-authority.ts	4
 src/gateway/cron-stream-sandbox.ts	1
 src/gateway/dashboard-session-title.ts	6
