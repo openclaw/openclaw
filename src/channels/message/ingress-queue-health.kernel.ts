@@ -91,19 +91,28 @@ export function countChannelIngressQueuePressureInDatabase(
         "lanes.channel_id as channelId",
         "lanes.account_id as accountId",
         eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0).as("laneCount"),
-        eb.fn
-          .sum<number>("lanes.pendingCount")
-          .filterWhere("lanes.pressuredCount", ">", 0)
+        eb
+          .cast<number>(
+            eb.fn.sum("lanes.pendingCount").filterWhere("lanes.pressuredCount", ">", 0),
+            "bigint",
+          )
           .as("pendingCount"),
-        eb.fn
-          .sum<number>("lanes.claimedCount")
-          .filterWhere("lanes.pressuredCount", ">", 0)
+        eb
+          .cast<number>(
+            eb.fn.sum("lanes.claimedCount").filterWhere("lanes.pressuredCount", ">", 0),
+            "bigint",
+          )
           .as("claimedCount"),
-        eb(
-          eb.fn.sum<number>("lanes.activeCount").filterWhere("lanes.pressuredCount", ">", 0),
-          "-",
-          eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0),
-        ).as("blockedCount"),
+        eb
+          .cast<number>(
+            eb(
+              eb.fn.sum<number>("lanes.activeCount").filterWhere("lanes.pressuredCount", ">", 0),
+              "-",
+              eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0),
+            ),
+            "bigint",
+          )
+          .as("blockedCount"),
         eb.fn
           .min<number>("lanes.oldestReceivedAt")
           .filterWhere("lanes.pressuredCount", ">", 0)

@@ -9,6 +9,7 @@ import {
   isCliRuntimeModelBackendForProvider,
   resolveCliRuntimeProfileAlias,
 } from "../agents/cli-backends.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
@@ -66,11 +67,9 @@ export function collectUtilityModelWarnings(
       }
       metadata ??= loadMetadata();
       const manifestPlugins = metadata.owners ? { owners: metadata.owners } : metadata.plugins;
-      const defaultProvider = resolveDefaultModelForAgent({
-        cfg: config,
-        agentId,
-        manifestPlugins,
-      }).provider;
+      const defaultProvider =
+        resolveDefaultModelForAgent({ cfg: config, agentId, manifestPlugins })?.provider ??
+        DEFAULT_PROVIDER;
       const aliasIndex = buildModelAliasIndex({
         cfg: config,
         agentId,

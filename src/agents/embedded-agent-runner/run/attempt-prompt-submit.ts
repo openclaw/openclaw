@@ -36,9 +36,9 @@ import {
   stripSessionsYieldArtifacts,
 } from "./attempt-sessions-yield.js";
 import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
-import type { createChatGPTV2CompactionBoundary } from "./chatgpt-v2-compaction.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import type { createRequestBoundaryCompaction } from "./request-boundary-compaction.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -81,7 +81,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   appendContext?: string;
   contextTokenBudget: number;
   compactionRequestBudget?: CompactionRequestBudget;
-  compactBeforeRequest?: ReturnType<typeof createChatGPTV2CompactionBoundary>;
+  compactBeforeRequest?: ReturnType<typeof createRequestBoundaryCompaction>;
   images: ImageContent[];
   modelPrompt: string;
   normalizeToolCallIds?: Parameters<typeof wrapStreamFnWithMessageTransform>[1];

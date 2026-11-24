@@ -37,6 +37,8 @@ export type SubagentRegistryWriteAuthority = {
 
 export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> = {
   runs?: Map<string, SubagentRunRecord>;
+  /** Deletion plans use resident metadata and may only publish null postimages. */
+  deleteOnly?: boolean;
   preparedRows?: () => ReadonlyMap<string, SubagentRunRecord>;
   context?: OpenClawStateWorkerContext;
   assertCurrent?: () => void;

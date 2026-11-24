@@ -69,6 +69,49 @@ async function probeCodexCommand(): Promise<LocalCommandProbe> {
   }
   return pathProbe;
 }
+/** The configured agent model, read from config alone without any machine probe. */
+export function resolveConfiguredModelCandidate(
+  options: {
+    config?: OpenClawConfig;
+    agentId?: string;
+  } = {},
+): InferenceBackendCandidate | undefined {
+  const defaultAgentId = options.config
+    ? options.agentId?.trim() || tryResolveLegacyCompatibilityAgentId(options.config)
+    : undefined;
+  const defaultAgentModel =
+    options.config && defaultAgentId
+      ? resolveAgentConfig(options.config, defaultAgentId)?.model
+      : undefined;
+  const existingModel =
+    resolveAgentModelPrimaryValue(defaultAgentModel) ??
+    resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
+  if (!existingModel) {
+    return undefined;
+  }
+  const resolved = resolveDefaultModelForAgent({
+    cfg: options.config ?? {},
+    ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
+  });
+  const profileId = splitTrailingAuthProfile(existingModel).profile;
+  const modelRef = resolved
+    ? resolveConfiguredRouteModelLabel({
+        configuredRef: existingModel,
+        resolved,
+        ...(profileId ? { profileId } : {}),
+      })
+    : existingModel;
+  return {
+    kind: "existing-model",
+    // Approval and activation bind to the executable target, not a mutable
+    // alias spelling. The authored config itself remains untouched.
+    modelRef,
+    label: "Current model",
+    detail: `${modelRef} — already configured`,
+    credentials: true,
+  };
+}
+
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; explicit setup owns selection.
@@ -80,38 +123,8 @@ export async function detectInferenceBackends(
     agentId?: string;
   } = {},
 ): Promise<InferenceBackendCandidate[]> {
-  const candidates: InferenceBackendCandidate[] = [];
-  const defaultAgentId = options.config
-    ? options.agentId?.trim() || tryResolveLegacyCompatibilityAgentId(options.config)
-    : undefined;
-  const defaultAgentModel =
-    options.config && defaultAgentId
-      ? resolveAgentConfig(options.config, defaultAgentId)?.model
-      : undefined;
-  const existingModel =
-    resolveAgentModelPrimaryValue(defaultAgentModel) ??
-    resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
-  if (existingModel) {
-    const resolved = resolveDefaultModelForAgent({
-      cfg: options.config ?? {},
-      ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
-    });
-    const profileId = splitTrailingAuthProfile(existingModel).profile;
-    const modelRef = resolveConfiguredRouteModelLabel({
-      configuredRef: existingModel,
-      resolved,
-      ...(profileId ? { profileId } : {}),
-    });
-    candidates.push({
-      kind: "existing-model",
-      // Approval and activation bind to the executable target, not a mutable
-      // alias spelling. The authored config itself remains untouched.
-      modelRef,
-      label: "Current model",
-      detail: `${modelRef} — already configured`,
-      credentials: true,
-    });
-  }
+  const configured = resolveConfiguredModelCandidate(options);
+  const candidates: InferenceBackendCandidate[] = configured ? [configured] : [];
   const envCandidates = detectAmbientInferenceBackends();
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([

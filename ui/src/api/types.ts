@@ -38,6 +38,7 @@ export type {
   AgentsFilesSetResult,
   SessionsFilesGetResult as SessionWorkspaceGetResult,
   SessionsFilesSetResult as SessionWorkspaceSetResult,
+  SessionsFilesStatResult as SessionWorkspaceStatResult,
   CronJob,
   CronRunLogEntry,
   CronScratchGetResult,

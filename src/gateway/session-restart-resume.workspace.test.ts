@@ -107,7 +107,7 @@ it(
       replaceSessionEntrySync(target, entry);
       replaceSessionEntrySync(target, {
         ...entry,
-        resumeAfterRestart: { queuedInputIds: [] },
+        resumeAfterRestart: {},
         pendingWorktree: {
           workspace: state.workspaceDir,
           name: "restart-workspace",

@@ -7,6 +7,7 @@ import {
   getDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
+import { withStateDatabaseColdAdmission } from "../infra/gateway-state-owner.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
@@ -16,6 +17,7 @@ import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
@@ -103,15 +105,21 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
     const executeRead = async (): Promise<OpenClawStateReadReply> => {
       const quarantineStorePath = resolveQuarantineStorePath(input.context.environment);
       if (input.checkFreshAdmission) {
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
-          input.databasePath,
-          input.context.environment,
-          (error) => {
-            nativeCleanupFailure = {
-              error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
-            };
-          },
-          true,
+        // A schema owner can arrive after host dispatch. Wait before entering the read,
+        // never replay a domain operation or borrow an offline maintenance owner.
+        withStateDatabaseColdAdmission(
+          { databasePath: input.databasePath, busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+          () =>
+            openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+              input.databasePath,
+              input.context.environment,
+              (error) => {
+                nativeCleanupFailure = {
+                  error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+                };
+              },
+              true,
+            ),
         );
       }
       const { command } = input;
@@ -347,7 +355,7 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
   }
 };
 
-serveOwnedWorkerTasks(
+export const startHostedWorker = serveOwnedWorkerTasks(
   async (message, channel, control) => {
     // SAFETY: The typed state-read pool owns this private task input.
     const input = message as OpenClawStateReadRequest;
@@ -363,6 +371,7 @@ serveOwnedWorkerTasks(
   },
   {
     closeResource: closeRetainedOpenClawStateReadConnections,
+    releaseRetainedResources: () => closeRetainedOpenClawStateReadConnections(),
     transferList: (reply) =>
       reply.ok && reply.type === "localWorkspace.manifest" ? [reply.snapshot.buffer] : [],
   },

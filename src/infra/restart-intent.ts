@@ -25,7 +25,6 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { prepareOpenClawStateReadSource } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { sleep } from "../utils/sleep.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
 import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import { readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
@@ -36,6 +35,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { GatewayRestartPreparationError } from "./restart-intent-error.js";
 import {
   normalizeRestartIntentReason,

@@ -137,25 +137,13 @@ export function createGitHubPublicationExecutionIdentity(params: {
   validateAuthority: () => boolean;
   assertWorkspace: () => void;
 }) {
-  let active: PreparedGitHubPublicationIdentity | undefined;
   const assertCurrent = () => {
     if (!params.validateAuthority()) {
       throw new GitHubPublicationAuthorityLostError(
-        "GitHub publication session authority changed.",
+        "GitHub publication execution ended. Retry the publication.",
       );
     }
     params.assertWorkspace();
-    if (
-      active &&
-      !(params.identity
-        ? params.identity.isCurrent(active)
-        : matchesCurrentGitHubPublicationIdentity({
-            agentId: params.row.agent_id,
-            identity: active,
-          }))
-    ) {
-      throw new Error("GitHub publication identity changed.");
-    }
   };
   return {
     assertCurrent,
@@ -167,8 +155,6 @@ export function createGitHubPublicationExecutionIdentity(params: {
       if (!matchesGitHubPublicationIdentityRow(params.row, identity)) {
         throw new Error("GitHub publication identity changed.");
       }
-      active = identity;
-      assertCurrent();
       return identity;
     },
   };

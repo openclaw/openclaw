@@ -151,9 +151,7 @@ it.each(["agent", "chat"] as const)(
       await runWithCronCreatorAuthorityCapability(capability, async () => {
         const grant = mintCronCreatorAuthorityGrant(capability);
         invalidateGatewayDeviceRevocation(context, "original-device", "operator");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-          "cron authority is no longer active",
-        );
+        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("cron access has ended");
       });
     } finally {
       caller.release();
@@ -175,6 +173,25 @@ it.each([
   expect(isDirectGatewayChatUserTurn({ ...params, isDirectExternalUser: false })).toBe(false);
 });
 
+it.each([
+  ["channel origin", { hasExplicitOrigin: true }],
+  ["channel ingress", { isDirectExternalUser: false }],
+  ["non-WebChat client", { client: createClient() }],
+  ["supervised child", { isUncontrolledDashboardChild: false }],
+  ["internal input", { isSystemGenerated: true }],
+  ["resumed input", { isReconnectResume: true }],
+  ["incognito", { isIncognito: true }],
+] as const)("keeps %s outside the dashboard handoff exception", (_label, overrides) => {
+  const params = createChatParams({
+    spawnedBy: "agent:main:parent",
+    isUncontrolledDashboardChild: true,
+    client: createClient({ authenticatedControlUi: true }),
+    ...overrides,
+  });
+  expect(isDirectGatewayChatUserTurn(params)).toBe(false);
+  expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
+});
+
 it.each([true, undefined] as const)(
   "retains host-attested Control UI admin authority with locality %s",
   (isLocalClient) => {
@@ -185,6 +202,30 @@ it.each([true, undefined] as const)(
       ...(!isLocalClient ? { callerScopedCreation: true } : {}),
       managementEntitlement: { source: "control-ui-admin" },
     });
+  },
+);
+
+it.each([true, undefined] as const)(
+  "admits authenticated native-app admin chat management with locality %s",
+  (isLocalClient) => {
+    const client = createClient({ isLocalClient, authenticatedOperator: true });
+    client.connect.client = {
+      id: "openclaw-macos",
+      mode: "ui",
+      version: "test",
+      platform: "macOS",
+    };
+    expect(admitChat({ client })?.managementEntitlement).toEqual({ source: "native-app-admin" });
+    client.connect.scopes = ["operator.write"];
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+    client.connect.scopes = ["operator.admin"];
+    client.internal!.authenticatedOperator = undefined;
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+    client.internal!.authenticatedOperator = true;
+    expect(admitChat({ client, isReconnectResume: true })).toBeUndefined();
+    expect(admitChat({ client, isSystemGenerated: true })).toBeUndefined();
+    client.connect.client.mode = "node";
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
   },
 );
 

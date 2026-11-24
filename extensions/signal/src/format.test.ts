@@ -20,35 +20,35 @@ describe("Signal formatting", () => {
     });
   });
 
-  it("does not duplicate URL for normalized equivalent labels", () => {
-    const equivalentCases = [
-      { input: "[selfh.st](http://selfh.st)", expected: "selfh.st" },
-      { input: "[example.com](https://example.com)", expected: "example.com" },
-      { input: "[www.example.com](https://example.com)", expected: "www.example.com" },
-      { input: "[example.com](https://example.com/)", expected: "example.com" },
-      { input: "[example.com](https://example.com///)", expected: "example.com" },
-      { input: "[example.com](https://www.example.com)", expected: "example.com" },
-      { input: "[EXAMPLE.COM](https://example.com)", expected: "EXAMPLE.COM" },
-      { input: "[example.com/page](https://example.com/page)", expected: "example.com/page" },
-      {
-        input: "[HTTPS://EXAMPLE.COM/Report](https://example.com/Report)",
-        expected: "HTTPS://EXAMPLE.COM/Report",
-      },
-      {
-        input: "[WWW.EXAMPLE.COM/Report](https://example.com/Report)",
-        expected: "WWW.EXAMPLE.COM/Report",
-      },
-      { input: "[USER@EXAMPLE.COM](mailto:user@example.com)", expected: "USER@EXAMPLE.COM" },
-      {
-        input: "[USER@EXAMPLE.COM?subject=HELLO](mailto:user@example.com?subject=hello)",
-        expected: "USER@EXAMPLE.COM?subject=HELLO",
-      },
-    ] as const;
-
-    for (const { input, expected } of equivalentCases) {
-      const res = markdownToSignalText(input);
-      expect(res.text).toBe(expected);
-    }
+  it.each([
+    ["[selfh.st](http://selfh.st)", "selfh.st"],
+    ["[example.com](https://example.com)", "example.com"],
+    ["[www.example.com](https://example.com)", "www.example.com"],
+    ["[example.com](https://example.com/)", "example.com"],
+    ["[example.com](https://example.com///)", "example.com"],
+    ["[example.com](https://www.example.com)", "example.com"],
+    ["[EXAMPLE.COM](https://example.com)", "EXAMPLE.COM"],
+    ["[example.com/page](https://example.com/page)", "example.com/page"],
+    ["[HTTPS://EXAMPLE.COM/Report](https://example.com/Report)", "HTTPS://EXAMPLE.COM/Report"],
+    ["[WWW.EXAMPLE.COM/Report](https://example.com/Report)", "WWW.EXAMPLE.COM/Report"],
+    ["[USER@EXAMPLE.COM](mailto:user@example.com)", "USER@EXAMPLE.COM"],
+    [
+      "[USER@EXAMPLE.COM?subject=HELLO](mailto:user@example.com?subject=hello)",
+      "USER@EXAMPLE.COM?subject=HELLO",
+    ],
+    ["See https://ja.wikipedia.org/wiki/東京", "See https://ja.wikipedia.org/wiki/東京"],
+    [
+      "[https://ja.wikipedia.org/wiki/東京](https://ja.wikipedia.org/wiki/東京)",
+      "https://ja.wikipedia.org/wiki/東京",
+    ],
+    ["https://example.com/?q=a|b", "https://example.com/?q=a|b"],
+    ["https://example.com/a%20b", "https://example.com/a b (https://example.com/a%20b)"],
+    [
+      "[https://example.com/%41](https://example.com/%2541)",
+      "https://example.com/%41 (https://example.com/%2541)",
+    ],
+  ] as const)("renders URL labels without losing distinct destinations: %s", (input, expected) => {
+    expect(markdownToSignalText(input).text).toBe(expected);
   });
 
   it("marks a transcript-role header promoted to a chunk boundary", () => {

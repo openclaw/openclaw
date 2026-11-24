@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -22,8 +23,18 @@ import {
   registerComputerUseProvider,
   type ComputerUseProvider,
 } from "../plugins/computer-use-registration.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { OpenClawPluginNodeHostCommand } from "../plugins/types.node-host.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { computerCapabilities } from "./desktop/computer.test-support.js";
 import {
   McpLoopbackToolCache,
@@ -219,13 +230,30 @@ it("retains a computer execution across MCP catalog rebuilds and releases it wit
 });
 
 it("adds the message tool for Telegram room delivery", async () => {
-  const result = await resolveTools({
-    cfg: { tools: { profile: "minimal" } },
-    sessionKey: "agent:main:telegram:group:-100123",
-    messageProvider: "telegram",
-    inboundEventKind: "room_event",
-  });
-  expect(toolNames(result)).toContain("message");
+  const registry = captureActivePluginRegistrySnapshot();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram" }),
+          outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+        },
+      },
+    ]),
+  );
+  try {
+    const result = await resolveTools({
+      cfg: { tools: { profile: "minimal" } },
+      sessionKey: "agent:main:telegram:group:-100123",
+      messageProvider: "telegram",
+      inboundEventKind: "room_event",
+    });
+    expect(toolNames(result)).toContain("message");
+  } finally {
+    restoreActivePluginRegistrySnapshot(registry);
+  }
 });
 
 it("rejects collector mode after gateway policy removes its reader", async () => {
@@ -365,6 +393,35 @@ it("applies sandbox tool denies to sandboxed loopback turns", async () => {
   const names = toolNames(result);
   expect(names).not.toContain("sessions_list");
   expect(names).toContain("sessions_history");
+});
+
+// The Gateway runs a CLI chat's OpenClaw tools, so the session's mode bounds an owner's turn too.
+it("bounds an owner's loopback file tools to the session root of a mode-set session", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mode-root-"));
+  const outside = path.join(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mode-out-")),
+    "x.txt",
+  );
+  await fs.writeFile(outside, "outside\n");
+  const context = { sessionKey: "agent:main:mode-owner", workspaceDir: root, senderIsOwner: true };
+  const readOutside = async (sessionPermissionPolicy?: { mode: "read-only"; root: string }) => {
+    const { tools } = await resolveMcpLoopbackScopedTools({
+      cfg: { plugins: { enabled: false } },
+      context: { ...context, ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}) },
+      defaultMediatedToolNames: ["read", "write"],
+    });
+    const read = tools.find((tool) => tool.name === "read");
+    assert(read);
+    const outcome = await Promise.resolve(read.execute("call-1", { path: outside })).then(
+      (result) => JSON.stringify(result),
+      (error: unknown) => String(error),
+    );
+    return { outcome, names: toolNames({ tools }) };
+  };
+  const bounded = await readOutside({ mode: "read-only", root });
+  expect(bounded.outcome).toContain("escapes");
+  expect(bounded.names).not.toContain("write");
+  expect((await readOutside()).outcome).toContain("outside");
 });
 
 registerGatewayToolFinalEffectTests();

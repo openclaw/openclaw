@@ -296,7 +296,6 @@ export function isSessionSharingOwnerEquivalent(
     return false;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   // Attribution alone grants nothing; neither side may widen session-only scopes.
   return (
     authority.profileId === actor.profileId &&
@@ -439,7 +438,7 @@ export async function authorizeResolvedSessionMutationAsync(params: {
   if (
     isGatewayAdmin(params.client) &&
     !isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
-    resolveOperatorRolePolicy(params.client, params.cfg)?.sandbox !== "required"
+    resolveOperatorRolePolicy(params.client, params.cfg) === undefined
   ) {
     return null;
   }
@@ -478,8 +477,7 @@ export function authorizePreparedSessionMutation(
   if (
     isGatewayAdmin(params.client) &&
     (!authorizesAgentRun ||
-      (!isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
-        prepared.policy?.sandbox !== "required"))
+      (!isNamedOperatorRoleEnforcementEnabled(params.cfg) && prepared.policy === undefined))
   ) {
     return null;
   }

@@ -99,6 +99,7 @@ export function validateCorrectionReview({
   source,
   workflowBinding,
   reviewOid,
+  pendingProofAcceptance,
 }) {
   const violations = validateReviewArtifacts({
     review,
@@ -110,7 +111,8 @@ export function validateCorrectionReview({
   if (review.correction?.incomingReviewJsonOid !== jsonOid || incomingCopyOid !== jsonOid) {
     throw new Error("Correction approval does not bind these exact incoming review bytes.");
   }
-  if (!forProof && review.recommendation !== "READY FOR /prepare-pr") {
+  const acceptingProof = !forProof && pendingProofAcceptance !== undefined;
+  if (!forProof && !acceptingProof && review.recommendation !== "READY FOR /prepare-pr") {
     throw new Error(
       "The exact correction needs an independent READY review before gates or publication.",
     );
@@ -126,14 +128,62 @@ export function validateCorrectionReview({
         (item) =>
           item?.id === id &&
           typeof item.resolution === "string" &&
-          (forProof || item.resolution.trim().length > 0),
+          (forProof || acceptingProof || item.resolution.trim().length > 0),
       ),
     )
   ) {
     throw new Error("The correction review must resolve every incoming BLOCKER/IMPORTANT finding.");
   }
-  const proof = forProof
-    ? proofPublication(review, findings, head, source, workflowBinding, reviewOid)
-    : null;
-  return proof;
+  const proof =
+    forProof || acceptingProof
+      ? proofPublication(review, findings, head, source, workflowBinding, reviewOid)
+      : null;
+  if (acceptingProof) {
+    const { record, publishedReviewOid, publishedFindings } = pendingProofAcceptance;
+    const pending = proof.pendingFindings.map(({ id }) => id).toSorted();
+    if (
+      !record ||
+      JSON.stringify(Object.keys(record).toSorted()) !==
+        '["findings","headSha","kind","reviewOid","treeOid","version"]' ||
+      record.version !== 1 ||
+      record.kind !== "maintainer-accepted-pending-proof" ||
+      record.headSha !== head ||
+      record.treeOid !== proof.treeOid ||
+      record.reviewOid !== reviewOid ||
+      publishedReviewOid !== reviewOid ||
+      publishedFindings !== pending.join(",") ||
+      !Array.isArray(record.findings) ||
+      !record.findings.every(
+        (item) =>
+          item &&
+          JSON.stringify(Object.keys(item).toSorted()) === '["id","reason"]' &&
+          typeof item.id === "string" &&
+          typeof item.reason === "string" &&
+          item.reason.isWellFormed() &&
+          // Match the retained outcome reader's character rules. jq rejects
+          // lone surrogate escapes before it can apply those same rules.
+          !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(item.reason) &&
+          /[^\p{Zs}\p{Cf}]/u.test(item.reason),
+      ) ||
+      JSON.stringify(record.findings.map(({ id }) => id).toSorted()) !== JSON.stringify(pending)
+    ) {
+      throw new Error(
+        "Pending proof acceptance must bind the exact published head, tree and review, with a nonblank, single-line Unicode reason for every pending IMPORTANT finding and no others.",
+      );
+    }
+    // Check the other READY requirements without changing or rendering the
+    // independent review as READY, or claiming any pending proof was performed.
+    const remainingViolations = validateReviewArtifacts({
+      review: {
+        ...review,
+        recommendation: "READY FOR /prepare-pr",
+        findings: review.findings.filter(({ severity }) => severity === "NIT"),
+      },
+      prMeta,
+    });
+    if (remainingViolations.length) {
+      throw new Error(remainingViolations.join("\n"));
+    }
+  }
+  return forProof ? proof : null;
 }

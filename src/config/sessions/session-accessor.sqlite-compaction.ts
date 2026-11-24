@@ -1,4 +1,3 @@
-import type { PreparedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveOpenClawAgentSqlitePath,
@@ -18,6 +17,7 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
+import type { PreparedCompactionAppend } from "./session-compaction-persistence.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import type {
   CompactionBoundaryOperations,

@@ -73,7 +73,7 @@ export async function captureOperatorToolGatewayRequestContinuationContext(
       }
       dispatched = true;
       const { callAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
-      return await captured.run(() =>
+      return await captured.runWithRequester(() =>
         callAgentToolGatewayRequest({
           method: fixed.method,
           params: fixed.params,
@@ -93,7 +93,7 @@ export async function captureOperatorToolGatewayRequestContinuationContext(
         await import("../auto-reply/reply/session-event-handoff.js");
       const { runOutsidePluginRuntimeRegistryScope } =
         await import("../plugins/runtime/gateway-request-scope.js");
-      return captured.run(() =>
+      return captured.runWithRequester(async () =>
         runOutsidePluginRuntimeRegistryScope(() => enqueueSessionEventForHost(text, options)),
       );
     },

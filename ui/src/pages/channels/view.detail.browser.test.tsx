@@ -7,7 +7,7 @@ import "../../styles/settings.css";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { renderChannelDetail } from "./view.detail.tsx";
-import { createChannelsViewProps } from "./view.test-support.ts";
+import { channelSnapshot, createChannelsViewProps } from "./view.test-support.ts";
 
 const viewport = { width: window.innerWidth, height: window.innerHeight };
 let host: HTMLDivElement | undefined;
@@ -16,6 +16,40 @@ afterEach(async () => {
   view?.unmount();
   host?.remove();
   await page.viewport(viewport.width, viewport.height);
+});
+
+it("wraps long connection identifiers inside the channel warning", async () => {
+  await page.viewport(390, 844);
+  const destination = "calendar-destination-".repeat(8);
+  const props = createChannelsViewProps(
+    channelSnapshot({
+      discord: { configured: true, lastError: "No connection to " + destination },
+    }),
+    null,
+  );
+  host = document.body.appendChild(document.createElement("div"));
+  view = mountSolid(
+    () =>
+      renderChannelDetail({
+        channelId: "discord",
+        label: "Discord",
+        props,
+        onClose: () => {},
+        onSetup: () => {},
+      }),
+    { container: host },
+  );
+  const { dialog } = await getRenderedModalDialog(host);
+  await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+  const alert = dialog.querySelector<HTMLElement>('[role="alert"]')!;
+  expect(alert.textContent).toContain(destination);
+  const range = document.createRange();
+  range.selectNodeContents(alert);
+  const bounds = alert.getBoundingClientRect();
+  for (const line of range.getClientRects()) {
+    expect(line.left).toBeGreaterThanOrEqual(bounds.left);
+    expect(line.right).toBeLessThanOrEqual(bounds.right + 1);
+  }
 });
 
 it("keeps channel fields and completion actions inset and reachable without visiting Config", async () => {

@@ -1,7 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveAgentRunCwd, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveAgentRunCwd,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope-config.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { hasActiveContainerUsage } from "../agents/sandbox/container-usage.js";
+import { readRegistry as readSandboxRegistry } from "../agents/sandbox/registry.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxSession } from "../agents/sandbox/session-selection.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { readWorktreeCleanupState } from "../agents/worktrees/registry-read.js";
 import {
@@ -16,6 +26,7 @@ import {
   listLiveAgentRunIds,
 } from "../infra/agent-run-registry.js";
 import { onGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import type { ScratchCleanupTarget } from "../infra/scratch-cleanup.js";
 import { listProjectRegistry } from "../projects/project-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -126,9 +137,10 @@ export async function prepareScratchMaintenanceTargets(
     placements.release();
   };
   try {
-    const [state, projects] = await Promise.all([
+    const [state, projects, sandboxes] = await Promise.all([
       readWorktreeCleanupState(process.env),
       listProjectRegistry(cfg),
+      readSandboxRegistry(),
     ]);
     assertInventory();
     const roots = new Map<string, string[]>();
@@ -153,8 +165,52 @@ export async function prepareScratchMaintenanceTargets(
         }
       }
     }
-    for (const project of projects) {
-      const root = path.resolve(project.repoRoot);
+    const otherRoots = [
+      ...projects.map((project) => project.repoRoot),
+      ...listAgentIds(cfg).flatMap((id) => [
+        resolveAgentWorkspaceDir(cfg, id),
+        resolveAgentRunCwd(cfg, id),
+      ]),
+    ];
+    // Container retirement preserves workspace bytes but removes its registry row.
+    // Keep their scratch discoverable under the configured workspace owner afterward.
+    const sandboxRoots = new Set(
+      listAgentIds(cfg).flatMap((id) => {
+        const sandbox = resolveSandboxConfigForAgent(cfg, id);
+        return ["docker", "podman"].includes(sandbox.backend) ? [sandbox.workspaceRoot] : [];
+      }),
+    );
+    let hasSandboxWorkspaces = false;
+    for (const root of sandboxRoots) {
+      const directory = resolveUserPath(root);
+      otherRoots.push(directory);
+      const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+      hasSandboxWorkspaces ||= entries.length > 0;
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name !== ".openclaw") {
+          otherRoots.push(path.join(directory, entry.name));
+        }
+      }
+    }
+    const localSandboxes = new Map<string, typeof sandboxes.entries>();
+    for (const sandbox of sandboxes.entries) {
+      if (
+        sandbox.workspaceDir &&
+        (!sandbox.backendId || ["docker", "podman"].includes(sandbox.backendId))
+      ) {
+        const root = path.resolve(sandbox.workspaceDir);
+        otherRoots.push(root);
+        const entries = localSandboxes.get(root) ?? [];
+        entries.push(sandbox);
+        localSandboxes.set(root, entries);
+      }
+    }
+    hasSandboxWorkspaces ||= localSandboxes.size > 0;
+    for (const directory of otherRoots) {
+      if (!directory) {
+        continue;
+      }
+      const root = path.resolve(directory);
       if (!roots.has(root)) {
         roots.set(root, []);
         const stat = await fs.stat(root).catch(() => undefined);
@@ -182,6 +238,11 @@ export async function prepareScratchMaintenanceTargets(
         if (placement.turnClaim) {
           current.keys.add(placement.sessionKey);
           current.needsBinding.add(placement.sessionKey);
+        }
+      }
+      if (hasSandboxWorkspaces) {
+        for (const key of current.keys) {
+          current.needsBinding.add(key);
         }
       }
       return current;
@@ -227,6 +288,33 @@ export async function prepareScratchMaintenanceTargets(
           entry?.sessionRoot,
           entry?.worktree && worktreesById.get(entry.worktree.id),
         ].filter((value): value is string => Boolean(value));
+        if (hasSandboxWorkspaces) {
+          const runtime = resolvePreparedSandboxRuntimeStatus({
+            cfg,
+            sessionKey: target.canonicalKey,
+            agentId: target.agentId,
+            preparedSessionEntry: entry ?? null,
+          });
+          const selected = await resolveSandboxSession({
+            config: cfg,
+            sessionKey: target.canonicalKey,
+            preparedRuntimeStatus: runtime,
+            skillsSnapshot: { librarySelections: entry?.skillLibrarySelections },
+          });
+          if (selected) {
+            for (const workspaceDir of [...paths, ...(current.sourcePaths.get(key) ?? [])]) {
+              paths.push(
+                resolveSandboxWorkspaceLayoutPaths({
+                  cfg: selected.cfg,
+                  rawSessionKey: selected.rawSessionKey,
+                  agentId: target.agentId,
+                  isolationSubject: selected.runtime.isolationSubject,
+                  workspaceDir,
+                }).workspaceDir,
+              );
+            }
+          }
+        }
         pathsByKey.set(key, paths);
         pathsByKey.set(target.canonicalKey, paths);
       }
@@ -287,6 +375,7 @@ export async function prepareScratchMaintenanceTargets(
         (runsChanged && worktreeIds.length === 0) ||
         worktreeIds.some((id) => liveScopes.has(`worktree-run:${id}`)) ||
         liveRoots.has(root) ||
+        (localSandboxes.get(root)?.some(hasActiveContainerUsage) ?? false) ||
         (unboundSince < Infinity && createdAtByRoot.get(root)! >= unboundSince)
       );
     };

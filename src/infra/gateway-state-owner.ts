@@ -11,10 +11,6 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
-import {
-  resolveIdentityPathViaExistingAncestor,
-  resolveIdentityPathViaExistingAncestorSync,
-} from "./boundary-path.js";
 import type { acquireFileLockSync } from "./file-lock-manager.js";
 import { describeGatewayLockHolder, type LockPayload } from "./gateway-lock-payload.js";
 import {
@@ -43,6 +39,10 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
 } from "./gateway-state-owner-record.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "./path-existence.js";
 import { normalizeWindowsPathForComparison } from "./path-guards.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";

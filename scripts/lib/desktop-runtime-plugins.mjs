@@ -114,37 +114,6 @@ function runtimeDependencies(root, seen = new Set()) {
   return seen;
 }
 
-function normalizeStagedCodexVoiceHost(packageRoot) {
-  const codex = dependencyRoot(path.join(packageRoot, "dist/extensions/codex"), "@openai/codex");
-  if (!codex) {
-    return;
-  }
-  for (const [architecture, target] of [
-    ["arm64", "aarch64-apple-darwin"],
-    ["x64", "x86_64-apple-darwin"],
-  ]) {
-    const platform = dependencyRoot(codex, `@openai/codex-darwin-${architecture}`);
-    const host =
-      platform &&
-      path.join(platform, "vendor", target, "codex-resources/voice/bin/codex-voice-host");
-    if (!host || !fs.existsSync(host)) {
-      continue;
-    }
-    const commands = execFileSync("/usr/bin/otool", ["-l", host], { encoding: "utf8" });
-    for (const [, rpath] of commands.matchAll(/^\s*path (.+) \(offset \d+\)$/gm)) {
-      // Codex also carries a portable ../lib path. Drop only missing Bazel
-      // build-tree paths from the installed copy before the app is signed.
-      if (
-        rpath.startsWith("@loader_path/../../_solib_darwin_") &&
-        rpath.includes("/voice/native_link_macos_") &&
-        !fs.existsSync(path.resolve(path.dirname(host), rpath.slice("@loader_path/".length)))
-      ) {
-        execFileSync("/usr/bin/install_name_tool", ["-delete_rpath", rpath, host]);
-      }
-    }
-  }
-}
-
 /** Select all official source plugins unless their additional installed payload exceeds 300 MiB. */
 export function planDesktopRuntimePlugins(root, { pluginIds: selectedIds } = {}) {
   const manifest = readJson(path.join(root, "package.json"));
@@ -221,14 +190,15 @@ export function stampDesktopRuntimePlugins(packageRoot, plan) {
       }
     }
   }
-  if (plan.pluginIds.includes("codex")) {
-    normalizeStagedCodexVoiceHost(packageRoot);
-  }
   build.stagedOfficialPlugins = { commit: plan.commit, pluginIds: plan.pluginIds };
   fs.writeFileSync(file, `${JSON.stringify(build, null, 2)}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node resolves the module URL through symlinks (macOS /tmp is /private/tmp),
+// so compare the real path or a symlinked checkout silently does nothing.
+// Importers may pass a non-path argv[1] (for example `node --eval ... <url>`).
+const entry = process.argv[1];
+if (entry && fs.existsSync(entry) && fs.realpathSync(entry) === fileURLToPath(import.meta.url)) {
   const [operation, root, planFile] = process.argv.slice(2);
   if (operation === "plan") {
     console.log(JSON.stringify(planDesktopRuntimePlugins(root)));

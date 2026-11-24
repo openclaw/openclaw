@@ -279,9 +279,9 @@ export function registerDiskProfileCase(options: NativePluginSpawnTestOptions) {
             },
             getPreDispatchAbortSignal: () => undefined,
             getDispatchAbortSignal: () => signal,
-            assertProgressCurrent: source.authority.assertCurrent,
-            assertCurrentBindingRoute: async () => source.authority.assertCurrent(),
-            turnAdoption: { assertCurrent: source.authority.assertCurrent, adopt: async () => {} },
+            assertProgressCurrent: () => signal.throwIfAborted(),
+            assertCurrentBindingRoute: async () => signal.throwIfAborted(),
+            turnAdoption: { assertCurrent: () => signal.throwIfAborted(), adopt: async () => {} },
           };
           const command = buildCommandTestParams("/profile-proof", cfg, ctx, {
             workspaceDir: workspace,

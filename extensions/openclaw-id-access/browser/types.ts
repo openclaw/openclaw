@@ -39,6 +39,7 @@ export type Member = {
   accountId: string;
   role: string;
   roleDefined?: boolean;
+  recoveryKit?: boolean;
   peerKeys: string[];
   email?: string | null;
   displayName?: string | null;
@@ -52,6 +53,18 @@ export type RemovalSummary = { devices: number; connectionsClosed: number; runsC
 
 /** A local personal profile with no OpenClaw ID linked yet. */
 export type ExistingProfile = { id: string; displayName: string | null };
+
+/** Owner-only accepted recovery-kit use, independent of current member/device membership. */
+export type MemberRecoveryUse = {
+  seq: number;
+  accountId: string;
+  memberName: string;
+  deviceLabel: string;
+  peerKey: string;
+  peerFp: string;
+  /** Gateway-observed admission time, Unix seconds. */
+  usedAt: number;
+};
 
 /** One invite as the Gateway lists it to owners. */
 export type Invite = {
@@ -77,6 +90,19 @@ export type Invite = {
   };
 };
 
+/** Whether a role that requires a sandbox can start one now; null when the Gateway cannot check. */
+type RoleSandboxReadiness =
+  | { ready: true }
+  | { ready: null; backend: string }
+  | { ready: false; reason: "engine_unavailable"; backend: string }
+  | {
+      ready: false;
+      reason: "image_missing";
+      backend: string;
+      image: string;
+      doctorBuilds: boolean;
+    };
+
 /** Small public role summary, not the full permission definition. */
 export type Role = { name: string; requiresSandbox: boolean } & (
   | { defined: false }
@@ -84,6 +110,8 @@ export type Role = { name: string; requiresSandbox: boolean } & (
       defined: true;
       sessions: "none" | "view" | "suggest" | "write";
       admin: boolean;
+      /** Present on the owner's People data for roles that require a sandbox. */
+      sandbox?: RoleSandboxReadiness;
     }
 );
 
@@ -100,8 +128,7 @@ export type Link = {
   ownerDevices?: OwnerDevice[];
   members?: Member[];
   roles?: Role[];
-  /** Default engine liveness; null means this backend is not probed here. */
-  sandboxBackend?: { backend: string; available: boolean | null };
+  recoveryUses?: MemberRecoveryUse[];
   invites?: Invite[];
   existingProfiles?: ExistingProfile[];
   nodes?: NodeRecord[];

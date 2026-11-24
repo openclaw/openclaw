@@ -12,6 +12,7 @@ import {
   createTestApprovalFixture,
 } from "../exec-approval-manager.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
   waitForApprovalAccepted,
   waitForApprovalRequested,
@@ -50,6 +51,7 @@ export function createExecApprovalClient(params: {
   connId: string;
   clientId: string;
   deviceId?: string;
+  profileId?: string;
   scopes?: string[];
   approvalRuntime?: boolean;
   agentRuntimeIdentity?: { agentId: string; sessionKey: string };
@@ -64,6 +66,7 @@ export function createExecApprovalClient(params: {
   };
   return {
     connId: params.connId,
+    ...(params.profileId ? { authenticatedUserProfile: dispatchProfile(params.profileId) } : {}),
     connect: {
       client: { id: params.clientId },
       device: params.deviceId ? { id: params.deviceId } : undefined,
@@ -113,8 +116,8 @@ export async function getExecApproval(params: ApprovalById) {
   return callApproval("exec.approval.get", params, { id: params.id });
 }
 
-export async function listExecApprovals(params: ApprovalCall) {
-  return callApproval("exec.approval.list", params, {});
+export async function listExecApprovals(params: ApprovalCall & { context?: object }) {
+  return callApproval("exec.approval.list", params, {}, params.context);
 }
 
 export async function requestExecApproval(

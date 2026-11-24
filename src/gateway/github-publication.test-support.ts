@@ -93,35 +93,6 @@ vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
   unlockWorktree: vi.fn(async () => undefined),
 }));
 
-// mock-isolation: Only the synthetic repository lacks physical recovery refs; real Git stays real.
-vi.mock("../agents/worktrees/git.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/worktrees/git.js")>();
-  const runGit: typeof actual.runGit = async (cwd, args, options) => {
-    if (
-      cwd !== "/repo" ||
-      args.length !== 4 ||
-      args[0] !== "show-ref" ||
-      args[1] !== "--verify" ||
-      args[2] !== "--quiet" ||
-      !args[3]?.startsWith("refs/openclaw/removals/")
-    ) {
-      return await actual.runGit(cwd, args, options);
-    }
-    options?.signal?.throwIfAborted();
-    options?.beforeRun?.();
-    return {
-      code: 1,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-      timeoutMs: options?.timeoutMs ?? 120_000,
-    };
-  };
-  return { ...actual, runGit };
-});
-
 vi.mock("../agents/git-coauthor-attribution.js", () => ({
   resolveGitCoauthorAttribution: mocks.attribution,
   prepareGitCoauthorAttribution: mocks.prepareAttribution,
@@ -154,10 +125,38 @@ vi.mock("./session-utils-store-worker.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runCommandBuffered: mocks.runCommand,
-}));
+// mock-isolation: Intercept external Git I/O even when a cached worktree owner holds runGit.
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  const runCommandWithTimeout: typeof actual.runCommandWithTimeout = async (argv, options) => {
+    const directory = argv.indexOf("-C");
+    const args = argv.slice(directory + 2);
+    if (
+      argv[0] !== "git" ||
+      directory < 1 ||
+      argv[directory + 1] !== "/repo" ||
+      args.length !== 4 ||
+      args[0] !== "show-ref" ||
+      args[1] !== "--verify" ||
+      args[2] !== "--quiet" ||
+      !args[3]?.startsWith("refs/openclaw/removals/")
+    ) {
+      return await actual.runCommandWithTimeout(argv, options);
+    }
+    if (typeof options !== "number") {
+      options.signal?.throwIfAborted();
+    }
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    };
+  };
+  return { ...actual, runCommandBuffered: mocks.runCommand, runCommandWithTimeout };
+});
 
 vi.mock("../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: mocks.getConfigSnapshot,

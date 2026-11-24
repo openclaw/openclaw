@@ -719,6 +719,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
+        operations: ["retainSessionColdNavigationInTransaction"],
+        evidence:
+          "Runtime callers execute in session-cold-storage-worker.ts under the archive mutation worker. The only direct non-worker caller is scripts/perf/restart-resume-measure.ts preparing its explicitly selected synthetic fixture before measurement; no Gateway call bypasses the worker owner.",
+      },
+      {
+        tier: "T3",
         operations: ["backfillSessionColdNavigationInTransaction"],
         evidence:
           "Only state-migrations.cold-navigation.ts calls backfill under Doctor maintenance custody and its per-archive transaction; the other caller is scripts/perf/session-cold-navigation.ts preparing explicitly selected synthetic state. Runtime cold archive publication calls retainSessionColdNavigationInTransaction from the archive mutation worker, not this backfill operation.",
@@ -1964,7 +1970,7 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
+        operations: ["readCursor", "readMaterialCursors", "writeMaterialCursors"],
         evidence:
           "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
@@ -2133,13 +2139,14 @@ const reviewedOperations = new Map([
         operations: [
           "readUserPreferences",
           "writeUserPreferences",
+          "upsertUserPreferenceValues",
           "deleteUserPreference",
           "selectUserPreferenceValues",
           "readPreferenceKeys",
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; acknowledgements and profile merges share the same worker-owned preference upsert",
       },
     ],
   ],
@@ -3792,6 +3799,10 @@ const cliModules = new Map([
     "Explicit developer-only measurement of cold archive publication, navigation backfill and bounded reads on synthetic state; no runtime imports or Gateway callers",
   ],
   [
+    "scripts/perf/session-cold-writer.mjs",
+    "Explicit developer-only writer-hold and restore benchmark on synthetic state; no runtime imports or Gateway callers",
+  ],
+  [
     "scripts/perf/session-cold-selection.ts",
     "Explicit developer-only benchmark of cold preparation and mutation on synthetic state; no runtime imports or Gateway callers",
   ],
@@ -4049,8 +4060,13 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
       : [
           "--files",
           "--null",
-          "-g",
-          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          // Match Git membership: type filters keep ignore rules (a positive -g glob would list
+          // ignored build outputs), and tracked hidden stubs stay in the source set.
+          "--hidden",
+          "--type-add",
+          "inventory:*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          "--type",
+          "inventory",
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
@@ -4300,11 +4316,23 @@ function render(rows) {
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
-    console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
+  const snapshot = args.length === 2 && args[0] === "--json" && args[1] === "--snapshot";
+  if (!snapshot && (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0]))) {
+    console.error(
+      "Usage: node scripts/database-worker-inventory.mjs --write|--check|--json [--snapshot]",
+    );
     process.exitCode = 2;
   } else {
-    const rows = inventory();
+    /** @type {{ root: string; ref: string; staged: boolean; sources: [string, string][]; trace: boolean } | undefined} */
+    const request = snapshot ? JSON.parse(fs.readFileSync(0, "utf8")) : undefined;
+    const rows = request
+      ? inventory(request.root, request.ref, request.staged, new Map(request.sources), {
+          observer: request.trace
+            ? (phase, facts) =>
+                console.error("[inventory-phase] " + JSON.stringify({ phase, facts }))
+            : undefined,
+        })
+      : inventory();
     if (args[0] === "--json") {
       console.log(
         JSON.stringify(

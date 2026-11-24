@@ -1,13 +1,12 @@
 // A linked owner device (OCF-510) is the Gateway owner attributed to a person. Retained work,
 // resumed access grants and personal skill-library permissions derive from its owner
-// certificate, not the person's named role, and only while that certificate is current.
+// certificate admitted for that request, not a later change to that person's named role.
 // Stored-role changes and session skill seeding need the host database broker; they are
 // covered in server-methods/linked-owner-authority.test.ts.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSkillLibraryActorFromProfile } from "../../skills/library/store.js";
-import { resumeGatewayOperatorAccessGrant } from "../operator-access-policy.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { currentPersonalProfileClient } from "../server-methods/personal-profile-authorization.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
@@ -48,11 +47,10 @@ afterEach(() => {
 });
 
 function dispatchClient(principal?: OpenClawIdTunnelPrincipal) {
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "person",
     ...(principal ? { openclawIdPrincipal: principal } : {}),
     scopes: ["operator.admin"],
-    assertCurrent: () => {},
     readCurrentRoleFacts: () => ({ assignedRole: null }),
   });
   // The same synthetic operator client tool dispatch builds from an admitted run.
@@ -67,18 +65,6 @@ describe("linked owner device authority", () => {
   it("dispatches a linked owner's run without the person's role", () => {
     expect(resolveOperatorRolePolicy(dispatchClient(OWNER), cfg)).toBeUndefined();
     expect(resolveOperatorRolePolicy(dispatchClient(), cfg)?.scopes).toEqual(["operator.talk"]);
-    ownerCurrent = false;
-    expect(() => resolveOperatorRolePolicy(dispatchClient(OWNER), cfg)).toThrow(
-      "OpenClaw ID membership authority changed",
-    );
-  });
-
-  it("resumes a linked owner's grantless work without the person's access policy", () => {
-    const profile = { profileId: "person", emails: [], assignedRole: null };
-    expect(
-      resumeGatewayOperatorAccessGrant(profile, cfg, null, { openclawIdPrincipal: OWNER }),
-    ).toBeUndefined();
-    expect(() => resumeGatewayOperatorAccessGrant(profile, cfg, null)).toThrow();
   });
 
   it("lifts the skill-library role ceiling only for the owner device's own profile", () => {

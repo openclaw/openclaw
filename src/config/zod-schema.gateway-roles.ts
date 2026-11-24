@@ -9,6 +9,8 @@ import {
   QUESTIONS_SCOPE,
   READ_SCOPE,
   SESSION_READ_SCOPE,
+  PUBLICATION_READ_SCOPE,
+  PUBLICATION_STEER_SCOPE,
   SESSION_WRITE_SCOPE,
   TALK_SCOPE,
   TALK_SECRETS_SCOPE,
@@ -21,6 +23,8 @@ export const OperatorScopeSchema = z.enum([
   WRITE_SCOPE,
   CRON_SCOPE,
   SESSION_READ_SCOPE,
+  PUBLICATION_READ_SCOPE,
+  PUBLICATION_STEER_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,
   QUESTIONS_SCOPE,
@@ -32,7 +36,7 @@ export const OperatorScopeSchema = z.enum([
 export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({
     /** Maximum access to another person's sessions without explicit membership. */
-    others: z.enum(["none", "view", "suggest", "write"]),
+    others: z.enum(["none", "invited", "view", "suggest", "write"]),
   }),
   /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
   sandbox: z.enum(["inherit", "required"]).optional(),
@@ -43,6 +47,10 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Registered project IDs this role may use beyond public repositories, or every project with "*". */
+  projects: z
+    .union([z.literal("*"), z.array(z.string().trim().min(1)).transform(uniqueValues)])
+    .optional(),
   /** Cloud profiles this role may explicitly dispatch its own sessions to. */
   workerProfiles: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
   /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */

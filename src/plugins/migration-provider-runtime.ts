@@ -1,4 +1,4 @@
-import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
+import { runWithLocalStateOwner, type OwnerRequest } from "../cli/local-state-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
@@ -182,14 +182,17 @@ export async function withPluginMigrationProviders<T>(
     providerId?: string;
     /** Report final cleanup failure only after the consuming operation succeeded. */
     onCleanupError?: (error: unknown) => void | Promise<void>;
+    /** Route to the serving owner without loading local migration providers. */
+    onForeignOwner?: (request: OwnerRequest) => Promise<T>;
   },
   run: (providers: MigrationProviderPlugin[]) => Promise<T>,
 ): Promise<T> {
+  const onForeignOwner = params.onForeignOwner;
   return await runWithLocalStateOwner({
     method: "migrate",
     params: {},
     target: params.providerId ?? "migration providers",
-    onForeignOwner: "refuse",
+    onForeignOwner: onForeignOwner ? ({ requestOwner }) => onForeignOwner(requestOwner) : "refuse",
     runLocal: async (scope) => {
       const { assertCurrent } = scope;
       assertCurrent();

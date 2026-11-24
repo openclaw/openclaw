@@ -111,6 +111,10 @@ import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-p
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import {
+  AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION,
+  migrateAgentPendingInputEndingsInTransaction,
+} from "./openclaw-agent-pending-input-endings-schema.js";
 import { interruptHistoricalPendingInputs } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
@@ -392,6 +396,9 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_TOOL_USAGE_SCHEMA_VERSION)) {
           db.exec(AGENT_TOOL_USAGE_SQL);
+        }
+        if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
+          migrateAgentPendingInputEndingsInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

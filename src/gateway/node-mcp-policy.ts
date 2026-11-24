@@ -1,5 +1,5 @@
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
-import { canInvokeNodeMcpLocally } from "./node-command-policy.js";
+import { canInvokeNodeMcpLocally, canInvokeNodeMcpToolLocally } from "./node-command-policy.js";
 import { NodeMcpElicitationRegistry } from "./node-mcp-elicitation.js";
 import type { NodeSession } from "./node-session.types.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
@@ -8,7 +8,10 @@ import { closeGatewayTransportWithGrace } from "./server/connection-transport-cl
 /** Own MCP permissions and pending questions for this Gateway’s paired node sessions. */
 export class NodeMcpPolicy {
   readonly elicitation = new NodeMcpElicitationRegistry();
-  private readonly permissions = new WeakMap<NodeSession, boolean>();
+  private readonly permissions = new WeakMap<
+    NodeSession,
+    { allowed: boolean; tools: Set<string> }
+  >();
 
   constructor(
     private readonly sessions: ReadonlyMap<string, NodeSession>,
@@ -45,14 +48,27 @@ export class NodeMcpPolicy {
     const previous = this.permissions.get(node);
     if (!available) {
       this.permissions.delete(node);
-      if (previous === true) {
+      if (previous?.allowed === true) {
         this.send(node, false);
       }
       return;
     }
     const allowed = canInvokeNodeMcpLocally(node.commands);
-    if (allowed !== previous) {
-      this.permissions.set(node, allowed);
+    const tools = new Set(
+      node.nodePluginTools.flatMap(({ mcp }) =>
+        mcp && canInvokeNodeMcpToolLocally({ nodeId: node.nodeId, ...mcp })
+          ? [JSON.stringify([mcp.server, mcp.tool])]
+          : [],
+      ),
+    );
+    const revoked =
+      previous?.allowed && allowed && [...previous.tools].some((tool) => !tools.has(tool));
+    if (revoked) {
+      // Revoke old turn grants only when an exact previously admitted tool is withdrawn.
+      this.send(node, false);
+    }
+    this.permissions.set(node, { allowed, tools });
+    if (allowed !== previous?.allowed || revoked) {
       this.send(node, allowed);
     }
   }

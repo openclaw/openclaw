@@ -7,13 +7,10 @@ import { decodePostgresRows } from "../postgres-sync/protocol.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
-import {
-  readAutoincrementHighWater,
-  restoreAutoincrementHighWater,
-  withSqliteForeignKeysDisabled,
-} from "../sqlite-strict.js";
+import { restoreAutoincrementHighWater, withSqliteForeignKeysDisabled } from "../sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { writeSqliteUserVersion } from "../sqlite-user-version.js";
+import { readSqlitePortAllocation } from "./port-allocation-fact.js";
 import {
   admitDatabasePortDescriptor,
   DatabasePortDataError,
@@ -22,6 +19,7 @@ import {
   type PortRow,
   type PortTable,
 } from "./port-descriptor.js";
+import { createPortTableDigest, PORT_ROW_DIGEST } from "./port-row-digest.js";
 import {
   assertPostgresCatalog,
   postgresCatalogQuery,
@@ -40,6 +38,7 @@ export {
 } from "./port-descriptor.js";
 
 export type PortVerification = {
+  digest?: typeof PORT_ROW_DIGEST;
   tables: Record<string, { rows: number; sha256: string }>;
   allocations: Record<string, { value: string; called: boolean }>;
 };
@@ -54,11 +53,9 @@ export async function migrateDatabasePortSource(
   assertCurrent();
   await descriptor.migrateSqliteSource?.(sourcePath, sourceVersion, assertCurrent);
   using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
-  const { tables, allocations: retainedAllocations } = await inspectDatabasePort(
-    { engine: "sqlite", db },
-    descriptor,
-  );
-  return { tables, allocations: retainedAllocations };
+  const source = { engine: "sqlite" as const, db };
+  const { catalog: _catalog, ...verification } = await inspectDatabasePort(source, descriptor);
+  return verification;
 }
 type Endpoint = PortEndpoint;
 const copiedTables = (descriptor: PortDescriptor) =>
@@ -240,21 +237,12 @@ export async function readDatabasePortAllocations(
         ).rows[0];
         result[key] = { value: row.value, called: row.called };
       } else {
-        const statement = sqliteStatement(
+        result[key] = readSqlitePortAllocation(
           endpoint.db,
-          `SELECT max(${quote(identity.column)}) AS value FROM ${quote(table.name)}`,
+          table.name,
+          identity.column,
+          identity.autoIncrement,
         );
-        let value = statement.get()?.value;
-        if (identity.autoIncrement) {
-          const high = readAutoincrementHighWater(endpoint.db, table.name);
-          if (
-            high !== null &&
-            (value === null || (typeof value === "bigint" && BigInt(high) > value))
-          ) {
-            value = BigInt(high);
-          }
-        }
-        result[key] = { value: String(value ?? 1), called: value !== null && value !== undefined };
       }
     }
   }
@@ -341,15 +329,16 @@ async function insertBatch(
 async function scan(
   endpoint: Endpoint,
   descriptor: PortDescriptor,
-  maxRowBytes: number,
+  legacyDigest: boolean,
+  // Include the blob owner's 100 MiB allowance plus keys and JSON metadata.
+  maxRowBytes = 128 * 1024 * 1024,
   destination?: Endpoint,
   assertCurrent = () => {},
   transformRow?: (table: string, row: PortRow) => PortRow | undefined,
-) {
+): Promise<Pick<PortVerification, "digest" | "tables">> {
   const tables: PortVerification["tables"] = {};
   for (const table of copiedTables(descriptor)) {
-    const hash = createHash("sha256").update(JSON.stringify(table.columns) + "\n");
-    let rows = 0;
+    const digest = createPortTableDigest(table.columns, legacyDigest);
     let pending: Promise<void> | undefined;
     const stream = readBatches(
       endpoint,
@@ -373,10 +362,7 @@ async function scan(
             })
           : batch;
         for (const row of copied) {
-          hash.update(
-            JSON.stringify(table.columns.map((c) => encodeSqliteValue(row[c.name]))) + "\n",
-          );
-          rows++;
+          digest.add(row);
         }
         await pending;
         // Start the remote read before a synchronous SQLite write; PG writes can start first.
@@ -395,9 +381,9 @@ async function scan(
     } finally {
       await Promise.all([pending, stream.return(undefined)]);
     }
-    tables[table.name] = { rows, sha256: hash.digest("hex") };
+    tables[table.name] = digest.result();
   }
-  return tables;
+  return legacyDigest ? { tables } : { digest: PORT_ROW_DIGEST, tables };
 }
 
 async function catalogEvidence(
@@ -449,13 +435,15 @@ async function catalogEvidence(
   if (invalid.rowCount) {
     throw new DatabasePortDataError("Port catalog has unvalidated constraints or invalid indexes");
   }
-  return facts.map((f) => ({
-    table: f.table,
-    kind: f.kind,
-    value: JSON.parse(
-      JSON.stringify(f.value).replaceAll(endpoint.namespace, "__port_schema__"),
-    ) as unknown,
-  }));
+  // PostgreSQL deparses hyphenated store namespaces with quotes, unlike the reference.
+  const quotedNamespace = JSON.stringify(quote(endpoint.namespace)).slice(1, -1);
+  for (const fact of facts) {
+    const value = JSON.stringify(fact.value)
+      .replaceAll(`${quotedNamespace}.`, "__port_schema__.")
+      .replaceAll(endpoint.namespace, "__port_schema__");
+    fact.value = JSON.parse(value) as unknown;
+  }
+  return facts;
 }
 
 async function referenceCatalog(
@@ -514,6 +502,7 @@ export async function inspectDatabasePort(
   baseDescriptor: PortDescriptor,
   storeId?: string,
   verifyDefinitions = false,
+  legacyDigest = false,
 ) {
   const descriptor = await admitDatabasePortDescriptor(source, baseDescriptor);
   let definitions: Awaited<ReturnType<typeof referenceCatalog>> | undefined;
@@ -538,7 +527,7 @@ export async function inspectDatabasePort(
     }
     return {
       catalog,
-      tables: await scan(source, descriptor, 64 * 1024 * 1024),
+      ...(await scan(source, descriptor, legacyDigest)),
       allocations: await readDatabasePortAllocations(source, descriptor),
     };
   } finally {
@@ -579,8 +568,10 @@ export async function materializeDatabasePort(params: {
   onPlannerStatistics?: (result: PostgresPlannerStatistics) => void;
   /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
   transformRow?: (table: string, row: PortRow) => PortRow | undefined;
+  /** Hash rows as builds before typed row digests did, to check a proof that omits `digest`. */
+  legacyDigest?: boolean;
 }): Promise<PortVerification> {
-  const { source, destination, assertCurrent } = params;
+  const { source, destination, assertCurrent, legacyDigest = false } = params;
   // A same-server copy shares one client, so one transaction snapshots both namespaces.
   const sameServer =
     source.engine === "postgres" &&
@@ -595,7 +586,7 @@ export async function materializeDatabasePort(params: {
     params.descriptor,
     params.activeFragments,
   );
-  const maxRowBytes = params.maxRowBytes ?? 64 * 1024 * 1024;
+  const maxRowBytes = params.maxRowBytes;
   const postgres = [source, destination].find(
     (endpoint): endpoint is Extract<Endpoint, { engine: "postgres" }> =>
       endpoint.engine === "postgres",
@@ -655,12 +646,13 @@ export async function materializeDatabasePort(params: {
       params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
     // Same-server rows are copied on the server, then hashed from a separate source read
     // in the same snapshot so the copy is checked against its source, not against itself.
-    const tables = sameServer
+    const copied = sameServer
       ? (await copyPostgresTables(source, destination, descriptor, assertCurrent),
-        await scan(source, descriptor, maxRowBytes))
+        await scan(source, descriptor, legacyDigest, maxRowBytes))
       : await scan(
           source,
           descriptor,
+          legacyDigest,
           maxRowBytes,
           destination,
           assertCurrent,
@@ -696,14 +688,14 @@ export async function materializeDatabasePort(params: {
       assertSqliteIntegrity(destination.db, "Port SQLite destination");
     }
     const verified = {
-      tables: await scan(destination, descriptor, maxRowBytes),
+      ...(await scan(destination, descriptor, legacyDigest, maxRowBytes)),
       allocations: await readDatabasePortAllocations(destination, descriptor),
     };
     const expected =
       destination.engine === "sqlite"
         ? sqlitePortAllocations(descriptor, verified.allocations, facts)
         : facts;
-    if (!isDeepStrictEqual(verified, { tables, allocations: expected })) {
+    if (!isDeepStrictEqual(verified, { ...copied, allocations: expected })) {
       throw new DatabasePortDataError("Port canonical verification failed");
     }
     if (destination.engine === "postgres") {

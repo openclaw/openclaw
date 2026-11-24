@@ -103,6 +103,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `previous_response_id`. Otherwise it sends full history without that
     reference. Idle cached connections expire after five minutes; keeping a
     connection warm does not retain the completed run's execution context.
+    Only the run that writes the conversation keeps this connection and its
+    continuation. Background runs on the same conversation (session forks such
+    as skill reviews, memory flush, `/btw` side questions, compaction summaries)
+    share its prompt-cache key but send full history on their own connection, so
+    they never replace the conversation's continuation.
 
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an
@@ -298,8 +303,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Uses `store: true` until input contains a compaction checkpoint, then uses
       `store: false` for replay (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
-    - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
-      unavailable)
+    - Default `compact_threshold`: 85% of `contextWindow` (or `80000` when
+      unavailable), the same fraction as client compaction
 
     The same resolved route and effective threshold gate the client preflight,
     so OpenClaw does not delay local compaction unless the transport will inject
@@ -343,12 +348,14 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     use the edited value. Older transcripts without those bytes use the recovery
     above when rejected. Unaffected sessions keep their prompt prefix and continuation.
     Gateway logs record `item_conflict_recovery`, a session hash, and the outcome
-    (`started`, `recovered`, `failed`, or `deferred`). If both requests fail, the reply offers
-    retry, `/compact`, and model-switch guidance. A response that already produced
-    output is not automatically replayed, because tools may have done work; its
-    repair is saved for the next request (`deferred`), including a new run or an
-    internal session-effects fork of that history. Successful requests that apply
-    a saved repair also log `recovered`. Subagent completion deliveries with a
+    (`started`, `recovered`, `failed`, or `deferred`). If recovery fails, the reply offers
+    retry, `/compact`, and model-switch guidance. After output starts, the transport
+    saves the repair for the next request (`deferred`). The active runtime retries
+    once in the same turn only when its execution evidence proves the entire run
+    is replay-safe, with no potential tool side effects and no pending or committed delivery.
+    Otherwise the visible failure remains, and the saved repair applies to a later
+    request, including a new run or an internal session-effects fork of that history.
+    Successful requests that apply a saved repair also log `recovered`. Subagent completion deliveries with a
     deferred repair retry automatically, up to three delivery attempts, without
     waiting for another user message. Encrypted checkpoints remain bound to their
     original session.
@@ -364,12 +371,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     including after the session is restored.
 
     V2 starts when the known or projected request occupancy reaches
-    `min(context window - effective reserve, floor(0.9 × context window))`.
-    With a 500,000-token window and 20,000-token reserve, this is 450,000 tokens.
+    `min(context window - effective reserve, floor(0.85 × context window))`,
+    the same trigger as client maintenance on every other route.
+    With a 500,000-token window and 20,000-token reserve, this is 425,000 tokens.
     It uses completed-request usage when available and prices pending content at
-    the next normal request boundary. This earlier trigger leaves more room for
-    tool output; it does not lower the model's physical context limit or change
-    the public API-key route's 70% inline threshold.
+    the next normal request boundary. This earlier trigger leaves room for tool
+    output and the compaction request; it does not lower the model's physical
+    context limit or change the public API-key route's 85% inline threshold.
 
     The entire outgoing request must still fit that physical window. If one
     pending message or tool result crosses it before V2 can run, OpenClaw falls

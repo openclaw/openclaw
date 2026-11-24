@@ -101,16 +101,10 @@ export async function handleGatewayProbeRequest(
       ).ok;
     }
     const readiness = status === "ready" ? getReadiness : undefined;
-    const readPrepared = await readiness?.prepare().then(
-      ({ publish }) => publish,
-      (error: unknown) => () => {
-        throw error;
-      },
-    );
     const includeDetails = await shouldIncludeGatewayProbeDetails();
     try {
-      if (readPrepared) {
-        const result = readPrepared();
+      if (readiness) {
+        const result = readiness();
         statusCode = result.ready ? 200 : 503;
         const recentCrashes = includeDetails ? getGatewayRecentCrashes() : [];
         body = JSON.stringify(

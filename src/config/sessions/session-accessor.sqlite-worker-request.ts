@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { resolveIdentityPathViaExistingAncestor } from "../../infra/boundary-path.js";
 import { settleWithCleanup } from "../../infra/error-graph-internal.js";
 import {
   acquireStateDatabaseSchemaLease,
   type captureStateDatabaseAccess,
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/path-existence.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { resolveDatabasePathKeyAsync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";

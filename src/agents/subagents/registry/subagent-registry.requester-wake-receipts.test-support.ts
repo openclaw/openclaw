@@ -258,7 +258,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
     "reply replacement",
     "delivery replacement",
     "rejected wake",
-    "rejected retired",
     "rejected persistence",
     "rejected newer yield",
     "rejected stopped",
@@ -346,10 +345,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       scenario === "rejected stable newer yield"
         ? holdRequesterWakeReceipts({ holdOutcome: true })
         : undefined;
-    setWakeRefusal(rejectRequesterWake && scenario !== "rejected retired", rejectPersistence);
-    if (scenario === "rejected retired") {
-      subagentRuns.retireCompletionAuthority(registry.getSubagentRunByRunId(beta.runId)!);
-    }
+    setWakeRefusal(rejectRequesterWake, rejectPersistence);
     if (stableBatch) {
       const batchRunIds = [alpha.runId, beta.runId];
       await mutateSubagentRuns(batchRunIds, (rows) => ({
@@ -521,13 +517,13 @@ export function registerRequesterWakeReceiptBoundaryTests({
             ? { status: "killed" }
             : stableBatch
               ? { lifecycleRunId: requesterTurnRunId, activeWriterRunId: requesterTurnRunId }
-              : { status: "failed", lastRunId: requesterTurnRunId },
+              : { status: "done", lastRunId: requesterTurnRunId },
       );
       if (
         scenario === "rejected wake" ||
-        scenario === "rejected retired" ||
         stableBatch ||
-        rejectPersistence
+        rejectPersistence ||
+        scenario === "rejected newer yield"
       ) {
         const events = readTranscriptEventRows(
           openOpenClawAgentDatabase({ agentId: "main" }),
@@ -536,19 +532,8 @@ export function registerRequesterWakeReceiptBoundaryTests({
         expect(
           events
             .map((event) => JSON.parse(event.eventJson))
-            .filter((event) => event.customType === "run-failed-before-reply"),
-        ).toEqual([
-          expect.objectContaining({
-            content:
-              "⚠️ The child result couldn't be delivered to this conversation. Your conversation is preserved. Check the child sessions for saved work, then retry or resend your request.",
-            display: true,
-            details: expect.objectContaining({
-              runId: stableBatch
-                ? `announce:requester-settle:main:${requesterSessionKey}:run-alpha,run-beta:yield-1:delivery-failure`
-                : requesterTurnRunId,
-            }),
-          }),
-        ]);
+            .filter((event) => event.customType === "subagent-completion"),
+        ).toEqual([]);
       }
     }
 

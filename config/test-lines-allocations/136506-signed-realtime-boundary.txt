@@ -1,0 +1,4 @@
+# Signed Twilio HTTP-to-WebSocket regression proof uses the real manager and SQLite store.
+# The 49 lines above the standard allowance retain signature generation, documented carrier frames,
+# deterministic bridge synchronization, isolated state cleanup, and missing/blank/mismatched identity checks.
+49

@@ -102,7 +102,7 @@ export function formatDuplicateAgentDirError(dups: DuplicateAgentDir[]): string 
     ...dups.map((d) => `- ${d.agentDir}: ${d.agentIds.map((id) => `"${id}"`).join(", ")}`),
     "",
     "Fix: remove the shared agents.entries.*.agentDir override (or give each agent its own directory).",
-    "Auth profiles live in each agent's SQLite store, so a shared agentDir is not how credentials are shared: give each agent its own directory and either leave its store empty to inherit the main agent's profiles, or log it in with `openclaw models auth login`.",
+    "Auth profiles live in each agent's SQLite store, so a shared agentDir is not how credentials are shared: give each agent its own directory and either leave its store empty to inherit the main agent's profiles, or sign that agent in to its own accounts.",
   ];
   return lines.join("\n");
 }

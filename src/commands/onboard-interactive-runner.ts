@@ -31,19 +31,24 @@ export async function runInteractiveOnboarding(
 }
 
 async function launchHatchTui(workspace: string, local: boolean, agentId?: string): Promise<void> {
-  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, fs] = await Promise.all([
-    import("../tui/tui-launch.js"),
-    import("../agents/workspace.js"),
-    import("node:fs"),
-  ]);
+  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, fs, { readActiveGatewayLockIdentity }] =
+    await Promise.all([
+      import("../tui/tui-launch.js"),
+      import("../agents/workspace.js"),
+      import("node:fs"),
+      import("../infra/gateway-lock.js"),
+    ]);
   const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
+  // A configured rerun asks for local mode because its Gateway may be stopped. A running
+  // Gateway owns agent state and refuses `--local`, so the hatch connects to it instead.
+  const useLocal = local && !(await readActiveGatewayLockIdentity());
   restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
   try {
     // Fresh setup already started the Gateway; local mode would contend for its state lock.
     // No timeoutMs: the run-level TUI timeout overrides the configured agent
     // timeout for every turn in the session, not just the hatch message.
     await launchTuiCli({
-      ...(local ? { local: true } : {}),
+      ...(useLocal ? { local: true } : {}),
       deliver: false,
       ...(agentId ? { session: `agent:${agentId}:main` } : {}),
       // Seed the first-run hatch only when the workspace bootstrap exists;

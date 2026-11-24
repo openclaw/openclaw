@@ -270,6 +270,176 @@ describe("Telegram prompt composition", () => {
     expect(structuredJson).not.toContain("ordinary assistant reply");
   });
 
+  describe("existing group topic sessions", () => {
+    const thread = 202;
+    const topicSession = `agent:main:telegram:group:${forumChat.id}:topic:${thread}`;
+    const usage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const topicConfig = (): OpenClawConfig => ({
+      session: { store: createStorePath() },
+      messages: { groupChat: { unmentionedInbound: "user_request" } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+          streaming: { mode: "off" },
+        },
+      },
+    });
+    // Telegram links every plain topic message to the topic's creation service message.
+    const topicRoot = {
+      message_id: thread,
+      date: 1_700_000_000,
+      chat: forumChat,
+      from,
+      message_thread_id: thread,
+      forum_topic_created: { name: "Models", icon_color: 7_322_096 },
+    };
+    const topicMessage = (id: number, text: string, replyTo: object = topicRoot) => ({
+      message_id: id,
+      date: Math.floor(Date.now() / 1000),
+      chat: forumChat,
+      from,
+      text,
+      message_thread_id: thread,
+      is_topic_message: true,
+      reply_to_message: replyTo,
+    });
+    async function seedSession(
+      storePath: string,
+      sessionId: string,
+      label: string,
+      startMs: number,
+    ) {
+      const owned = { agentId: "main", sessionId, sessionKey: topicSession, storePath };
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: topicSession,
+        entry: { sessionId, updatedAt: startMs },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...owned,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: `${label} user turn` }],
+          timestamp: startMs + 1_000,
+        },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...owned,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `${label} assistant reply` }],
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5",
+          usage,
+          stopReason: "stop",
+          timestamp: startMs + 2_000,
+        },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...owned,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `${label} cron announcement` }],
+          api: "openclaw-transcript-artifact",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          openclawDeliveryMirror: { kind: "cron-direct-delivery-context" },
+          usage,
+          stopReason: "stop",
+          timestamp: startMs + 3_000,
+        },
+      });
+    }
+    async function deliverTopicMessage(cfg: OpenClawConfig, current: object) {
+      const bot = await createBot(true, true, cfg);
+      await deliverTelegramUpdate(bot, { update_id: 1, message: current });
+      expect(harness.replySpy).toHaveBeenCalledOnce();
+      const observed = harness.replySpy.mock.calls[0]![0];
+      expect(observed.SessionKey).toBe(topicSession);
+      return observed;
+    }
+
+    it("keeps only delivery-only rows when the session already replays its turns", async () => {
+      const cfg = topicConfig();
+      await seedSession(cfg.session!.store!, "topic-current", "earlier", 1_700_000_000_000);
+
+      const observed = await deliverTopicMessage(cfg, topicMessage(300, "next question"));
+
+      expect(observed.SessionTranscriptContext).toMatchObject({
+        chatWindow: true,
+        deliveryOnly: true,
+      });
+      expect(observed.ChannelStructuredContext).toMatchObject([
+        {
+          source: "session",
+          type: "chat_window",
+          payload: { messages: [{ sender: "OpenClaw", body: "earlier cron announcement" }] },
+        },
+      ]);
+      const structuredJson = JSON.stringify(observed.ChannelStructuredContext);
+      expect(structuredJson).not.toContain("earlier user turn");
+      expect(structuredJson).not.toContain("earlier assistant reply");
+    });
+
+    it("keeps the full transcript window for an explicit reply", async () => {
+      const cfg = topicConfig();
+      await seedSession(cfg.session!.store!, "topic-current", "earlier", 1_700_000_000_000);
+      const botReply = {
+        message_id: 250,
+        date: 1_700_000_002,
+        chat: forumChat,
+        from: telegramBotInfoForTest,
+        text: "earlier assistant reply",
+        message_thread_id: thread,
+        is_topic_message: true,
+        reply_to_message: topicRoot,
+      };
+
+      const observed = await deliverTopicMessage(cfg, topicMessage(301, "about that", botReply));
+
+      expect(observed.SessionTranscriptContext).not.toHaveProperty("deliveryOnly");
+      const structuredJson = JSON.stringify(observed.ChannelStructuredContext);
+      expect(structuredJson).toContain("earlier user turn");
+      expect(structuredJson).toContain("earlier assistant reply");
+    });
+
+    it("never reaches turns from an earlier session id of the same topic", async () => {
+      const cfg = topicConfig();
+      const storePath = cfg.session!.store!;
+      await seedSession(storePath, "topic-before-reset", "old", 1_700_000_000_000);
+      // A reset gives the same key a new session id; no start time bounds the read here.
+      await seedSession(storePath, "topic-after-reset", "new", 1_600_000_000_000);
+      const botReply = {
+        message_id: 251,
+        date: 1_600_000_002,
+        chat: forumChat,
+        from: telegramBotInfoForTest,
+        text: "new assistant reply",
+        message_thread_id: thread,
+        is_topic_message: true,
+        reply_to_message: topicRoot,
+      };
+
+      const observed = await deliverTopicMessage(cfg, topicMessage(302, "and this", botReply));
+
+      const structuredJson = JSON.stringify(observed.ChannelStructuredContext);
+      expect(structuredJson).toContain("new user turn");
+      expect(structuredJson).not.toContain("old user turn");
+      expect(structuredJson).not.toContain("old assistant reply");
+      expect(structuredJson).not.toContain("old cron announcement");
+    });
+  });
+
   it("excludes old DM history but preserves explicit replies with a zero sender limit", async () => {
     const telegramCfg: TelegramAccountConfig = {
       dmPolicy: "open",

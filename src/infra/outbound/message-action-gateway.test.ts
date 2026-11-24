@@ -69,11 +69,19 @@ describe("runMessageAction gateway dispatch", () => {
             : { ok: true, pollId: "gw-poll-1" };
       mocks.callGatewayLeastPrivilege.mockResolvedValue({ ...payload });
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => "agent-runtime-token");
+      const agentButtons = {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "A", action: { type: "callback", value: "pick:a" } }],
+          },
+        ],
+      };
       const params =
         action === "react"
           ? { to: "+15551234567", chatJid: "+15551234567", messageId: "wamid.1", emoji: "✅" }
           : action === "send"
-            ? { target: "user-123", message: "hello from cli" }
+            ? { target: "user-123", message: "hello from cli", presentation: agentButtons }
             : { target: "pollchat:123", pollQuestion: "Lunch?", pollOption: ["Pizza", "Sushi"] };
       const result = await runGatewayAction(
         action,
@@ -112,6 +120,10 @@ describe("runMessageAction gateway dispatch", () => {
       const rpc = readRecordField(call, "params", "gateway params");
       expect(call).toMatchObject({ method: "message.action" });
       expect(rpc).toMatchObject({ channel, action, idempotencyKey: "idem-gateway-action" });
+      if (action === "send") {
+        // The Gateway marks controls where they leave core, so the hop forwards them unmarked.
+        expect(readRecordField(rpc, "params", "action params").presentation).toEqual(agentButtons);
+      }
       expect(handleAction).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         kind: action === "react" ? "action" : action,

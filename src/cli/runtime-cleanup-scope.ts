@@ -15,7 +15,11 @@ import {
 import { SKILLS_DISCOVERY_KEY } from "../skills/types.js";
 import { STATE_DATABASE_LIFECYCLE_KEY } from "../state/openclaw-state-db-contract.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
-import { installCliSignalExitHandlers, registerSignalExitGate } from "./signal-exit-barrier.js";
+import {
+  installCliSignalExitHandlers,
+  registerSignalExitGate,
+  withGatewayStartupSignalOwner,
+} from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
   scheduler: GatewayScheduler;
@@ -65,7 +69,9 @@ export async function withCliCommandCleanup<T>(
 ): Promise<T> {
   if (gatewayRun) {
     // Gateway owns its process lifetime; borrowed calls must not inherit CLI ownership.
-    return scope.run(undefined, () => run());
+    // The executable still needs a stop owner until its run loop installs one.
+    const executable = scope.getStore() === "process";
+    return scope.run(undefined, () => (executable ? withGatewayStartupSignalOwner(run) : run()));
   }
   if (scope.getStore() !== "process") {
     return run();

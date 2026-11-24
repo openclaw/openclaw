@@ -140,7 +140,6 @@ describe("OpenAI Responses reasoning replay", () => {
         null,
         { ...metadata, v: 2 },
         { ...metadata, provider: "other-provider" },
-        { ...metadata, model: "other-model" },
         { ...metadata, baseUrlHash: "other-endpoint" },
         { ...metadata, sessionHash: "other-session" },
       ]) {

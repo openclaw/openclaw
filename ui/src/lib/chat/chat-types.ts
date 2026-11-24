@@ -409,6 +409,7 @@ export type MessageImageSource = {
 };
 
 export type MessageContentItem =
+  | import("./automation-creation-card.ts").AutomationCreationCardBlock
   | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
   | import("../../../../src/shared/template-install-notice.js").TemplatePluginInstallNotice
   | ClawHubRecommendation

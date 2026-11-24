@@ -18,8 +18,6 @@ import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import "../styles/sidebar-pinned-agents.css";
 import { createSidebarRosterWindow } from "./sidebar-roster-window.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -461,25 +459,4 @@ declare module "@solidjs/web" {
       "openclaw-sidebar-agent-roster": HTMLAttributes<HTMLElement>;
     }
   }
-}
-
-export function SidebarPinnedSession(props: { host: RosterHost; session: SidebarRecentSession }) {
-  const session = () => props.session;
-  const agentId = createMemo(() => props.host.sessionNavigationAgentId(session()));
-  const card = createMemo(() => {
-    const cards =
-      cachedRosterCards(props.host) ??
-      (props.host.sessionDataContext
-        ? rosterActivityStore(props.host.sessionDataContext).snapshot.cards
-        : []);
-    return cards.find((agent) => agent.id === agentId());
-  });
-  return (
-    <SessionTree
-      host={props.host}
-      session={session()}
-      listItem={false}
-      icon={<AgentIdentityAvatar agent={card() ?? { id: agentId() }} />}
-    />
-  );
 }

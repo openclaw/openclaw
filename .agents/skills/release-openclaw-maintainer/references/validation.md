@@ -140,8 +140,12 @@ qualify for `npm-beta-v1`.
 
 FRV `normalCi` Windows Node shards and all other unwaived hard-gate failures
 block. Only the exact checked-in operator grants may accept a failed job;
-preserve their candidate, version, job, and attempt scope. Decide
-blocker or flake for every failure,
+preserve their explicit scope. Default new approved job waivers to the exact
+release version, child role, and job for all future FRV runs, attempts, and
+candidates of that release. Do not bind ordinary waivers to the diagnostic run
+or candidate. Attempt-specific waivers are only for exceptionally high-risk
+cases with an explicitly limited approval; document the risk and honor any
+operator-requested narrower scope. Decide blocker or flake for every failure,
 rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
 issue/PR on `main`. Do not re-cut solely to clear a flake. Every unwaived selected
 job must pass, and FRV itself must conclude success before publication. See the
@@ -187,9 +191,13 @@ source, including soak and blocking performance. Beta confidence may inform
 diagnosis but cannot substitute for required stable evidence.
 
 Preserve the validation parent and successful children when continuation is
-eligible; parents that produced sealed candidate artifacts need a new parent
-with verified evidence reuse. Diagnose failures and retry only the affected
-surface within the controller's budget. Classify every selected test failure as
+eligible. If sealing/collection failed or same-parent continuation cannot restore
+the original plan, assess [receipt-backed aggregate recovery](../../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery)
+before starting a new full qualification. It can authenticate the original
+admission, C/Q, completed child receipts, and unchanged publication bytes under
+a reviewed trusted P; the original failed parent stays failed. Missing required
+evidence or invalid bytes still block recovery. Diagnose failures and retry only
+the affected surface within the controller's budget. Classify every selected test failure as
 a real blocker or a flake under the
 [shared release boundaries](../SKILL.md#shared-release-boundaries): flakes get
 bounded recorded reruns on the same Release SHA and a fix-in-parallel issue or

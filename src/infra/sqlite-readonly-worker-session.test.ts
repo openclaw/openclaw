@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { expectCollected } from "../test-utils/retention.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
@@ -42,10 +44,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];
-function createSession() {
+function createSession(deadlineOwnedByCaller = () => true) {
   const child = new MockChild();
   mock.spawn.mockReturnValueOnce(child);
-  const readBudget = vi.fn(() => ({ timeoutMs: 60_000, size: "fixture" }));
+  const readBudget = vi.fn<Parameters<typeof createSqliteReadOnlyWorkerSession>[0]["readBudget"]>(
+    async () => ({ timeoutMs: 60_000, size: "fixture" }),
+  );
   const requestArgs = vi.fn((file: string, { mode }: { mode: string }) => [mode, file]);
   const env = { OPENCLAW_STATE_DIR: "/fixture/state" };
   const session = createSqliteReadOnlyWorkerSession({
@@ -57,7 +61,7 @@ function createSession() {
     retainOnOperationError: true,
     requestArgs,
     readBudget,
-    deadlineOwnedByCaller: () => true,
+    deadlineOwnedByCaller,
     timeoutError: () => new Error("fixture budget expired"),
     closeTimeoutMs: 60_000,
   });
@@ -247,6 +251,7 @@ it("keeps detached staging budget inside a caller-owned deadline", async () => {
       sessions.push({ session, child });
       timer.mockClear();
       const result = session.run("/fixture/staging", { mode: "staging-create" });
+      await vi.waitFor(() => expect(child.send).toHaveBeenCalledOnce());
       const budgeted = timer.mock.calls.some(([, delay]) => typeof delay === "number" && delay > 0);
       reply(child, { ok: true, location: "/fixture/staged" });
       await expect(result).resolves.toBe("/fixture/staged");
@@ -255,6 +260,23 @@ it("keeps detached staging budget inside a caller-owned deadline", async () => {
     },
     { signal: new AbortController().signal, deadlineOwnedByCaller: true },
   );
+});
+
+it("does not send a request when its worker closes during budget preparation", async () => {
+  const { session, child, readBudget, requestArgs } = createSession(() => false);
+  const budget = createDeferredCore<{ timeoutMs: number; size: string }>();
+  readBudget.mockReturnValueOnce(budget.promise);
+  const result = session.run("/fixture/source.sqlite", { mode: "staging-create" });
+  const rejected = expect(result).rejects.toThrow("exited with code 0");
+  expect(child.send).not.toHaveBeenCalled();
+  const closing = session.close();
+  child.emit("close", 0, null);
+  await closing;
+  budget.resolve({ timeoutMs: 60_000, size: "fixture" });
+  await nextTurn();
+  await rejected;
+  expect(requestArgs).not.toHaveBeenCalled();
+  expect(child.send).toHaveBeenCalledExactlyOnceWith("close", expect.any(Function));
 });
 
 it("captures only read scope and refuses callbacks after owner retirement", async () => {
@@ -397,3 +419,55 @@ it("counts admitted SQLite children in spawn diagnostics", () => {
     clock.mockRestore();
   }
 });
+
+it.each([
+  [undefined, true],
+  ["0", false],
+] as const)(
+  "makes natively spawned readers the preferred Linux OOM victim unless opted out (%s)",
+  (optOut, adjusted) => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const previous = process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+    if (optOut === undefined) {
+      delete process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+    } else {
+      process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = optOut;
+    }
+    const write = vi.spyOn(fs.promises, "writeFile").mockResolvedValue();
+    const syncWrite = vi.spyOn(fs, "writeFileSync");
+    const child = Object.assign(new MockChild(), { pid: 4242 });
+    mock.spawn.mockReturnValueOnce(child);
+    try {
+      const session = createSqliteReadOnlyWorkerSession({
+        env: { OPENCLAW_STATE_DIR: "/fixture/state" },
+        cwd: "/fixture/launch",
+        transport: { kind: "native" },
+        argv: ["--fixture-readonly-session"],
+        retainLifetime: false,
+        retainOnOperationError: true,
+        requestArgs: (file: string, { mode }: { mode: string }) => [mode, file],
+        readBudget: async () => ({ timeoutMs: 60_000, size: "fixture" }),
+        deadlineOwnedByCaller: () => true,
+        timeoutError: () => new Error("fixture budget expired"),
+        closeTimeoutMs: 60_000,
+      });
+      sessions.push({ session, child });
+      expect(
+        write.mock.calls.filter(
+          ([file]) => typeof file === "string" && file.endsWith("/oom_score_adj"),
+        ),
+      ).toEqual(adjusted ? [["/proc/4242/oom_score_adj", "1000"]] : []);
+      // Readers spawn on request paths, so the score write stays off the event loop.
+      expect(syncWrite).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+      syncWrite.mockRestore();
+      platform.mockRestore();
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+      } else {
+        process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = previous;
+      }
+    }
+  },
+);

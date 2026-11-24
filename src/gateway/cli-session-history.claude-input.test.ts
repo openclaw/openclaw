@@ -192,3 +192,25 @@ it("seeds from a trailing summary without a boundary", async () => {
     ]),
   ).toMatchObject({ summaryText: "trailing summary without boundary" });
 });
+
+it.each([
+  ["tool_use", "toolUse"],
+  ["end_turn", "end_turn"],
+] as const)("imports Claude stop_reason %s as %s", (stopReason, expected) => {
+  const message = parseClaudeCliHistoryEntry(
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-5",
+        content: blocks("Checking the config before I run the command."),
+        stop_reason: stopReason,
+      },
+    },
+    "native-session",
+    1,
+    new Map(),
+    { reseedMode: "recover" },
+  );
+  expect(message).toMatchObject({ role: "assistant", stopReason: expected });
+});

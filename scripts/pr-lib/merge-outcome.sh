@@ -141,6 +141,26 @@ merge_outcome_init() {
   fi
 }
 
+# Use the same jq predicate for acceptance at intent composition and reload.
+merge_outcome_jq_definitions() {
+  printf '%s\n' '
+    def oid: type == "string" and test("^[0-9a-f]{40}$");
+    def valid_pending_proof_acceptance:
+      if has("pendingProofAcceptance") then . as $record |
+        (.pendingProofAcceptance |
+          keys == ["findings","headSha","kind","reviewOid","treeOid","version"] and
+          .version == 1 and .kind == "maintainer-accepted-pending-proof" and
+          .headSha == $record.head and .headSha == $record.localHead and
+          (.reviewOid | oid) and (.treeOid | oid) and
+          (.findings | type == "array" and length > 0 and
+            all(.[]; keys == ["id","reason"] and (.id | test("^[A-Za-z0-9_.-]+$")) and
+              (.reason | type == "string" and (test("[\\p{Cc}\\p{Zl}\\p{Zp}]") | not) and
+                test("[^\\p{Zs}\\p{Cf}]"))) and
+            (map(.id) | length == (unique | length))))
+      else true end;
+  '
+}
+
 # Cleanup validates retained proof locally (Git 2.45+ prevents lazy fetch). Admission also
 # supplies the freshly resolved repository identity; local validity is not reconciliation.
 merge_outcome_load_local() {
@@ -158,8 +178,7 @@ merge_outcome_load_local() {
     local parents retained
     [ "$(GIT_NO_LAZY_FETCH=1 pr_git cat-file -t "$MERGE_OUTCOME_OID")" = commit ] || { merge_outcome_stop "outcome ref is not a commit"; return 1; }
     MERGE_OUTCOME_RECORD=$(GIT_NO_LAZY_FETCH=1 pr_git show "$MERGE_OUTCOME_OID:outcome.json" | jq -ce \
-      --argjson repo "$expected_repo" --argjson pr "$pr" '
-      def oid: type == "string" and test("^[0-9a-f]{40}$");
+      --argjson repo "$expected_repo" --argjson pr "$pr" "$(merge_outcome_jq_definitions)"'
       def attempt: type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
       def recovery:
         if has("recovery") then . as $record | .recovery |
@@ -189,7 +208,7 @@ merge_outcome_load_local() {
       select(.version == 1 and ($repo == null or .repo == $repo) and .pr == $pr and .base == "main" and
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
-        (.attempt | attempt) and recovery and
+        (.attempt | attempt) and recovery and valid_pending_proof_acceptance and
         (if has("workflowAdmission") then
           (.workflowAdmission | keys == ["binding","from","to"] and all(.[]; oid))
          else true end) and

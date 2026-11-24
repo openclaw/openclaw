@@ -65,7 +65,6 @@ describe("requester pause notices", () => {
         delivered: false,
         path: "none",
         reason: "source_owner_changed",
-        disposition: "intentional_non_delivery",
       };
     });
     const params = wakeParams({

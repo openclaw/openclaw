@@ -11,34 +11,19 @@ import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-r
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import { isSessionTranscriptLeafControl } from "./transcript-tree.js";
 import type { InternalSessionEntry } from "./types.js";
 
-/**
- * Classify an entry like the SQLite projection: exact leaf, active ancestor, or
- * off-path, plus whether a navigation control landed after it.
- */
+/** Like the SQLite projection: the leaf or an active ancestor; `null` only when empty. */
 function readActivePathFacts(
   window: SessionActorMemoryWindow,
   entryId: string | null,
-): Pick<SessionTranscriptAnchorFacts, "activePathRelation" | "activePathNavigationMoved"> {
+): Pick<SessionTranscriptAnchorFacts, "onActivePath"> {
   const navigation = createSessionActorMemoryHistoryNavigation(window);
-  const leafId = navigation.tree.leafId ?? null;
-  const anchorIndex =
-    entryId === null ? -1 : (navigation.tree.byId.get(entryId)?.index ?? undefined);
   return {
-    activePathRelation:
-      leafId === entryId
-        ? "exact"
-        : entryId === null ||
-            !navigation.active.some(({ event }) => isRecord(event) && event.id === entryId)
-          ? "off-path"
-          : "ancestor",
-    activePathNavigationMoved:
-      anchorIndex === undefined ||
-      navigation.tree.nodes.some(
-        (node) => node.index > anchorIndex && isSessionTranscriptLeafControl(node.entry),
-      ),
+    onActivePath:
+      (navigation.tree.leafId ?? null) === entryId ||
+      (entryId !== null &&
+        navigation.active.some(({ event }) => isRecord(event) && event.id === entryId)),
   };
 }
 

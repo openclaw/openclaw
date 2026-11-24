@@ -41,6 +41,17 @@ describe("SAS approval", () => {
     await expect(openHandoff(ssN, transcript, sealed)).resolves.toEqual({ root_pub: "ed25519:r" });
   });
 
+  it("binds the claimed member account without changing ordinary device commitments", async () => {
+    const n = await generateEphemeralKey(new Uint8Array(32).fill(1));
+    const member = { ...start, member_account_id: "alice" };
+    const commit = await sasCommitment(n.publicKey, member);
+    expect(await verifySasCommitment(commit, n.publicKey, member)).toBe(true);
+    expect(await verifySasCommitment(commit, n.publicKey, start)).toBe(false);
+    expect(
+      await verifySasCommitment(commit, n.publicKey, { ...member, member_account_id: "bob" }),
+    ).toBe(false);
+  });
+
   it("binds an app's node key and surface into the commitment and code", async () => {
     const n = await generateEphemeralKey(new Uint8Array(32).fill(1));
     const node = {

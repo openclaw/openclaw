@@ -66,7 +66,8 @@ export function createSessionStreamFn(
     // The admitted caller owns liveness; this stream never creates authority.
     assertCurrent?.();
     // Isolated session streams bypass the process-default stream facade.
-    await import("../ai-transport-runtime-host.js");
+    const { configureAiTransportRuntimeHost } = await import("../ai-transport-runtime-host.js");
+    configureAiTransportRuntimeHost();
     optionsLocal?.signal?.throwIfAborted();
     const providerRetrySettings = settingsManager.getProviderRetrySettings();
     const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);

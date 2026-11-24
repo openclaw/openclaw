@@ -119,6 +119,7 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
     expect(
       row.querySelector(".settings-row__control button.chat-copy-btn")?.getAttribute("aria-label"),
     ).toBe("Copy version and commit");
+    expect(row.querySelector(".chat-copy-btn__icon-failed")).not.toBeNull();
   }
   const time = ui.rows.get("Built")?.querySelector("time");
   expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
