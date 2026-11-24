@@ -57,6 +57,10 @@ export type InternalRealtimeVoiceProviderApi = {
   isBrowserSessionConfiguredAsync?: (
     ctx: RealtimeVoiceProviderConfiguredContext,
   ) => Promise<boolean>;
+  /** Read-only route hint for an ordinary browser session; never resolves credentials. */
+  resolveBrowserSessionAuthRoute?: (
+    ctx: RealtimeVoiceProviderConfiguredContext,
+  ) => Promise<"api-key" | "chatgpt-sign-in" | undefined>;
   /** @deprecated Use resolveBrowserSessionCapabilitiesAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
   resolveBrowserSessionCapabilities?: (
     ctx: RealtimeVoiceProviderConfiguredContext & {

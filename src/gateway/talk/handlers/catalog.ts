@@ -34,7 +34,10 @@ import { getActiveSecretsRuntimeSnapshotRevisionState } from "../../../secrets/r
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { operatorScopeSatisfied } from "../../../shared/operator-scope-compat.js";
 import { resolveTalkSessionAgentId } from "../../../talk/agent-target.js";
-import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/provider-internal.js";
+import {
+  readInternalRealtimeVoiceProviderApi,
+  type InternalRealtimeVoiceProviderCapabilities,
+} from "../../../talk/provider-internal.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
@@ -401,6 +404,18 @@ async function buildTalkCatalog(
               capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
             ),
           };
+          if (entry.configured && realtimeSurface === "browser-session") {
+            const authRoute = await readInternalRealtimeVoiceProviderApi(provider)
+              ?.resolveBrowserSessionAuthRoute?.({
+                cfg: config,
+                providerConfig,
+                agentId: realtimeAgentId,
+              })
+              .catch(() => undefined);
+            if (authRoute === "api-key" || authRoute === "chatgpt-sign-in") {
+              entry.authRoute = authRoute;
+            }
+          }
           const defaultModel =
             normalizeOptionalString(defaultProviderConfig.model) ?? provider.defaultModel;
           if (defaultModel) {

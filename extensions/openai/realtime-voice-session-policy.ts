@@ -46,6 +46,7 @@ import {
 import {
   OPENAI_GPT_LIVE_MODELS,
   OPENAI_GPT_LIVE_MODEL_PREFIX,
+  isOpenAIGptLiveModel,
   isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
@@ -481,13 +482,23 @@ export async function requireOpenAIRealtimePlatformAuth(
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
 }
 
+export function resolveOpenAIBrowserAuthOrder(model: string) {
+  if (isOpenAIGptLiveSubscriptionModel(model)) {
+    return ["chatgpt-sign-in", "api-key"] as const;
+  }
+  if (isOpenAIGptLiveModel(model)) {
+    return ["api-key"] as const;
+  }
+  return ["api-key", "chatgpt-sign-in"] as const;
+}
+
 export async function resolveOpenAIQuicksilverBridgeAuth(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0] & {
     model: string;
   },
   runtime: OpenAIRealtimeHost,
 ) {
-  if (isOpenAIGptLiveSubscriptionModel(params.model)) {
+  if (resolveOpenAIBrowserAuthOrder(params.model)[0] === "chatgpt-sign-in") {
     const { resolveAgentDir } = runtime;
     const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
       {
@@ -584,6 +595,7 @@ export async function hasOpenAIChatGptSubscriptionAuthInputAsync(
   params: {
     cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
     agentId?: string;
+    profileTypes?: readonly ("oauth" | "token")[];
   },
   {
     isProviderAuthProfileConfiguredAsync,
@@ -599,7 +611,7 @@ export async function hasOpenAIChatGptSubscriptionAuthInputAsync(
     cfg: params.cfg,
     agentDir:
       params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    profileTypes: OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
+    profileTypes: params.profileTypes ?? OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
     includeExternalCliAuth: false,
   });
 }

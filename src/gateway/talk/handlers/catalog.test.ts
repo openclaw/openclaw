@@ -369,6 +369,7 @@ describe("talk.catalog handler", () => {
   );
 
   it("emits realtime models and voices and mirrors create-time configured inputs", async () => {
+    const resolveBrowserSessionAuthRoute = vi.fn(async () => "api-key");
     const provider = {
       id: "openai",
       label: "OpenAI Realtime",
@@ -388,11 +389,15 @@ describe("talk.catalog handler", () => {
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
       createBrowserSession: vi.fn(),
+      [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
+        isBrowserSessionConfigured: vi.fn(() => true),
+        resolveBrowserSessionAuthRoute,
+      },
     };
     mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
     mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider: { id: "openai" },
-      providerConfig: { model: "gpt-live-test-canary" },
+      providerConfig: { model: "gpt-live-test-canary", apiKey: "synthetic-not-public" },
       capabilities: {
         transports: ["gateway-relay"],
         inputAudioFormats: [],
@@ -433,7 +438,15 @@ describe("talk.catalog handler", () => {
     const catalog = expectRespondOk(respond) as {
       realtime: { providers: Array<Record<string, unknown>> };
     };
+    expect(resolveBrowserSessionAuthRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "voice",
+        providerConfig: { model: "gpt-live-test-canary", apiKey: "synthetic-not-public" },
+      }),
+    );
+    expect(JSON.stringify(catalog)).not.toContain("synthetic-not-public");
     expect(catalog.realtime.providers[0]).toMatchObject({
+      authRoute: "api-key",
       defaultModel: "scoped-browser-default",
       models: ["gpt-realtime-2.1"],
       voices: ["alloy", "marin"],
