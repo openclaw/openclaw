@@ -13,7 +13,10 @@ import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
-import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import {
+  requiresExternalCronDelivery,
+  resolveDeliveryTarget,
+} from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import type { CronFailureRepairRequest, CronServiceDeps } from "../cron/service/state.js";
@@ -473,23 +476,68 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 
     const abortController = new AbortController();
     const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
+    const sessionKey = resolveCronDeliverySessionKey(params.job);
+    const plan = {
+      mode: "announce" as const,
+      source: "delivery" as const,
+      requested: true,
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId,
+      threadId: params.threadId,
+    };
+    const payload = {
+      ...params.payload,
+      text: appendCronFailureAlertDetails(
+        params.payload.text ?? "",
+        params.job.id,
+        params.runAtMs,
+        runtimeConfig,
+      ),
+    };
     // Release Gateway admission on deadline even when a transport ignores abort.
     const result = await withTimeout(
       (async () => {
         const resolved = await resolveDeliveryTarget(
           runtimeConfig,
           agentId,
-          {
-            channel: params.channel,
-            to: params.to,
-            accountId: params.accountId,
-            threadId: params.threadId,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
-          },
+          { ...plan, sessionKey, sessionTarget: params.job.sessionTarget },
           { inheritSessionThread: params.inheritSessionThread },
         );
         if (!resolved.ok) {
-          throw resolved.error;
+          const incidentId = params.job.state.lastFailureNotificationId;
+          if (
+            params.job.sessionTarget !== "current" ||
+            !sessionKey ||
+            !incidentId ||
+            requiresExternalCronDelivery(plan, resolved)
+          ) {
+            throw resolved.error;
+          }
+          // The writer owns publication; a timeout after admission may race that commit.
+          const { commitCronConversationResult } = await import("../cron/conversation-result.js");
+          abortController.signal.throwIfAborted();
+          mayHaveReachedRecipient = true;
+          const committed = await commitCronConversationResult({
+            config: runtimeConfig,
+            agentId,
+            jobId: params.job.id,
+            runStartedAt:
+              params.runAtMs ??
+              params.job.state.lastRunAtMs ??
+              params.job.state.lastFailureAlertAtMs ??
+              0,
+            idempotencyKey: `cron-failure-alert:${params.job.id}:${incidentId}`,
+            conversation: { sessionKey },
+            payloads: [payload],
+            signal: abortController.signal,
+            deliveryAttemptFence: null,
+          });
+          if (!committed.ok) {
+            mayHaveReachedRecipient = false;
+            throw new Error(committed.reason);
+          }
+          return { status: "sent" as const };
         }
         return await sendCronAnnouncePayloadStrict({
           deps: params.deps,
@@ -498,17 +546,9 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           jobId: params.job.id,
           target: {
             ...resolved,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
+            sessionKey,
           },
-          payload: {
-            ...params.payload,
-            text: appendCronFailureAlertDetails(
-              params.payload.text ?? "",
-              params.job.id,
-              params.runAtMs,
-              runtimeConfig,
-            ),
-          },
+          payload,
           abortSignal: abortController.signal,
           onDeliveryAttempt,
         });

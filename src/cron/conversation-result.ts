@@ -38,6 +38,8 @@ export type CronConversationResultParams = {
   agentId: string;
   jobId: string;
   runStartedAt: number;
+  /** Failure notifications have their own incident identity, separate from the run result. */
+  idempotencyKey?: string;
   conversation: { sessionKey: string; lifecycleRevision?: string };
   payloads: ReplyPayload[];
   text?: string;
@@ -228,7 +230,7 @@ export async function commitCronConversationResult(
         preparedContent = assistantContent;
         return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
       },
-      idempotencyKey: `cron-current-completion:${runId}`,
+      idempotencyKey: params.idempotencyKey ?? `cron-current-completion:${runId}`,
       provenance: { kind: "cron", jobId: params.jobId, runId },
       config: params.config,
       signal: params.signal,
