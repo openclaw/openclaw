@@ -160,7 +160,7 @@ class UpdateRecoveryCaptureFaultError extends Error {
   constructor(
     message: string,
     readonly fault: UpdateRecoveryCaptureFault,
-    readonly recordedStateDir?: string,
+    readonly detail?: string,
   ) {
     super(message);
   }
@@ -177,7 +177,7 @@ function assertManifestSelectedScope(
     throw new UpdateRecoveryCaptureFaultError(
       "Update recovery backup belongs to another selected state or configuration",
       "foreign",
-      manifest.stateDir,
+      `it records state directory ${manifest.stateDir} with configuration ${manifest.configPath}, which are not the selected ones`,
     );
   }
 }
@@ -202,7 +202,7 @@ function assertManifestLocation(
     throw new UpdateRecoveryCaptureFaultError(
       "Update recovery backup belongs to another state directory or update run",
       "foreign",
-      manifest.stateDir,
+      `it records run ${manifest.runId} for state directory ${manifest.stateDir}, which does not match where it is stored`,
     );
   }
 }
@@ -578,7 +578,7 @@ type UpdateRecoveryBackupRead =
       directory: string;
       error: string;
       fault?: UpdateRecoveryCaptureFault;
-      recordedStateDir?: string;
+      detail?: string;
     };
 
 export async function readUpdateRecoveryBackups(
@@ -651,7 +651,7 @@ export async function readUpdateRecoveryBackups(
         directory,
         error: formatErrorMessage(error),
         ...(error instanceof UpdateRecoveryCaptureFaultError
-          ? { fault: error.fault, recordedStateDir: error.recordedStateDir }
+          ? { fault: error.fault, detail: error.detail }
           : {}),
       });
     }

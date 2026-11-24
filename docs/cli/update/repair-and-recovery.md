@@ -272,9 +272,10 @@ Standalone Doctor copies appear as `manual`; their presence does not record a
 successful or failed repair. An unfinished capture appears as `incomplete`
 alongside valid captures, with its directory and no sealed manifest reference.
 A capture that records another state directory or update run appears as `foreign`
-with its recorded state directory, and one whose update ledger could not be read
-appears as `unverified`; run `openclaw update status` again for the latter. Only a
-capture whose files cannot be read appears as `unreadable`.
+with what it recorded, and one whose update ledger could not be read
+appears as `unverified`; run `openclaw update status` again for the latter. A capture
+with damaged files, a malformed or mismatched manifest, or a changed identity still
+appears as `unreadable`.
 Discovery recognizes capture directories by their `.openclaw-private-update-capture`
 marker; unrelated files and unmarked directories do not hide retained captures.
 Keep current data and inspect the originals before attempting restoration.

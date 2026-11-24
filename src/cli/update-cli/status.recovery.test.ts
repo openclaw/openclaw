@@ -421,12 +421,30 @@ it("names a foreign capture's recorded state instead of calling it unreadable", 
   const [set] = (await inspect()).recoverySets;
   expect(set).toMatchObject({ directory: c.directory, status: "foreign" });
   expect(set.message).toContain(foreignState);
+  expect(set.message).toContain("records run");
   expect(set.message).not.toContain("unreadable");
   expect(set.message).not.toContain("..");
   expect(set.nextAction).toBe("openclaw update cleanup --dry-run");
   expect(await text(c.manifestPath)).toBe(
     JSON.stringify({ ...c.manifest, stateDir: foreignState }),
   );
+});
+it("names the mismatched configuration when only the config path differs", async () => {
+  const c = await capture();
+  const otherConfig = path.join(stateDir, "other.json");
+  await writeJson(c.manifestPath, {
+    ...c.manifest,
+    configPath: otherConfig,
+    configPaths: [otherConfig],
+    protectedPaths: [otherConfig],
+    entries: c.manifest.entries.map((entry) =>
+      entry.sourcePath === configPath ? { ...entry, sourcePath: otherConfig } : entry,
+    ),
+  });
+  const [set] = (await inspect()).recoverySets;
+  expect(set).toMatchObject({ directory: c.directory, status: "foreign" });
+  expect(set.message).toContain(otherConfig);
+  expect(set.message).toContain("configuration");
 });
 it("reports an unavailable ledger as transient and keeps the capture", async () => {
   const c = await capture();

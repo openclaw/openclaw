@@ -32,7 +32,7 @@ function unreadableCapture(
   directory: string,
   error: string,
   fault?: UpdateRecoveryCaptureFault,
-  recordedStateDir?: string,
+  detail?: string,
 ) {
   const reason = error.replace(/\.+$/u, "");
   if (fault === "foreign") {
@@ -41,7 +41,7 @@ function unreadableCapture(
       directory,
       status: "foreign" as const,
       nextAction: "openclaw update cleanup --dry-run",
-      message: `Update capture at ${directory} belongs to another state or update run${recordedStateDir ? ` (recorded state directory: ${recordedStateDir})` : ""}. It is not used for recovery here. \`openclaw update cleanup --dry-run\` shows whether cleanup would retire it and why; nothing is removed without confirmation.`,
+      message: `Update capture at ${directory} belongs to another state or update run: ${detail ?? reason}. It is not used for recovery here. \`openclaw update cleanup --dry-run\` shows whether cleanup would retire it and why; nothing is removed without confirmation.`,
     };
   }
   if (fault === "unverified") {
@@ -92,7 +92,7 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
   const classified = await Promise.all(
     evidence.map(async (entry) => {
       if (entry.kind === "unreadable") {
-        return unreadableCapture(entry.directory, entry.error, entry.fault, entry.recordedStateDir);
+        return unreadableCapture(entry.directory, entry.error, entry.fault, entry.detail);
       }
       const directory = entry.kind === "sealed" ? entry.ref.directory : entry.directory;
       const cleanup = captures.get(directory)!;
