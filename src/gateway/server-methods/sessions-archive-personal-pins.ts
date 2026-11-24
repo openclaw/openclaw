@@ -23,13 +23,22 @@ import type { MutationOutcome, PreparedPatchTarget } from "./sessions-patch-type
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 
-export function archivePinRequester(options: GatewayRequestHandlerOptions) {
+function archivePinConnection(options: GatewayRequestHandlerOptions) {
   const { client } = options;
-  if (!client?.connId || isSyntheticGatewayCaller(client) || usesLegacySessionPins(client)) {
+  if (
+    !client?.connId ||
+    client.connect.role !== "operator" ||
+    isSyntheticGatewayCaller(client) ||
+    usesLegacySessionPins(client)
+  ) {
     return undefined;
   }
   const owner = sessionPinRequester(options);
-  return owner && { ...owner, connId: client.connId };
+  return { owner: owner && { ...owner, connId: client.connId } };
+}
+
+export function archivePinRequester(options: GatewayRequestHandlerOptions) {
+  return archivePinConnection(options)?.owner;
 }
 
 const archiveOnlyFields = new Set([
@@ -77,8 +86,8 @@ export async function prepareArchivePins(
     );
     return undefined;
   }
-  const owner = archivePinRequester(options);
-  if (!owner) {
+  const connection = archivePinConnection(options);
+  if (!connection) {
     respondError(
       options.respond,
       ErrorCodes.FORBIDDEN,
@@ -86,11 +95,16 @@ export async function prepareArchivePins(
     );
     return undefined;
   }
-  const prefs = await getCanonicalUserPreferences(owner.profileId, [preferenceKey]).catch(
-    () => undefined,
-  );
+  // An admitted operator can have ordinary Archive authority without a durable profile.
+  // Keep its shared lifecycle checks; report unknown rather than guessing whose pins to retire.
+  const { owner } = connection;
+  const prefs = owner
+    ? await getCanonicalUserPreferences(owner.profileId, [preferenceKey]).catch(() => undefined)
+    : undefined;
   const layout: unknown =
-    prefs?.profileId === owner.profileId ? (prefs.entries[preferenceKey] ?? []) : undefined;
+    prefs && prefs.profileId === owner?.profileId
+      ? (prefs.entries[preferenceKey] ?? [])
+      : undefined;
   const status = new Map<number, ArchivePinStatus>();
   let undo: string | undefined;
   return {
@@ -105,7 +119,7 @@ export async function prepareArchivePins(
       targets: readonly PreparedPatchTarget[],
       outcomes: readonly (MutationOutcome | undefined)[],
     ) {
-      if (!Array.isArray(layout)) {
+      if (!owner || !Array.isArray(layout)) {
         return;
       }
       const committed = new Map<string, { index: number; id: string }>();
