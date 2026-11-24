@@ -6,6 +6,9 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readBackupEngine } from "../infra/database-engine/physical-store.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
@@ -15,6 +18,7 @@ import {
   prepareSqliteDatabaseDirectory,
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { retirePostgresUpgrade } from "../snapshot/database-backup.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -606,34 +610,67 @@ export function applyPlan(plan: UpgradePlan): void {
 }
 
 /** Keep one prior generation of owned files only. Operator recovery is never pruned. */
-export function pruneGenerations(
+export async function pruneGenerations(
   root: string,
   keepVersion: string,
   pinnedVersions: ReadonlySet<string>,
   ownedFiles: ReadonlySet<string>,
-): string[] {
+  postgres: {
+    config: OpenClawConfig;
+    activeAnchors: string[];
+    warn: (message: string) => void;
+  },
+): Promise<string[]> {
   const removed: string[] = [];
   // No recursive walk: ownership comes from the copy or the durable swap plan.
   const directories = new Set([...ownedFiles].map((file) => path.dirname(file)));
+  const generations: Array<{ absolute: string; retained: boolean }> = [];
   for (const directory of directories) {
     for (const name of fs.readdirSync(directory)) {
-      // A generation is a build ID (custom IDs may start with a letter) or, before build IDs, a version.
       const match = /^(.*)\.pre-([^/]+)$/u.exec(name);
       if (!match || RETIRED_BACKUP_NAME.test(name)) {
         continue;
       }
       const [, original, generation] = match;
       const absolute = path.join(directory, name);
-      if (
-        ownedFiles.has(path.join(directory, original!)) &&
-        generation !== keepVersion &&
-        !pinnedVersions.has(generation!) &&
-        fs.lstatSync(absolute).isFile()
-      ) {
-        fs.rmSync(absolute);
-        removed.push(path.relative(root, absolute));
+      if (ownedFiles.has(path.join(directory, original!)) && fs.lstatSync(absolute).isFile()) {
+        generations.push({
+          absolute,
+          retained: generation === keepVersion || pinnedVersions.has(generation!),
+        });
       }
     }
+  }
+  const retainedAnchors = [
+    ...postgres.activeAnchors,
+    ...generations.filter((entry) => entry.retained).map((entry) => entry.absolute),
+  ].filter(isSqliteFile);
+  const protectedNamespaces = new Set(
+    retainedAnchors.flatMap((file) => {
+      const engine = readBackupEngine(file);
+      return engine.engine === "postgres" ? [engine.namespace] : [];
+    }),
+  );
+  for (const { absolute, retained } of generations) {
+    if (retained) {
+      continue;
+    }
+    if (isSqliteFile(absolute)) {
+      const engine = readBackupEngine(absolute);
+      if (engine.engine === "postgres" && !protectedNamespaces.has(engine.namespace)) {
+        try {
+          await retirePostgresUpgrade(absolute, postgres.config, retainedAnchors);
+        } catch (error) {
+          // Keep the anchor with its namespace when ownership or cleanup is uncertain.
+          postgres.warn(
+            `Previous PostgreSQL recovery data was kept because cleanup could not finish: ${formatErrorMessage(error)}. Run openclaw doctor to inspect retained recovery data.`,
+          );
+          continue;
+        }
+      }
+    }
+    fs.rmSync(absolute);
+    removed.push(path.relative(root, absolute));
   }
   return removed;
 }

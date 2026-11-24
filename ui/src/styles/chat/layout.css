@@ -653,22 +653,6 @@ openclaw-pending-session-create {
   margin-top: 0 !important;
 }
 
-.chat-history-sentinel {
-  display: flex;
-  min-height: 28px;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-thread-inner--virtual > .chat-history-sentinel {
-  position: absolute;
-  z-index: 1;
-  right: 0;
-  left: 0;
-  min-height: 1px;
-  pointer-events: none;
-}
-
 .chat-history-error,
 .chat-pending-inputs {
   display: flex;

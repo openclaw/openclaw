@@ -208,7 +208,6 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/usage",
     match: (body) => matchCommandPrefix(body, "/usage"),
-    silentUnauthorized: true,
   },
   async (params, rawArgs) => {
     const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
@@ -253,7 +252,7 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
 );
 
 export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: "/fast", match: (body) => matchCommandPrefix(body, "/fast"), silentUnauthorized: true },
+  { label: "/fast", match: (body) => matchCommandPrefix(body, "/fast") },
   async (params, rawArgs) => {
     const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
     if (!rawMode || rawMode === "status") {
@@ -301,7 +300,6 @@ export const handleSessionCommand: CommandHandler = defineAuthorizedTextCommand(
     label: SESSION_COMMAND_PREFIX,
     match: (body) =>
       /^\/session(?:\s|$)/.test(body) ? body.slice(SESSION_COMMAND_PREFIX.length).trim() : null,
-    silentUnauthorized: true,
   },
   async (params, rest) => {
     const tokens = rest.split(/\s+/).filter(Boolean);

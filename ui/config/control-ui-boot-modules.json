@@ -928,7 +928,6 @@
   "ui/src/lib/sessions/session-snooze.ts",
   "ui/src/lib/sessions/session-thinking-claims.ts",
   "ui/src/lib/sessions/session-thinking-metadata.ts",
-  "ui/src/lib/sessions/swarm-activity.ts",
   "ui/src/lib/sessions/tool-overrides.ts",
   "ui/src/lib/settings-navigation.ts",
   "ui/src/lib/shared-request-subscription.ts",

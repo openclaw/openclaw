@@ -2,14 +2,65 @@
   "name": "@openclaw/beam",
   "version": "2026.11.7",
   "private": true,
-  "description": "Read-only coding-session Beam receiver",
+  "description": "Receive coding-session snapshots for viewing and Team handoff",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "assetScripts": {
+      "package": "node scripts/package-cleaners.mjs"
+    },
     "extensions": [
       "./index.ts"
     ]
+  },
+  "beamNativeRelease": {
+    "version": "0.1.0",
+    "protocol": 1,
+    "platforms": {
+      "darwin-x64": {
+        "archive": "beam-clean_0.1.0_darwin_amd64.gz",
+        "bytes": 1215833,
+        "sha256": "430001b1de313f0e89581f91eb0e8ca1907ab6cab767b66aa5e4b8b46ef0b9dc",
+        "executableBytes": 2802448,
+        "executableSha256": "1f40524bdb2b790ad7514439a60b80f501a85596a8c1d2c9164cd5ade9df8aef"
+      },
+      "darwin-arm64": {
+        "archive": "beam-clean_0.1.0_darwin_arm64.gz",
+        "bytes": 1132306,
+        "sha256": "89e34fb37759188708f8dfa04fec21e28922b885f8f478aab955b190199807e2",
+        "executableBytes": 2655170,
+        "executableSha256": "c9621882a12015cc5febd9025bdf598b54820143b2ccfaf2d1abb6510deabc7e"
+      },
+      "linux-x64": {
+        "archive": "beam-clean_0.1.0_linux_amd64.gz",
+        "bytes": 1178538,
+        "sha256": "3d31f4b269494a2a9f3ef83deceb7fdfa59d827c9faee3ba0c4da16886134280",
+        "executableBytes": 2703522,
+        "executableSha256": "9c67c5a9ebbfd62bdf6e9ee08fad881c854c91d8cb3489bd9a6a556d63b2b4fa"
+      },
+      "linux-arm64": {
+        "archive": "beam-clean_0.1.0_linux_arm64.gz",
+        "bytes": 1073403,
+        "sha256": "06319091d090f5938777820c16ebb6b3da825c5dc77d2cc416cec7ba3d3b2a18",
+        "executableBytes": 2621602,
+        "executableSha256": "a4a2bd6e7945f35227d54d287131b8e6be377096be1819a5d0006f93c012072f"
+      },
+      "win32-x64": {
+        "archive": "beam-clean_0.1.0_windows_amd64.gz",
+        "bytes": 1217354,
+        "sha256": "3fbd6992ea02171765a9b6a9ad29e79e857ad29b9116fdfd54833368cb3ae210",
+        "executableBytes": 2816512,
+        "executableSha256": "8b65cf3f5abe3674f3fa108d2405ee9655766d5505111154e555e4c81e522f73"
+      },
+      "win32-arm64": {
+        "archive": "beam-clean_0.1.0_windows_arm64.gz",
+        "bytes": 1099200,
+        "sha256": "882c363cdc7ce6eace969f60ca4df17fa5a75268e35b96ed430d9a5b0caa30f8",
+        "executableBytes": 2612224,
+        "executableSha256": "824fe52502d11af16fa1447c1d693724277dc52b6f131dcf3abf514f63cdbc8e"
+      }
+    }
   }
 }

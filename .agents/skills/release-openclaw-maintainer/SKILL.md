@@ -81,9 +81,10 @@ recommended bookkeeping, not another release gate.
 
 ## Fast-track approval is human-only
 
-**NEVER approve your own or another agent's fast-track request. NEVER use an
-available maintainer token to impersonate human approval.** Obtain explicit
-approval from another human member of the normal release-managers group for the
+**NEVER approve a fast-track request, whether you or another agent prepared it.
+NEVER use an available maintainer token to impersonate human approval.** Obtain
+explicit approval from a human member of the normal release-managers group,
+which may be the release manager who requested it, for the
 exact request/digest, candidate, artifacts, publication scope, run/attempt,
 expiry and explicit skip/incomplete-validation action. Preparation authority,
 generic publish authority, silence and previous approvals do not qualify.
@@ -93,28 +94,32 @@ and ask that human. Changed contents require a new request and approval.
 Preserve the human decision's permalink, identity and timestamp with the exact
 request and original FRV results. Keep the normal `npm-release` environment
 approval and existing release receipt. Shared tokens make this a procedural
-rule, not a technical guarantee of human independence. There is no Google Chat
-app, Firebase service or alternate approval API. See
-[fast-track approval](../../../docs/reference/fast-track-release-approval.md).
-Request preparation does not enable skipping: until existing publishers support
-these policies, use the ordinary validation/waiver path below.
+rule, not a technical guarantee of human independence. See
+[fast-track approval](references/fast-track.md).
+For an approved exception, pass `--fast-track-approval <packet.json>` to
+`pnpm release:publish-preflight`; it forwards `fast_track_approval` through the
+existing publication path. Keep the original FRV run/attempt and sealed bytes.
+Use the bounded policy only within 20 commits AND 15,000 added/deleted lines
+(package manifests and enumerated lockfiles excluded from LOC only), or the
+separate partial-FRV policy with its complete outstanding-check snapshot.
+Neither policy creates a fully validated baseline. An admitted publication may
+finish after expiry only through its original packet-bound receipt and verified
+approval-job start timestamp; expiry never authorizes a new publication.
 
 ## Shared release boundaries
 
+Absent an explicit [approved fast-track](#fast-track-approval-is-human-only),
 FRV must conclude **success** with trusted P evaluating pinned Q’s
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
-Apply only the exact exceptions in that policy, including its operator-authorized
-Kova grants; preserve each grant’s version, job, optional candidate SHA, and
-optional attempt restrictions. When an operator approves a job waiver, default
-to the exact release version, child role, and job across all future FRV runs,
-attempts, and candidates for that release. Do not add `evidence` run/attempt or
-`targetSha` restrictions by default. Reserve attempt-specific waivers for
-exceptionally high-risk cases where approval intentionally covers only the
-reviewed execution; record that risk and the explicit limit in the PR/handoff.
-Preserve any narrower scope the operator explicitly requested. Diagnostic run
-IDs belong in the PR/handoff, not in matching restrictions merely because they
-identify the original failure. See the [attempt-binding correction in #201694](https://github.com/openclaw/openclaw/pull/201694)
-and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
+Record the approved release version, child role, and short reason. Include a
+candidate SHA only for candidate-specific approval. Name a job to waive only
+that job, regardless of outcome or whether it ran. Optional `step` narrows the
+grant to that job’s first incomplete or failed step. Omit `jobName` to waive
+all descendants of the role without dispatch, lookup, reuse, or a receipt.
+Record the exception separately from a pass, keeping raw outcomes unchanged.
+See [#204382](https://github.com/openclaw/openclaw/pull/204382): cancellation in
+[Performance 45327586533](https://github.com/openclaw/openclaw/actions/runs/45327586533)
+blocked [FRV 45326913251](https://github.com/openclaw/openclaw/actions/runs/45326913251).
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
@@ -123,12 +128,11 @@ no grant PR to `main`, no grant cherry-pick into C. Pin the new Q in a fresh
 request/admission, then reevaluate eligible raw successful/failed receipts under
 its grants. The ledger-only delta preserves workload identity; executable Q
 changes do not. Public Q branches are not private storage.
-A failed-job grant is not permission to skip the job or change C. All other
-required lanes must succeed: Windows
+A grant does not change C. All unwaived required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
 and Linux/Windows/macOS Gateway checks, including Windows packaged
-install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
+install/upgrade checks in Release Checks. A cancelled FRV parent still blocks. Preserve
 first failures and classify each one as below before recovery. Stable
 publication requires stable/full evidence, soak, and blocking performance.
 Beta-profile evidence cannot authorize stable publication. Hard gates and soak
@@ -197,7 +201,8 @@ never acknowledges SDK API changes, so supply
 `plugin_sdk_api_acknowledgement` whenever the SDK report contains changes.
 Review the diff and acknowledge it yourself; stop for the operator only if a
 change looks harmful. The
-publisher accepts only successful FRV and cannot grant a waiver. Explicit
+publisher accepts successful FRV or an exact human-approved fast-track packet.
+It does not grant ad hoc waivers or relabel failed validation. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
 
@@ -319,3 +324,5 @@ or main closeout.
 Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
 block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.
+
+For public-safe approval evidence, follow [public approval packets](references/fast-track.md#public-approval-packets).

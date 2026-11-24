@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { GatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -8,10 +9,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
+  PluginServiceExportCatalog,
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, assert, vi } from "vitest";
@@ -26,13 +27,24 @@ import {
 } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
+export function beamTestAuthority(
+  overrides: Partial<GatewayRequestAuthorityV1> = {},
+): GatewayRequestAuthorityV1 {
+  return {
+    clientIp: "127.0.0.1",
+    scopes: ["operator.write"],
+    assertCurrent() {},
+    async revalidate() {},
+    ...overrides,
+  };
+}
 export function beamTestHandler(
   store: BeamStore,
   options: Partial<Parameters<typeof createBeamRequestHandler>[0]> = {},
   failureStatus = 500,
 ) {
   const handler = createBeamRequestHandler({
-    resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] }),
+    resolveAuthority: beamTestAuthority,
     resolveControlUiBasePath: () => undefined,
     ...options,
     store,
@@ -104,6 +116,8 @@ export function beamTestBarrier() {
 
 export type BeamTestSession = {
   threadId: string;
+  sourceHomeId?: string;
+  exportPolicy?: SessionCatalogHost["sessions"][number]["exportPolicy"] | null;
   name?: string;
   modelProvider?: string;
   recencyAt: number;
@@ -131,29 +145,38 @@ export function createBeamTestCatalog(
     items?: SessionCatalogTranscriptItem[] | ((threadId: string) => SessionCatalogTranscriptItem[]);
     hostCursor?: string;
     hostKind?: SessionCatalogHost["kind"];
+    hostId?: string;
     onList?: () => unknown;
-    onRead?: (threadId: string) => unknown;
+    onRead?: (threadId: string, sourceHomeId?: string, agentId?: string) => unknown;
     processHomeFallbackAllowed?: boolean;
   } = {},
-): sessionCatalogRuntime.ActiveSessionCatalog {
+): PluginServiceExportCatalog {
   const id = params.id ?? "claude";
   return {
-    pluginId: id,
     id,
-    label: id,
     processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
+    assertCurrent: () => {},
     list: async () => {
       await params.onList?.();
       const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
       return [
         {
-          hostId: "gateway:local",
+          hostId: params.hostId ?? "gateway:local",
           label: "Local",
           kind: params.hostKind ?? "gateway",
           connected: true,
           ...(params.hostCursor ? { nextCursor: params.hostCursor } : {}),
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
+            sourceHomeId: session.sourceHomeId,
+            exportPolicy:
+              session.exportPolicy === null
+                ? undefined
+                : (session.exportPolicy ?? {
+                    origin: "native-local",
+                    automatic: true,
+                    stableHostThreadIdentity: true,
+                  }),
             name: session.name,
             modelProvider: session.modelProvider,
             recencyAt: session.recencyAt,
@@ -165,8 +188,8 @@ export function createBeamTestCatalog(
         },
       ];
     },
-    read: async ({ hostId, threadId }) => {
-      await params.onRead?.(threadId);
+    read: async ({ hostId, threadId, sourceHomeId, agentId }) => {
+      await params.onRead?.(threadId, sourceHomeId, agentId);
       const items = typeof params.items === "function" ? params.items(threadId) : params.items;
       return {
         hostId,
@@ -182,15 +205,15 @@ export function createBeamTestCatalog(
 }
 
 type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
-  listCatalogs?: () => sessionCatalogRuntime.ActiveSessionCatalog[];
+  listCatalogs?: () => PluginServiceExportCatalog[];
 };
 export function createBeamTestRunner({
   endpoint,
   listCatalogs = () => [createBeamTestCatalog()],
   ...options
 }: Partial<RunnerOptions> & { endpoint?: string } = {}) {
-  vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockImplementation(listCatalogs);
   return createBeamMirrorRunner({
+    catalogExports: { listCatalogs },
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,
