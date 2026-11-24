@@ -690,7 +690,7 @@ focused fixes; never widen automatically.
 At seal time the parent records the SDK evidence digest from the qualified npm
 receipt and resolves per-package npm plans against the registry. The manifest's
 `publishInputs` supplies publisher/preflight defaults. SDK API changes still
-need the operator's acknowledgement; sealed evidence does not grant authority.
+need acknowledgement: the release agent reviews and acknowledges changes, stopping for the operator only if a change looks harmful. Sealed evidence does not grant authority.
 Mutation owners recheck live publication authority, selectors, and immutable bytes.
 
 ### Publication requirements
