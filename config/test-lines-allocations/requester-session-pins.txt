@@ -6,4 +6,5 @@
 # +96: native Archive/Undo through routed SQLite owners, including newer layout conflicts and lost cleanup acknowledgements after a committed archive.
 # +71: signed native Archive with failed profile acquisition, unchanged saved layout, no false Undo and a stale incarnation control.
 # +70: signed compare-only Archive, new pin during lifecycle drain, untouched absence and mixed-batch conflict receipts.
-1533
+# +24: actual embedded tool rejects an oversized pin layout without changing it; removing an old pin lets the same request succeed.
+1557

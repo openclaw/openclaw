@@ -84,3 +84,27 @@ it("agent tools read and write the original signed-in person's ordered pins; sel
     });
   });
 });
+
+it("explains how to make room for a pin without dropping any saved shortcut", async () => {
+  await withParticipantSessionToolsFixture(async ({ cfg, alice }) => {
+    const pref = "ui.railShortcuts";
+    const shortcuts = Array.from(
+      { length: 100 },
+      (_, i) => `session-rail:agent:main:dashboard:${String(i).padStart(3, "0")}`,
+    );
+    const before = [...shortcuts, `session:${PARTICIPANT_SHARED}`];
+    expect(
+      (await preferences.setCanonicalUserPreferences(alice.profileId, { [pref]: before }))?.ok,
+    ).toBe(true);
+    const tool = createSessionsTool({ config: cfg, agentSessionKey: REQUESTER });
+    const patch = (sessionKey: string, pinned: boolean) =>
+      tool.execute("patch-pin", { action: "patch", sessionKey, pinned });
+    const read = async () =>
+      (await preferences.getCanonicalUserPreferences(alice.profileId, [pref]))?.entries[pref];
+    await expect(patch(PARTICIPANT_DRAFT, true)).rejects.toThrow(/remove .*pin or .*shortcut/i);
+    expect(await read()).toEqual(before);
+    await patch(PARTICIPANT_SHARED, false);
+    await patch(PARTICIPANT_DRAFT, true);
+    expect(await read()).toEqual([...shortcuts, `session:${PARTICIPANT_DRAFT}`]);
+  });
+});

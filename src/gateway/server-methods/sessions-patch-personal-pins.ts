@@ -335,6 +335,15 @@ export async function patchPersonalSessionPins(
           { expectedEntries: { [preferenceKey]: raw ?? null }, assertCurrent },
         );
         if (!result?.ok) {
+          if (result?.error.code === "value-too-large") {
+            return respond(
+              false,
+              undefined,
+              reject(
+                "Your sidebar is full. Remove an existing pin or rail shortcut and try again.",
+              ),
+            );
+          }
           return respond(
             false,
             undefined,
