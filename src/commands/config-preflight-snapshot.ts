@@ -303,8 +303,9 @@ export async function readAdmittedConfigSnapshot(params: {
                   measureDoctorConfigPreflightStep(
                     "admission.plugin-config",
                     async () => {
-                      const read = await params.readSnapshot(
-                        coreRecovery ? { isolateEnv: true } : undefined,
+                      const read = await withLiveStateReads(
+                        () => params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
+                        { startupConfig: true },
                       );
                       metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
                       return read;

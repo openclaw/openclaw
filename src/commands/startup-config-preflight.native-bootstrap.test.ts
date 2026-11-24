@@ -12,6 +12,7 @@ import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
+import { createConfigIO } from "../config/io.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import {
@@ -22,6 +23,7 @@ import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-own
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -31,6 +33,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import * as stateReadPool from "../state/openclaw-state-read-pool.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readAdmittedConfigSnapshot } from "./config-preflight-snapshot.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 it.runIf(process.platform !== "win32")(
@@ -308,65 +311,92 @@ it.each([
   });
 });
 
-it.each(["schema-lease", "offline-maintenance"] as const)(
-  "handles a foreign %s acquired at worker-handoff without redispatch",
-  async (holder) => {
-    await withOpenClawTestState({ label: "gateway-worker-handoff" }, async (state) => {
-      await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
-      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-      await closeOpenClawStateDatabaseAsync();
-      const stop = new AbortController();
-      let foreignOwner: Promise<unknown> | undefined;
-      let dispatches = 0;
-      const createPool = stateReadPool.createStateReadPool;
-      const poolSpy = vi
-        .spyOn(stateReadPool, "createStateReadPool")
-        .mockImplementation((...args) => {
-          const pool = createPool(...args);
-          const runTask = pool.runTask;
-          pool.runTask = (input, options) =>
-            runTask(async () => {
-              const request = typeof input === "function" ? await input() : input;
-              if (
-                request.command.type === "machineState.read" &&
-                request.command.input.key === `webhookListeners:${state.configPath}`
-              ) {
-                dispatches += 1;
-                if (dispatches === 1) {
-                  // Host admission passed; the real worker still has to admit its native read.
-                  foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal))
-                    .exited;
-                }
-              }
-              return request;
-            }, options);
-          return pool;
-        });
-      try {
-        const ready = runStartupConfigPreflight({
-          gateway: true,
-          observe: false,
-        });
-        if (holder === "schema-lease") {
-          await expect(ready).resolves.toMatchObject({ snapshot: { valid: true } });
-        } else {
-          // Ordinary worker errors preserve their name/message, not their prototype.
-          await expect(ready).rejects.toMatchObject({
-            name: "StateDatabaseAccessError",
-            message: expect.stringContaining(databasePath + " is undergoing offline maintenance"),
-          });
-        }
-        expect(foreignOwner).toBeDefined();
-        expect(dispatches).toBe(1);
-      } finally {
-        stop.abort();
-        await foreignOwner;
-        poolSpy.mockRestore();
-        await closeOpenClawStateDatabaseAsync();
-      }
+it.each([
+  ["schema-lease", "before parent admission"],
+  ["offline-maintenance", "before parent admission"],
+  ["schema-lease", "after parent admission"],
+  ["offline-maintenance", "after parent admission"],
+] as const)("handles a foreign %s acquired %s without redispatch", async (holder, boundary) => {
+  await withOpenClawTestState({ label: "gateway-worker-handoff" }, async (state) => {
+    await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const stop = new AbortController();
+    const key =
+      boundary === "before parent admission"
+        ? "startup.test"
+        : `webhookListeners:${state.configPath}`;
+    let foreignOwner: Promise<unknown> | undefined;
+    let dispatches = 0;
+    const createPool = stateReadPool.createStateReadPool;
+    const poolSpy = vi.spyOn(stateReadPool, "createStateReadPool").mockImplementation((...args) => {
+      const pool = createPool(...args);
+      const runTask = pool.runTask;
+      pool.runTask = (input, options) =>
+        runTask(async () => {
+          if (
+            boundary === "before parent admission" &&
+            options?.diagnosticOperation === "machineState.read" &&
+            !foreignOwner
+          ) {
+            foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+          }
+          const request = typeof input === "function" ? await input() : input;
+          if (request.command.type === "machineState.read" && request.command.input.key === key) {
+            dispatches += 1;
+            if (boundary === "after parent admission" && dispatches === 1) {
+              // Host admission passed; the real worker still has to admit its native read.
+              foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal))
+                .exited;
+            }
+          }
+          return request;
+        }, options);
+      return pool;
     });
-  },
-);
+    try {
+      const readSnapshot = vi.fn(async () => {
+        await readConfigMachineStateAsync(key, { env: state.env });
+        return {
+          snapshot: await createConfigIO({
+            env: state.env,
+            observe: false,
+            pluginValidation: "core-only",
+          }).readConfigFileSnapshot(),
+        };
+      });
+      // The webhook pin read occurs later; exercise parent admission inside the parallel
+      // full-config callback instead, using the same real read worker.
+      const ready =
+        boundary === "before parent admission"
+          ? readAdmittedConfigSnapshot({ env: state.env, readSnapshot })
+          : runStartupConfigPreflight({ gateway: true, observe: false });
+      if (holder === "schema-lease") {
+        await expect(ready).resolves.toMatchObject({ snapshot: { valid: true } });
+      } else if (boundary === "before parent admission") {
+        await expect(ready).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+      } else {
+        // Ordinary worker errors preserve their name/message, not their prototype.
+        await expect(ready).rejects.toMatchObject({
+          name: "StateDatabaseAccessError",
+          message: expect.stringContaining(databasePath + " is undergoing offline maintenance"),
+        });
+      }
+      expect(foreignOwner).toBeDefined();
+      if (boundary === "before parent admission") {
+        expect(readSnapshot).toHaveBeenCalledTimes(1);
+      }
+      expect(dispatches).toBe(
+        holder === "offline-maintenance" && boundary === "before parent admission" ? 0 : 1,
+      );
+    } finally {
+      stop.abort();
+      await foreignOwner;
+      poolSpy.mockRestore();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
 
 it.each(["invalid config", "rejected guard"] as const)(
   "preserves pending native credentials before startup admission for %s",

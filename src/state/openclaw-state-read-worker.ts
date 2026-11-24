@@ -17,6 +17,7 @@ import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { isStartupConfigStateRead } from "./artifact-preserving-state-reads.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -344,10 +345,13 @@ class StateReadTransport {
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
-      const task = pool.pool.runTask(
-        async () => {
-          const physicalLocation = resolveSqliteDatabaseFilePath(location);
+      const waitForAdmission = isStartupConfigStateRead();
+      const prepareDispatch = async () => {
+        const physicalLocation = resolveSqliteDatabaseFilePath(location);
+        if (!waitForAdmission) {
           await authority.acquire(() => undefined);
+        }
+        try {
           const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () => {
             authority.signal.throwIfAborted();
             context.admission.assertCurrent();
@@ -355,23 +359,30 @@ class StateReadTransport {
           if (turn) {
             releaseAdmission = await turn;
           }
-          try {
-            return await authority.acquire(async () => {
-              // Queue admission can outlive the captured file at this pathname.
-              if (expectedIdentity !== undefined) {
-                assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
-                  key: expectedIdentity,
-                });
-                authority.assertCurrent();
-              }
-              return request;
-            });
-          } catch (error) {
-            releaseAdmission?.();
-            releaseAdmission = undefined;
-            throw error;
+          const validateDispatch = async () => {
+            // Queue admission can outlive the captured file at this pathname.
+            if (expectedIdentity !== undefined) {
+              assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
+                key: expectedIdentity,
+              });
+              authority.assertCurrent();
+            }
+            return request;
+          };
+          if (waitForAdmission) {
+            authority.assertCurrent();
+            return await validateDispatch();
           }
-        },
+          return await authority.acquire(validateDispatch);
+        } catch (error) {
+          releaseAdmission?.();
+          releaseAdmission = undefined;
+          throw error;
+        }
+      };
+      // Retry only dispatch preparation, using the release's existing per-read admission budget.
+      const task = pool.pool.runTask(
+        waitForAdmission ? () => authority.acquire(prepareDispatch) : prepareDispatch,
         {
           signal: authority.signal,
           inputBytes: requestBytes(request),
