@@ -96,13 +96,26 @@ export function createBranchReadCache(environment: () => unknown) {
                 );
               }
               if (observation) {
-                selected.watches.push(
-                  observeOwnedDirectory(observation.root, (filename, event) => {
-                    if (!filename || filename === ".git") {
-                      invalidate(filename, event);
-                    }
-                  }),
-                );
+                const observedRoots = new Set<string>([observation.root]);
+                let dir = path.resolve(input.repoRoot);
+                const stopRoot = path.resolve(observation.root);
+                for (let depth = 0; depth < 32 && dir !== stopRoot; depth += 1) {
+                  observedRoots.add(dir);
+                  const parent = path.dirname(dir);
+                  if (parent === dir) {
+                    break;
+                  }
+                  dir = parent;
+                }
+                for (const rootDir of observedRoots) {
+                  selected.watches.push(
+                    observeOwnedDirectory(rootDir, (filename, event) => {
+                      if (!filename || filename === ".git") {
+                        invalidate(filename, event);
+                      }
+                    }),
+                  );
+                }
                 selected.watches.push(
                   observeOwnedDirectory(path.join(observation.commonDir, "refs"), invalidate, {
                     recursive: true,

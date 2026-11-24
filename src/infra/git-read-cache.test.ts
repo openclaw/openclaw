@@ -199,6 +199,57 @@ describe("typed Git read ownership", () => {
     expect(workerCalls("repository.branches")).toHaveLength(2);
   });
 
+  it("invalidates subfolder branch snapshots when git init creates a nested .git directory", async () => {
+    const outerReady = {
+      branches: [{ name: "outer-main", kind: "local" as const }],
+      repositoryStatus: "git" as const,
+      observation: {
+        root: "/outer",
+        gitDir: "/outer/.git",
+        commonDir: "/outer/.git",
+      },
+    };
+    const held = holdRead("repository.branches", outerReady);
+    const operation = {
+      type: "repository.branches" as const,
+      input: { repoRoot: "/outer/packages/widget", includeRepositoryStatus: true },
+    };
+    const initial = createDeferredCore();
+    expect(
+      await runGitReadOperation(operation, { snapshot: true, onRefresh: initial.resolve }),
+    ).toEqual({ branches: [], refreshing: true });
+    held.resolve(outerReady);
+    await initial.promise;
+
+    const watch = [...branchChanges.entries()].find(([dir]) =>
+      dir.replaceAll("\\", "/").endsWith("/outer/packages/widget"),
+    )?.[1];
+    expect(watch).toBeDefined();
+    watch!(".git", "rename");
+
+    const innerReady = {
+      branches: [{ name: "inner-main", kind: "local" as const }],
+      repositoryStatus: "git" as const,
+      observation: {
+        root: "/outer/packages/widget",
+        gitDir: "/outer/packages/widget/.git",
+        commonDir: "/outer/packages/widget/.git",
+      },
+    };
+    const refresh = holdRead("repository.branches", innerReady);
+    const refreshed = createDeferredCore();
+    expect(
+      await runGitReadOperation(operation, { snapshot: true, onRefresh: refreshed.resolve }),
+    ).toEqual({ branches: outerReady.branches, repositoryStatus: "git", refreshing: true });
+    refresh.resolve(innerReady);
+    await refreshed.promise;
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual({
+      branches: innerReady.branches,
+      repositoryStatus: "git",
+    });
+    expect(workerCalls("repository.branches")).toHaveLength(2);
+  });
+
   it("retains interleaved PR histories while sharing checks of the same checkout refs", async () => {
     const read = (sha: string, branch = "feature", refreshIndex = false) =>
       runGitReadOperation({
