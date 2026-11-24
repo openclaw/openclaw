@@ -140,9 +140,28 @@ for (const billing of [false, true]) {
           await waitForControlUiGatewayReady(page);
           await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill("Hello");
           await page.getByRole("button", { name: "Send message", exact: true }).click();
-          const failure = page.locator(".chat-run-failure").first();
+          const failure = page.locator(".chat-run-failure-notice").first();
           const checkFailure = async () => {
             await failure.waitFor({ timeout: 60_000 });
+            expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
+              billing
+                ? "Fixture reports a billing problem"
+                : "Fixture didn’t accept the saved credentials",
+            );
+            expect(await failure.locator(".chat-run-failure__icon").isVisible()).toBe(true);
+            expect(await failure.locator(".chat-run-failure__chevron").isVisible()).toBe(true);
+            expect(
+              await failure.getByRole("button", { name: "Open Models", exact: true }).isVisible(),
+            ).toBe(true);
+            expect(
+              await failure.getByRole("button", { name: "Edit message", exact: true }).isVisible(),
+            ).toBe(true);
+            expect(
+              await failure.getByRole("button", { name: "Try again", exact: true }).isVisible(),
+            ).toBe(true);
+            expect(
+              await failure.getByRole("link", { name: "Report a bug", exact: true }).isVisible(),
+            ).toBe(true);
             if (billing) {
               expect(
                 await failure.locator(".chat-run-failure__billing-message").textContent(),
@@ -153,14 +172,13 @@ for (const billing of [false, true]) {
                   .getAttribute("href"),
               ).toBe(actionUrl);
               expect(await failure.textContent()).not.toContain("RAW_BILLING_CANARY");
-            } else {
-              expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
-                "Fixture didn’t accept the saved credentials",
-              );
             }
           };
           await checkFailure();
           expect(upstreamRequests).toBeGreaterThan(0);
+          await failure.locator(".chat-run-failure__toggle").click();
+          await page.locator(".chat-run-failure__log").waitFor();
+          await page.keyboard.press("Escape");
           const shot = process.env.OPENCLAW_E2E_SHOT;
           if (shot) {
             await page.screenshot({ path: shot });
@@ -173,13 +191,14 @@ for (const billing of [false, true]) {
             await checkFailure();
             const text = await failure.locator(".chat-run-failure__billing-message").boundingBox();
             const link = await failure.locator(".chat-run-failure__plans").boundingBox();
+            const header = await failure.locator(".chat-run-failure").boundingBox();
+            expect(text!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
             expect(link!.y).toBeGreaterThanOrEqual(text!.y + text!.height);
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
-          } else {
-            await failure.getByRole("button", { name: "Open Models", exact: true }).click();
-            await page.waitForURL((url) => url.pathname.endsWith("/settings/model-providers"));
-            expect(new URL(page.url()).searchParams.get("provider")).toBe("fixture");
           }
+          await failure.getByRole("button", { name: "Open Models", exact: true }).click();
+          await page.waitForURL((url) => url.pathname.endsWith("/settings/model-providers"));
+          expect(new URL(page.url()).searchParams.get("provider")).toBe("fixture");
         },
       );
     });
