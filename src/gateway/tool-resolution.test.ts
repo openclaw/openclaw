@@ -1,7 +1,10 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -377,6 +380,35 @@ describe("resolveGatewayScopedTools", () => {
     expect(names).not.toContain("sessions_list");
     expect(names).toContain("sessions_history");
   });
+});
+
+const modeRoots = useAutoCleanupTempDirTracker(afterEach);
+
+// The Gateway runs a CLI chat's OpenClaw tools, so the session's mode bounds an owner's turn too.
+it("bounds an owner's loopback file tools to the session root of a mode-set session", async () => {
+  setRuntimeConfigSnapshot({});
+  const root = modeRoots.make("openclaw-mode-root-");
+  const outside = path.join(modeRoots.make("openclaw-mode-out-"), "x.txt");
+  await fs.writeFile(outside, "outside\n");
+  const context = { sessionKey: "agent:main:mode-owner", workspaceDir: root, senderIsOwner: true };
+  const readOutside = async (sessionPermissionPolicy?: { mode: "read-only"; root: string }) => {
+    const { tools } = await resolveMcpLoopbackScopedTools({
+      cfg: { plugins: { enabled: false } },
+      context: { ...context, ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}) },
+      defaultMediatedToolNames: ["read", "write"],
+    });
+    const read = tools.find((tool) => tool.name === "read");
+    assert(read);
+    const outcome = await Promise.resolve(read.execute("call-1", { path: outside })).then(
+      (result) => JSON.stringify(result),
+      (error: unknown) => String(error),
+    );
+    return { outcome, names: tools.map(({ name }) => name) };
+  };
+  const bounded = await readOutside({ mode: "read-only", root });
+  expect(bounded.outcome).toContain("escapes");
+  expect(bounded.names).not.toContain("write");
+  expect((await readOutside()).outcome).toContain("outside");
 });
 
 registerGatewayToolFinalEffectTests();

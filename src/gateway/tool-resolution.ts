@@ -219,10 +219,9 @@ export async function resolveGatewayScopedTools(
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const completionHandoff =
     stableSessionSurface && requesterPolicies.requesterPolicySource === "completion-handoff";
-  const sessionPermissionPolicy =
-    requesterPolicies.inheritedToolPolicySource === "sender"
-      ? params.sessionPermissionPolicy
-      : undefined;
+  // The Gateway runs these tools, so it enforces the session's permission mode for every caller,
+  // on every runtime; a runtime's own sandbox only covers that runtime's own tools.
+  const sessionPermissionPolicy = params.sessionPermissionPolicy;
   const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -283,7 +282,7 @@ export async function resolveGatewayScopedTools(
   ];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
-    (requesterPolicies.inheritedToolPolicySource === "sender"
+    (sessionPermissionPolicy || requesterPolicies.inheritedToolPolicySource === "sender"
       ? params.preparedSessionWorkspaceDir?.trim()
       : undefined) ||
     params.workspaceDir?.trim() ||
