@@ -518,6 +518,53 @@ describe("agent activity audit projection", () => {
     });
   });
 
+  it("projects observed skill-selection metadata without prompt content", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "runtime-skill-loading-diagnostics",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
+          redaction: "metadata_only",
+          // Prompt text, tool arguments, and skill file contents must never
+          // survive the metadata-only projection, even when present upstream.
+          prompt: "PRIVATE_PROMPT_CONTENT",
+          toolInput: "PRIVATE_PROMPT_CONTENT",
+          skillFileContents: "PRIVATE_PROMPT_CONTENT",
+        },
+      }),
+    );
+
+    expect(projected).toMatchObject({
+      kind: "skill_selection",
+      action: "skill.selection.observed",
+      status: "observed",
+      toolName: "runtime-skill-loading-diagnostics",
+      agentId: "coder",
+      sessionKey: "agent:coder:main",
+    });
+    expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROMPT_CONTENT");
+  });
+
+  it("drops unobserved skill selection claims", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectionSource: "none",
+          selectionConfidence: "none",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+
+    expect(projected).toBeUndefined();
+  });
+
   it("does not share reused run id provenance across recorder instances", () => {
     const runId = "run-reused-across-recorders";
     projectAgentEventToAudit(
@@ -760,6 +807,99 @@ describe("agent activity audit projection", () => {
       { action: "agent.run.started", status: "started" },
       { action: "agent.run.finished", status: "failed" },
     ]);
+  });
+
+  it("records observed skill use between lifecycle start and terminal events", async () => {
+    const inputs: AuditEventInput[] = [];
+    const writer = captureAuditWriter(inputs);
+    const recorder = createAgentEventAuditRecorder({
+      writer,
+      getConfig: () => ({}),
+      terminalSettleMs: 60_000,
+    });
+    const lifecycleGeneration = "gateway-skill-use";
+
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 1 }));
+    recorder.record(
+      agentEvent({
+        lifecycleGeneration,
+        seq: 2,
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "debug-toolkit",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 3, data: { phase: "end" } }));
+
+    expect(inputs.map(({ action, status }) => ({ action, status }))).toEqual([
+      { action: "agent.run.started", status: "started" },
+      { action: "skill.selection.observed", status: "observed" },
+      { action: "agent.run.finished", status: "succeeded" },
+    ]);
+    await recorder.stop();
+  });
+
+  it("retains the buffered start for paired settlement when the writer rejects it at skill time", async () => {
+    const inputs: AuditEventInput[] = [];
+    const runs: Array<{ start: AuditEventInput; finish: AuditEventInput }> = [];
+    let startAttempts = 0;
+    const writer: AuditEventWriter = {
+      ...captureAuditWriter(inputs),
+      record: (input) => {
+        if (input.kind === "agent_run" && input.action === "agent.run.started") {
+          startAttempts += 1;
+          return false; // full queue: nothing is accepted yet
+        }
+        inputs.push(input);
+        return true;
+      },
+      recordRun: (start, finish) => {
+        runs.push({ start, finish });
+        return true;
+      },
+    };
+    const recorder = createAgentEventAuditRecorder({
+      writer,
+      getConfig: () => ({}),
+      terminalSettleMs: 60_000,
+    });
+    const lifecycleGeneration = "gateway-skill-backpressure";
+
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 1 }));
+    recorder.record(
+      agentEvent({
+        lifecycleGeneration,
+        seq: 2,
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "debug-toolkit",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 3, data: { phase: "end" } }));
+
+    // The lifecycle start buffers without a write; the skill-time flush
+    // attempts it once and, rejected, retains it: the terminal still
+    // settles as one paired run instead of a lone finish.
+    expect(startAttempts).toBe(1);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      start: { action: "agent.run.started", status: "started" },
+      finish: { action: "agent.run.finished", status: "succeeded" },
+    });
+    expect(inputs.map(({ action }) => action)).toEqual(["skill.selection.observed"]);
+    await recorder.stop();
   });
 
   it("keeps one start when a retry cancels a pending terminal", async () => {

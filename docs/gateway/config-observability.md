@@ -25,14 +25,17 @@ For the full key index and the other top-level config domains, see [Configuratio
 }
 ```
 
-The Gateway records **metadata-only** audit events for agent runs and tool
-actions into the shared state database. Message lifecycle metadata is a
-separate opt-in. The ledger stores identity, timing, tool names, and normalized
-outcomes, but never prompts, message bodies, tool arguments, results, or raw
-error text. Message rows do not store raw platform account, conversation,
-message, and target ids. Run/tool session keys remain available for correlation
-and can themselves contain platform account or peer ids. Records
-expire after 30 days and the ledger is capped at 100,000 rows. Query them with
+The Gateway records **metadata-only** audit events for agent runs, tool
+actions, and observed runtime skill selections into the shared state database.
+Message lifecycle metadata is a separate opt-in. The ledger stores identity,
+timing, tool or skill names, and normalized outcomes, but never prompts,
+message bodies, tool arguments, results, skill contents, paths, or raw error
+text. Message rows do not store raw platform account, conversation, message,
+and target ids. Run, tool, and skill-selection session keys remain available
+for correlation and can themselves contain platform account or peer ids. Run,
+tool, and message records expire after 30 days and share a 100,000-row cap.
+Skill-selection records use the same 30-day cutoff and a separate 100,000-row
+cap. Query them with
 [`openclaw audit`](/cli/audit) or the
 [`audit.activity.list`](/gateway/protocol/ledgers#audit-ledger-rpc) Gateway RPC. See
 [Audit history](/gateway/audit) for the full data model, privacy semantics,
@@ -42,7 +45,9 @@ and coverage limits.
   default because an audit trail enabled only after an incident cannot explain
   the incident. Setting `false` stops new event collection immediately;
   existing records stay readable until they expire. Turning it back on resumes
-  recording from that point — the gap is not backfilled.
+  recording from that point — the gap is not backfilled. This master toggle
+  also controls observed skill-selection records; there is no separate skill
+  selection toggle.
 - `executionIdentity`: retain bounded attribution context for exact execution
   inspection (default: `false`). This privacy-sensitive metadata is disabled
   on fresh installs and upgrades. Collection requires `enabled: true`; use
