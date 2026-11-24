@@ -48,6 +48,7 @@ describe("installed plugin update config migration", () => {
     "legacy-contract-ready",
     "legacy-contract-no-config",
     "legacy-contract-failure",
+    "artifact-free",
     "unchanged",
     "unchanged-ready",
     "include",
@@ -133,12 +134,14 @@ describe("installed plugin update config migration", () => {
         const ready =
           scenario === "unchanged-ready" ||
           scenario === "legacy-contract-no-config" ||
+          scenario === "artifact-free" ||
           scenario === "rules-only-ready" ||
           scenario === "rules-only-pending-ready";
         const settled =
           ready &&
           scenario !== "rules-only-pending-ready" &&
-          scenario !== "legacy-contract-no-config";
+          scenario !== "legacy-contract-no-config" &&
+          scenario !== "artifact-free";
         const alreadyCurrent = scenario === "unchanged" || ready;
         const unselectedMarker = state.path("unselected-doctor-ran");
         const config = {
@@ -197,7 +200,8 @@ describe("installed plugin update config migration", () => {
               ...(version === "2.0.0" &&
               scenario !== "legacy-contract-ready" &&
               scenario !== "legacy-contract-no-config" &&
-              scenario !== "legacy-contract-failure"
+              scenario !== "legacy-contract-failure" &&
+              scenario !== "artifact-free"
                 ? {
                     doctorContract:
                       scenario === "declared-unrelated-surface"
@@ -226,32 +230,35 @@ describe("installed plugin update config migration", () => {
         };
         const previousPath = writePlugin("1.0.0");
         const candidatePath = writePlugin("2.0.0");
-        fs.writeFileSync(
-          path.join(candidatePath, "doctor-contract-api.mjs"),
-          scenario === "wrong-doctor-surface" ||
-            scenario === "declared-unrelated-surface" ||
-            scenario === "legacy-contract-no-config"
-            ? "export function resolveSessionStoreAgentIds() { return []; }"
-            : scenario === "missing-normalizer" ||
-                scenario === "rules-only-no-pending" ||
-                scenario === "rules-only-ready" ||
-                scenario === "rules-only-pending-ready"
-              ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];'
-              : `
-        ${scenario === "constructor-failure" || scenario === "legacy-contract-failure" ? 'throw new Error("fixture constructor refused");' : ""}
-        ${scenario === "unrelated-core-legacy" ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];' : ""}
-        export function normalizeCompatibilityConfig({ cfg }) {
-          ${scenario === "transform-failure" ? 'throw new Error("fixture transform refused");' : ""}
-          const config = structuredClone(cfg);
-          const settings = config.plugins.entries["listener-fixture"].config;
-          if (settings.oldPort === undefined) return { config, changes: [] };
-          settings.listener = { port: settings.oldPort };
-          if (settings.oldHost !== undefined) settings.listener.host = settings.oldHost;
-          delete settings.oldPort;
-          delete settings.oldHost;
-          return { config, changes: ["Moved the configured listener port."] };
-        }`,
-        );
+        // An artifact-free package has nothing for Doctor to inspect.
+        if (scenario !== "artifact-free") {
+          fs.writeFileSync(
+            path.join(candidatePath, "doctor-contract-api.mjs"),
+            scenario === "wrong-doctor-surface" ||
+              scenario === "declared-unrelated-surface" ||
+              scenario === "legacy-contract-no-config"
+              ? "export function resolveSessionStoreAgentIds() { return []; }"
+              : scenario === "missing-normalizer" ||
+                  scenario === "rules-only-no-pending" ||
+                  scenario === "rules-only-ready" ||
+                  scenario === "rules-only-pending-ready"
+                ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];'
+                : `
+          ${scenario === "constructor-failure" || scenario === "legacy-contract-failure" ? 'throw new Error("fixture constructor refused");' : ""}
+          ${scenario === "unrelated-core-legacy" ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];' : ""}
+          export function normalizeCompatibilityConfig({ cfg }) {
+            ${scenario === "transform-failure" ? 'throw new Error("fixture transform refused");' : ""}
+            const config = structuredClone(cfg);
+            const settings = config.plugins.entries["listener-fixture"].config;
+            if (settings.oldPort === undefined) return { config, changes: [] };
+            settings.listener = { port: settings.oldPort };
+            if (settings.oldHost !== undefined) settings.listener.host = settings.oldHost;
+            delete settings.oldPort;
+            delete settings.oldHost;
+            return { config, changes: ["Moved the configured listener port."] };
+          }`,
+          );
+        }
         if (included) {
           fs.writeFileSync(state.statePath("plugins.json"), JSON.stringify(config.plugins));
           await state.writeConfig({ plugins: { $include: state.statePath("plugins.json") } });
