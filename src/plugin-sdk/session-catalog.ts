@@ -43,6 +43,7 @@ export type {
   SessionsCatalogListResult,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
+  SessionsCatalogResolveResult,
   SessionsCatalogStartTerminalParams,
   SessionsCatalogStartTerminalResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";

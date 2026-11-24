@@ -23,7 +23,9 @@ export type GatewayRequestAuthorityV1 = Readonly<{
 }>;
 
 export type PluginRuntimeGatewayRequestScope = {
-  readRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
+  readRequestAuthority?: (
+    client: PluginRuntimeGatewayRequestScope["client"],
+  ) => GatewayRequestAuthorityV1 | undefined;
   parentHttpRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
   /** Request-owned reader headroom expires when the interactive handler settles. */
   canUseInteractiveStateReadCapacity?: () => boolean;

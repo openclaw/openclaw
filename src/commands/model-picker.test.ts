@@ -328,6 +328,18 @@ it("offers likely chat models only; unlikely ones stay reachable by manual entry
   ]);
 });
 
+it("can leave a fresh setup unconfigured while still offering manual model entry", async () => {
+  const { result, select } = await promptDefaultPicker({
+    config: {},
+    allowKeep: true,
+    allowSkipUnconfigured: true,
+    loadCatalog: false,
+  });
+  expect(optionValues(pickerOptions(select))).toEqual(["__keep__", "__manual__"]);
+  expect(requireOption(pickerOptions(select), "__keep__").label).toBe("Skip for now");
+  expect(result).toEqual({});
+});
+
 it("keeps provider browsing cold and preserves literal labels through selection", async () => {
   pickerRuntime.resolvePluginProviders.mockReturnValue([
     { id: "nvidia", preserveLiteralProviderPrefix: true },

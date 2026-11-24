@@ -8,6 +8,8 @@ import {
 } from "../plugin-sdk/plugin-test-contracts.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
@@ -142,87 +144,107 @@ async function waitForPause(f: ReturnType<typeof fixture>, pending: Promise<unkn
 
 describe("registered plugin RPC authority through the real dispatcher", () => {
   it("preserves each concurrent HTTP caller in a registered RPC and expires the nested lease", async () => {
-    const { registry, config } = createPluginRegistryFixture();
-    const path = "/authority-proof";
-    const retained: NonNullable<ReturnType<typeof getGatewayRequestAuthorityV1>>[] = [];
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "authority-proof",
-      name: "Authority proof",
-      contracts: { gatewayMethodDispatch: ["authenticated-request"] },
-      register(api) {
-        api.registerGatewayMethod(
-          "authorityProof.read",
-          async ({ respond }) => {
-            const authority = getGatewayRequestAuthorityV1();
-            if (authority) {
-              await authority.revalidate();
-              retained.push(authority);
-            }
-            respond(true, {
-              person: authority?.personProfileId,
-              attribution: authority?.attributionProfileId,
-            });
-          },
-          { scope: "operator.read", profileAccess: "independent" },
-        );
-        api.registerHttpRoute({
-          path: path,
-          match: "exact",
-          auth: "gateway",
-          async handler(_req, res) {
-            const nested = await dispatchGatewayMethod("authorityProof.read", {});
-            res.end(JSON.stringify(nested.payload));
-            return true;
-          },
-        });
-      },
-    });
-    const methods = createGatewayMethodRegistry(
-      registry.registry.gatewayMethodDescriptors,
-      registry.registry,
-    );
-    const context = createDirectChatContext({
-      trackExecution: trackAsyncWork,
-      getGatewayMethodRegistry: () => methods,
-    });
-    setTestPluginRegistry(registry.registry);
-    const handler = createGatewayPluginRequestHandler({
-      registry: registry.registry,
-      log: createSubsystemLogger("test/plugin-rpc-authority"),
-      getGatewayRequestContext: () => context,
-    });
-    const results = await Promise.all(
-      (["trusted-proxy", "token"] as const).map(async (authMethod) => {
-        const profileId = authMethod === "trusted-proxy" ? "individual" : "shared-display";
-        const response = makeMockHttpResponse();
-        response.res.req.url = path;
-        await handler(response.res.req, response.res, undefined, {
-          gatewayAuthSatisfied: true,
-          gatewayRequestOperatorScopes: ["operator.read"],
-          gatewayRequestAuth: {
-            authMethod,
-            trustDeclaredOperatorScopes: false,
-            authenticatedUserProfile: {
-              profileId,
-              displayName: null,
-              hasAvatar: false,
-              updatedAt: 1,
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const individual = ensureProfileForEmail("http-caller@example.test");
+      const owner = ensureGatewayOwnerProfile(null);
+      const { registry, config } = createPluginRegistryFixture();
+      const path = "/authority-proof";
+      const log = createSubsystemLogger("test/plugin-rpc-authority");
+      const warnings = vi.spyOn(log, "warn");
+      const retained: NonNullable<ReturnType<typeof getGatewayRequestAuthorityV1>>[] = [];
+      registerVirtualTestPlugin({
+        registry,
+        config,
+        id: "authority-proof",
+        name: "Authority proof",
+        contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+        register(api) {
+          api.registerGatewayMethod(
+            "authorityProof.read",
+            async ({ respond }) => {
+              const authority = getGatewayRequestAuthorityV1();
+              if (authority) {
+                await authority.revalidate();
+                retained.push(authority);
+              }
+              respond(true, {
+                person: authority?.personProfileId,
+                attribution: authority?.attributionProfileId,
+              });
             },
-            ...(authMethod === "trusted-proxy" ? { personProfileId: profileId } : {}),
-          },
-        });
-        return response.end.mock.calls[0]?.[0];
-      }),
-    );
-    expect(results).toEqual([
-      JSON.stringify({ person: "individual", attribution: "individual" }),
-      JSON.stringify({ attribution: "shared-display" }),
-    ]);
-    expect(retained).toHaveLength(2);
-    for (const authority of retained)
-      expect(() => authority.assertCurrent()).toThrow("Gateway request authority expired");
+            { scope: "operator.read", profileAccess: "independent" },
+          );
+          api.registerGatewayMethod(
+            "authorityProof.forward",
+            async ({ respond }) => {
+              const result = await dispatchGatewayMethod("authorityProof.read", {});
+              respond(result.ok, result.payload, result.error);
+            },
+            { scope: "operator.read", profileAccess: "independent" },
+          );
+          api.registerHttpRoute({
+            path,
+            match: "exact",
+            auth: "gateway",
+            async handler(_req, res) {
+              const nested = await dispatchGatewayMethod("authorityProof.forward", {});
+              res.end(JSON.stringify(nested.payload));
+              return true;
+            },
+          });
+        },
+      });
+      const methods = createGatewayMethodRegistry(
+        registry.registry.gatewayMethodDescriptors,
+        registry.registry,
+      );
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => config,
+        trackExecution: trackAsyncWork,
+        getGatewayMethodRegistry: () => methods,
+      });
+      setTestPluginRegistry(registry.registry);
+      const handler = createGatewayPluginRequestHandler({
+        registry: registry.registry,
+        log,
+        getGatewayRequestContext: () => context,
+      });
+      const results = await Promise.all(
+        (["trusted-proxy", "token"] as const).map(async (authMethod) => {
+          const profile = authMethod === "trusted-proxy" ? individual : owner;
+          const profileId = profile.id;
+          const response = makeMockHttpResponse();
+          response.res.req.url = path;
+          response.res.req.method = "GET";
+          await handler(response.res.req, response.res, undefined, {
+            gatewayAuthSatisfied: true,
+            gatewayRequestOperatorScopes: ["operator.read"],
+            gatewayRequestAuth: {
+              authMethod,
+              trustDeclaredOperatorScopes: false,
+              authenticatedUserProfile: {
+                profileId,
+                displayName: null,
+                hasAvatar: false,
+                updatedAt: profile.updatedAt,
+              },
+              ...(authMethod === "trusted-proxy"
+                ? { personProfileId: profileId }
+                : { operatorRoleActor: { kind: "system" } }),
+            },
+          });
+          return response.end.mock.calls[0]?.[0];
+        }),
+      );
+      expect(results, JSON.stringify(warnings.mock.calls)).toEqual([
+        JSON.stringify({ person: individual.id, attribution: individual.id }),
+        JSON.stringify({ attribution: owner.id }),
+      ]);
+      expect(retained).toHaveLength(2);
+      for (const authority of retained) {
+        expect(() => authority.assertCurrent()).toThrow("Gateway request authority expired");
+      }
+    });
   });
 
   it.each(["login", "shared"] as const)(

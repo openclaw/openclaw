@@ -268,7 +268,9 @@ describe("plugin HTTP route runtime scopes", () => {
               requiredPolicyPlugin: "policy",
               signal: new AbortController().signal,
               assertCurrent() {
-                if (cause === "unavailable") throw new GatewayOperatorAccessUnavailableError();
+                if (cause === "unavailable") {
+                  throw new GatewayOperatorAccessUnavailableError();
+                }
                 throw new GatewayOperatorAccessDeniedError("grant-revoked");
               },
             },

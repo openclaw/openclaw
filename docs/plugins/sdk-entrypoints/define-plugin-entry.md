@@ -59,6 +59,12 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  A catalog row can declare its `exportPolicy`. Set `origin` to `native-local` for
+  a native session on this Gateway, `imported` for a received copy, or `federated`
+  for a remote source. Set `automatic: true` only when this source permits
+  background export. An unknown origin requires explicit selection. Assign the
+  policy at the receiving Gateway when projecting a peer's rows.
+
   Providers whose rows require current source authorization declare
   `requiresFreshList: true`. Each list, search, and page request must reauthorize
   its rows at the source. The Gateway bypasses cached pages for these providers;
@@ -167,6 +173,12 @@ export default definePluginEntry({
   owns operator and agent authorization, session creation, model readiness and
   policy checks, rollback, and untrusted-content wrapping. The provider supplies
   transcript text through `read(...)`; it must not write the destination session.
+
+  A provider with a durable continuation can implement `resolveGatewayConversation`.
+  After checking source and destination read access and the destination’s stored
+  origin, `sessions.catalog.resolve` returns its `sessionKey` and current
+  `sessionId`. An unbound source returns `null`. Looking up a destination starts
+  no session and sends no message.
 
   A read-only catalog of sessions published by another Gateway may set
   `audience: "session-viewers"`. Viewers need `operator.read`; configured roles

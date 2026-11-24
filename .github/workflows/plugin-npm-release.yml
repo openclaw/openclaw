@@ -49,6 +49,10 @@ on:
       - "src/utils/run-with-concurrency.ts"
   workflow_dispatch:
     inputs:
+      fast_track_approval:
+        description: Exact human-approved fast-track request and decision JSON; never an agent approval
+        required: false
+        type: string
       publish_scope:
         description: Publish the selected plugins or all publishable plugins from the ref
         required: true
@@ -136,6 +140,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
+  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
   RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
   RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
   RELEASE_TARGET_SHA: ${{ inputs.ref }}

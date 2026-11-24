@@ -10,6 +10,7 @@ import {
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetRequesterOwner,
 } from "../auto-reply/reply/session-event-target.js";
+import { runWithoutSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -21,10 +22,11 @@ import {
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
 import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   listFinishedSessions,
   listRunningSessions,
@@ -81,7 +83,7 @@ export function prepareExecExitNotification(
         session.notifyOnExit = false;
       }
       logWarn(
-        `exec: automatic completion has no destination (${formatErrorMessage(error)}); use process poll.`,
+        `exec: automatic completion has no destination (${sessionKind(session.sessionKey)} session; ${formatErrorMessage(error)}); use process poll.`,
       );
     },
   );
@@ -94,6 +96,9 @@ const execYieldResumes = new Map<string, ExecYieldResume>();
 /** A chat is its agent plus session key; a raw key such as `global` is shared across agents. */
 type ExecChat = { agentId: string; sessionKey: string };
 const execChatKey = (chat: ExecChat) => `${chat.agentId}\0${chat.sessionKey}`;
+/** Failure logs name the session kind, never the session key or id. */
+const sessionKind = (sessionKey: string | undefined) =>
+  isIncognitoSessionKey(sessionKey) ? "incognito" : "normal";
 const processChat = (session: ProcessSession) =>
   session.sessionKey && session.agentId
     ? execChatKey({ agentId: session.agentId, sessionKey: session.sessionKey })
@@ -294,7 +299,9 @@ async function settleOwedExecWake(
   wakeAgain?: (stored: Owed) => void,
 ) {
   if (outcome.status === "failed") {
-    logWarn(`exec: completion delivery failed (${outcome.error}); inspect the process result.`);
+    logWarn(
+      `exec: completion delivery failed (${sessionKind(owed.to.sessionKey)} session; ${outcome.error}); inspect the process result.`,
+    );
   }
   try {
     const stored = isGatewayRestartDraining() ? undefined : await readPendingOwed(owed);
@@ -309,7 +316,9 @@ async function settleOwedExecWake(
       await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }
   } catch (error) {
-    logWarn(`exec: completion ${owed.id} stays owed (${formatErrorMessage(error)}).`);
+    logWarn(
+      `exec: completion ${owed.id} stays owed (${sessionKind(owed.to.sessionKey)} session; ${formatErrorMessage(error)}).`,
+    );
   }
 }
 
@@ -340,7 +349,7 @@ async function notifyOnExit(
     const target = session.notifySessionTarget;
     if (!agentId || !target?.storePath) {
       logWarn(
-        `exec: completion ${session.id} has no admitted session destination; inspect its process result.`,
+        `exec: completion ${session.id} has no admitted session destination (${sessionKind(eventSessionKey)} session); inspect its process result.`,
       );
       return;
     }
@@ -359,18 +368,34 @@ async function notifyOnExit(
           ...(operatorProfileId ? { operatorProfileId } : {}),
         },
       };
-      await owe(owed);
-      // Admission resolves the chat by key: a deleted chat refuses the wake. The captured target
-      // and request owners carry the requester's authority into the one retry as well.
-      wakeOwedExec(
-        owed,
-        { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
-        (cancel) => recordNotifyOnExitRemoval(session, cancel),
-        1,
+      // The completion outlives the turn that started the command, so it stores and wakes under
+      // its own session actor and work scope: an incognito turn's actor and signal end with it.
+      await runOutsideAsyncWorkScope(() =>
+        runWithoutSessionActorStorage(async () => {
+          // A store failure must not drop the result: it is delivered live once, without a
+          // stored row to retry from or to replay after a restart.
+          const stored = await owe(owed).then(
+            () => true,
+            (error: unknown) => {
+              logWarn(
+                `exec: completion ${session.id} was not stored (${sessionKind(eventSessionKey)} session; ${formatErrorMessage(error)}); delivering it without restart recovery.`,
+              );
+              return false;
+            },
+          );
+          // Admission resolves the chat by key: a deleted chat refuses the wake. The captured
+          // target and request owners carry the requester's authority into the one retry too.
+          wakeOwedExec(
+            owed,
+            { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
+            (cancel) => recordNotifyOnExitRemoval(session, cancel),
+            stored ? 1 : 0,
+          );
+        }),
       );
     } catch (error) {
       logWarn(
-        `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,
+        `exec: completion was not admitted (${sessionKind(eventSessionKey)} session; ${formatErrorMessage(error)}); inspect the result with process log.`,
       );
     }
     return;
@@ -389,6 +414,8 @@ async function notifyOnExit(
     if (!(error instanceof SystemEventQueueFullError)) {
       throw error;
     }
-    logWarn(`exec: completion ${session.id} was not queued (${error.message}); use process poll.`);
+    logWarn(
+      `exec: completion ${session.id} was not queued (${sessionKind(sessionKey)} session; ${error.message}); use process poll.`,
+    );
   }
 }

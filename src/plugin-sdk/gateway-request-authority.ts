@@ -5,5 +5,6 @@ export type { GatewayRequestAuthorityV1 };
 
 /** Read the Gateway's authority for this HTTP or RPC handler, if admitted. */
 export function getGatewayRequestAuthorityV1(): GatewayRequestAuthorityV1 | undefined {
-  return getPluginRuntimeExecutionFrame()?.gatewayScope?.readRequestAuthority?.();
+  const scope = getPluginRuntimeExecutionFrame()?.gatewayScope;
+  return scope?.readRequestAuthority?.(scope.client);
 }

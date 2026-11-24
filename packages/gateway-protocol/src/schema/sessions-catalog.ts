@@ -69,6 +69,13 @@ export const SessionCatalogSessionSchema = closedObject({
   originalUrl: Type.Optional(Type.String({ maxLength: 4096 })),
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
+  /** Producer-owned source provenance. An unclassified row permits explicit selection only. */
+  exportPolicy: Type.Optional(
+    closedObject({
+      origin: stringLiteralUnion(["native-local", "imported", "federated"]),
+      automatic: Type.Boolean(),
+    }),
+  ),
   name: Type.Optional(Type.String()),
   /** Named tint imported from the source CLI session (SESSION_COLOR_IDS). */
   color: Type.Optional(Type.String()),
@@ -200,6 +207,11 @@ export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
+export const SessionsCatalogResolveResultSchema = Type.Union([
+  closedObject({ sessionKey: NonEmptyString, sessionId: NonEmptyString }),
+  Type.Null(),
+]);
+
 export const SessionsCatalogImportParamsSchema = closedObject({
   profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
@@ -264,6 +276,7 @@ export type SessionsCatalogReadParams = Static<typeof SessionsCatalogReadParamsS
 export type SessionsCatalogReadResult = Static<typeof SessionsCatalogReadResultSchema>;
 export type SessionsCatalogContinueParams = Static<typeof SessionsCatalogContinueParamsSchema>;
 export type SessionsCatalogContinueResult = Static<typeof SessionsCatalogContinueResultSchema>;
+export type SessionsCatalogResolveResult = Static<typeof SessionsCatalogResolveResultSchema>;
 export type SessionsCatalogImportParams = Static<typeof SessionsCatalogImportParamsSchema>;
 export type SessionsCatalogImportResult = Static<typeof SessionsCatalogImportResultSchema>;
 export type SessionsCatalogArchiveParams = Static<typeof SessionsCatalogArchiveParamsSchema>;
