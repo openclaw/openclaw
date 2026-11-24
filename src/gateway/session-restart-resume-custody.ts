@@ -291,14 +291,21 @@ async function recoverRequesterCompletionCustody(params: {
   } finally {
     target?.release();
   }
-  const settledWithoutNotice = refused.length
-    ? await settleRefusedRestartCompletions({
+  let settledWithoutNotice = 0;
+  if (refused.length) {
+    try {
+      settledWithoutNotice = await settleRefusedRestartCompletions({
         chat: { agentId, sessionKey, storePath, sessionId: entry.sessionId },
         lifecycleRevision: entry.lifecycleRevision,
         refused,
         assertCurrent,
-      })
-    : 0;
+      });
+    } catch (error) {
+      // Recovered siblings keep their custody; the refused rows stay pending for the next restart.
+      assertCurrent();
+      log.warn(`Restart completion refusal settlement failed in ${sessionKey}: ${String(error)}`);
+    }
+  }
   return { recovered, settledWithoutNotice };
 }
 

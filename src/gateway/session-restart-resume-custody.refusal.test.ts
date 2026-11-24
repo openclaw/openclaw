@@ -6,6 +6,7 @@ import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import type * as SessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
@@ -23,6 +24,20 @@ vi.mock("./operator-run-recovery.js", () => ({
   restoreGatewayQueuedOperatorRecovery: vi.fn(),
 }));
 const restore = vi.mocked(restoreGatewayQueuedOperatorRecovery);
+// The real transcript owner, except that one case can make the notice append fail.
+const noticeAppend = vi.hoisted(() => ({ fail: false }));
+vi.mock("../config/sessions/session-accessor.js", async (importActual) => {
+  const actual = await importActual<typeof SessionAccessor>();
+  return {
+    ...actual,
+    appendSessionTranscriptReport: (
+      ...args: Parameters<typeof SessionAccessor.appendSessionTranscriptReport>
+    ) =>
+      noticeAppend.fail
+        ? Promise.resolve({ ok: false, error: { code: "test-append-refused" } })
+        : actual.appendSessionTranscriptReport(...args),
+  };
+});
 
 const DAY_MS = 24 * 60 * 60_000;
 // The fixed wording: no requester, grant, or result content.
@@ -45,6 +60,7 @@ afterEach(() => {
   }
   clearSubagentRunsReadCacheForTest();
   restore.mockReset();
+  noticeAppend.fail = false;
 });
 
 function openChat(name: string) {
@@ -174,6 +190,30 @@ it("settles a refused result older than 7 days without a chat notice", () =>
     expect(warnings.filter((line) => line.includes("older than 7 days"))).toEqual([
       "Restart completion recovery settled 1 refused results older than 7 days without a chat notice; their results remain in the subagent run records.",
     ]);
+  }));
+
+it("keeps a refused child pending when its notice cannot be written, without failing the chat", () =>
+  withState(async () => {
+    const chat = openChat("notice-failure");
+    const child = owedChild(chat, "notice-failure-child", Date.now() - DAY_MS);
+    restore.mockRejectedValue(refusal("grant-revoked"));
+    noticeAppend.fail = true;
+
+    const warnings = await restartRecovery();
+
+    expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("pending");
+    expect(warnings).toContainEqual(
+      expect.stringContaining("Restart completion refusal settlement failed in"),
+    );
+    // Settlement errors stay inside the chat's recovery, so recovered siblings keep custody.
+    expect(warnings).not.toContainEqual(
+      expect.stringContaining(`Restart completion recovery failed for ${chat.sessionKey}:`),
+    );
+
+    noticeAppend.fail = false;
+    await restartRecovery();
+    expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("discarded");
+    expect(await notices(chat)).toHaveLength(1);
   }));
 
 it("notifies for an old row whose result was captured recently", () =>
