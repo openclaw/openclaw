@@ -318,6 +318,9 @@ export function createSqliteWalCheckpoint(
     get health() {
       return snapshot ? structuredClone(snapshot.health) : undefined;
     },
+    get observedAtNs() {
+      return snapshot?.observedAtNs;
+    },
     get snapshot() {
       return snapshot ? structuredClone(snapshot) : undefined;
     },

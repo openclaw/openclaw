@@ -52,23 +52,23 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
       assertCurrent();
     };
     const startedAt = Date.now();
-    const checkpointPath = sqliteReaderDatabasePathKey(identity.canonicalPath);
-    const unobserveCheckpoint = onSqliteWalCheckpoint(({ databasePath, health }) => {
-      if (databasePath !== checkpointPath || !health.bytePressure) {
-        return;
-      }
-      // Only this scan's original physical custody can cancel its owned child.
-      execution.assertCurrent();
-      assertVerificationCurrent();
-      controller.abort(
-        new Error(
-          "Agent database background integrity verification interrupted by WAL byte pressure",
-        ),
-      );
-    });
     try {
       assertVerificationCurrent();
       try {
+        const checkpointPath = sqliteReaderDatabasePathKey(identity.canonicalPath);
+        const unobserveCheckpoint = onSqliteWalCheckpoint(({ databasePath, health }) => {
+          if (databasePath !== checkpointPath || !health.bytePressure) {
+            return;
+          }
+          // Only this scan's original physical custody can cancel its owned child.
+          execution.assertCurrent();
+          assertVerificationCurrent();
+          controller.abort(
+            new Error(
+              "Agent database background integrity verification interrupted by WAL byte pressure",
+            ),
+          );
+        });
         await assertSqliteIntegrityInWorker(
           pathname,
           OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -81,7 +81,7 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
             expectedIdentity: identity,
             preparedIdentity: integrityWitness,
           },
-        );
+        ).finally(unobserveCheckpoint);
       } catch (error) {
         assertVerificationCurrent();
         if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
@@ -151,7 +151,6 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
         elapsedMs: Date.now() - startedAt,
       });
     } finally {
-      unobserveCheckpoint();
       unobserve();
       await execution.release();
     }
