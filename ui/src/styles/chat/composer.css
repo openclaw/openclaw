@@ -1776,12 +1776,12 @@
 
 .chat-attachment-file__icon {
   background: color-mix(in srgb, var(--text) 4%, transparent);
-}
 
-.chat-attachment-file__icon svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.75px;
+  svg {
+    width: 16px;
+    height: 16px;
+    stroke-width: 1.75px;
+  }
 }
 
 .chat-attachments-preview :is(.chat-attachment-file__name, .chat-selection-annotations__label) {
