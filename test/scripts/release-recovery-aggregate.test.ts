@@ -15,6 +15,7 @@ import {
   verifyNpmPreflightPublicationLineage,
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
+  acquirePublicationManifest,
   validateReleaseRunEvidence,
   runReleaseRecoveryCli,
 } from "../../scripts/release-ci-summary.mjs";
@@ -308,7 +309,10 @@ it("seals the original plan without an original manifest or any new CI/old-paren
 });
 
 it("authenticates the sealed recovery attempt while npm and Docker keep their original producers", async () => {
-  const { f, origin, normalCiSelection, producer, client, rerun, setSealed } = fixture(true, 2);
+  const { f, origin, normalCiSelection, producer, run, client, rerun, setSealed } = fixture(
+    true,
+    2,
+  );
   const { env, manifestPath } = await cliFixture(f, producer, client, normalCiSelection);
   await runReleaseRecoveryCli(["--seal-recovery"], env, client);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -347,6 +351,83 @@ it("authenticates the sealed recovery attempt while npm and Docker keep their or
     ["991", 2],
     ["991", 2],
   ]);
+  const closeout = parse(
+    readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8"),
+  );
+  const step = closeout.jobs.verify.steps.find(
+    (entry: { name: string }) => entry.name === "Verify release workflow evidence",
+  );
+  const closeoutGate = step.run.match(
+    /node --input-type=module - "\$RUNNER_TEMP\/full-release-validation-run.json"[^\n]* <<'NODE'\n([\s\S]*?)\nNODE/u,
+  )?.[1];
+  if (!closeoutGate) {
+    throw new Error("Missing closeout workflow evidence gate");
+  }
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const verify = new AsyncFunction(
+    "readFileSync",
+    "validateReleaseRunEvidence",
+    "createReleaseEvidenceClient",
+    "process",
+    closeoutGate.replace(/^import .*?;$/gmu, ""),
+  );
+  const qualifyCloseout = async (attempt: string, sourceSha = f.c) =>
+    verify(
+      (path: string) =>
+        JSON.stringify(
+          path === "run"
+            ? {
+                ...run,
+                name: "OpenClaw Release Prepare",
+              }
+            : manifest,
+        ),
+      (options: Parameters<typeof validateReleaseRunEvidence>[0]) =>
+        validateReleaseRunEvidence(
+          {
+            ...options,
+            verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+          },
+          client,
+        ),
+      () => client,
+      {
+        argv: ["node", "-", "run", "manifest"],
+        env: {
+          GITHUB_REPOSITORY: f.repository,
+          FULL_RELEASE_VALIDATION_RUN_ID: "991",
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: attempt,
+          SOURCE_SHA: sourceSha,
+          CLOSEOUT_TOOLING_SHA: f.p,
+        },
+      },
+    );
+  await expect(qualifyCloseout("2")).resolves.toBeUndefined();
+  await expect(qualifyCloseout("1")).rejects.toThrow("run attempt mismatch");
+  await expect(qualifyCloseout("2", "f".repeat(40))).rejects.toThrow("Recovery target differs");
+  const acquire = (runAttempt: number) =>
+    acquirePublicationManifest(
+      {
+        repository: f.repository,
+        runId: "991",
+        expectedRunAttempts: { 991: runAttempt },
+      },
+      client,
+    );
+  await expect(acquire(2)).resolves.toEqual(manifest);
+  await expect(acquire(1)).rejects.toThrow("recovery producer run attempt changed");
+  const originalLoad = client.loadManifest.getMockImplementation();
+  if (!originalLoad) {
+    throw new Error("Missing manifest reader");
+  }
+  client.loadManifest.mockImplementation((id, attempt) => {
+    const retained = originalLoad(id, attempt);
+    return {
+      ...retained,
+      artifact: { ...retained.artifact, name: "full-release-validation-991-1" },
+    };
+  });
+  await expect(acquire(2)).rejects.toThrow("manifest artifact is not compatible");
   expect(rerun).not.toHaveBeenCalled();
 });
 
