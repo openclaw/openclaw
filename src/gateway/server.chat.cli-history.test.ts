@@ -7,6 +7,8 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hashCliImageTurnEntryId } from "../agents/cli-image-turn-correlation.js";
 import { prepareCliPromptImagePayload } from "../agents/cli-runner/helpers.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   createClaudeTextHistoryLines,
   withClaudeProjectsDir,
@@ -123,21 +125,32 @@ test("chat.history keeps the submitted documents instead of a second expanded Cl
     await fs.writeFile(
       filePath,
       createClaudeTextHistoryLines([
+        { role: "user", uuid: "native-caption", content: caption },
         { role: "user", uuid: "native-document-turn", content: prompt },
         { role: "user", uuid: "unrelated-native-turn", content: expanded },
       ]),
     );
     await writeStoredMainSession(sessionDir, sessionId, cliSessionId);
     await writeMainSessionTranscript(
-      [createTextTranscriptEvent("user", caption, { id, message: { __openclaw: { media } } })],
+      [
+        createTextTranscriptEvent("user", caption, {
+          id,
+          timestamp: Date.parse("2026-03-26T16:29:54.801Z"),
+          message: { __openclaw: { media } },
+        }),
+      ],
       sessionId,
     );
     const history = await readHistory(ws, { limit: 100 });
     expect(history.ok, JSON.stringify(history.error)).toBe(true);
     const users = history.payload?.messages?.filter((message) => message.role === "user");
-    expect(users).toHaveLength(2);
+    expect(users).toHaveLength(3);
     expect(users).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          content: caption,
+          __openclaw: expect.objectContaining({ externalId: "native-caption" }),
+        }),
         expect.objectContaining({
           __openclaw: expect.objectContaining({
             id,
@@ -148,6 +161,78 @@ test("chat.history keeps the submitted documents instead of a second expanded Cl
         expect.objectContaining({ content: expanded }),
       ]),
     );
+  });
+});
+
+test("chat.history refreshes a warm worker after an accepted document steer is stamped", async () => {
+  await withGatewayChatHarness(async ({ ws, createSessionDir, filePath, cliSessionId }) => {
+    await connectOk(ws);
+    const sessionDir = await createSessionDir({ fresh: true });
+    const sessionId = "warm-document-steer";
+    await writeStoredMainSession(sessionDir, sessionId, cliSessionId);
+    const caption = "Read this note";
+    const media = [
+      {
+        kind: "document",
+        contentType: "text/markdown",
+        fileName: "note.md",
+        url: "media://inbound/note.md",
+      },
+    ];
+    const identity = { importedFrom: "claude-cli", cliSessionId, externalId: "accepted-input" };
+    // Claude records direct stdin as a queued command, not a second displayable user row.
+    const native = [
+      createClaudeTextHistoryLines([{ role: "user", uuid: "independent", content: caption }]),
+      JSON.stringify({
+        type: "attachment",
+        uuid: "envelope",
+        sessionId: cliSessionId,
+        attachment: { type: "queued_command", source_uuid: identity.externalId, prompt: caption },
+      }),
+    ].join("\n");
+    await fs.writeFile(filePath, native);
+    const recorder = createUserTurnTranscriptRecorder({
+      target: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId,
+        storePath: path.join(sessionDir, "sessions.json"),
+        sessionEntry: undefined,
+      },
+      message: {
+        role: "user",
+        content: caption,
+        timestamp: Date.parse("2026-03-26T16:29:54.801Z"),
+        __openclaw: { media },
+      },
+    });
+    const persisted = expectDefined(
+      await recorder.persistApproved({ updateMode: "none" }),
+      "accepted document steer",
+    );
+    const page = async () => {
+      const response = await readHistory(ws, { limit: 10 });
+      expect(response.ok, JSON.stringify(response.error)).toBe(true);
+      return response.payload?.messages;
+    };
+    const before = await page();
+    expect(before).toMatchObject([
+      { __openclaw: { id: persisted.messageId, externalId: "independent", media } },
+    ]);
+    const { workers, workersCreated } = historyLane.pool.getSnapshot();
+    expect(workers).toBe(1);
+
+    await recorder.confirmSteerTargetRunIdForPersistence?.("active-run", identity);
+    expect(recorder.getAdmissionReceipt()).toEqual(persisted.admission);
+    expect(recorder.getPersistedMessage?.()?.["__openclaw"]).toMatchObject({ ...identity, media });
+    const after = await page();
+    expect(historyLane.pool.getSnapshot()).toMatchObject({ workers, workersCreated });
+    expect(await fs.readFile(filePath, "utf8")).toBe(native);
+    expect(after).toMatchObject([
+      { content: caption, __openclaw: { id: "independent", externalId: "independent" } },
+      { content: caption, __openclaw: { id: persisted.messageId, ...identity, media } },
+    ]);
+    expect(after?.[0]?.["__openclaw"]).not.toHaveProperty("media");
   });
 });
 

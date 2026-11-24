@@ -635,7 +635,10 @@ async function beginPreparedReplyMessageInjectionTarget(
           return { status: "indeterminate", errorMessage: result.errorMessage };
         }
         if (targetRunId) {
-          await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
+          await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(
+            targetRunId,
+            result?.transcriptCommit === "confirmed" ? result.nativeInputIdentity : undefined,
+          );
         }
         return { status: "accepted" };
       })

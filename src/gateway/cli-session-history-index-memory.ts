@@ -2,6 +2,7 @@ import {
   orderCliHistoryRows,
   createCliHistoryRow,
   DEDUPE_TIMESTAMP_WINDOW_MS,
+  RESERVED_FOR_MEDIA_MATCH,
   mergeCliHistoryRow,
   type CliHistoryIndex,
   type CliHistoryMergeStore,
@@ -68,6 +69,13 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
       if (match) {
         match.consumed = 1;
       }
+      if (row.media_key) {
+        for (const local of media.get(row.media_key) ?? []) {
+          if (local.consumed === 0) {
+            local.consumed = RESERVED_FOR_MEDIA_MATCH;
+          }
+        }
+      }
     }
     const textMatchers = (withIdentity: boolean) => {
       const create = (time: "any" | "window" | "missing") => (params: HistoryTextMatch) => {
@@ -105,7 +113,8 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
     };
     const store: CliHistoryMergeStore = {
       matchExternal: (identity) => external.get(identity),
-      matchMedia: (identity) => media.get(identity)?.find((row) => !row.consumed),
+      matchMedia: (identity) =>
+        media.get(identity)?.find((row) => row.consumed === RESERVED_FOR_MEDIA_MATCH),
       matchers: { withIdentity: textMatchers(true), withoutIdentity: textMatchers(false) },
       minimumOrder: (role, text) => floors.get(key(role, text)) ?? 0,
       advanceOrderFloor: ({ role, text, minimumOrder }) => {

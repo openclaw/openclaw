@@ -11,10 +11,12 @@ import {
 import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { readPersistedMediaFacts } from "../media/media-facts.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
+// The local row is unavailable to text matching, but its exact media import can still consume it.
+export const RESERVED_FOR_MEDIA_MATCH = 2;
 
 // v2026.11.1-v2026.11.3 wrote gap notes with an optional replay block.
 // Fresh sessions could carry the gap alone; both shapes are comparison-only.
@@ -154,7 +156,8 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
     record && role
       ? extractComparableText(record, role, localSeq === undefined)
       : { hasCliImageMentions: false };
-  const localMedia = record?.role === "user" && Boolean(readPersistedMediaFacts(record)?.length);
+  const localMedia =
+    record?.role === "user" && readPersistedMediaFacts(record)?.some(isMeaningfulMediaFact);
   const entryId = normalizeOptionalString(meta?.id);
   const serialized = JSON.stringify(message);
   return {

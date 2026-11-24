@@ -14,6 +14,7 @@ import {
   orderCliHistoryRows,
   createCliHistoryRow,
   DEDUPE_TIMESTAMP_WINDOW_MS,
+  RESERVED_FOR_MEDIA_MATCH,
   mergeCliHistoryRow,
   type CliHistoryMergeStore,
   type HistoryMatch,
@@ -313,6 +314,19 @@ export class CliSessionHistoryIndex {
     if (this.hasAggregates) {
       this.coverage.setLocalUsers(readCliHistoryCoverageUsers(this.database));
     }
+    // Reserve only correlated uploads; unmarked native histories still use the text fallback.
+    executeSqliteQuerySync(
+      this.database,
+      this.db
+        .updateTable("messages")
+        .set({ consumed: RESERVED_FOR_MEDIA_MATCH })
+        .where("consumed", "=", 0)
+        .where(
+          "media_key",
+          "in",
+          this.db.selectFrom("imports").select("media_key").where("media_key", "is not", null),
+        ),
+    );
     const candidates = () =>
       this.db.selectFrom("messages").select(["id", "text", "metadata", "role"]);
     const matchExternal = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
@@ -337,7 +351,7 @@ export class CliSessionHistoryIndex {
             parameter((key) => key),
           )
           .where("local_seq", "is not", null)
-          .where("consumed", "=", 0)
+          .where("consumed", "=", RESERVED_FOR_MEDIA_MATCH)
           .orderBy("id")
           .limit(1),
     );
