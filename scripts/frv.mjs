@@ -90,7 +90,7 @@ const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify|recover> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record> | pnpm frv recover --run <original> --workflow-sha <P> --request-file <path> | pnpm frv recover --reconcile-request <path>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify|recover> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record> | pnpm frv recover --run <original> --workflow-sha <P> [--request-file <path> [--policy-sha <Q> --policy-admission-run <id>] | --prepare-policy-admission --policy-sha <Q>] | pnpm frv recover --reconcile-request <path>";
 const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
@@ -4037,8 +4037,8 @@ async function main() {
         }
       },
     });
-    print(result, options.json);
-    if (!options.json) {
+    print(result, options.json || options.preparePolicyAdmission);
+    if (!options.json && !options.preparePolicyAdmission) {
       console.log(
         "recovery run: " +
           (result.runId ?? "unconfirmed") +
@@ -4124,6 +4124,16 @@ async function main() {
     const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
     await releaseSealedPriority(client, options.runId);
+    if (!options.json) {
+      console.log(`VERIFIED: Full Release Validation run ${options.runId}`);
+      console.log(`Qualification tooling (Q): ${plan.trustedWorkflow.sha}`);
+      console.log(
+        `Candidate inputs: --target-sha ${plan.targetSha} --full-release-validation-run-id ${options.runId} --release-profile ${String(plan.releaseProfile)} --skip-dispatch`,
+      );
+      console.log(
+        "Supply independently pinned publication tooling (P) via --workflow-sha <P> or --publish-workflow-ref <tag>, plus the release tag, channel, route, and any required SDK acknowledgement; these are not inferred from verification.",
+      );
+    }
     return;
   }
   const loaded = await loadPlanForCommand(options, client);

@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -12,11 +12,10 @@ const cfg = createModelFallbackConfig("fixture/primary", [
 ]);
 cfg.agents!.defaults!.models = { "fixture/restricted-v1": { alias: "special" } };
 
-const source = (assertCurrent = () => {}) =>
+const source = () =>
   createTestOperatorAuthority({
     profileId: "fixture-operator",
     scopes: ["operator.write"],
-    assertCurrent,
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { deny: ["fixture/restricted-*"] },
@@ -62,25 +61,40 @@ it("rejects a denied alias before provider or harness preparation", async () => 
   expect(run).not.toHaveBeenCalled();
 });
 
-it("rechecks retained authority after asynchronous preparation before starting a model", async () => {
-  const entered = createDeferred();
-  const release = createDeferred();
-  let active = true;
-  const pending = fallback({
-    skipAuthProfileRuntime: true,
-    operatorAuthority: source(() => {
-      if (!active) {
-        throw new Error("source retired");
-      }
-    }),
-    prepareCandidateChain: async () => {
-      entered.resolve();
-      await release.promise;
-    },
+it("lets the next turn retry a cooled-down model after its dispatch policy check refuses it", async () => {
+  await withOpenClawTestState({ label: "model-policy-probe" }, async (state) => {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(Date.now());
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: { primary: { type: "api_key", provider: "fixture", key: "fixture-key" } },
+      usageStats: { primary: { cooldownUntil: Date.now() + 60_000, cooldownReason: "overloaded" } },
+    });
+    const candidate = { agentDir: state.agentDir(), fallbacksOverride: [] };
+    let modelAllowed = true;
+    const operatorAuthority = createTestOperatorAuthority({
+      profileId: "fixture-operator",
+      scopes: ["operator.write"],
+      modelPolicy: { models: [], allows: () => modelAllowed },
+    });
+    await expect(
+      fallback({
+        ...candidate,
+        operatorAuthority,
+        resolveAgentHarnessRuntimeOverride: () => {
+          // Deny this candidate at dispatch after it passes initial selection.
+          modelAllowed = false;
+          return undefined;
+        },
+      }),
+    ).rejects.toThrow("operator role cannot use this model");
+    expect(run).not.toHaveBeenCalled();
+
+    run.mockResolvedValue("answer");
+    await expect(fallback(candidate)).resolves.toMatchObject({
+      model: "primary",
+      result: "answer",
+    });
+    expect(run).toHaveBeenCalledOnce();
   });
-  await entered.promise;
-  active = false;
-  release.resolve();
-  await expect(pending).rejects.toThrow("source retired");
-  expect(run).not.toHaveBeenCalled();
 });

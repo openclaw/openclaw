@@ -55,9 +55,9 @@ import { withSessionPlacementForcedTerminalSettlement } from "../../session-plac
 import { detachActiveEmbeddedRun, attachActiveEmbeddedRun } from "../runs.js";
 import { createEmbeddedRunHandle } from "../runs.test-support.js";
 import { outsideExecutionCapacity } from "./execution-capacity.js";
+import type { RunEmbeddedAgentParamsWithSessionFile as LaneParams } from "./internal-params.js";
 import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS as GRACE_MS } from "./lane-runtime.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 // mock-isolation: Deadline and custody tests exercise raw work without durable writer admission.
@@ -83,8 +83,8 @@ afterEach(() => {
 
 const key = "agent:main:controller-execution";
 const globalLane = "test:controller-global";
-function create(runId: string, overrides: Partial<RunEmbeddedAgentParams> = {}, lane = globalLane) {
-  const params: RunEmbeddedAgentParams & { sessionFile: string } = {
+function create(runId: string, overrides: Partial<LaneParams> = {}, lane = globalLane) {
+  const params: LaneParams = {
     admittedRunContext: overrides.admittedRunContext ?? createTestAdmittedRunContext(runId),
     sessionKey: key,
     sessionId: "incarnation",
@@ -876,7 +876,7 @@ describe("exact attempt deadline transfer", () => {
   });
 });
 
-function queuedContext(runId: string, overrides: Partial<RunEmbeddedAgentParams> = {}) {
+function queuedContext(runId: string, overrides: Partial<LaneParams> = {}) {
   const state = create(runId, {
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
     ...overrides,
@@ -961,9 +961,11 @@ it("releases global waiting context when its source owner cancels", async () => 
 it.each(["local", "remote"] as const)(
   "rejects %s execution when its lifecycle rotates during placement admission",
   async (execution) => {
+    const releaseUnstartedProbe = vi.fn();
     const state = queuedContext("placement-replaced", {
         trigger: "user",
         sessionPersistence: "detached",
+        releaseUnstartedProbe,
       }),
       local = vi.fn(result),
       placement = holdPlacement(async (_claim, _params, runLocal, onAdmitted) => {
@@ -990,6 +992,7 @@ it.each(["local", "remote"] as const)(
       await rejected;
       expect(getAgentRunContext("placement-replaced")).toMatchObject(replacement);
       expect(local).not.toHaveBeenCalled();
+      expect(releaseUnstartedProbe).toHaveBeenCalledOnce();
     } finally {
       placement.release();
       await run.catch(() => {});

@@ -45,11 +45,20 @@ export function RecordedAttempt(
       : !props.update.recordedUpdateAttempt ||
           classifyUpdateOutcome(props.update.recordedUpdateAttempt) !== "noop";
   };
-  const canRetry = () =>
-    !props.confirming &&
-    props.canUpdate &&
-    !props.updateBusy &&
-    !props.update.updateStatusRefreshing;
+  const retryDisabledReason = () => {
+    if (!props.canUpdate) {
+      return !props.canAdmin
+        ? t("updates.adminRequiredTooltip")
+        : t(props.connected ? "updates.page.statusUnavailable" : "updates.dialog.reconnecting");
+    }
+    if (props.confirming) {
+      return t("updates.reviewUpdate");
+    }
+    if (props.updateBusy) {
+      return t("updates.sidebar.updating");
+    }
+    return props.update.updateStatusRefreshing ? t("updates.page.checking") : null;
+  };
   return (
     <Show when={run() || props.update.updateStatusBanner}>
       <SettingsSection title={t("updates.page.latestAttempt")}>
@@ -117,8 +126,8 @@ export function RecordedAttempt(
                   <button
                     class="btn btn--sm primary"
                     type="button"
-                    title={canRetry() ? "" : t("updates.adminRequiredTooltip")}
-                    disabled={!canRetry()}
+                    title={retryDisabledReason() ?? ""}
+                    disabled={retryDisabledReason() !== null}
                     onClick={() => void props.onUpdateNow()}
                   >
                     {t("updates.page.retryUpdate")}
@@ -146,7 +155,17 @@ export function RecordedAttempt(
               </div>
             }
           />
-          <Show when={failed() && run()?.target.installationMethod !== "ocm"}>
+          <Show
+            when={
+              failed() &&
+              run()?.target.installationMethod !== "ocm" &&
+              !(
+                run()?.verification.rollbackOutcome?.status === "succeeded" &&
+                run()?.verification.serviceRunning &&
+                run()?.verification.coreReady
+              )
+            }
+          >
             <SettingsRow
               title={t("updates.page.cliFallback")}
               description={t("updates.triage.hostHint")}

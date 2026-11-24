@@ -432,7 +432,6 @@ export function createEmbeddedRunLaneController<
             });
           },
           () => {
-            placementAdmitted = true;
             throwIfAborted();
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             releaseQueuedContext("admitted");
@@ -450,6 +449,8 @@ export function createEmbeddedRunLaneController<
             waitingWatchdog?.progress("semantic", "global_capacity:admitted");
             params.replyOperation?.markGlobalLaneWaitEnded();
             params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+            // Transfer probe cleanup to the execution owner only after admission succeeds.
+            placementAdmitted = true;
           },
         ),
       );

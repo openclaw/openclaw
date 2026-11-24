@@ -389,6 +389,8 @@ on:
         required: false
       ZAI_API_KEY:
         required: false
+      ZAI_CODING_API_KEY:
+        required: false
       Z_AI_API_KEY:
         required: false
       BYTEPLUS_ACCESS_KEY_ID:
@@ -1477,6 +1479,7 @@ jobs:
       VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
       BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
       BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}

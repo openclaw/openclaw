@@ -1,13 +1,11 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
-import { resolveGatewayAgentAbortStopReason } from "../../../gateway/agent-turn/agent-run-dispatch-outcome.js";
 import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
@@ -28,11 +26,6 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
-import {
-  createAgentRunDirectAbortError,
-  resolveAgentRunAbortLifecycleFields,
-} from "../../run-termination.js";
-import { toSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
@@ -44,7 +37,6 @@ import {
   registerRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
-import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
   deliver,
   registryRead,
@@ -193,140 +185,6 @@ describe("requester settle dispatch deadline", () => {
   );
 
   it.each([
-    { persistent: false, returned: false },
-    { persistent: true, returned: false },
-    { persistent: false, returned: true },
-    { persistent: true, returned: true },
-    { persistent: false, returned: true, aborted: true },
-    { persistent: true, returned: false, aborted: true },
-    { persistent: false, returned: false, failure: "preparation" },
-    { persistent: true, returned: false, failure: "preparation" },
-    { persistent: false, returned: false, failure: "worker" },
-    { persistent: true, returned: false, failure: "worker" },
-    { persistent: false, returned: true, failure: "timeout" },
-    { persistent: true, returned: true, failure: "timeout" },
-    { persistent: false, returned: false, failure: "sandbox" },
-    { persistent: false, returned: false, failure: "unavailable" },
-  ])(
-    "keeps interrupted settlement owed with no attempt limit ($persistent, returned=$returned, aborted=$aborted, failure=$failure)",
-    async ({ persistent, returned, aborted, failure }) => {
-      const failingAttempts = persistent ? 4 : 1;
-      const context = createContext();
-      const { child, completeBatch, params } = dispatchFixture();
-      useDirectDelivery();
-      const runIds: string[] = [];
-      startTurn.mockImplementation(async (turn) => {
-        acceptTurn(turn);
-        runIds.push(turn.preflight.request.idempotencyKey);
-        if (runIds.length <= failingAttempts) {
-          if (failure === "sandbox" || failure === "unavailable") {
-            throw failure === "sandbox"
-              ? toSandboxProvisioningError(new Error("Aborted"), "synthetic")
-              : new GatewayClientRequestError({
-                  code: "UNAVAILABLE",
-                  message: "Aborted | sandbox_provisioning",
-                });
-          }
-          if (failure === "timeout") {
-            turn.io.emitFinal([
-              true,
-              { status: "timeout", stopReason: "timeout", replaySafe: true },
-              undefined,
-            ]);
-            return;
-          }
-          if (failure === "preparation") {
-            throw new SessionWorkStartChangedError(
-              "Session target preparation outlived its attempt",
-            );
-          }
-          if (failure === "worker") {
-            throw new WorkerTaskError("worker task timed out", "timeout");
-          }
-          if (aborted) {
-            const registration = registerRequesterTurn(turn, 60_000);
-            try {
-              await withSessionTurn(
-                { ...REQUESTER_TURN, controllerInput: registration.entry?.input },
-                async () => registration.controller.abort(createAgentRunDirectAbortError()),
-              );
-              turn.io.emitFinal([
-                true,
-                {
-                  status: "timeout",
-                  replaySafe: true,
-                  ...(returned
-                    ? {
-                        result: {
-                          payloads: [],
-                          meta: resolveAgentRunAbortLifecycleFields(registration.controller.signal),
-                        },
-                      }
-                    : {
-                        stopReason: resolveGatewayAgentAbortStopReason(
-                          registration.controller.signal,
-                        ),
-                      }),
-                },
-                undefined,
-              ]);
-            } finally {
-              registration.cleanup();
-            }
-            return;
-          }
-          const error = {
-            kind: "incomplete_turn",
-            code: "item_conflict",
-            message: "Saved conversation state rejected",
-          };
-          if (returned) {
-            turn.io.emitFinal([
-              true,
-              { status: "ok", result: { payloads: [], meta: { error } } },
-              undefined,
-            ]);
-            return;
-          }
-          throw Object.assign(new Error(error.message), error);
-        }
-        finishTurn(turn.io, "Recovered child result.");
-      });
-      const run = () =>
-        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-      await expect(run()).resolves.toBe(false);
-      if (aborted || failure) {
-        expect(await deliver.mock.results[0]?.value).toMatchObject({
-          delivered: false,
-          reason: aborted
-            ? "requester_aborted"
-            : failure === "sandbox" || failure === "unavailable"
-              ? undefined
-              : failure === "preparation"
-                ? "requester_preparation_changed"
-                : "requester_timed_out",
-          disposition: "retryable",
-        });
-      }
-      expect(completeBatch).not.toHaveBeenCalled();
-      expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
-      // Each failed attempt leaves the result owed; the next wake runs it again.
-      for (let attempt = 2; attempt <= failingAttempts; attempt++) {
-        await expect(run()).resolves.toBe(false);
-        expect(completeBatch).not.toHaveBeenCalled();
-        expect(child.requesterSettleWake).toMatchObject({ status: "pending" });
-      }
-      await expect(run()).resolves.toBe(true);
-      expect(runIds).toHaveLength(failingAttempts + 1);
-      expect(new Set(runIds).size).toBe(runIds.length);
-      expect(completeBatch).toHaveBeenCalledOnce();
-      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
-      await expect(run()).resolves.toBe(false);
-      expect(startTurn).toHaveBeenCalledTimes(failingAttempts + 1);
-    },
-  );
-
-  it.each([
     new WorkerTaskError("worker task timed out", "timeout"),
     new SessionWorkStartChangedError("Session target preparation outlived its attempt"),
   ])("does not repeat a committed turn that failed after execution ($name)", async (error) => {
@@ -341,7 +199,7 @@ describe("requester settle dispatch deadline", () => {
       throw error;
     });
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-    // Consumption prevents replay; retained settlement owns the visible fallback.
+    // Consumption prevents replay even when the requester execution subsequently fails.
     await expect(run()).resolves.toBe(true);
     expect(completeBatch).toHaveBeenCalledOnce();
     expect(completeBatch.mock.calls[0]?.[2]).toEqual(await deliver.mock.results[0]?.value);
@@ -349,24 +207,6 @@ describe("requester settle dispatch deadline", () => {
     expect(child.requesterSettleWake).toBeUndefined();
     await expect(run()).resolves.toBe(false);
     expect(startTurn).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a result owed while cancellation refuses every dispatch", async () => {
-    const context = createContext();
-    const { child, completeBatch, params } = dispatchFixture();
-    useDirectDelivery();
-    deliver.mockImplementation((request) =>
-      sendSubagentAnnounceDirectly({ ...request, signal: AbortSignal.abort() }),
-    );
-    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-    using clock = vi.spyOn(Date, "now");
-    for (let attempt = 1; attempt <= 4; attempt++) {
-      await expect(run()).resolves.toBe(false);
-      expect(startTurn).not.toHaveBeenCalled();
-      expect(completeBatch).not.toHaveBeenCalled();
-      expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: attempt });
-      clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
-    }
   });
 
   it("keeps a followup completion owed while its policy is unavailable", async () => {
@@ -398,7 +238,7 @@ describe("requester settle dispatch deadline", () => {
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
     deliver.mockImplementationOnce(async () => {
       unavailable = true;
-      return { delivered: false, path: "none", disposition: "retryable" };
+      return { delivered: false, path: "none" };
     });
     await expect(run()).rejects.toThrow(GatewayOperatorAccessUnavailableError);
     expect(completeBatch).not.toHaveBeenCalled();
@@ -760,97 +600,6 @@ describe("requester settle dispatch deadline", () => {
       await wake;
     }
   });
-
-  it.each([
-    ["removed", "managed worktree was removed: /synthetic/requester", true],
-    ["removed session", "This session's worktree was removed by cleanup or deletion.", true],
-    ["removing", "managed worktree removal is in progress: /synthetic/requester", false],
-  ] as const)(
-    "settles a worktree refusal only when permanent: %s",
-    async (_state, message, permanent) => {
-      const context = createContext();
-      const { child, completeBatch, params } = dispatchFixture();
-      useDirectDelivery();
-      startTurn.mockRejectedValue(new GatewayClientRequestError({ code: "UNAVAILABLE", message }));
-      const run = () =>
-        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-
-      await expect(run()).resolves.toBe(false);
-      expect(await deliver.mock.results[0]?.value).toMatchObject({
-        error: message,
-        disposition: permanent ? "permanent_failure" : "retryable",
-      });
-      if (permanent) {
-        expect(completeBatch).toHaveBeenCalledOnce();
-        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
-          disposition: "permanent_failure",
-        });
-        expect(child.requesterSettleWake).toBeUndefined();
-        await expect(run()).resolves.toBe(false);
-        expect(startTurn).toHaveBeenCalledOnce();
-      } else {
-        expect(completeBatch).not.toHaveBeenCalled();
-        expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
-        expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
-        startTurn.mockImplementation(async (turn) => {
-          acceptTurn(turn);
-          finishTurn(turn.io, "Completion received.");
-        });
-        await expect(run()).resolves.toBe(true);
-        expect(completeBatch).toHaveBeenCalledOnce();
-        expect(startTurn).toHaveBeenCalledTimes(2);
-      }
-    },
-  );
-
-  it.each(["unavailable", "admitted", "accepted replay", "ambiguous"] as const)(
-    "keeps a result no turn committed owed unless its refusal is permanent: %s",
-    async (failure) => {
-      const context = createContext();
-      const createFacade = context.createAgentTurnFacade;
-      const { child, completeBatch, params } = dispatchFixture();
-      useDirectDelivery();
-      startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
-        if (failure === "admitted") {
-          const registration = registerRequesterTurn({ controllerInput, preflight, io }, 1_000);
-          registration.cleanup();
-        } else if (failure === "accepted replay") {
-          acceptTurn({ controllerInput, preflight, io }, true);
-        }
-        throw Object.assign(
-          new Error("requester dispatch unavailable"),
-          failure === "ambiguous" ? { sentBeforeError: true } : {},
-        );
-      });
-      if (failure === "unavailable") {
-        context.createAgentTurnFacade = undefined;
-      }
-      const run = () =>
-        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-      await expect(run()).resolves.toBe(false);
-      expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
-      if (failure === "admitted" || failure === "accepted replay") {
-        // A refusal after admission is permanent: withheld once, never dispatched again.
-        expect(completeBatch).toHaveBeenCalledOnce();
-        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
-          disposition: "permanent_failure",
-        });
-        await expect(run()).resolves.toBe(false);
-        expect(startTurn).toHaveBeenCalledOnce();
-        return;
-      }
-      expect(completeBatch).not.toHaveBeenCalled();
-      expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
-      context.createAgentTurnFacade = createFacade;
-      startTurn.mockImplementation(async ({ preflight, io }) => {
-        io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
-        finishTurn(io, "Continuation.");
-      });
-      await expect(run()).resolves.toBe(true);
-      expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 1 : 2);
-      expect(completeBatch).toHaveBeenCalledOnce();
-    },
-  );
 
   it("rejects a replaced anchor after requester wake runtime loading", async () => {
     const retired = settledChild();

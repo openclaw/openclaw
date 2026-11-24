@@ -898,9 +898,16 @@ suite.define(() => {
             if (!(title instanceof HTMLElement)) {
               throw new Error("settings row description is missing its title");
             }
-            const titleBox = title.getBoundingClientRect();
-            const descriptionBox = description.getBoundingClientRect();
-            return Math.round(descriptionBox.y - titleBox.y - titleBox.height);
+            // The Gateway host title and uptime share a grid row above the full-width facts.
+            const uptime = title
+              .closest("#settings-connection-host .settings-row")
+              ?.querySelector(".settings-row__control");
+            const titleBottom = title.getBoundingClientRect().bottom;
+            const titleRowBottom = Math.max(
+              titleBottom,
+              uptime?.getBoundingClientRect().bottom ?? titleBottom,
+            );
+            return Math.round(description.getBoundingClientRect().top - titleRowBottom);
           }),
         );
         auditedPairCount += gaps.length;

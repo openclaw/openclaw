@@ -431,7 +431,7 @@ export function registerAccessRequestSpawnCases(
               () =>
                 createRequestNativeSubagentRuntime(nativeRequestSource(bound, source), {
                   pluginId: "access-fixture",
-                  assertCurrent: source.authority.assertCurrent,
+                  assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
                 }).spawn({
                   requestId: "access-proof",
                   task: "bounded child",

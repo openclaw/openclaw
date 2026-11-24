@@ -340,7 +340,6 @@ export async function executeWorkerTurn(
             sessionId: turn.sessionId,
           });
           placementTools.push(...desktop.tools);
-          const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
           const tools = await runPrepared(() =>
             params.environments.createGatewayTools?.({
               identity,
@@ -388,7 +387,7 @@ export async function executeWorkerTurn(
                 }
                 return filterWorkerPlacementTools(
                   applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow),
-                  availablePlacementTools,
+                  new Set(placementTools.map((tool) => tool.name)),
                   launchToolNames,
                 );
               },
@@ -467,6 +466,7 @@ export async function executeWorkerTurn(
         surface,
         localMcpNodeId,
         exec,
+        memoryBoundary: params.environments.resolveExecMemoryBoundary?.(placement.environmentId),
         connectionIdentity,
         placements: params.placements,
         questionsEnabled: turn.config.mcp?.apps?.enabled === true,
@@ -628,7 +628,7 @@ export async function executeWorkerTurn(
         );
       }
       if (!isAuthorized()) {
-        throw new Error("Worker turn authority changed while preparing its launch");
+        throw new Error("Worker turn ended while preparing its launch. Start a new turn.");
       }
       if (!workerAdmission) {
         recorder?.markSentToProvider?.();

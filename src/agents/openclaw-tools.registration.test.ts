@@ -644,7 +644,6 @@ describe("gateway client capability tool filtering", () => {
           operatorAuthority: createTestOperatorAuthority({
             profileId: "reviewer",
             scopes: [scope],
-            assertCurrent: () => {},
           }),
         },
         () =>

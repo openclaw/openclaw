@@ -162,7 +162,6 @@ async function runWithModelFallbackInternal<T>(
   const operatorAuthority = params.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const plannedCandidates = resolveModelCandidateChain({
     cfg: params.cfg,

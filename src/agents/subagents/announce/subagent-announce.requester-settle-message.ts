@@ -32,14 +32,10 @@ export function buildRequesterSettleWakeMessage(params: {
   completionChannel?: string;
   requesterOrigin: DeliveryContext | undefined;
   retainedMessage?: string;
-  retryMissingResult: boolean;
 }): string {
   if (params.retainedMessage !== undefined) {
     return params.retainedMessage;
   }
-  const retryInstruction = params.retryMissingResult
-    ? "[Subagent Context] The previous continuation ended without the required result. Continue from the current transcript and provide the missing result; do not repeat completed actions."
-    : "";
   const child = params.children.length === 1 ? params.children[0] : undefined;
   const pauseNotice =
     child?.pauseReason === "sessions_yield" ? child.requesterSettleWake?.pauseNotice : undefined;
@@ -54,7 +50,6 @@ export function buildRequesterSettleWakeMessage(params: {
       }),
       `The child will resume only through sessions_send to ${child.childSessionKey}. Do not wait for its completion without sending the needed continuation.`,
       wrapPromptDataBlock({ label: "Acknowledgment", text: pauseNotice.acknowledgment }),
-      ...(retryInstruction ? [retryInstruction] : []),
     ].join("\n");
   }
   const deliveredChildren = params.children.filter((entry) => !needsRequesterSettleFindings(entry));
@@ -105,7 +100,7 @@ export function buildRequesterSettleWakeMessage(params: {
     params.parentOnly
       ? `[Subagent Context] ${buildSubagentPrivateCompletionInstruction(params.requesterOrigin)}`
       : params.yieldedFinalDeliverable
-        ? "[Subagent Context] Child results are internal input. Answer the original conversation under its normal reply rules: if replies there must go through the message tool, send your answer with it. Continue any unfinished work, and avoid repeating an update already delivered."
+        ? "[Subagent Context] Child results are internal input, not a message from the user. Write your answer to the user of the original conversation, addressed to them directly, under that conversation's normal reply rules: if replies there must go through the message tool, send your answer with it. Continue any unfinished work, and avoid repeating an update already delivered."
         : params.requireVisibleReply
           ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
           : "[Subagent Context] Review the settled results and continue any unfinished work. Avoid repeating a consolidated final answer that was already delivered.",
@@ -128,7 +123,6 @@ export function buildRequesterSettleWakeMessage(params: {
       : []),
     params.findings ??
       "(each child result was announced individually in earlier completion events)",
-    ...(retryInstruction ? [retryInstruction] : []),
   ].join("\n");
 }
 

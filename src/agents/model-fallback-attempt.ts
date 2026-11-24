@@ -93,7 +93,6 @@ export function canDispatchFallbackCandidate(
 ): boolean {
   let allowed = false;
   try {
-    authority?.assertCurrent();
     allowed = authority?.modelPolicy?.allows(candidate) !== false;
     return allowed;
   } finally {

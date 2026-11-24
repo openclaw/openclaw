@@ -36,7 +36,7 @@ import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
 /** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
-export function authorizeGatewayMethodScopes(
+function authorizeGatewayMethodScopes(
   method: string,
   scopes: readonly string[],
   params: unknown,
@@ -114,7 +114,12 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   if (client.invalidated) {
-    return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
+    return {
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "This connection lost access. Reconnect and try again.",
+      ),
+    };
   }
   if (resolveGatewayOperatorRoleActor(client)?.kind === "operator") {
     const roleError = authorizeCurrentOperatorRoleScopes(

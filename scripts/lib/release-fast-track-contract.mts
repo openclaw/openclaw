@@ -4,8 +4,8 @@ import { z } from "zod";
 import { validateNpmPublishBoundary } from "../openclaw-npm-extended-stable-release.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./release-version.mjs";
 
-export const FAST_TRACK_POLICY = "approved-fast-track-v1";
-export const FAST_TRACK_ACTION = "Approve skipping release validation";
+const FAST_TRACK_POLICY = "approved-fast-track-v1";
+const FAST_TRACK_ACTION = "Approve skipping release validation";
 // Excluded from LOC only. Commits, blob integrity and unmeasurable-change checks still apply.
 const packageFiles = new Set([
   "package.json",
@@ -101,7 +101,7 @@ const partialValidationSnapshot = z.strictObject({
     .max(80),
 });
 
-export const fastTrackRequestSchema = z
+const fastTrackRequestSchema = z
   .discriminatedUnion("policy", [
     commonRequestSchema.extend({
       policy: z.literal(FAST_TRACK_POLICY),
@@ -200,7 +200,6 @@ const validatedReferenceSchema = z.strictObject({
   validationMode: z.literal("full-release-validation"),
   published: z.literal(true),
 });
-export type ValidatedFastTrackReference = z.infer<typeof validatedReferenceSchema>;
 
 /**
  * Eligibility only. The publisher must separately authenticate reference evidence, verify the

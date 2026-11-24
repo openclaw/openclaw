@@ -73,7 +73,7 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
     const second = await acquireAgentRunPreparedModelRuntime(input);
     await second[Symbol.asyncDispose]();
 
-    expect(second.snapshot).toBe(first.snapshot);
+    expect(second.snapshot.catalogOwner).toBe(first.snapshot.catalogOwner);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
   });
 });

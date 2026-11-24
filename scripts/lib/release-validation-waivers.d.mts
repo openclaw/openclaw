@@ -41,7 +41,7 @@ export interface ReleaseValidationWaiver {
     signatures: { kind: "vitest"; file: string; test: string }[];
     alternativeSignatures?: { kind: "vitest"; file: string; test: string }[][];
   };
-  evidence?: { runId: string; runAttempt: number };
+  evidence?: { runId: string | number; runAttempt: number };
   qualificationExemption?: QualificationExemptionEvidence;
 }
 export interface ReleasePolicyJob {
@@ -74,6 +74,11 @@ export function evaluateReleaseChildPolicy(input: {
 }): ReleaseChildPolicy;
 export const RELEASE_VALIDATION_WAIVERS_PATH: string;
 export function parseReleaseValidationWaivers(source: string): ReleaseValidationWaiver[];
+export function releaseWaiverEvidenceMatches(
+  evidence: ReleaseValidationWaiver["evidence"],
+  runId: string | undefined,
+  runAttempt: number | undefined,
+): boolean;
 export function decodeReleaseValidationSource(payload: unknown, sourcePath: string): string;
 export function readReleaseValidationWaivers(
   readSource: (path: string) => string,

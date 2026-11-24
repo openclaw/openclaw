@@ -71,7 +71,7 @@ const channelRequestersByScope = new WeakMap<
 function expiredAuthorityError(): Error & { status: number } {
   return Object.assign(
     new TypeError(
-      "Configured MCP cron authority is no longer active for this run. Retry the automation mutation from a fresh authenticated creator turn.",
+      "This run's MCP cron access has ended. Retry the automation mutation from a fresh authenticated creator turn.",
     ),
     { name: "CronCreatorAuthorityExpiredError", status: 403 },
   );
