@@ -92,7 +92,10 @@ export class AcpGatewayAgent implements Agent {
       this.sessionUpdates,
       sessionState,
       sessionCreateRateLimiter,
-      (session) => this.promptStream.cancelSessionWork(session),
+      async (session) => {
+        await this.promptStream.cancelSessionWork(session);
+        await this.promptStream.releaseSessionMessages(session.sessionId);
+      },
       this.log,
     );
     this.newSession = sessionLifecycle.newSession.bind(sessionLifecycle);
