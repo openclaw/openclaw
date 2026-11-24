@@ -520,22 +520,18 @@ describe("requester settle wake product flow", () => {
       };
     });
     try {
+      // Ready children can wake a yielded coordinator while siblings are still
+      // running. Deliver this cohort together to exercise nested batch fan-in.
       for (const [index, child] of children.entries()) {
         emitCompleted(child.runId, child.childSessionKey, "findings " + index);
-
-        await flushOwnedWork();
-
-        if (index < children.length - 1) {
-          expect(getRequesterWakeCalls()).toHaveLength(0);
-        }
       }
+      await flushOwnedWork();
     } finally {
       callGatewayMock.mockImplementation(ordinaryGatewayCall);
     }
-    const coordinatorWakes = getRequesterWakeCalls().filter(
-      (request) => request.params?.sessionKey === coordinator.childSessionKey,
-    );
-    expect(coordinatorWakes).toHaveLength(1);
+    expect(getRequesterWakeCalls().map((request) => request.params?.sessionKey)).toEqual([
+      coordinator.childSessionKey,
+    ]);
     expect(coordinatorInputs).toHaveLength(1);
     expect(coordinatorInputs[0]?.params?.inputProvenance?.sourceTool).toBe("subagent_settle");
     expectLargeRequesterWakeFindings(coordinatorInputs[0], 3);
