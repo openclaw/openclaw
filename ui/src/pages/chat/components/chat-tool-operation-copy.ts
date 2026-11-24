@@ -3,6 +3,7 @@ import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display
 import type { IconName } from "../../../components/icon-data.ts";
 import { registerChatToolOperationsEnglish } from "../../../i18n/locales/en-chat-tool-operations.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatToolOperationsEnglish);
@@ -110,7 +111,9 @@ export function catalogToolLabel(
     return undefined;
   }
   const phase = outcome === "running" ? "running" : outcome === "succeeded" ? "done" : "action";
-  const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
+  const phaseLabel = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
+  const queryDetail = name === "web_search" ? resolveToolDisplay(call).detail : undefined;
+  const label = queryDetail ? `${phaseLabel} ${queryDetail}` : phaseLabel;
   const actionLabel = addressed?.name
     ? t("chat.toolCards.namedOperation", { action: label, name: addressed.name })
     : label;

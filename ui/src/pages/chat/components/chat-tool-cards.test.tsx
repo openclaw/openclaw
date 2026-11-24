@@ -527,7 +527,9 @@ it.each([
   for (const expanded of [false, true]) {
     await mountCard(card, { expanded }, container);
     if (name === "tool_call") {
-      expect(textOf(container, ".chat-tool-msg-summary")).toContain("OpenClaw release notes");
+      expect(textOf(container, ".chat-tool-row__title")).toBe(
+        'Search the web for "OpenClaw release notes"',
+      );
     }
     expect(container.textContent?.toLowerCase()).toContain("skipped");
     expect(container.textContent).not.toMatch(/failed|Completed|updated|Tool error/);
@@ -551,7 +553,7 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
   const onOpenSidebar = vi.fn();
   for (const expanded of [false, true]) {
     const container = await mountCard(card, { expanded, onOpenSidebar });
-    expect(textOf(container, ".chat-tool-msg-summary")).toContain(args.query);
+    expect(textOf(container, ".chat-tool-row__title")).toBe(`Searched the web for "${args.query}"`);
     const direct = await mountCard(
       { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
       { expanded, onOpenSidebar },
