@@ -78,7 +78,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     notifyRunProgress,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { createAttemptControls } = runInput.laneController;
   const {
     provider,
     modelId,
@@ -349,7 +348,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       admission: runInput.sessionAdmission,
       assertCallerCurrent: assertActiveRun,
     });
-  const attemptControls = createAttemptControls({
+  const attemptControls = runInput.laneController.createAttemptControls({
     admittedRunContext,
     onAbort: () => params.replyOperation?.abortByUser(),
   });
