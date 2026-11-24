@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
+import {
+  importSqliteSessionRowsBatch,
+  restoreColdSessionTranscriptsForImport,
+} from "../config/sessions/session-accessor.sqlite-import.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareLegacyAcpMigrationSource } from "../infra/legacy-acp-migration-source.js";
@@ -117,6 +120,15 @@ export async function importLegacySessionRecords(
             return [];
           }
         });
+      if (pending.length > 0) {
+        await restoreColdSessionTranscriptsForImport({
+          agentId: target.agentId,
+          assertCurrent: assertRestoredIndexCurrent,
+          env,
+          sessionIds: pending.map((entry) => entry.params.entry.sessionId),
+          storePath: target.storePath,
+        });
+      }
       const imported = await importSqliteSessionRowsBatch(
         pending.map((entry, index) => ({
           ...entry.params,

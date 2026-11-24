@@ -1,4 +1,7 @@
-import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
+import {
+  importSqliteSessionRowsBatch,
+  restoreColdSessionTranscriptsForImport,
+} from "../config/sessions/session-accessor.sqlite-import.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
@@ -70,6 +73,12 @@ export async function prepareActiveSqliteTranscriptSettlement(params: {
         );
       }
       if (verified.missingEvents > 0) {
+        await restoreColdSessionTranscriptsForImport({
+          agentId: target.agentId,
+          env: params.env,
+          sessionIds: [source.sessionId],
+          storePath: target.sqlitePath,
+        });
         const [imported] = await importSqliteSessionRowsBatch([
           {
             agentId: target.agentId,

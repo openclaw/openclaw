@@ -1,8 +1,12 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
+  executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { LegacyAcpMigrationSource } from "../../infra/legacy-acp-migration-source.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   runOpenClawAgentWriteTransaction,
   resolveOpenClawAgentSqlitePath,
@@ -21,6 +25,7 @@ import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sql
 import {
   getSessionKysely,
   resolveSqliteScope,
+  resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -183,6 +188,53 @@ function importSqliteSessionRowsInTransaction(
         }
       : {}),
   };
+}
+
+/** Restores any cold transcripts targeted by a Doctor import batch before reserving the writer. */
+export async function restoreColdSessionTranscriptsForImport(params: {
+  agentId: string;
+  assertCurrent?: () => void;
+  env?: NodeJS.ProcessEnv;
+  sessionIds: readonly string[];
+  storePath: string;
+}): Promise<void> {
+  const sessionIds = uniqueStrings(params.sessionIds);
+  if (sessionIds.length === 0) {
+    return;
+  }
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
+  const options = { ...toDatabaseOptions(resolved), ...(params.env ? { env: params.env } : {}) };
+  const opened = openOpenClawAgentDatabaseReadOnly(options);
+  if (!opened.found) {
+    return;
+  }
+  let coldSessionIds: string[];
+  try {
+    coldSessionIds = executeSqliteQuerySync(
+      opened.database.db,
+      getSessionKysely(opened.database.db)
+        .selectFrom("session_transcript_cold_archives")
+        .select("session_id")
+        .where("session_id", "in", sqliteStringSet(sessionIds)),
+    ).rows.map((row) => row.session_id);
+  } finally {
+    opened.database.close();
+  }
+  if (coldSessionIds.length === 0) {
+    return;
+  }
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  for (const sessionId of coldSessionIds) {
+    await restoreSessionColdTranscript(
+      {
+        agentId: options.agentId,
+        env: options.env,
+        sessionId,
+        storePath: resolved.ownerStorePath ?? params.storePath,
+      },
+      params.assertCurrent,
+    );
+  }
 }
 
 /** Imports legacy session rows that share one SQLite store in one durable transaction. */
