@@ -29,8 +29,10 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import {
+  checkUpdateInstallationSlot,
   resolveInstalledPackageFrontend,
   resolveUpdateInstallationIdentity,
+  UnverifiedForegroundUpdateOwnerError,
 } from "./installation-identity.js";
 import { PREPARE_DEADLINE_MS, markForwarding, prepareUpdate } from "./run.js";
 import { readTrial, resolvePrefix } from "./store.js";
@@ -194,6 +196,14 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   const startedAt = Date.now();
   if (await delegateInstalledPackageUpdate(opts)) {
     return;
+  }
+  try {
+    await checkUpdateInstallationSlot(opts.runningRoot);
+  } catch (error) {
+    if (!(error instanceof UnverifiedForegroundUpdateOwnerError) || !opts.restart || opts.tag) {
+      throw error;
+    }
+    // A local update.run can identify its own argv; preparation rechecks under its lock.
   }
   const { channel } = opts;
   let timeoutMs = opts.timeoutMs;

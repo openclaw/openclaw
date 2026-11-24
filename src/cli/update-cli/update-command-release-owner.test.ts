@@ -5,14 +5,19 @@ import type * as ServiceModule from "../../daemon/service.js";
 import type * as LockProcessModule from "../../infra/gateway-lock-process.js";
 import type * as LockModule from "../../infra/gateway-lock.js";
 import type * as RetainedRuntimeModule from "../../infra/update-retained-runtime.js";
+import type * as RecoveryAdmissionModule from "../../infra/update-run-recovery-admission.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import type * as ReleaseCliModule from "../../update/cli.js";
 import { checkUpdateInstallationSlot } from "../../update/installation-identity.js";
 import { resolvePrefix } from "../../update/store.js";
 import type * as SharedModule from "./shared.js";
 import type * as AdmissionModule from "./update-command-admission-report.js";
+import type * as AdmittedModule from "./update-command-admitted.js";
 import type * as ConfigModule from "./update-command-config.js";
 import type * as EngineModule from "./update-command-database-engine.js";
+import type * as ImmutableModule from "./update-command-immutable.js";
 import type * as InitializationModule from "./update-command-initialization.js";
+import type * as ActivationModule from "./update-command-package-activation.js";
 import type * as RunModule from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 
@@ -20,6 +25,8 @@ const facts = vi.hoisted(() => ({
   root: "",
   serviceRoot: "",
   liveRoot: "",
+  opaque: false,
+  pid: 123,
   gateway: true,
   node: false,
   unreadable: false,
@@ -30,7 +37,10 @@ const release = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const legacy = vi.hoisted(() => vi.fn(async () => {}));
 
 // Routing owns these decisions; external preparation and activation do no work in this fixture.
-vi.mock("../../update/cli.js", () => ({ runReleaseUpdateCli: release }));
+vi.mock("../../update/cli.js", async (original) => ({
+  ...(await original<typeof ReleaseCliModule>()),
+  runReleaseUpdateCli: release,
+}));
 vi.mock("../../daemon/service.js", async (original) => ({
   ...(await original<typeof ServiceModule>()),
   resolveGatewayService: (kind?: string) => ({
@@ -54,24 +64,25 @@ vi.mock("../../daemon/service.js", async (original) => ({
 vi.mock("../../infra/gateway-lock.js", async (original) => ({
   ...(await original<typeof LockModule>()),
   readActiveGatewayLockIdentity: async () =>
-    facts.liveRoot ? { pid: 123, port: 18789 } : undefined,
+    facts.liveRoot ? { pid: facts.pid, port: 18789 } : undefined,
 }));
 vi.mock("../../infra/gateway-lock-process.js", async (original) => ({
   ...(await original<typeof LockProcessModule>()),
-  readGatewayLockProcessCmdline: () => [
-    process.execPath,
-    path.join(facts.liveRoot, "dist/index.js"),
-    "gateway",
-  ],
+  readGatewayLockProcessCmdline: () =>
+    facts.opaque
+      ? ["openclaw-gateway"]
+      : [process.execPath, path.join(facts.liveRoot, "dist/index.js"), "gateway"],
 }));
 vi.mock("../../infra/update-retained-runtime.js", async (original) => ({
   ...(await original<typeof RetainedRuntimeModule>()),
   withRetainedUpdateRuntime: async (_url: string, run: () => Promise<unknown>) => run(),
 }));
-vi.mock("./update-command-immutable.js", () => ({
+vi.mock("./update-command-immutable.js", async (original) => ({
+  ...(await original<typeof ImmutableModule>()),
   tryRunImmutableUpdateCommand: async () => false,
 }));
-vi.mock("../../infra/update-run-recovery-admission.js", () => ({
+vi.mock("../../infra/update-run-recovery-admission.js", async (original) => ({
+  ...(await original<typeof RecoveryAdmissionModule>()),
   assertUpdateRecoveryAdmission: async () => {},
 }));
 vi.mock("./update-command-run.js", async (original) => ({
@@ -106,14 +117,18 @@ vi.mock("./update-command-database-engine.js", async (original) => ({
     run: (readable: boolean, malformed: boolean) => Promise<unknown>,
   ) => run(true, false),
 }));
-vi.mock("./update-command-package-activation.js", () => ({
+vi.mock("./update-command-package-activation.js", async (original) => ({
+  ...(await original<typeof ActivationModule>()),
   assertUpdatePackageActivationAdmission: () => {},
 }));
 vi.mock("./update-command-initialization.js", async (original) => ({
   ...(await original<typeof InitializationModule>()),
   updateStateNeedsInitialization: async () => false,
 }));
-vi.mock("./update-command-admitted.js", () => ({ runAdmittedUpdate: legacy }));
+vi.mock("./update-command-admitted.js", async (original) => ({
+  ...(await original<typeof AdmittedModule>()),
+  runAdmittedUpdate: legacy,
+}));
 
 let home: TempHomeEnv;
 async function packageAt(root: string) {
@@ -128,6 +143,8 @@ beforeEach(async () => {
   home = await createTempHomeEnv("update-release-owner-");
   facts.root = path.join(home.home, "package");
   facts.serviceRoot = facts.liveRoot = "";
+  facts.opaque = false;
+  facts.pid = 123;
   facts.gateway = true;
   facts.node = facts.unreadable = false;
   facts.kind = "package";
@@ -203,4 +220,29 @@ it.each(["service", "foreground"])(
 it("does not turn unreadable service inspection into a new installation refusal", async () => {
   facts.unreadable = true;
   await expect(checkUpdateInstallationSlot(facts.root)).resolves.toBeUndefined();
+});
+
+it("refuses an opaque live foreground owner without inventing an installation root", async () => {
+  facts.gateway = false;
+  facts.liveRoot = facts.root;
+  facts.opaque = true;
+  await expect(checkUpdateInstallationSlot(facts.root)).rejects.toMatchObject({
+    name: "UnverifiedForegroundUpdateOwnerError",
+    message: expect.stringMatching(/Control UI.*operator access.*stop the Gateway/u),
+  });
+  await expect(fs.stat(resolvePrefix())).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("lets the Gateway identify its own argv even when its OS title has no root", async () => {
+  facts.gateway = false;
+  facts.liveRoot = facts.root;
+  facts.opaque = true;
+  facts.pid = process.pid;
+  const argv = process.argv;
+  process.argv = [process.execPath, path.join(facts.root, "dist/index.js"), "gateway"];
+  try {
+    await expect(checkUpdateInstallationSlot(facts.root)).resolves.toBeUndefined();
+  } finally {
+    process.argv = argv;
+  }
 });

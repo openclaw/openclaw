@@ -19,6 +19,16 @@ import { readTrial, resolvePrefix } from "./store.js";
 
 type CheckoutIdentity = NonNullable<UpdateRunParams["checkout"]>;
 
+export class UnverifiedForegroundUpdateOwnerError extends Error {
+  override name = "UnverifiedForegroundUpdateOwnerError";
+
+  constructor(pid: number) {
+    super(
+      `Cannot verify which installation the live foreground Gateway (PID ${pid}) uses. Run the update from that Gateway in Control UI or with operator access (\`openclaw update\`), or stop the Gateway through its owner and rerun this command.`,
+    );
+  }
+}
+
 /** Git releases are linked worktrees; their common directory, not their root, is stable. */
 export async function resolveUpdateInstallationIdentity(
   root: string,
@@ -146,21 +156,20 @@ export async function checkUpdateInstallationSlot(
       env,
       requireInspection: true,
       timeoutMs: 10_000,
-    }).catch(ignoreNonCleanupCommandError);
+    });
     if (owner) {
-      const argv = readGatewayLockProcessCmdline(
-        owner.pid,
-        process.platform,
-        10_000,
-        undefined,
-        env,
-      );
+      const argv =
+        owner.pid === process.pid
+          ? process.argv
+          : readGatewayLockProcessCmdline(owner.pid, process.platform, 10_000, undefined, env);
       const entry = classifyOpenClawArgv(argv ?? [], {
         requirePackageIdentity: true,
         pid: owner.pid,
       });
       if (entry.kind === "openclaw" && entry.packageIdentity?.root) {
         installedRoots.push(entry.packageIdentity.root);
+      } else if (installedRoots.length === 0) {
+        throw new UnverifiedForegroundUpdateOwnerError(owner.pid);
       }
     }
   }

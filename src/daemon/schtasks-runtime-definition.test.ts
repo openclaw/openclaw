@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type * as GatewayLock from "../infra/gateway-lock.js";
 import type { WindowsProcessSnapshotEntry } from "./schtasks-process-snapshot.js";
 import {
   readScheduledTaskRuntime as readRuntime,
@@ -18,7 +19,7 @@ const { native, resetNative } = vi.hoisted(() => {
     state: 4,
     ownerAlive: false,
     ownerPid: 42,
-    ownerPort: 18789,
+    ownerPort: 18789 as number | undefined,
     ownerTask: "OpenClaw Gateway",
     environment: undefined as Record<string, string> | undefined,
     reads: 0,
@@ -75,6 +76,11 @@ vi.mock("../infra/gateway-owner-lease.js", () => {
       : undefined;
   return { readGatewayOwnerLease: readOwner, readGatewayOwnerLeaseAsync: async () => readOwner() };
 });
+vi.mock("../infra/gateway-lock.js", async (original) => ({
+  ...(await original<typeof GatewayLock>()),
+  readActiveGatewayLockIdentity: async () =>
+    native.ownerAlive ? { pid: native.ownerPid, port: native.ownerPort } : undefined,
+}));
 beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   resetNative();
@@ -115,7 +121,7 @@ it.each<[string, Partial<typeof native>]>([
   const argv = kind === "supervised" ? [...actual, supervisorChild(65536)] : actual;
   native.processes = [processEntry(42, argv)];
   const runtime = await readRuntime({});
-  const matches = kind === "direct" || kind === "supervised";
+  const matches = kind === "direct" || kind === "supervised" || kind === "other-task";
   expect([runtime.status, runtime.pid]).toEqual(matches ? ["running", 42] : ["unknown", undefined]);
 });
 
@@ -156,6 +162,19 @@ it.each(["present", "absent", "unavailable"] as const)("pins %s observation", as
     initial === "present" ? "C:\\runtime-a\\node.exe" : undefined,
   );
   expect([state.running, state.runtime?.status]).toEqual([false, "unknown"]);
+});
+
+it.each([
+  [undefined, "unknown"],
+  [18789, "unknown"],
+  [19848, "stopped"],
+] as const)("preserves live file custody with port %s as %s", async (port, status) => {
+  native.state = 3;
+  native.ownerAlive = true;
+  native.ownerPort = port;
+  native.ownerTask = "Another supervisor";
+  native.processes = [processEntry(42, ["powershell.exe"])];
+  await expectUnidentified(status);
 });
 afterEach(() => vi.restoreAllMocks());
 

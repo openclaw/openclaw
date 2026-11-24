@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type * as ImmutableInstallModule from "../../infra/update-immutable-install.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createTempHomeEnv } from "../../test-utils/temp-home.js";
 import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import { resolvePrefix } from "../../update/store.js";
+import type * as OneShotExitModule from "../one-shot-exit.js";
 import * as shared from "./shared.js";
 import { tryRunImmutableUpdateCommand } from "./update-command-immutable.js";
 
@@ -13,12 +15,14 @@ const prepare = vi.hoisted(() =>
     throw new Error("The immutable executor was reached");
   }),
 );
-vi.mock("../../infra/update-immutable-install.js", () => ({
+vi.mock("../../infra/update-immutable-install.js", async (original) => ({
+  ...(await original<typeof ImmutableInstallModule>()),
   inspectImmutableInstall: async () => ({}),
   prepareImmutableUpdate: prepare,
   adoptImmutableInstall: vi.fn(),
 }));
-vi.mock("../one-shot-exit.js", () => ({
+vi.mock("../one-shot-exit.js", async (original) => ({
+  ...(await original<typeof OneShotExitModule>()),
   exitCliAfterOutput: (_runtime: unknown, code: number): never => {
     throw new Error(`exit ${code}`);
   },

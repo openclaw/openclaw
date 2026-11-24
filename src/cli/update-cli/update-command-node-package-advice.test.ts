@@ -1,12 +1,14 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type * as NodeServiceModule from "../../daemon/node-service.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { appendNodeOnlyPackageUpdateAdvice } from "./update-command-post-update-maintenance.js";
 
 // Final result guidance consumes captured ownership; it must not reopen native inspection.
-vi.mock("../../daemon/node-service.js", () => ({
+vi.mock("../../daemon/node-service.js", async (original) => ({
+  ...(await original<typeof NodeServiceModule>()),
   resolveNodeService: () => {
     throw new Error("Result guidance must not inspect services");
   },
