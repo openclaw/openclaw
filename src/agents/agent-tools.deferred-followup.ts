@@ -17,12 +17,6 @@ function replaceDescription(tool: AnyAgentTool, description: string): AnyAgentTo
 
 const TOOL_FOLLOWUPS = [
   [
-    "gateway",
-    "openclaw",
-    "Use runtime-owned actions.",
-    "Use runtime-owned actions. Other system changes: use openclaw tool.",
-  ],
-  [
     "sessions_search",
     "sessions_history",
     "Search visible past sessions for matching user and assistant text.",

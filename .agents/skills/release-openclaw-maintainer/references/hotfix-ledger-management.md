@@ -44,9 +44,14 @@ Send `Accept: application/json` and an identifying User-Agent, e.g.
    dependencies, and evidence.
    Upsert its target-release assessment at the assessed SHA. Keep existing
    selection authority; eligibility or clean application is not approval.
-4. **Apply/verify:** follow the approved backport flow; record destination commits
-   and proof. Update the observed head and review stale assessments rather than
-   merely replacing their SHA. Keep deferred/blocked work for the next owner.
+4. **Apply/verify:** update the target assessment immediately after **every
+   backport adaptation**, not at batch completion or handoff. Record conflicts,
+   deviations, dependencies, new validation errors, repairs, destination commits
+   when available, and proof as it arrives. Other release owners often port the
+   same fixes concurrently and may consult the ledger at any time. Share useful
+   findings without assuming another baseline needs the same adaptation. Update
+   the observed head and review stale assessments rather than merely replacing
+   their SHA. Keep deferred/blocked work for the next owner.
 5. **Checkpoint:** after every release-branch change and immediately before
    handoff, complete the release-owner checkpoint below. A branch push, local
    candidate, or old assessment is not a checkpoint receipt.
@@ -56,9 +61,12 @@ Send `Accept: application/json` and an identifying User-Agent, e.g.
 
 ## Enforced release-owner checkpoint
 
-The release owner must complete this checkpoint after every branch-head change
-and again at handoff. The manager rejects a handoff without it; do not publish,
-handoff, or claim the ledger current while any item remains unsynchronized.
+The release owner records a checkpoint after every branch-head change and again
+at handoff. When the service is usable, complete the synchronization below before
+claiming the ledger current. If access, availability, or required capabilities
+prevent use, follow [Fallback and privacy](#fallback-and-privacy): retain the
+checkpoint and pending updates in local release evidence without delaying
+publication or handoff.
 
 1. Resolve the configured release ref from the remote and record its exact SHA.
    GET the release record, then PATCH `observedHeadSha` with its current
@@ -78,6 +86,20 @@ handoff, or claim the ledger current while any item remains unsynchronized.
    stale count, unresolved decisions, mutation request IDs, and rollback/export
    evidence. Completion requires the stored head to match the remote head and no
    unexplained stale assessment or unsynchronized decision.
+
+## Final closeout integrity check
+
+At closeout, review branch history from the recorded baseline through the published
+Release SHA—not just existing ledger rows. When access is available, reconcile
+all landed hotfixes, including late backports and release-first fixes, with complete
+release assessments: source/destination commits, disposition, adaptations,
+dependencies/exclusions, and proof. Account for reverts and partial or superseding
+fixes; don't count later branch commits as shipped.
+
+Use the existing checkpoint flow for corrections. Note the checked range and any
+unresolved gaps in closeout evidence; if access is unavailable, use the
+[fallback](#fallback-and-privacy). This is an agent judgment pass, not a new
+validator or publication gate.
 
 ## Manager opportunity intake
 
@@ -133,7 +155,7 @@ assessment for the target release:
   not just to clear a stale flag.
 
 Deferral is not necessarily blocked; one release's exclusion does not make a fix
-globally `not_a_hotfix`. Keep P0/P1 priority in rationale/evidence, separate from
+globally `not_a_hotfix`. Keep P0/P1/P2 priority in rationale/evidence, separate from
 API severity.
 
 ## API essentials

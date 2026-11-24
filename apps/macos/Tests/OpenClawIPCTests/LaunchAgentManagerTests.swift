@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -33,19 +34,20 @@ struct LaunchAgentManagerTests {
         let calls = LoginAgentCalls()
         let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
             await calls.record(arguments)
-            return arguments.first == "print" && !loaded ? 1 : 0
+            let bootstrapped = await calls.arguments.contains { $0.first == "bootstrap" }
+            return arguments.first == "print" && !loaded && !bootstrapped ? 113 : 0
         }
         let reloaded = await manager.set(
             enabled: true,
             bundlePath: "/Applications/OpenClaw.app",
             profile: AppProfile(environment: [:])).value
 
-        #expect(reloaded == !loaded)
+        #expect(reloaded)
         let plist = try #require(PropertyListSerialization.propertyList(
             from: Data(contentsOf: plistURL), format: nil) as? [String: Any])
         #expect(plist["ProgramArguments"] as? [String] == ["/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"])
         let operations = await calls.arguments.map(\.first)
-        #expect(operations == (loaded ? ["print"] : ["print", "bootout", "bootstrap", "kickstart"]))
+        #expect(operations == (loaded ? ["print"] : ["print", "bootstrap", "print"]))
     }
 
     @Test(arguments: [true, false])
@@ -65,14 +67,172 @@ struct LaunchAgentManagerTests {
             await calls.record(arguments)
             return 0
         }
+        var observed: Bool? = true
+        var failure: String?
+        let applied = await manager.set(
+            enabled: true,
+            bundlePath: "/Applications/OpenClaw.app",
+            profile: AppProfile(environment: [:]),
+            onResult: { observed = $0
+                failure = $1
+            }).value
+
+        #expect(!applied)
+        #expect(await calls.arguments.isEmpty)
+        #expect(try String(contentsOf: blocker, encoding: .utf8) == "original")
+        #expect(observed == nil)
+        #expect(failure != nil)
+    }
+
+    @Test(arguments: [Int32(5), Int32(-1)])
+    func `failed bootstraps do not report login changes as applied`(status: Int32) async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plistURL = directory.appendingPathComponent("Library/LaunchAgents/login.plist")
+        let calls = LoginAgentCalls()
+        let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
+            await calls.record(arguments)
+            return switch arguments.first {
+            case "print", "bootout": 3 // An absent job is expected on first enable.
+            case "bootstrap": status
+            default: 0
+            }
+        }
+
         let applied = await manager.set(
             enabled: true,
             bundlePath: "/Applications/OpenClaw.app",
             profile: AppProfile(environment: [:])).value
 
         #expect(!applied)
-        #expect(await calls.arguments.isEmpty)
-        #expect(try String(contentsOf: blocker, encoding: .utf8) == "original")
+        #expect(!FileManager.default.fileExists(atPath: plistURL.path))
+        let operations = await calls.arguments.compactMap(\.first)
+        #expect(operations.contains("bootstrap"))
+        #expect(!operations.contains("kickstart"))
+    }
+
+    @Test(arguments: [Int32(5), Int32(-1)])
+    func `failed status inspection restores the old plist without starting a job`(status: Int32) async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plistURL = directory.appendingPathComponent("login.plist")
+        try "original".write(to: plistURL, atomically: true, encoding: .utf8)
+        let calls = LoginAgentCalls()
+        let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
+            await calls.record(arguments)
+            return status
+        }
+
+        #expect(await !manager.set(
+            enabled: true, bundlePath: "/Applications/OpenClaw.app",
+            profile: AppProfile(environment: [:])).value)
+        #expect(try String(contentsOf: plistURL, encoding: .utf8) == "original")
+        #expect(await calls.arguments.allSatisfy { $0.first == "print" })
+    }
+
+    @Test func `app state reconciles failed login choices and clears the error after retry`() async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plistURL = directory.appendingPathComponent("login.plist")
+        let configURL = directory.appendingPathComponent("openclaw.json")
+        try "{}".write(to: configURL, atomically: true, encoding: .utf8)
+        let calls = LoginAgentCalls()
+        let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
+            await calls.record(arguments)
+            let attempts = await calls.arguments.filter { $0.first == "bootstrap" }.count
+            if arguments.first == "print" { return attempts >= 2 ? 0 : 113 }
+            if arguments.first == "bootstrap", attempts == 1 { return 5 }
+            return 0
+        }
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configURL.path,
+            "OPENCLAW_STATE_DIR": directory.appendingPathComponent("state").path,
+        ]) {
+            let state = AppState(preview: true, launchAtLoginManager: manager)
+            do {
+                try await state.setLaunchAtLogin(true).value
+                Issue.record("A failed bootstrap must reject the settings request")
+            } catch {
+                #expect(error.localizedDescription.contains("bootstrap"))
+            }
+            #expect(!state.launchAtLogin)
+            #expect(state.launchAtLoginError != nil)
+            #expect(!FileManager.default.fileExists(atPath: plistURL.path))
+
+            try await state.setLaunchAtLogin(true).value
+            #expect(state.launchAtLogin)
+            #expect(state.launchAtLoginError == nil)
+            try await state.setLaunchAtLogin(false).value
+            #expect(!state.launchAtLogin)
+            #expect(!FileManager.default.fileExists(atPath: plistURL.path))
+            #expect(await !calls.arguments.contains { $0.first == "bootout" })
+        }
+    }
+
+    @Test func `queued login choices supersede an enable before activation`() async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plistURL = directory.appendingPathComponent("login.plist")
+        let configURL = directory.appendingPathComponent("openclaw.json")
+        try "{}".write(to: configURL, atomically: true, encoding: .utf8)
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        let calls = LoginAgentCalls()
+        let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
+            await calls.record(arguments)
+            if arguments.first == "print" {
+                entered.open()
+                await release.wait()
+                return 113
+            }
+            return 0
+        }
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configURL.path,
+            "OPENCLAW_STATE_DIR": directory.appendingPathComponent("state").path,
+        ]) {
+            let state = AppState(preview: true, launchAtLoginManager: manager)
+            let queue = DeviceSettingsRequestQueue()
+            defer { queue.cancel() }
+            let replies = AsyncStream<Void>.makeStream()
+            defer { replies.continuation.finish() }
+            var results = replies.stream.makeAsyncIterator()
+            var operations: [Task<Void, Error>] = []
+            for enabled in [true, false] {
+                queue.enqueueAdmission {
+                    let completion = state.setLaunchAtLogin(enabled)
+                    operations.append(completion)
+                    return {
+                        do {
+                            try await completion.value
+                        } catch {
+                            Issue.record("Superseded or disabled login intent must not fail: \(error)")
+                        }
+                        replies.continuation.yield(())
+                    }
+                }
+                if enabled { await entered.wait() }
+            }
+            // The later intent must reach AppState while the earlier print is held.
+            do {
+                try await TestWait.state("queued login disable admission") { !state.launchAtLogin }
+            } catch {
+                queue.cancel()
+                release.open()
+                for operation in operations {
+                    try? await operation.value
+                }
+                throw error
+            }
+            release.open()
+            await results.next()
+            await results.next()
+            #expect(!state.launchAtLogin)
+            #expect(state.launchAtLoginError == nil)
+            #expect(!FileManager.default.fileExists(atPath: plistURL.path))
+            #expect(await calls.arguments.map(\.first) == ["print"])
+        }
     }
 
     @Test func `late startup status does not overwrite a newer disabled login choice`() async throws {

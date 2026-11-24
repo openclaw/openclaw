@@ -1,65 +1,37 @@
 import Foundation
 
-/// The native first run only prepares the local host; the dashboard owns AI setup.
+/// Native first run asks where to run before any Gateway setup or dashboard handoff.
 @MainActor
 enum OnboardingFirstRun {
     enum Page: Int {
         case welcome = 0, connection = 1, runtime = 2, aiSetup = 3
     }
 
-    enum Step {
-        case preparingRuntime, startingGateway, openingDashboard
-    }
-
-    struct Fallback: Equatable {
-        let page: Page
-        let message: String?
-    }
-
-    static func isFresh(
-        isUnconfigured: Bool,
+    static func presentIfNeeded(
+        connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
         onboardingVersion: Int,
-        configExists: Bool,
-        hasRemoteSettings: Bool) -> Bool
+        joinedClaw: Bool = false,
+        removedClaw: Bool = false,
+        markComplete: () -> Void,
+        show: () -> Void,
+        openDashboard: () -> Void = {},
+        showRemoval: () -> Void = {})
     {
-        isUnconfigured && !onboardingSeen && onboardingVersion == 0 &&
-            !configExists && !hasRemoteSettings
-    }
-
-    static func run(
-        reportProgress: (Step) -> Void = { _ in },
-        selectLocal: () throws -> Void,
-        prepareRuntime: () async throws -> Void,
-        startGateway: () async throws -> Void,
-        supportsAutomaticSetup: () async throws -> Bool,
-        openDashboard: () async throws -> Void,
-        markComplete: () -> Void) async -> Fallback?
-    {
-        var page = Page.connection
-        do {
-            try Task.checkCancellation()
-            reportProgress(.preparingRuntime)
-            try selectLocal()
-            page = .runtime
-            try await prepareRuntime()
-            try Task.checkCancellation()
-            reportProgress(.startingGateway)
-            try await startGateway()
-            try Task.checkCancellation()
-            page = .connection
-            guard try await supportsAutomaticSetup() else {
-                return Fallback(page: .aiSetup, message: nil)
+        // A Mac whose primary is its OpenClaw ID claw has nothing to set up here: the claw owns AI
+        // and Gateway setup, which a member key cannot run. An unfinished first run (such as a join
+        // interrupted before completion) finishes into the claw's dashboard.
+        if connectionMode == .unconfigured, removedClaw {
+            showRemoval()
+        } else if joinedClaw {
+            if !onboardingSeen {
+                markComplete()
+                openDashboard()
             }
-            try Task.checkCancellation()
-            page = .aiSetup
-            reportProgress(.openingDashboard)
-            try await openDashboard()
-            try Task.checkCancellation()
+        } else if connectionMode != .unconfigured, onboardingSeen {
             markComplete()
-            return nil
-        } catch {
-            return Fallback(page: page, message: error.localizedDescription)
+        } else if onboardingVersion < currentOnboardingVersion || !onboardingSeen {
+            show()
         }
     }
 }

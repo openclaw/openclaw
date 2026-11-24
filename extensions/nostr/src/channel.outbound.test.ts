@@ -14,7 +14,6 @@ import type { startNostrBus } from "./nostr-bus.js";
 import type { NostrIngressLifecycle } from "./nostr-ingress.js";
 import { setNostrRuntime } from "./runtime.js";
 import {
-  NOSTR_SANITIZER_CASES,
   TEST_HEX_PUBLIC_KEY,
   TEST_RESOLVED_PRIVATE_KEY,
   buildResolvedNostrAccount,
@@ -239,21 +238,26 @@ describe("nostr inbound", () => {
 });
 
 describe("nostr outbound", () => {
-  it("suppresses an outbound internal-trace-only reply", () => {
-    const { text, expected } = NOSTR_SANITIZER_CASES[3]!;
-    expect(nostrPlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe(expected);
+  const project = (text: string, cfg: OpenClawConfig = {}) =>
+    nostrPlugin.outbound!.sanitizeText!({ text, payload: { text }, cfg });
+
+  it("projects a trace-only reply to empty text, which sendText rejects", async () => {
+    expect(project("\u26a0\ufe0f \u{1f6e0}\ufe0f `search repos (agent)` failed")).toBe("");
+    const { bus } = await startGateway();
+    await expect(send("")).rejects.toThrow("requires non-empty text");
+    expect(bus.sendDm).not.toHaveBeenCalled();
   });
 
-  it("chunks oversized encrypted replies without splitting Unicode", () => {
-    const text = `a${"😀".repeat(2_500)}`;
-    expect(nostrPlugin.outbound?.textChunkLimit).toBe(4_000);
-    const chunks = nostrPlugin.outbound?.chunker?.(text, 4_000);
-    expect(chunks).toHaveLength(2);
-    expect(chunks?.every((chunk) => chunk.length <= 4_000)).toBe(true);
-    expect(chunks?.join("")).toBe(text);
+  it("projects the whole reply before chunking, without splitting emphasis or Unicode", () => {
+    const tail = `a${"😀".repeat(2_500)}`;
+    const projected = project(`${"x".repeat(3_980)} **phrase crosses** \`a ** b\` ${tail}`);
+    expect(projected).toBe(`${"x".repeat(3_980)} phrase crosses a ** b ${tail}`);
+    const chunks = nostrPlugin.outbound!.chunker!(projected, nostrPlugin.outbound!.textChunkLimit!);
+    expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(4_000);
+    expect(chunks.join("").replaceAll(" ", "")).toBe(projected.replaceAll(" ", ""));
   });
 
-  it("sends converted tables through the configured default account and returns its relay receipt", async () => {
+  it("projects tables for the configured default account and sends the text unchanged", async () => {
     convertMarkdownTables.mockReturnValueOnce("**Table:** [docs](https://example.com)");
     const cfg = createConfiguredNostrCfg({
       defaultAccount: "work",
@@ -263,12 +267,13 @@ describe("nostr outbound", () => {
       account: buildResolvedNostrAccount({ accountId: "work" }),
       cfg,
     });
+    const text = project("|a|b|", cfg);
+    expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     const result = await nostrOutboundAdapter.sendText({
       cfg,
       to: TEST_HEX_PUBLIC_KEY.toUpperCase(),
-      text: "|a|b|",
+      text,
     });
-    expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(h.bus.sendDm).toHaveBeenCalledWith(
       TEST_HEX_PUBLIC_KEY,
       "Table: docs (https://example.com)",
@@ -280,11 +285,5 @@ describe("nostr outbound", () => {
       TEST_HEX_PUBLIC_KEY,
       "Your pairing request has been approved!",
     );
-  });
-
-  it("rejects empty text after Markdown conversion", async () => {
-    const h = await startGateway();
-    await expect(send("***")).rejects.toThrow("requires non-empty text");
-    expect(h.bus.sendDm).not.toHaveBeenCalled();
   });
 });

@@ -4,11 +4,11 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
   loadMemorySessionMetadataBatchAsync,
-  matchesSessionEntryPrefixHash,
   sessionPathForFile,
   statSessionEntry,
+  streamSessionEntry,
+  type SessionEntryPage,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -42,7 +42,7 @@ const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
-type BuildSessionEntryOptions = NonNullable<Parameters<typeof buildSessionEntry>[1]>;
+type BuildSessionEntryOptions = NonNullable<Parameters<typeof streamSessionEntry>[1]>;
 
 export type SessionEntryOrigin = {
   agentId: string;
@@ -355,97 +355,136 @@ export async function scanSessionIngestionSource(params: {
   ) {
     return emptyScan("unchanged", params.previous);
   }
-  const entry = await buildSessionEntry(params.source.absolutePath, params.source.buildOptions);
-  if (!entry) {
+  // Appends usually keep the checkpoint's prefix: scan from its end while streaming, and only
+  // rescan from the start when the completed export shows the prefix changed.
+  const previous =
+    params.previous && params.previous.contentHash.length > 0 ? params.previous : undefined;
+  const first = await scanSessionEntryLines(
+    params,
+    Math.max(0, previous?.lastContentLine ?? 0),
+    previous,
+  );
+  if (!first) {
     // Tolerant readers collapse transient failures to null. The stat boundary
     // above owns absence, so retain any prior checkpoint here.
     return emptyScan("unavailable", params.previous);
   }
+  const { summary } = first;
   const fileFingerprint = {
-    mtimeMs: Math.floor(Math.max(0, entry.revisionMs ?? entry.mtimeMs)),
-    size: Math.floor(Math.max(0, entry.size)),
+    mtimeMs: Math.floor(Math.max(0, summary.revisionMs ?? summary.mtimeMs)),
+    size: Math.floor(Math.max(0, summary.size)),
   };
-  const lines = entry.content ? entry.content.split("\n") : [];
   const terminalState = {
     ...fileFingerprint,
-    contentHash: entry.hash.trim(),
-    lineCount: lines.length,
-    lastContentLine: lines.length,
+    contentHash: summary.hash.trim(),
+    lineCount: summary.lineCount,
+    lastContentLine: summary.lineCount,
   };
-  if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
+  if (summary.generatedByDreamingNarrative || summary.generatedByCronRun) {
     return emptyScan("excluded", terminalState);
   }
   if (
     params.previous?.mtimeMs === fileFingerprint.mtimeMs &&
     params.previous.size === fileFingerprint.size &&
     params.previous.contentHash === terminalState.contentHash &&
-    params.previous.lineCount === lines.length &&
-    params.previous.lastContentLine >= lines.length
+    params.previous.lineCount === summary.lineCount &&
+    params.previous.lastContentLine >= summary.lineCount
   ) {
     return emptyScan("unchanged", params.previous);
   }
   // Reuse the full hash for unchanged capped scans; only appends need a prefix hash.
   const previousSnapshotMatches =
-    params.previous !== undefined &&
-    params.previous.contentHash.length > 0 &&
-    ((params.previous.lineCount === lines.length &&
-      params.previous.contentHash === terminalState.contentHash) ||
-      (params.previous.lineCount < lines.length &&
-        matchesSessionEntryPrefixHash(
-          entry,
-          params.previous.lineCount,
-          params.previous.contentHash,
-        )));
-  const startIndex = previousSnapshotMatches
-    ? Math.max(0, Math.min(params.previous?.lastContentLine ?? 0, lines.length))
-    : 0;
-  const seen = new Set(params.seenMessages[params.source.scope] ?? []);
-  const legacySeen = params.source.legacyScope
-    ? new Set(params.seenMessages[params.source.legacyScope] ?? [])
-    : undefined;
-  const candidates: SessionIngestionCandidate[] = [];
-  let progressBlockIndex: number | undefined;
-  let scannedEndIndex = startIndex;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if (params.maxCandidates !== undefined && candidates.length >= params.maxCandidates) {
-      break;
+    previous !== undefined &&
+    ((previous.lineCount === summary.lineCount &&
+      previous.contentHash === terminalState.contentHash) ||
+      (previous.lineCount < summary.lineCount && summary.prefixHash === previous.contentHash));
+  let scan = first;
+  if (
+    !previousSnapshotMatches &&
+    previous &&
+    previous.lastContentLine > 0 &&
+    summary.lineCount > 0
+  ) {
+    const rescan = await scanSessionEntryLines(params, 0);
+    // A transcript that changed between both reads retries from its checkpoint next sweep.
+    if (!rescan || rescan.summary.hash !== summary.hash) {
+      return emptyScan("unavailable", params.previous);
     }
-    scannedEndIndex = index + 1;
-    const snippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
+    scan = rescan;
+  }
+  return {
+    status: "scanned",
+    candidates: scan.candidates,
+    fileState: { ...terminalState, lastContentLine: scan.scannedEndIndex },
+    ...(scan.progressBlockIndex !== undefined
+      ? { progressBlockIndex: scan.progressBlockIndex }
+      : {}),
+    scannedEndIndex: scan.scannedEndIndex,
+  };
+}
+
+/** Streams one export, collecting candidates from `startIndex`, with no transcript text retained. */
+async function scanSessionEntryLines(
+  params: Parameters<typeof scanSessionIngestionSource>[0],
+  startIndex: number,
+  previous?: SessionIngestionFileState,
+) {
+  const start = (): {
+    seen: Set<string>;
+    legacySeen?: Set<string>;
+    candidates: SessionIngestionCandidate[];
+    progressBlockIndex?: number;
+    scannedEndIndex: number;
+  } => ({
+    seen: new Set(params.seenMessages[params.source.scope] ?? []),
+    legacySeen: params.source.legacyScope
+      ? new Set(params.seenMessages[params.source.legacyScope] ?? [])
+      : undefined,
+    candidates: [],
+    scannedEndIndex: startIndex,
+  });
+  let state = start();
+  const scanLine = (index: number, page: SessionEntryPage, offset: number) => {
+    if (index < startIndex) {
+      return;
+    }
+    if (params.maxCandidates !== undefined && state.candidates.length >= params.maxCandidates) {
+      return;
+    }
+    // Lines arrive in order; candidates stop at the first line after the cap.
+    state.scannedEndIndex = index + 1;
+    const snippet = normalizeSessionCorpusSnippet(page.lines[offset] ?? "");
     if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
-      continue;
+      return;
     }
-    const lineNumber = entry.lineMap[index] ?? index + 1;
-    const timestampMs = entry.messageTimestampsMs[index] ?? 0;
-    const parsedProvenance = entry.lineProvenance[index] ?? {
-      originClass: "untrusted",
-      sessionKind: "interactive",
-      observedAt: timestampMs || entry.mtimeMs,
-    };
+    const lineNumber = page.lineMap[offset] ?? index + 1;
+    const timestampMs = page.messageTimestampsMs[offset] ?? 0;
+    const parsedProvenance = page.lineProvenance[offset]!;
     // Foreign JSONL is caller-controlled; only canonical stores authenticate provenance.
     const provenance = params.source.foreign
       ? { ...parsedProvenance, originClass: "untrusted" as const }
       : parsedProvenance;
     if (params.acceptProvenance && !params.acceptProvenance(provenance)) {
-      continue;
+      return;
     }
-    const day = formatMemoryDreamingDay(timestampMs || entry.mtimeMs, params.timezone);
+    // Rendered provenance already falls back to the export's activity time.
+    const day = formatMemoryDreamingDay(timestampMs || provenance.observedAt, params.timezone);
     const disposition = params.classifyDay(day);
     if (disposition !== "include") {
       if (disposition === "block") {
-        progressBlockIndex ??= index;
+        state.progressBlockIndex ??= index;
       }
-      continue;
+      return;
     }
     const basis = timestampMs > 0 ? `ts:${Math.floor(timestampMs)}` : `line:${lineNumber}`;
     const hash = hashSessionMessageId(`${params.source.scope}\n${basis}\n${snippet}`);
     const legacyHash = params.source.legacyScope
       ? hashSessionMessageId(`${params.source.legacyScope}\n${basis}\n${snippet}`)
       : undefined;
-    if (seen.has(hash) || (legacyHash && legacySeen?.has(legacyHash))) {
-      continue;
+    if (state.seen.has(hash) || (legacyHash && state.legacySeen?.has(legacyHash))) {
+      return;
     }
-    candidates.push({
+    state.candidates.push({
       contentIndex: index,
       day,
       hash,
@@ -460,15 +499,25 @@ export async function scanSessionIngestionSource(params: {
       snippet,
       ...(params.source.sessionOrigin ? { sessionOrigin: params.source.sessionOrigin } : {}),
     });
-    seen.add(hash);
-  }
-  return {
-    status: "scanned",
-    candidates,
-    fileState: { ...terminalState, lastContentLine: scannedEndIndex },
-    ...(progressBlockIndex !== undefined ? { progressBlockIndex } : {}),
-    scannedEndIndex,
+    state.seen.add(hash);
   };
+  const summary = await streamSessionEntry(params.source.absolutePath, params.source.buildOptions, {
+    ...(previous ? { prefixLineCount: previous.lineCount } : {}),
+    onPage(page) {
+      for (let offset = 0; offset < page.lines.length; offset++) {
+        scanLine(page.startLine + offset, page, offset);
+      }
+    },
+    onReset() {
+      state = start();
+    },
+  });
+  if (!summary) {
+    return null;
+  }
+  // A checkpoint beyond the export's end scanned nothing and clamps to its line count.
+  state.scannedEndIndex = Math.min(state.scannedEndIndex, summary.lineCount);
+  return { summary, ...state };
 }
 
 export function mergeTrackedMessageHashes(existing: string[], additions: string[]): string[] {

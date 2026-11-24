@@ -11,6 +11,10 @@ The outlet mounts that renderer once and supplies live `data`, `loaderPending`, 
 `presented` props; loader updates must preserve page-local state. Keep page
 imports inside their route's `component` loader.
 
+## Labs
+
+- Moving a feature out of Labs (on or still off by default): follow the [Labs graduation skill](../.agents/skills/labs-graduation/SKILL.md).
+
 ## State Ownership And Async Results
 
 - Gateway owns shared state; renderer copies = caches; views own presentation state. Reuse owning store/controller + Gateway contract for session, config, authorization decisions.
@@ -63,6 +67,7 @@ imports inside their route's `component` loader.
 ## Stylesheet Policy
 
 - `:has()` limits: stylelint's `selector-disallowed-list` enforces them on raw selectors (config comments say why). Apply the same limits by hand to nested `&` selectors, which stylelint cannot resolve.
+- Keep unkeyed rightmost class/ID alternatives separately indexed: `.a, .b` or `:where(.a), :where(.b)`. Multi-member `:is()`/`:where()` subjects use universal rule buckets in Chromium and WebKit. Preserve specificity and forgiving parsing; Stylelint prevents new eligible cases and existing selector allowances only shrink.
 - New-tab links/controls: pointer cursors; state-changing controls: default arrow.
 - Colors: use `src/styles/base.css` tokens.
 - `main.runtime.ts` injects `components/kbd.css` document-wide; renderers never import it. Never JS-import a sheet `styles.css` already ships from a lazy module: the build copies it into that chunk (catalog bytes) and re-applies it late in the cascade. Resolve cascade ties by specificity, not duplicate loading.

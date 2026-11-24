@@ -34,6 +34,10 @@ import { resolveSessionPublicShare } from "../config/sessions/session-public-sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginInstance, runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import {
   getPluginRecordRegistry,
@@ -42,6 +46,7 @@ import {
   markPluginRegistryRetired,
 } from "../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../plugins/registry.js";
+import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -306,6 +311,8 @@ describe("X publication production-owner composition", () => {
       ],
     });
     gateway.resolveGatewayContext = () => gateway;
+    const sdkResources = new LegacyPluginSdkResourceHost();
+    bindLegacyPluginSdkResourceHost(gateway.resolveGatewayContext, sdkResources);
     // Registry completion must observe the real child, not the direct fixture's empty wait result.
     gateway.lifecycleRuntime = createMockGatewayLifecycleRuntime();
     vi.mocked(gateway.lifecycleRuntime.waitForAgent).mockImplementation(
@@ -316,7 +323,7 @@ describe("X publication production-owner composition", () => {
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     };
     const runtime = createPluginRuntime();
-    bindGatewayContextResolver(runtime.subagent, () => gateway);
+    bindGatewayContextResolver(runtime.subagent, gateway.resolveGatewayContext);
     let rejectMonitor: ((error: Error) => void) | undefined;
     const reportMonitorFailure = (message: string) => rejectMonitor?.(new Error(message));
     const logger = {
@@ -453,8 +460,12 @@ describe("X publication production-owner composition", () => {
       "delegation-revoked": { error: expect.stringContaining("authorization changed") },
       revoked: { error: expect.stringContaining("publication policy changed") },
       "author-revoked": { error: expect.stringContaining("X allowlist changed") },
-      // The outer Gateway binding surfaces retirement before the publication guard.
-      "owner-retired": { error: "Error: Gateway instance unavailable for sessions.create" },
+      // Either owner guard can surface retirement; both must prevent child creation.
+      "owner-retired": {
+        error: expect.stringMatching(
+          /^Error: (Gateway instance unavailable for sessions\.create|Public ingress owner is no longer current\.)$/,
+        ),
+      },
     };
     const spawnErrors = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();
@@ -915,6 +926,8 @@ describe("X publication production-owner composition", () => {
         } finally {
           markPluginRegistryRetired(builder.registry);
           networkCase = undefined;
+          await disposePluginRegistryInstances(builder.registry);
+          await sdkResources.close();
         }
       }
     }

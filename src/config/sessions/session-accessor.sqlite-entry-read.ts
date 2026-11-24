@@ -119,7 +119,7 @@ export function parseReadableSqliteSessionEntryRow(
 }
 
 /** Decode supplied rows in caller order while sharing their lazy participant acquisition. */
-export function prepareSqliteSessionEntryRowDecoder(
+function prepareSqliteSessionEntryRowDecoder(
   database: Pick<OpenClawAgentDatabase, "db">,
   rows: readonly ReadableSessionEntryRow[],
   projection: SessionEntryProjection | "delivery" = "full",

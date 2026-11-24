@@ -29,17 +29,17 @@ if (isMainThread) {
     {
       owner: "src/config/sessions/session-source-authority.ts",
       name: "assertSources",
-      declaration: /const assertSources = \(\) => \{/g,
+      declaration: /const assertSources\s*=\s*\(\)\s*=>\s*\{/g,
     },
     {
       owner: "src/gateway/operator-access-policy.ts",
       name: "accessAssertCurrent",
-      declaration: /const assertCurrent = \(\) => \{/g,
+      declaration: /const assertCurrent\s*=\s*\(\)\s*=>\s*\{/g,
     },
     {
       owner: "src/plugins/runtime/gateway-request-scope.ts",
       name: "pluginGatewayScopeCalls",
-      declaration: /function runWithPluginGatewayScope\([^)]*\) \{/g,
+      declaration: /function runWithPluginGatewayScope\([^)]*\)\s*\{/g,
     },
   ];
   const census = {

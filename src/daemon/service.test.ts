@@ -246,6 +246,7 @@ describe("readGatewayServiceState", () => {
           vi.spyOn(fs, "readdir").mockResolvedValue([]);
         }
         const lstat = fs.lstat;
+        const directory = await lstat(home);
         vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
           const name = String(target);
           if (node && !name.startsWith(`${home}${path.sep}`)) {
@@ -253,6 +254,14 @@ describe("readGatewayServiceState", () => {
           }
           if (condition === "unreadable" && name === unit) {
             throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          if (name === "/run/systemd/system") {
+            // Absence/listener cases have no host manager; uninspectable units
+            // keep a booted host so unavailable tools cannot certify absence.
+            if (condition === "absent" || portUsage) {
+              throw Object.assign(new Error("missing"), { code: "ENOENT" });
+            }
+            return directory;
           }
           // The host may run systemd; this fixture models a separate managerless namespace.
           if (name === "/run/systemd" || /^\/run\/user\/\d+\/systemd$/.test(name)) {

@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
@@ -150,6 +151,92 @@ it.runIf(native)(
     expect(recent.matchingPids).toEqual(expect.arrayContaining([runHolder, rootHolder]));
     // Without a recorded family deadline every root holder keeps blocking repair.
     expect(inspectOtherOpenClawProcesses(references).matchingPids).toContain(rootHolder);
+  },
+);
+
+it.runIf(native)(
+  "releases a retained runtime only from processes that can never be its updater",
+  async () => {
+    const root = fs.realpathSync(dirs.make("census-non-updater-"));
+    const runtime = path.join(root, "openclaw-update-runtime-Native");
+    const pkg = path.join(root, "openclaw");
+    fs.mkdirSync(runtime);
+    fs.mkdirSync(pkg);
+    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "openclaw" }));
+    const titled = (title: string) =>
+      `process.title = ${JSON.stringify(title)}; setInterval(() => {}, 1e9)`;
+    // Like the respawn and node-host launchers, it keeps argv; the CLI child it starts does not.
+    fs.writeFileSync(
+      path.join(pkg, "openclaw.mjs"),
+      `import { spawn } from "node:child_process";
+spawn(process.execPath, ["-e", ${JSON.stringify(titled("openclaw"))}], { stdio: "ignore" });
+setInterval(() => {}, 1e9);`,
+    );
+    // Symlinks run the signed Node under a helper's or the app bundle's image path;
+    // relocated copies of signed binaries fail code-signature validation.
+    const idle = ["-e", "setInterval(() => {}, 1e9)"];
+    const helper = path.join(root, "helper");
+    const app = path.join(root, "OpenClaw.app/Contents/MacOS/OpenClaw");
+    fs.mkdirSync(path.dirname(app), { recursive: true });
+    fs.symlinkSync(process.execPath, helper);
+    fs.symlinkSync(process.execPath, app);
+    const start = async (
+      command: string,
+      args: string[],
+      ready: string,
+      options: { cwd: string; env?: NodeJS.ProcessEnv; argv0?: string },
+    ) => {
+      const pid = spawn(command, args, { ...options, stdio: "ignore" }).pid!;
+      orphans.add(pid);
+      await waitFor(() => readCommand(pid) === ready);
+      return pid;
+    };
+    const launchedChild = async (launcher: number) => {
+      await waitFor(() => childPids(launcher).some((pid) => readCommand(pid) === "openclaw"));
+      return childPids(launcher)[0]!;
+    };
+
+    const nodeLauncherArgs = [path.join(pkg, "openclaw.mjs"), "node", "run"];
+    const nodeLauncher = await start(
+      process.execPath,
+      nodeLauncherArgs,
+      [process.execPath, ...nodeLauncherArgs].join(" "),
+      { cwd: root },
+    );
+    const released = new Set([
+      nodeLauncher,
+      await launchedChild(nodeLauncher),
+      await start(helper, idle, [helper, ...idle].join(" "), {
+        cwd: root,
+        env: { ...process.env, OPENCLAW_SERVICE_MARKER: "openclaw" },
+      }),
+      await start(app, idle, [app, ...idle].join(" "), { cwd: "/" }),
+      await start(
+        process.execPath,
+        ["-e", titled("openclaw-node-worker")],
+        "openclaw-node-worker",
+        { cwd: root },
+      ),
+    ]);
+    // A title-erased CLI started by any other parent may be the updater that created it.
+    const shell = await start(
+      "/bin/sh",
+      ["-c", `"$0" -e '${titled("openclaw")}'; :`, process.execPath],
+      `/bin/sh -c "$0" -e '${titled("openclaw")}'; : ${process.execPath}`,
+      { cwd: root },
+    );
+    const retained = [
+      await start(process.execPath, ["-e", titled("openclaw")], "openclaw", { cwd: runtime }),
+      await launchedChild(shell),
+      // An app-shaped argv alone does not exempt a JS runtime image.
+      await start(process.execPath, idle, [app, ...idle].join(" "), { cwd: "/", argv0: app }),
+    ];
+
+    const result = inspectOtherOpenClawProcesses(runtime);
+    expect(result).not.toHaveProperty("error");
+    const pids = "pids" in result ? result.pids : [];
+    expect(pids).toEqual(expect.arrayContaining(retained));
+    expect(pids.filter((pid) => released.has(pid))).toEqual([]);
   },
 );
 

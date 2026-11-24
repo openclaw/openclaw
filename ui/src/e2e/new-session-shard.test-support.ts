@@ -21,8 +21,6 @@ export async function expectRequest(gateway: MockGatewayControls, method: string
 export const pollVisible = (target: Locator) => expect.poll(() => target.isVisible());
 export const pollFocused = (target: Locator) =>
   expect.poll(() => target.evaluate((element) => element === document.activeElement));
-export const pollOpacity = (target: Locator) =>
-  expect.poll(() => target.evaluate((element) => getComputedStyle(element).opacity));
 
 export function personalModelScenario(
   model: ModelCatalogEntry,

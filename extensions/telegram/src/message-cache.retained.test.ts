@@ -202,7 +202,12 @@ describe("Telegram retained message history", () => {
       (await cache.recentBefore({ accountId, chatId, messageId: "103", limit: 10 })).map(
         (node) => node.messageId,
       ),
-    ).toEqual(["8", "9", "10", "99", "100", "101", "102"]);
+    ).toEqual(["9"]);
+    expect(
+      (
+        await cache.recentBefore({ accountId, chatId, threadId: 77, messageId: "103", limit: 10 })
+      ).map((node) => node.messageId),
+    ).toEqual(["8", "10", "99", "100", "101", "102"]);
   });
 
   it("atomically promotes legacy roots and preserves embedded-only ancestry across database reopen", async () => {

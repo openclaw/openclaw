@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { VERSION } from "../version.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 
 export function writeFeaturePluginScaffold(params: {
   rootDir: string;
@@ -8,10 +9,11 @@ export function writeFeaturePluginScaffold(params: {
   name: string;
 }): void {
   if (!/^[a-z][a-z0-9-]*$/u.test(params.id)) {
-    throw new Error(
+    throwExpectedCliError(
       "Feature plugin ids must start with a lowercase letter and contain lowercase letters, digits, or hyphens.",
     );
   }
+  fs.mkdirSync(path.join(params.rootDir, "src"), { recursive: true });
   const literal = JSON.stringify;
   const toolName = `${params.id.replaceAll("-", "_")}_analyze`;
   const description = `Analyze drafts with ${params.name} tools and native UI.`;

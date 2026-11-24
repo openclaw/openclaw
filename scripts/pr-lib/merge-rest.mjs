@@ -18,6 +18,17 @@ const RULE_TYPES = new Set([
   "pull_request",
   "required_status_checks",
 ]);
+// Only these workflow-job events can fulfill PR checks; merge queues have their
+// own event. External App checks and commit statuses do not use this restriction.
+const REQUIRED_CHECK_EVENTS = new Set([
+  "push",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_target",
+  "deployment",
+  "deployment_status",
+  "merge_group",
+]);
 
 function requireEvidence(condition, message) {
   if (!condition) {
@@ -428,7 +439,7 @@ function* latestRequiredChecksSteps(repo, head, checks) {
     }
     names.add(name);
   }
-  if (repeated.size === 0) {
+  if (repeated.size === 0 && !checks.some((check) => check.app.slug === "github-actions")) {
     return checks;
   }
   const runs = yield* checkPagesSteps(
@@ -457,11 +468,17 @@ function* latestRequiredChecksSteps(repo, head, checks) {
   const groups = new Map();
   const unique = [];
   for (const check of checks) {
+    const run = suites.get(check.check_suite?.id);
+    if (check.app.slug === "github-actions") {
+      requireEvidence(run, "cannot establish required-check workflow or start time");
+      if (!REQUIRED_CHECK_EVENTS.has(run.event)) {
+        continue;
+      }
+    }
     if (!repeated.has(JSON.stringify([check.app.id, check.name]))) {
       unique.push(check);
       continue;
     }
-    const run = suites.get(check.check_suite?.id);
     const started = Date.parse(check.started_at);
     requireEvidence(
       check.app.slug === "github-actions" && run && Number.isFinite(started),

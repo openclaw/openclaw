@@ -122,7 +122,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
   let deadline = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const startDeadline = () => {
-    deadline = Date.now() + timeout;
+    deadline = performance.now() + timeout;
     timer = setTimeout(
       () =>
         controller.abort(new Error(`Timeout ${timeout}ms exceeded while completing file upload`)),
@@ -172,7 +172,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
           await clickViaPlaywright({
             ...opts,
             ref: opts.ref!,
-            timeoutMs: Math.max(1, deadline - Date.now()),
+            timeoutMs: Math.max(1, deadline - performance.now()),
             resolvedPage: page,
             signal,
           });
@@ -198,7 +198,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
           page,
           fileChooser,
           paths,
-          timeoutMs: Math.max(1, deadline - Date.now()),
+          timeoutMs: Math.max(1, deadline - performance.now()),
           signal,
         });
         signal.throwIfAborted();

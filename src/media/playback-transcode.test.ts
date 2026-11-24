@@ -111,6 +111,48 @@ function createGatedFfmpegJob(output: string) {
 }
 
 describe("resolvePlaybackTranscode", () => {
+  it("returns a lossless MP4 rendition on the first playback request for a compatible MOV", async () => {
+    const source = await createSource("screen-recording.mov");
+    probePlaybackMediaFileDescriptor.mockResolvedValue(
+      videoProbe({
+        videoCodec: "h264",
+        videoProfile: "high",
+        videoPixelFormat: "yuv420p",
+        audioCodec: "aac",
+        audioStreamIndex: 1,
+      }),
+    );
+    runFfmpeg.mockImplementation(writeFfmpegOutput("mp4-rendition"));
+    const params = videoRequest(source, "video/quicktime");
+
+    const result = await resolveTranscode(params);
+    await waitForPlaybackSourceCleanup();
+    expect(result).toMatchObject({ kind: "transcoded", contentType: "video/mp4" });
+    expect(runFfmpeg).toHaveBeenCalledOnce();
+    expect(runFfmpeg.mock.calls[0]?.[0]).toEqual(expect.arrayContaining(["-c", "copy"]));
+    expect(runFfmpeg.mock.calls[0]?.[0]).not.toContain("libx264");
+    await expect(resolveTranscode(params)).resolves.toEqual(result);
+    expect(runFfmpeg).toHaveBeenCalledOnce();
+  });
+
+  it("re-encodes a compatible MOV if copying its streams fails", async () => {
+    const source = await createSource("unmappable-recording.mov");
+    probePlaybackMediaFileDescriptor.mockResolvedValue(
+      videoProbe({
+        videoCodec: "h264",
+        videoProfile: "high",
+        videoPixelFormat: "yuv420p",
+      }),
+    );
+    runFfmpeg
+      .mockRejectedValueOnce(new Error("Could not write MP4 header"))
+      .mockImplementationOnce(writeFfmpegOutput("encoded-rendition"));
+
+    await expectResolution(videoRequest(source, "video/quicktime"), "transcoded");
+    expect(runFfmpeg).toHaveBeenCalledTimes(2);
+    expect(runFfmpeg.mock.calls[1]?.[0]).toContain("libx264");
+  });
+
   it("does not reuse a rendition after the source file is replaced", async () => {
     using sync = vi.spyOn(syncFs, "fsyncSync");
     const original = await createSource("replaced-cache.mkv", "first-source");
@@ -176,24 +218,30 @@ describe("resolvePlaybackTranscode", () => {
   });
 
   it.each([
-    ["hevc", undefined],
-    ["h264", "native"],
-  ] as const)("only advertises native playback for oversized %s media", async (codec, expected) => {
-    const source = await createSource(`oversized-${codec}.mp4`);
-    await fs.truncate(source.sourcePath, 16 * 1024 * 1024 + 1);
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
-      videoProbe({
-        videoCodec: codec,
-        videoProfile: "high",
-        videoPixelFormat: "yuv420p",
-      }),
-    );
+    ["video/mp4", "hevc", undefined],
+    ["video/mp4", "h264", "native"],
+    ["video/x-m4v", "hevc", undefined],
+    ["video/x-m4v", "h264", "native"],
+  ] as const)(
+    "only advertises native playback for oversized %s %s media",
+    async (mimeType, codec, expected) => {
+      const source = await createSource(`oversized-${mimeType.replaceAll("/", "-")}-${codec}`);
+      await fs.truncate(source.sourcePath, 16 * 1024 * 1024 + 1);
+      probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
+        videoProbe({
+          videoCodec: codec,
+          videoProfile: "high",
+          videoPixelFormat: "yuv420p",
+        }),
+      );
 
-    const metadata = await resolveMetadata(
-      videoRequest(await readPlaybackSource(source.sourcePath)),
-    );
-    expect(metadata.playback).toBe(expected);
-  });
+      const params = videoRequest(await readPlaybackSource(source.sourcePath), mimeType);
+      const metadata = await resolveMetadata(params);
+      expect(metadata.playback).toBe(expected);
+      await expectResolution(params, expected === "native" ? "passthrough" : "fallback");
+      expect(runFfmpeg).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["high-10", { videoProfile: "high 10", videoPixelFormat: "yuv420p10le" }],
@@ -316,12 +364,16 @@ describe("resolvePlaybackTranscode", () => {
 
   it.each([
     ["mkv", "video/x-matroska", "matroska,webm", 0, 1],
+    ["mkv", "video/matroska", "matroska,webm", 0, 1],
     ["mp4", "video/mp4", "mov", 2, 3],
+    ["m4v", "video/x-m4v", "mov", 2, 3],
   ] as const)(
     "single-flights %s conversion and reuses its store entry",
     async (extension, mimeType, format, videoIndex, audioIndex) => {
-      const source = await createSource(`single-flight.${extension}`);
-      if (extension === "mp4") {
+      const source = await createSource(
+        `single-flight-${mimeType.replaceAll("/", "-")}.${extension}`,
+      );
+      if (extension !== "mkv") {
         probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
           videoProbe({
             videoCodec: "hevc",

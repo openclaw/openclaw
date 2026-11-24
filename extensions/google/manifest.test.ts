@@ -134,8 +134,8 @@ describe("google manifest model catalog", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
-    expect(modelIds).toHaveLength(12);
-    expect(modelIds[0]).toBe("gemini-4-argon");
+    expect(modelIds).toHaveLength(14);
+    expect(modelIds.slice(0, 2)).toEqual(["gemini-4-argon", "gemini-4-hydrogen"]);
     expect(
       modelIds.slice(
         modelIds.indexOf("gemini-3.7-flash"),
@@ -157,14 +157,15 @@ describe("google manifest model catalog", () => {
     expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
   });
 
-  it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
+  it("offers Gemini API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 
     expect(choices).toEqual([
       expect.objectContaining({
         provider: "google",
         method: "api-key",
-        choiceLabel: "Google AI Studio API key",
+        choiceLabel: "Gemini API key",
+        groupLabel: "Gemini API key",
         choiceHint: "Supported API-key access from aistudio.google.com/apikey",
         groupHint: "Supported API-key setup",
       }),

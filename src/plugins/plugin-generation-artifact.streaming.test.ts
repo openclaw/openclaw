@@ -7,10 +7,14 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "../infra/worker-native-lifecycle.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { expectBytes, observeFileIo, readText } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
@@ -20,11 +24,12 @@ vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const reloadError = "Plugin source changed while preparing its reload";
 const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   for (const artifact of artifacts.splice(0)) {
     artifact.dispose();
   }
+  await closeDefaultRetainedNativeWorkerSource();
 });
 
 function fixture(bytes: Buffer, basename = "fixture.bin") {
@@ -79,29 +84,35 @@ it.each(["changed bytes", "escaping link"])(
     const source = fixture(bytes, "fixture.dat");
     const outside = path.join(temp.make("plugin-custody-outside-"), "fixture.dat");
     fs.writeFileSync(outside, bytes);
-    const copy = fs.cpSync;
-    vi.spyOn(fs, "cpSync").mockImplementation((from, to, options) => {
-      copy(from, to, options);
-      const directory = String(to);
-      const relative = listDirectoryTreeStrictSync(directory)
-        .map((walkEntry) => walkEntry.relativePath)
-        .find((name) => name.endsWith("fixture.dat"));
-      if (!relative) {
-        throw new Error("fixture copy is missing its payload");
-      }
-      const target = path.join(directory, relative);
-      if (change === "escaping link") {
-        fs.unlinkSync(target);
-        fs.symlinkSync(outside, target);
-      } else {
-        fs.writeFileSync(target, "changed");
-      }
-    });
+    const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+    const create = nativeSource.create.bind(nativeSource);
+    vi.spyOn(nativeSource, "create").mockImplementation((filename, options = {}, ...rest) =>
+      create(
+        new URL("./doctor-capture-probe.test-support.ts", import.meta.url),
+        {
+          ...options,
+          workerData: {
+            ...options.workerData,
+            doctorCaptureWorkerUrl: String(filename),
+            doctorCopyTamper: { mode: change, basename: "fixture.dat", outside },
+          },
+        },
+        ...rest,
+      ),
+    );
     await withPluginGenerationSourceCustody(async () => {
-      expect(() => source.capture()).toThrow(
-        change === "escaping link" ? "Cannot capture plugin source" : reloadError,
-      );
+      const capture = preparePluginGenerationArtifact({
+        rootDir: source.directory,
+        source: source.filename,
+      });
+      await expect(
+        capture.then(async ({ artifact }) => {
+          await artifact.disposeAsync();
+          throw new Error("Expected capture to reject the tampered source");
+        }),
+      ).rejects.toThrow(change === "escaping link" ? "Cannot capture plugin source" : reloadError);
     });
+    expect(nativeSource.hasActiveWorkers).toBe(false);
     expectBytes(source.filename, bytes);
   },
 );

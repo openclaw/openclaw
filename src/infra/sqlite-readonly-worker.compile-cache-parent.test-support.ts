@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
 import { listDirectoryTreeStrictSync } from "./directory-walk.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
   createScopedSqliteReadOnlyWorker,
@@ -103,7 +104,7 @@ try {
 }
 assert.equal(fs.existsSync(prepared.location), false);
 assert.deepEqual(fs.readFileSync(source), before);
-assert.deepEqual(fs.readdirSync(path.join(stagingRoot, "openclaw")), []);
+assert.deepEqual(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot()), []);
 assert.deepEqual({ ...process.env }, callEnv);
 const observed = fs.readdirSync(probes);
 assert.ok(observed.length > 0, "real read-only children must execute");

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
+import { SESSION_ICON_SVG_MAX_BYTES } from "../packages/gateway-protocol/src/session-agent-status.ts";
 import { MAX_THEME_DEFINITION_BYTES } from "../packages/gateway-protocol/src/theme.ts";
 import { loadPluginControlUiDeclaration } from "../src/plugins/control-ui-build-manifest.ts";
 import { createPluginCache, withPluginCache } from "../src/plugins/plugin-cache.ts";
@@ -19,6 +20,7 @@ import {
   mapPluginCatalogEntries,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
+import { ensureOpenClawExtensionAlias } from "./lib/bundled-plugin-sdk-alias.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
@@ -32,7 +34,6 @@ import {
   removePathIfExists,
   writeTextFileIfChanged,
 } from "./runtime-postbuild-shared.mjs";
-import { ensureOpenClawExtensionAlias } from "./stage-bundled-plugin-runtime.mts";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
@@ -402,10 +403,17 @@ function copyMetadata(params: CopyMetadataParams): void {
       writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
       copyPluginIcons(pluginDir, distPluginDir);
       const pluginRoot = fs.realpathSync(pluginDir);
-      for (const relativePath of collectPluginThemeAssetPaths(bundledManifest)) {
-        const maxBytes = relativePath.toLowerCase().endsWith(".svg")
-          ? PLUGIN_ACTIVITY_ICON_MAX_BYTES
-          : MAX_THEME_DEFINITION_BYTES * 4;
+      const presentationAssets = new Set(collectPluginThemeAssetPaths(bundledManifest));
+      if (controlUi.value?.panelIcon) {
+        presentationAssets.add(controlUi.value.panelIcon);
+      }
+      for (const relativePath of presentationAssets) {
+        const maxBytes =
+          relativePath === controlUi.value?.panelIcon
+            ? SESSION_ICON_SVG_MAX_BYTES
+            : relativePath.toLowerCase().endsWith(".svg")
+              ? PLUGIN_ACTIVITY_ICON_MAX_BYTES
+              : MAX_THEME_DEFINITION_BYTES * 4;
         const file = openRootFileSync({
           absolutePath: path.resolve(pluginRoot, relativePath),
           rootPath: pluginRoot,

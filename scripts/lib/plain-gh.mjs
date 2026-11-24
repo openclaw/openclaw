@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,6 +13,40 @@ import path from "node:path";
  *   options: ExecFileSyncOptions,
  * ) => string | Uint8Array<ArrayBuffer>} ExecGhReadImpl
  */
+
+// A command-local transport ceiling, not a shared quota reservation or cache.
+/** @type {AsyncLocalStorage<{limit: number, used: number}>} */
+const requestBudget = new AsyncLocalStorage();
+
+/**
+ * @template T
+ * @param {number} limit
+ * @param {(budget: {limit: number, used: number}) => T} operation
+ * @returns {T}
+ */
+export function withGithubRequestBudget(limit, operation) {
+  const budget = { limit, used: 0 };
+  return requestBudget.run(budget, () => operation(budget));
+}
+
+/** @param {readonly string[]} [args] */
+export function accountGithubRequest(args) {
+  const budget = requestBudget.getStore();
+  if (!budget) {
+    return;
+  }
+  // Hidden CLI pagination cannot be charged per request. Bounded callers use
+  // explicit REST pages, and count each retry immediately before transport.
+  if (args && (args[0] !== "api" || args.includes("--paginate"))) {
+    throw new Error("GitHub publication request budget requires explicit REST requests");
+  }
+  if (budget.used >= budget.limit) {
+    throw new Error(
+      `GitHub publication request budget exhausted (${budget.limit}); resume a smaller selection with fresh authority after the quota reset.`,
+    );
+  }
+  budget.used += 1;
+}
 
 const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 const ASYNC_GH_DRAIN_GRACE_MS = 1_000;
@@ -33,6 +68,7 @@ function refuseFurtherAsyncGh(cause) {
 
 // Share the process-wide budget across protected-writer and cache-aware reads.
 async function runGhAsync(file, args, options) {
+  accountGithubRequest(args);
   if (asyncGhRefusal) {
     throw asyncGhRefusal;
   }
@@ -288,6 +324,7 @@ export function resolvePlainGhBin(env = process.env, cwd = process.cwd()) {
  * @returns {string | Uint8Array<ArrayBuffer>}
  */
 export function execPlainGh(args, options = {}) {
+  accountGithubRequest(args);
   const env = plainGhAuthenticatedEnv(options.env ?? process.env);
   const ghBin = resolvePlainGhBin(env, options.cwd ?? process.cwd());
   return execFileSync(ghBin, args, {
@@ -325,6 +362,7 @@ export function execPlainGh(args, options = {}) {
  * @returns {string | Uint8Array<ArrayBuffer>}
  */
 export function execGhRead(args, options = {}, params = {}) {
+  accountGithubRequest(args);
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   return execFileSyncImpl("gh", args, {
     ...options,

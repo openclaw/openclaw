@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { runEmbeddedAttempt } from "../../agents/embedded-agent-runner/run/attempt.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createOpenClawAgentHarness } from "../../agents/harness/builtin-openclaw.js";
@@ -10,7 +10,7 @@ import {
 } from "../../agents/harness/lifecycle.test-support.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import {
@@ -25,6 +25,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
   sessionControllerMailboxes,
+  reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -51,7 +52,7 @@ import {
   isGoalContinuationPlacementCurrent,
   createGoalContinuationReturn,
 } from "./goal-continuation.js";
-import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
 
 // mock-isolation: This unit contract observes the actual built-in context consumer without a provider call.
@@ -72,7 +73,6 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
 // mock-isolation: Queue insertion is observed here; real draining is covered by server.chat-goal.
 vi.mock("./queue/enqueue.js", () => ({
   enqueueFollowupRun: vi.fn(() => true),
-  getFollowupQueueDepth: vi.fn(() => 0),
 }));
 
 const workerPlacement = vi.hoisted(() => ({
@@ -177,7 +177,17 @@ function fixture() {
     operation,
     runFollowup: vi.fn(async () => {}),
   };
-  return { params, controller, operation };
+  const reserveInput = () =>
+    reserveSessionControllerSource(params.queueKey, {
+      policy: params.settings,
+      target: captureSessionTarget({
+        storeScope: params.storePath,
+        sessionKey: params.sessionKey,
+        agentId: params.base.run.agentId,
+        incarnation: params.expectedSession.sessionId,
+      }),
+    });
+  return { params, controller, operation, reserveInput };
 }
 beforeEach(() => {
   vi.useFakeTimers();
@@ -185,7 +195,6 @@ beforeEach(() => {
   workerPlacement.supported = true;
   workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
-  vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
 });
 afterEach(async () => {
@@ -211,14 +220,14 @@ describe("Goal continuation eligibility", () => {
   it.each([
     [true, "remote-exec", "workerGoal"],
     [true, "local", "localCodexGoal"],
+    [true, "local-no-authority", "localCodexGoal"],
     [true, "worker-turn", undefined],
     [true, "wrong-session", undefined],
     [true, "unsupported", undefined],
     [true, "no-authority", undefined],
     [false, "local", "localCodexGoal"],
     [false, "worker-required", undefined],
-    [false, "no-authority", undefined],
-    [false, "revoked", undefined],
+    [false, "no-authority", "localCodexGoal"],
   ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
     const codexSession = { ...entry(), agentHarnessId: "codex" };
@@ -228,29 +237,20 @@ describe("Goal continuation eligibility", () => {
       workerPlacement.current.mockReturnValue({
         ...localPlacement(identity.sessionId),
         sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
-        state: mode === "local" ? "local" : "requested",
+        state: mode === "local" || mode === "local-no-authority" ? "local" : "requested",
         executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
       });
     }
-    if (mode !== "no-authority") {
-      f.params.base.operatorAuthority = {
+    if (mode !== "no-authority" && mode !== "local-no-authority") {
+      f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.admin"],
-        assertCurrent: () => {
-          if (mode === "revoked") {
-            throw new Error("operator revoked");
-          }
-        },
-      };
+      });
     }
     if (mode === "worker-required") {
       f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
     }
-    if (mode === "revoked") {
-      await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
-    } else {
-      expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
-    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
     expect(enqueueFollowupRun).toHaveBeenCalledTimes(marker ? 1 : 0);
     if (marker) {
       const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
@@ -258,14 +258,18 @@ describe("Goal continuation eligibility", () => {
     }
   });
   it.each([
-    ["localCodexGoal", "local", false, true],
-    ["localCodexGoal", "worker", false, false],
-    ["workerGoal", "local", false, false],
-    ["workerGoal", "worker", false, true],
-    ["localCodexGoal", "local", true, false],
+    ["localCodexGoal", "local", false, true, true],
+    ["localCodexGoal", "local", false, false, true],
+    ["localCodexGoal", "worker", false, true, false],
+    ["localCodexGoal", "worker", false, false, false],
+    ["workerGoal", "local", false, true, false],
+    ["workerGoal", "worker", false, true, true],
+    ["workerGoal", "worker", false, false, false],
+    ["localCodexGoal", "local", true, true, false],
+    ["localCodexGoal", "local", true, false, false],
   ] as const)(
-    "checks %s Codex placement against %s (requires worker=%s)",
-    async (marker, current, requiresWorker, expected) => {
+    "checks %s Codex placement against %s (requires worker=%s, operator=%s)",
+    async (marker, current, requiresWorker, hasOperatorAuthority, expected) => {
       workerPlacement.current.mockReturnValue({
         ...localPlacement(identity.sessionId),
         sessionKey: "agent:main:goal",
@@ -277,21 +281,21 @@ describe("Goal continuation eligibility", () => {
           continuation: { ...identity, [marker]: true },
           agentId: "main",
           sessionKey: "agent:main:goal",
-          hasOperatorAuthority: true,
+          hasOperatorAuthority,
           requiresWorker,
         }),
       ).resolves.toBe(expected);
     },
   );
-  it("checks current Goal, incarnation, stop and runtime facts before continuing", () => {
+  it("checks current Goal, stop and runtime facts before continuing", () => {
     const current = entry();
     expect(isGoalContinuationCurrent(identity, undefined)).toBe(false);
     for (const [patch, expected, continuation] of [
       [{}, true],
       [{ goal: undefined }, false],
       [{ goal: { ...current.goal!, status: "paused" } }, false],
-      [{ sessionId: "replacement" }, false],
-      [{ lifecycleRevision: "revision-3" }, false],
+      [{ sessionId: "replacement" }, true],
+      [{ lifecycleRevision: "revision-3" }, true],
       [{ abortedLastRun: true }, false],
       [{ agentHarnessId: "codex" }, false],
       [{ agentHarnessId: "codex" }, true, { localCodexGoal: true }],
@@ -310,7 +314,7 @@ describe("Goal continuation eligibility", () => {
     current.goal!.tokenBudget = 50;
     current.totalTokens = 50;
     current.totalTokensFresh = true;
-    current.totalTokensVersion = 1;
+    current.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     expect(isGoalContinuationCurrent(identity, current)).toBe(false);
     expect(current.goal!.status).toBe("active");
   });
@@ -323,6 +327,15 @@ describe("Goal continuation eligibility", () => {
     { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
     { meta: { stopReason: "refusal" } },
     { didSendDeterministicApprovalPrompt: true },
+    {
+      acceptedSessionSpawns: [
+        {
+          runId: "child",
+          childSessionKey: "agent:main:subagent:child",
+          expectsCompletionMessage: true,
+        },
+      ],
+    },
     { payloads: [{ text: "failed", isError: true }] },
   ])("preserves an existing continuation, failure or approval owner: %j", async (result) => {
     const f = fixture();
@@ -448,7 +461,7 @@ describe("Goal queue custody", () => {
         f.controller.abort();
       }
       if (change === "new input") {
-        vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
+        f.reserveInput();
       }
       if (change === "goal replacement") {
         current.goal!.id = "new-goal";
@@ -496,9 +509,10 @@ function retainedGoal(existingChild?: SubagentRunRecord) {
     runId = "settle-run",
     result = normal,
     succeeded = true,
+    entries: SubagentRunRecord[] = [child],
   ) =>
     withGoalContinuationSettlement(
-      [child],
+      entries,
       "settle-run",
       () => true,
       () => {
@@ -606,6 +620,36 @@ describe("Goal return from committed child custody", () => {
     }
   });
 
+  it("resumes the Goal once, on the partition that settles its cohort last", async () => {
+    const f = retainedGoal();
+    const sibling: SubagentRunRecord = {
+      ...f.child,
+      runId: "goal-sibling",
+      childSessionKey: `${f.child.childSessionKey}-sibling`,
+      requesterSettleWake: {
+        ...f.child.requesterSettleWake!,
+        batchRunIds: ["goal-child", "goal-sibling"],
+      },
+    };
+    createGoalContinuationReturn(f.params)(() => {
+      bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
+      promoteGoalContinuationYield({
+        requesterTurnRunId: f.params.sourceRunId,
+        entries: [f.child, sibling],
+        rearmGeneration: 1,
+      });
+    });
+    f.operation.complete();
+    // The first ready result is an ordinary settle turn while its sibling still works.
+    expect(f.publish()).toBeUndefined();
+    await f.finish();
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    const context = f.publish(true, "settle-run", normal, true, [sibling]);
+    expect(context?.text).toContain("Active goal: Finish the checklist");
+    await finishGoalContinuationSettlement([sibling], true);
+    expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+  });
+
   it.each(["settle-run", "independent-command"])(
     "injects Goal context at the actual built-in harness only for the admitted settlement (%s)",
     async (runId) => {
@@ -642,14 +686,9 @@ describe("Goal return from committed child custody", () => {
   it("keeps the original route and independently retained operator restriction until queue handoff", async () => {
     const f = retainedGoal();
     let holds = 1;
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {
-        if (!holds) {
-          throw new Error("source released");
-        }
-      },
       retain() {
         holds++;
         return () => {
@@ -765,10 +804,9 @@ describe("Goal return from committed child custody", () => {
   it("releases an obsolete return when a newer requester owns the same child cohort", async () => {
     const first = retainedGoal();
     const release = vi.fn();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {},
       retain: () => release,
     });
     first.params.base.operatorAuthority = authority;
@@ -810,7 +848,6 @@ describe("Goal return from committed child custody", () => {
     ),
     { change: "cleared", patch: { goal: undefined } },
     { change: "replaced", patch: { goal: { ...entry().goal!, id: "new-goal" } } },
-    { change: "reset", patch: { lifecycleRevision: "new-revision" } },
     { change: "stopped", patch: { abortedLastRun: true } },
   ])("rechecks $change after the command final and batch commit", async ({ patch }) => {
     const f = retainedGoal();
@@ -848,7 +885,7 @@ describe("Goal return from committed child custody", () => {
       boundary !== "command failure" && boundary !== "unverified command",
     );
     if (boundary === "queued input") {
-      vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
+      f.reserveInput();
     }
     if (boundary === "unsettled sibling") {
       children.mockResolvedValue([{ runId: "sibling" }]);
@@ -857,22 +894,10 @@ describe("Goal return from committed child custody", () => {
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
 
-  it.each(["Stop", "source retirement", "operator revocation"])(
+  it.each(["Stop", "source retirement"])(
     "checks %s again after asynchronous final enqueue preparation",
     async (boundary) => {
       const f = retainedGoal();
-      const revoked = new AbortController();
-      let current = true;
-      f.params.base.operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "goal-owner",
-        scopes: ["operator.write"],
-        signal: revoked.signal,
-        assertCurrent() {
-          if (!current) {
-            throw new Error("revoked");
-          }
-        },
-      });
       f.retain();
       f.operation.complete();
       f.publish();
@@ -907,10 +932,6 @@ describe("Goal return from committed child custody", () => {
       }
       if (boundary === "source retirement") {
         revokeGoalContinuationReturn(f.child);
-      }
-      if (boundary === "operator revocation") {
-        current = false;
-        revoked.abort();
       }
       read.resolve(entry());
       await finishing;

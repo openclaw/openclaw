@@ -320,3 +320,37 @@ it.each(["publication", "activation"])(
     );
   },
 );
+
+it.each([
+  ["stops the replacement", "exit", ["stop", "recovery hook", "start"]],
+  ["cannot stop the replacement", "stop-fails", ["stop"]],
+] as const)(
+  "runs the caller's recovery hook only when rollback %s, before the previous unit starts",
+  async (_name, rollback, expected) => {
+    const { installArgs } = await createInstallFixture();
+    const events: string[] = [];
+    native.active.mockResolvedValue({ ok: true, value: true });
+    native.exec.mockImplementation(async (_env, args) => {
+      if (args[0] === "restart") {
+        return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
+      }
+      if (args[0] === "stop" || args[0] === "start") {
+        events.push(args[0]);
+        if (args[0] === "stop" && rollback === "stop-fails") {
+          return { code: 1, termination: "exit", stdout: "", stderr: "stop timed out" };
+        }
+      }
+      return nativeExit(args[0] === "is-enabled" ? "enabled" : "");
+    });
+
+    await expect(
+      installSystemdService({
+        ...installArgs,
+        beforeRecovery: async () => {
+          events.push("recovery hook");
+        },
+      }),
+    ).rejects.toThrow("candidate failed");
+    expect(events).toEqual(expected);
+  },
+);

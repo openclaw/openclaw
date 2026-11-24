@@ -192,6 +192,7 @@ describe("registered Telegram media", () => {
       throw new Error("Expected Telegram media message");
     }
     const media = await resolveMedia({
+      budget: new AbortController().signal,
       ctx,
       token,
       apiRoot,

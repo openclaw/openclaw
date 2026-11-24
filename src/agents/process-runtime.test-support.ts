@@ -1,5 +1,10 @@
 // Prepare native process probes before their liveness, readiness, and retention deadlines.
 export const agentProcessTestEntrypoints = {
+  inlineAuthFailure: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "auth-profiles/inline-usage.postgres.test-support",
+    distWorkerPath: "agents/auth-profiles/inline-usage.postgres.test-support.js",
+  },
   durableProcesses: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "bash-process-durable.test-support",
@@ -39,6 +44,11 @@ export const agentProcessTestEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "lifecycle-creation.retention.test-support",
     distWorkerPath: "agents/lifecycle-creation.retention.test-support.js",
+  },
+  toolAuthorityRetention: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "harness/tool-authority.runtime.retention.test-support",
+    distWorkerPath: "agents/harness/tool-authority.runtime.retention.test-support.js",
   },
   modelGenerationRetention: {
     currentModuleUrl: import.meta.url,

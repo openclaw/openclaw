@@ -63,6 +63,25 @@ describe("sidebar attention projection", () => {
     expect(overdue?.label).toBe("stalled-id");
   });
 
+  it("acknowledges an auto-disable until another run fails", () => {
+    const autoDisabled = {
+      reason: "consecutive-failures" as const,
+      atMs: 150,
+      consecutiveErrors: 1,
+    };
+    const alerts = (lastRunStatus: "ok" | "error", lastRunAtMs: number) =>
+      cronItems([
+        { ...cronJob("archive", { lastRunStatus, lastRunAtMs, autoDisabled }), enabled: false },
+      ]);
+
+    const [failed] = alerts("error", 100);
+    const [recovered] = alerts("ok", 200);
+    const [failedAgain] = alerts("error", 300);
+
+    expect([failed, recovered].map((alert) => alert?.dismissal?.failedAtMs)).toEqual([150, 150]);
+    expect(failedAgain?.dismissal?.failedAtMs).toBe(300);
+  });
+
   it("labels and links automation alerts, ordered by failure then recency", () => {
     const items = cronItems(
       [
@@ -86,6 +105,26 @@ describe("sidebar attention projection", () => {
     );
     expect(items[0]?.meta?.context).toBe("Writer");
   });
+  it("orders rows by arrival, newest first, with timeless live states on top", () => {
+    const [cron] = cronItems(
+      [cronJob("job", { lastRunStatus: "error", lastRunAtMs: 2_000 })],
+      5_000,
+    );
+    const entries = buildSidebarInboxEntries({
+      approvals: [
+        { id: "old", createdAtMs: 1_000 },
+        { id: "new", createdAtMs: 4_000 },
+      ] as never,
+      attention: [cron!],
+      mentions: [{ ...inboxMention("mention"), createdAt: 3_000 }],
+      scopeUpgrade: { type: "scopeUpgrade" } as never,
+      update: null,
+    });
+    expect(
+      entries.map((entry) => (entry.type === "approval" ? entry.approval.id : entry.type)),
+    ).toEqual(["scopeUpgrade", "new", "mention", "attention", "old"]);
+  });
+
   it("derives every tab count and dismiss control from one entry list", () => {
     const entries = inbox(true, {
       approvals: [
@@ -112,17 +151,15 @@ describe("sidebar attention projection", () => {
       all: 6,
       approvals: 1,
       mentions: 2,
-      automations: 1,
-      system: 2,
+      system: 3,
     });
     expect(entries.filter((entry) => entry.dismissal).map((entry) => entry.type)).toEqual([
       "scopeUpgrade",
       "attention",
     ]);
-    expect(entries.slice(-2).map((entry) => entry.type === "mention" && entry.mention.id)).toEqual([
-      "newer",
-      "older",
-    ]);
+    expect(
+      entries.flatMap((entry) => (entry.type === "mention" ? [entry.mention.id] : [])),
+    ).toEqual(["newer", "older"]);
   });
 
   it("keeps informational updates visible without adding them to attention counts", () => {
@@ -133,7 +170,6 @@ describe("sidebar attention projection", () => {
       all: 0,
       approvals: 0,
       mentions: 0,
-      automations: 0,
       system: 0,
     });
   });

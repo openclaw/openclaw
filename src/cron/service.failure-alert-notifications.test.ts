@@ -34,13 +34,18 @@ const otherConversation = "agent:ops:discord:channel:other";
 const deliveryContext: DeliveryContext = { channel: "telegram", to: "-10042", threadId: 77 };
 
 it.for([
-  ["persistent target", `session:${target}`, otherConversation, "now", true],
-  ["targeted next-heartbeat", "isolated", target, "next-heartbeat", true],
-  ["default owner", "isolated", undefined, "now", false],
-  ["deferred default owner", "isolated", undefined, "next-heartbeat", false],
+  ["persistent target", `session:${target}`, otherConversation, "now", true, false],
+  ["targeted next-heartbeat", "isolated", target, "next-heartbeat", true, false],
+  ["default owner", "isolated", undefined, "now", false, false],
+  ["deferred default owner", "isolated", undefined, "next-heartbeat", false, false],
+  // Owner alerts resolve like the job's own delivery; their fallback never borrows the last route.
+  ["owner-targeted session", "isolated", target, "now", true, true],
 ] as const)(
   "routes a rejected failure alert to %s with scheduling disabled",
-  async ([_name, sessionTarget, creationSessionKey, wakeMode, carriesOrigin], { signal }) => {
+  async (
+    [_name, sessionTarget, creationSessionKey, wakeMode, carriesOrigin, ownerTarget],
+    { signal },
+  ) => {
     await withOpenClawTestState(
       { label: "cron-failure-notification", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -81,6 +86,7 @@ it.for([
           status: "error" as const,
           error: "temporary upstream error",
         });
+        let alertTarget: string | undefined;
         const deps = cronTestDeps({
           storePath: state.statePath("cron", "jobs.json"),
           cronEnabled: false,
@@ -90,6 +96,7 @@ it.for([
           resolveOriginDeliveryContext: async () => deliveryContext,
           enqueueSessionEvent: adapter.enqueueSessionEvent,
           sendCronFailureAlert: async (params) => {
+            alertTarget = params.target;
             await params.onDeliverySettled({
               delivered: false,
               status: "not-delivered",
@@ -109,6 +116,7 @@ it.for([
             sessionTarget,
             sessionKey: creationSessionKey,
             wakeMode,
+            ...(ownerTarget ? { delivery: { mode: "announce", target: "owner" } } : {}),
           });
 
           await cron.run(job.id, "force");
@@ -125,9 +133,11 @@ it.for([
             sessionKey: expectedSessionKey,
             trigger: "event",
           });
-          expect(turn.prompt).toContain('Automation "Important report" failed 1 times');
-          expect(turn.messageTo).toBe(carriesOrigin ? deliveryContext.to : undefined);
-          expect(turn.messageThreadId).toBe(carriesOrigin ? deliveryContext.threadId : undefined);
+          expect(turn.prompt).toContain('Automation "Important report" failed');
+          const fallbackOrigin = carriesOrigin && !ownerTarget;
+          expect(alertTarget).toBe(ownerTarget ? "owner" : undefined);
+          expect(turn.messageTo).toBe(fallbackOrigin ? deliveryContext.to : undefined);
+          expect(turn.messageThreadId).toBe(fallbackOrigin ? deliveryContext.threadId : undefined);
           expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
           expect(peekSystemEventEntries(expectedSessionKey)).toEqual([]);
         } finally {

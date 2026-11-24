@@ -85,7 +85,7 @@ suite.define(() => {
         await gateway.deferNext(rpc.next, { answer: { stepId: "scope" } });
         await button(
           page.locator('[data-auth-choice="provider-device-code"]'),
-          "Set up & verify",
+          "Provider account",
         ).click();
         const start = await gateway.waitForRequest(rpc.auth);
         expect(start.params).toMatchObject({ authChoice: "provider-device-code" });
@@ -119,7 +119,7 @@ suite.define(() => {
 
         const detectCountBeforeCompletion = (await gateway.getRequests(rpc.detect)).length;
         await gateway.resolveDeferred(rpc.next);
-        await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+        await page.getByRole("heading", { name: "Model verified" }).waitFor();
         expect(await gateway.getRequests(rpc.detect)).toHaveLength(detectCountBeforeCompletion);
         await expectText(page.locator(".model-setup-success"), "provider/verified-model");
       },
@@ -160,7 +160,7 @@ suite.define(() => {
         });
 
         await openModelSetup(page, suite.server.baseUrl);
-        await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
+        await page.locator("[data-prepare-choice]").first().waitFor();
         const colors = await page
           .locator("[data-prepare-choice] [data-provider-icon]")
           .evaluateAll((icons) => icons.map((icon) => getComputedStyle(icon).color));
@@ -198,15 +198,17 @@ suite.define(() => {
           1,
         );
 
-        const providerMenuWidth = () =>
-          providerPicker
-            .locator('[role="menu"]')
-            .evaluate((menu) => Math.round(menu.getBoundingClientRect().width));
-        await expect.poll(providerMenuWidth).toBe(620);
+        const menuEdgeOffset = () =>
+          providerPicker.evaluate((picker) => {
+            const field = picker.getBoundingClientRect();
+            const menu = picker.querySelector('[role="menu"]')!.getBoundingClientRect();
+            return Math.max(Math.abs(menu.left - field.left), Math.abs(menu.right - field.right));
+          });
+        await expect.poll(menuEdgeOffset).toBeLessThanOrEqual(1);
 
         await page.setViewportSize({ height: 844, width: 390 });
         await providerPicker.scrollIntoViewIfNeeded();
-        await expect.poll(providerMenuWidth).toBe(358);
+        await expect.poll(menuEdgeOffset).toBeLessThanOrEqual(1);
 
         await page.setViewportSize({ height: 1000, width: 1440 });
         await page.keyboard.press("Escape");
@@ -255,7 +257,7 @@ suite.define(() => {
               requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }),
         );
-        await page.getByRole("button", { name: "Connect & use for this agent" }).click();
+        await page.getByRole("button", { name: "Add account for this agent" }).click();
         const activate = await gateway.waitForRequest(rpc.activate);
         expect(activate.params).toEqual({
           sessionId: expect.any(String),
@@ -264,7 +266,7 @@ suite.define(() => {
           authChoice: "qwen-cn",
           apiKey: "qwen-test-secret",
         });
-        await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+        await page.getByRole("heading", { name: "Model verified" }).waitFor();
         await page.getByText("qwen/qwen3-coder-plus", { exact: true }).waitFor();
 
         await page.setViewportSize({ height: 844, width: 390 });
@@ -279,8 +281,7 @@ suite.define(() => {
         await expectText(page.locator(".model-setup-success"), "Verified in", true);
 
         const detectCountBeforeDismiss = (await gateway.getRequests(rpc.detect)).length;
-        await page.getByRole("button", { name: "Return to Models" }).click();
-        await page.locator("[data-models-connect]").click();
+        await page.getByRole("button", { name: "Back to Models" }).click();
         await page.locator("[data-models-login-discover]").click();
         await pollRequestCount(gateway, rpc.detect).toBe(detectCountBeforeDismiss + 1);
         await openProviderMenu();

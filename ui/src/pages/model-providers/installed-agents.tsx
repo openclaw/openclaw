@@ -17,7 +17,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
@@ -33,6 +34,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import {
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
@@ -272,10 +274,13 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     notify();
   }
 
+  /** An installed agent shows this provider on its own row, with its own status. */
+  function owns(providerId: string): boolean {
+    return Boolean(projection.read().agents?.some((agent) => agent.runtimeId === providerId));
+  }
+
   function filterProviders(cards: ModelProviderCard[]): ModelProviderCard[] {
-    return cards.filter(
-      (card) => !projection.read().agents?.some((agent) => agent.runtimeId === card.id),
-    );
+    return cards.filter((card) => !owns(card.id));
   }
 
   function available(): boolean {
@@ -438,6 +443,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   function renderAgent(
     props: { agent: InstalledAgent },
     getCards: () => readonly ModelProviderCard[],
+    catalogDiscovering: () => boolean,
   ) {
     const view = createMemo(() => {
       const snapshot = projection.read();
@@ -463,13 +469,14 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         status = { kind: "danger", labelKey: "modelProviders.installedAgents.status.signIn" };
         hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
       } else if (card?.catalogStatus === "unavailable") {
-        status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
+        // An app on by default that lists nothing is just not set up yet; warn only after a choice.
+        if (typeof configuredEnabled === "boolean") {
+          status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
+        }
         hint = t("modelProviders.installedAgents.discoveryHint", { name: agent.name });
-      } else if (card?.checkingModels) {
-        status = { kind: "muted", labelKey: "modelProviders.installedAgents.status.discovering" };
       } else if (card && card.availableModelCount > 0) {
         status = { kind: "ok", labelKey: "modelProviders.installedAgents.status.modelsAvailable" };
-      } else {
+      } else if (!card?.checkingModels && !catalogDiscovering()) {
         hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
       }
       return {
@@ -525,7 +532,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 </span>
               }
             >
-              <ProviderBrandIcon provider={view().agent.id} class="model-providers__icon" />
+              <ModelProviderIcon provider={view().agent.id} class="model-providers__icon" />
             </Show>
           }
           title={view().agent.name}
@@ -552,20 +559,31 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         />
         <Show when={view().message}>
           {(message) => (
-            <div
-              class={["callout", message().kind, "model-providers__installed-agent-message"]}
-              role={message().kind === "error" ? "alert" : "status"}
+            <InlineAlert
+              tone={
+                message().kind === "error"
+                  ? "danger"
+                  : message().kind === "warning"
+                    ? "warning"
+                    : "success"
+              }
+              class="model-providers__installed-agent-message"
             >
               {message().text}
-            </div>
+            </InlineAlert>
           )}
         </Show>
       </div>
     );
   }
 
-  function render(getCards: () => readonly ModelProviderCard[], retryDiscovery: () => void) {
-    const AgentRow = (props: { agent: InstalledAgent }) => renderAgent(props, getCards);
+  function render(
+    getCards: () => readonly ModelProviderCard[],
+    retryDiscovery: () => void,
+    catalogDiscovering: () => boolean,
+  ) {
+    const AgentRow = (props: { agent: InstalledAgent }) =>
+      renderAgent(props, getCards, catalogDiscovering);
     const InstalledAgents = () => {
       const view = createMemo(() => ({
         ...projection.read(),
@@ -592,20 +610,16 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               </>
             }
             actions={
-              <openclaw-tooltip prop:content={label()}>
-                <button
-                  type="button"
-                  class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-                  aria-label={label()}
-                  disabled={props.checking || view().pending.size > 0}
-                  onClick={() => {
-                    void load();
-                    retryDiscovery();
-                  }}
-                >
-                  <Icon name="refresh" />
-                </button>
-              </openclaw-tooltip>
+              <RefreshButton
+                class="model-providers__refresh-button"
+                label={label()}
+                busy={props.checking}
+                disabled={view().pending.size > 0}
+                onClick={() => {
+                  void load();
+                  retryDiscovery();
+                }}
+              />
             }
           >
             {props.children}
@@ -620,9 +634,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         const detected = createMemo(() =>
           (displayedInventory().agents ?? []).filter((agent) => agent.installation !== "missing"),
         );
-        const missing = createMemo(() =>
-          (displayedInventory().agents ?? []).filter((agent) => agent.installation === "missing"),
-        );
+        const missingNames = () =>
+          (displayedInventory().agents ?? [])
+            .flatMap((agent) => (agent.installation === "missing" ? [agent.name] : []))
+            .join(", ");
         const outcome = createMemo(() => {
           const failure = displayedInventory().failure;
           if (failure) {
@@ -653,26 +668,22 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               {outcome()}
             </Errored>
             <Show when={view().agents !== null}>
+              {/* Only detected apps get rows; the supported list helps only when none were found. */}
               <For
                 each={detected()}
                 keyed={(agent) => agent.id}
                 fallback={
-                  <Show when={missing().length === 0}>
-                    <SettingsEmpty message={t("modelProviders.installedAgents.empty")} />
-                  </Show>
+                  <SettingsEmpty
+                    message={
+                      missingNames()
+                        ? t("modelProviders.installedAgents.notDetected", { names: missingNames() })
+                        : t("modelProviders.installedAgents.empty")
+                    }
+                  />
                 }
               >
                 {(agent) => <AgentRow agent={agent()} />}
               </For>
-              <Show when={missing().length > 0}>
-                <p class="model-providers__agents-missing" data-installed-agents-missing>
-                  {t("modelProviders.installedAgents.notDetected", {
-                    names: missing()
-                      .map((agent) => agent.name)
-                      .join(", "),
-                  })}
-                </p>
-              </Show>
             </Show>
           </InventorySection>
         );
@@ -716,6 +727,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     synchronize,
     subscribe,
     reset,
+    owns,
     filterProviders,
     available,
     render,

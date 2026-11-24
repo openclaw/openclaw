@@ -42,6 +42,7 @@ export async function editChannelDiscord(
     locked: payload.locked,
     auto_archive_duration: payload.autoArchiveDuration,
     available_tags: payload.availableTags,
+    applied_tags: payload.appliedTags,
   });
   // SAFETY: Discord's Modify Channel route returns the updated API channel.
   return (await rest.patch(Routes.channel(payload.channelId), { body })) as APIChannel;

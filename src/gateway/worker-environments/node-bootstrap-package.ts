@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { valid } from "semver";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { walkDirectory } from "../../infra/fs-safe.js";
 import type { DistributionPackageManifest } from "../../infra/package-plugin-composition.js";
 import { DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS } from "../../shared/worker-bundle-archive.js";
@@ -107,13 +108,24 @@ export async function resolvePlugins(options: NodeBootstrapArtifactOptions, pack
       const bundledRoot = path.join(packageRoot, "dist", "extensions", id);
       const builtRoot = requestedRoot === sourceRoot ? bundledRoot : requestedRoot;
       const packageJson = await readPackageManifest(builtRoot);
-      if (requestedRoot === sourceRoot) {
-        const sourcePackage = await readPackageManifest(sourceRoot);
-        if (METADATA_KEYS.some((key) => !isDeepStrictEqual(packageJson[key], sourcePackage[key]))) {
-          throw new Error(
-            `Built plugin ${id} does not match source metadata; rebuild and restart the Gateway`,
-          );
-        }
+      // Built-entry qualification retains the source installation as dependency owner.
+      // Published packages have no source tree and resolve from their installed built root.
+      const sourcePackage =
+        builtRoot === bundledRoot
+          ? await readPackageManifest(sourceRoot).catch((error: unknown) => {
+              if (requestedRoot === bundledRoot && hasErrnoCode(error, "ENOENT")) {
+                return undefined;
+              }
+              throw error;
+            })
+          : undefined;
+      if (
+        sourcePackage &&
+        METADATA_KEYS.some((key) => !isDeepStrictEqual(packageJson[key], sourcePackage[key]))
+      ) {
+        throw new Error(
+          `Built plugin ${id} does not match source metadata; rebuild and restart the Gateway`,
+        );
       }
       const manifest = JSON.parse(
         await fs.readFile(path.join(builtRoot, "openclaw.plugin.json"), "utf8"),
@@ -132,7 +144,7 @@ export async function resolvePlugins(options: NodeBootstrapArtifactOptions, pack
       return {
         id,
         root: builtRoot,
-        installationRoot: requestedRoot,
+        installationRoot: sourcePackage ? sourceRoot : requestedRoot,
         packageJson,
         bundled: builtRoot === bundledRoot,
       };

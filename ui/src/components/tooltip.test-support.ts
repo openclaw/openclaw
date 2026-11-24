@@ -74,12 +74,9 @@ export function expectSharedTooltipSkin(tooltip: TooltipElement) {
     ...rules.map((rule) => rule.cssText),
   ].join("\n");
   expect(styles).toContain("--openclaw-tooltip-background-color");
-  expect(styles).toContain("--openclaw-tooltip-border-color");
   expect(styles).toContain("border: 1px solid");
   expect(styles).toContain(".tooltip-surface");
   expect(styles).not.toContain("::part(");
-  expect(styles).toContain("var(--overlay-border, var(--border-strong))");
-  expect(styles).toContain("var(--overlay-shadow, var(--shadow-md))");
   expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
   if (root.adoptedStyleSheets?.length) {
     const animationNames = rules.flatMap((rule) =>

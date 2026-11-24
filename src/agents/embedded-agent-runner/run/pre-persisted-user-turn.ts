@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPendingBackgroundResultMessage } from "../../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import {
   prepareForeignLiveSessionPendingInputEntries,
@@ -27,15 +28,13 @@ import {
   isSessionWorkStartInvalidatedError,
   SessionWorkStartChangedError,
 } from "../../../config/sessions/work-start-error.js";
-import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "../../../sessions/user-turn-transcript.types.js";
+import { readOwnNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { MODEL_FALLBACK_NOTICE_KIND } from "../../../shared/model-fallback-notice.js";
 import {
   isOpenClawDeliveryMirrorAssistantMessage,
-  SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+  PLUGIN_NOTICE_KIND,
 } from "../../../shared/transcript-only-openclaw-assistant.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
@@ -73,14 +72,15 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   const message = entry.message;
   if (message.role === "custom") {
-    return readNestedToolActivity(message)?.details.runId === runId;
+    return readOwnNestedToolActivity(message)?.details.runId === runId;
   }
   const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
     ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
     : undefined;
   // Operational notices do not complete the foreground user turn.
   if (
-    delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND ||
+    isPendingBackgroundResultMessage(message) ||
+    delivery?.kind === PLUGIN_NOTICE_KIND ||
     delivery?.kind === MODEL_FALLBACK_NOTICE_KIND
   ) {
     return true;
@@ -331,72 +331,103 @@ export async function preparePersistedCurrentUserTurn(params: {
       );
     }
   };
-  const readCurrentTurn = (
+  const readCurrentTurn = async (
     signal: AbortSignal | undefined,
     consume: (prepared: CurrentTurnReplayWitness | undefined) => void,
-  ) =>
-    withSource(signal, async (target, assertSource) => {
-      const matchesUser = (entry: SessionEntry | undefined) =>
-        entry?.type === "message" &&
-        entry.message.role === "user" &&
-        isDeepStrictEqual(entry.message, message);
-      const select = () =>
-        sessionManager[sessionManagerPrepareCurrentTurnReplay](
-          (entry) => isInterruptedTurnEntry(entry, runId),
-          matchesUser,
-          signal,
-        );
-      let witness: CurrentTurnReplayWitness | undefined;
-      const accept = (current: CurrentTurnReplayWitness | undefined) => {
-        witness = current;
-        consume(current);
-      };
-      if (getOwnedSessionTranscriptReader(target)) {
-        const allowInitial = Boolean(initialWriter) && !initialWriter?.committedFence;
-        const hint = sessionManager.resolveCurrentTurnEntryId((entry) =>
-          isInterruptedTurnEntry(entry, runId),
-        );
-        let consumed = false;
-        await sessionManager[sessionManagerReloadTranscriptCohort](
-          {
-            sessionKey: scope.sessionKey,
-            entryIds: hint ? [hint] : [],
-            replayValidation: {
-              expectedLifecycleRevision: scope.expectedLifecycleRevision,
-              expectedWriterRunId: scope.expectedWriterRunId,
-              allowInitial,
-              admission: resolveSessionTranscriptReadFence(target),
+    initial?: Pick<TranscriptEntryAnchor, "entryId" | "generation">,
+  ) => {
+    let selection: { entryId: string; generation: string | null } | undefined = initial;
+    let consumed = false;
+    const read = () =>
+      withSource(signal, async (target, assertSource) => {
+        const matchesUser = (entry: SessionEntry | undefined) =>
+          entry?.type === "message" &&
+          entry.message.role === "user" &&
+          isDeepStrictEqual(entry.message, message);
+        const select = () =>
+          sessionManager[sessionManagerPrepareCurrentTurnReplay](
+            (entry) => isInterruptedTurnEntry(entry, runId),
+            matchesUser,
+            signal,
+          );
+        let witness: CurrentTurnReplayWitness | undefined;
+        const accept = (current: CurrentTurnReplayWitness | undefined) => {
+          if (
+            selection &&
+            (!current ||
+              current.anchor.entryId !== selection.entryId ||
+              current.anchor.generation !== selection.generation)
+          ) {
+            throw new SessionWorkStartChangedError(
+              "Persisted user turn changed before replay admission. Retry the turn.",
+            );
+          }
+          witness = current;
+          consumed = true;
+          consume(current);
+        };
+        if (getOwnedSessionTranscriptReader(target)) {
+          const allowInitial = Boolean(initialWriter) && !initialWriter?.committedFence;
+          const hint = sessionManager.resolveCurrentTurnEntryId((entry) =>
+            isInterruptedTurnEntry(entry, runId),
+          );
+          await sessionManager[sessionManagerReloadTranscriptCohort](
+            {
+              sessionKey: scope.sessionKey,
+              entryIds: hint ? [hint] : [],
+              replayValidation: {
+                expectedLifecycleRevision: scope.expectedLifecycleRevision,
+                expectedWriterRunId: scope.expectedWriterRunId,
+                allowInitial,
+                admission: resolveSessionTranscriptReadFence(target),
+              },
             },
-          },
-          (prepared, assertView) => {
-            assertSource();
-            assertCurrent();
-            const selected = selectCurrentUserTurnFromCohort({
-              sessionManager,
-              message,
-              runId,
-              prepared,
-              assertView,
-              allowInitial,
-              initialWriter,
-            });
-            if (selected) {
-              consumed = true;
-              accept(selected.current);
-            }
-          },
-          signal,
-        );
-        if (consumed) {
-          return witness;
+            (prepared, assertView) => {
+              assertSource();
+              assertCurrent();
+              const selected = selectCurrentUserTurnFromCohort({
+                sessionManager,
+                message,
+                runId,
+                prepared,
+                assertView,
+                allowInitial,
+                initialWriter,
+              });
+              if (selected) {
+                accept(selected.current);
+              }
+            },
+            signal,
+          );
+          if (consumed) {
+            return witness;
+          }
         }
+        await sessionManager.reloadPersistedTranscriptAsync(signal);
+        assertSource();
+        assertCurrent();
+        const prepared = await select();
+        if (prepared) {
+          selection ??= { entryId: prepared.entryId, generation: prepared.version.generation };
+        }
+        await validate(target, assertSource, prepared, signal, accept);
+        return witness;
+      });
+    try {
+      return await read();
+    } catch (error) {
+      if (
+        consumed ||
+        (!isSessionWorkStartInvalidatedError(error) &&
+          !(error instanceof SessionTranscriptReadFenceError))
+      ) {
+        throw error;
       }
-      await sessionManager.reloadPersistedTranscriptAsync(signal);
-      assertSource();
-      assertCurrent();
-      await validate(target, assertSource, await select(), signal, accept);
-      return witness;
-    });
+      // Refresh once before consumption, retaining the original user and live authority.
+      return await read();
+    }
+  };
   const initial = params.initial
     ? params.initial.anchor
     : (
@@ -461,42 +492,19 @@ export async function preparePersistedCurrentUserTurn(params: {
         ? AbortSignal.any([signal, params.signal])
         : signal;
     replaySignal?.throwIfAborted();
-    const accept = (prepared: CurrentTurnReplayWitness | undefined, onAdmitted?: () => void) => {
-      if (
-        !prepared ||
-        prepared.anchor.entryId !== initial.entryId ||
-        prepared.anchor.generation !== initial.generation
-      ) {
-        throw new SessionWorkStartChangedError(
-          "Persisted user turn changed before replay admission. Retry the turn.",
-        );
-      }
-      if (onAdmitted) {
-        if (!pending) {
-          throw new Error("Persisted user turn replay was already consumed");
-        }
-        pending = false;
-        onAdmitted();
-      }
-    };
     assertCurrent();
     return async (onAdmitted) => {
-      const consume = () =>
-        readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
-      try {
-        await consume();
-      } catch (error) {
-        if (
-          !pending ||
-          (!isSessionWorkStartInvalidatedError(error) &&
-            !(error instanceof SessionTranscriptReadFenceError))
-        ) {
-          throw error;
-        }
-        // An append may invalidate selection before admission. Refresh once;
-        // the original user anchor, generation, and live authority must still match.
-        await consume();
-      }
+      await readCurrentTurn(
+        replaySignal,
+        () => {
+          if (!pending) {
+            throw new Error("Persisted user turn replay was already consumed");
+          }
+          pending = false;
+          onAdmitted();
+        },
+        initial,
+      );
     };
   };
 }
@@ -569,7 +577,7 @@ export async function prepareForeignPendingUserTurns(
   | ((
       activeSession: ForeignPendingUserTurnSession,
       currentUserIdempotencyKey: string | undefined,
-    ) => ForeignPendingUserTurns | undefined)
+    ) => Promise<ForeignPendingUserTurns | undefined>)
   | undefined
 > {
   const target = sessionManager.getSessionTarget();
@@ -590,10 +598,12 @@ export async function prepareForeignPendingUserTurns(
   const entries = new Map<string, string>();
   const adopted = new Set<string>();
   let observing = false;
-  return (activeSession, currentUserIdempotencyKey) => {
+  return async (activeSession, currentUserIdempotencyKey) => {
+    assertPrepared();
+    const liveEntries = await readEntries();
     assertPrepared();
     // Preserve the first sample through transcript reload even if a source finishes meanwhile.
-    for (const [id, key] of readEntries()) {
+    for (const [id, key] of liveEntries) {
       entries.set(id, key);
     }
     if (!entries.size) {

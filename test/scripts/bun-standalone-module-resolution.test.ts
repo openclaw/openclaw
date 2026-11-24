@@ -17,13 +17,13 @@ import {
 import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
 import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
 import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
+import { runStandaloneBootstrap } from "../helpers/standalone-bootstrap.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const parse = createStandaloneSourceParser();
 const temporary: string[] = [];
 afterEach(() => {
-  for (const directory of temporary.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  cleanupTempDirs(temporary);
 });
 
 function fixture() {
@@ -125,7 +125,7 @@ console.log(JSON.stringify({ before, answer, file, alias, loaded }));`,
       answer: 42,
       file: "ordinary-file",
       alias: "embedded-alias",
-      loaded: ["node:vm"],
+      loaded: ["node:vm", override],
     });
   });
 
@@ -207,7 +207,7 @@ module.exports = value => value + " transformed";`;
           ),
         context,
       );
-      vm.runInContext(requireAdapter.bootstrap, context);
+      runStandaloneBootstrap(requireAdapter.bootstrap, context);
       vm.runInContext(
         rewritten.replace(/^import[^\n]+\n/gm, "").replace("export function", "function") +
           "\nglobalThis.loadFactory = loadFactory;",

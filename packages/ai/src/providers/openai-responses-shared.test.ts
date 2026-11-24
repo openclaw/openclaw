@@ -70,11 +70,11 @@ const gpt56SolModel = {
 } satisfies Model<"openai-responses">;
 
 const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
-const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const reasoningReplayIdentity = { sessionId: "session-a" };
 
 type LifecycleParams = Parameters<typeof runResponsesStreamLifecycle>[0];
 type RequestOptions = Parameters<
-  ReturnType<LifecycleParams["createClient"]>["responses"]["create"]
+  Awaited<ReturnType<LifecycleParams["createClient"]>>["responses"]["create"]
 >[1];
 
 function startLifecycle(
@@ -282,8 +282,9 @@ describe("convertResponsesMessages", () => {
     ["provider", convertResponsesMessages],
     ["transport", convertTransportResponsesMessages],
   ] as const)("preserves frozen %s bytes, identities and replay fences", (_style, convert) => {
+    const inspect = vi.fn(isDeeplyFrozenPlainData);
     const host = createAiTransportHost({
-      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData: inspect },
     });
     runWithAiTransportHost(host, () => {
       const model: Model = { ...nativeOpenAIModel, input: ["text", "image"] };
@@ -311,9 +312,9 @@ describe("convertResponsesMessages", () => {
       };
       const golden = `[${[
         '{"type":"message","role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
-        '{"id":"rs_prior","type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
-        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","id":"msg_prior","phase":"commentary"}',
-        String.raw`{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
+        '{"type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
+        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","phase":"commentary"}',
+        String.raw`{"type":"function_call","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
         '{"type":"function_call_output","call_id":"call_read","output":[{"type":"input_text","text":"result"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
       ].join(",")}]`;
       const build = (target = model, options = reasoningReplayIdentity) =>
@@ -322,16 +323,12 @@ describe("convertResponsesMessages", () => {
       expect(JSON.stringify(first)).toBe(golden);
       for (const [target, options] of [
         [model, { ...reasoningReplayIdentity, sessionId: "other" }],
-        [model, { ...reasoningReplayIdentity, authProfileId: "other" }],
-        [{ ...model, id: "other-model" }, reasoningReplayIdentity],
         [{ ...model, baseUrl: "https://other.invalid/v1" }, reasoningReplayIdentity],
       ] as const) {
         expect(JSON.stringify(build(target, options))).not.toContain("ciphertext");
         const again = build();
         expect(JSON.stringify(again)).toBe(golden);
-        for (const index of [1, 2, 3]) {
-          expect(again[index]).toBe(first[index]);
-        }
+        first.slice(1, 4).forEach((item, index) => expect(again[index + 1]).toBe(item));
       }
       const idless = convert(model, context, testAllowedToolCallProviders, {
         ...reasoningReplayIdentity,
@@ -341,6 +338,7 @@ describe("convertResponsesMessages", () => {
         golden.replace(/"id":"(?:rs_prior|msg_prior|fc_read)",/g, ""),
       );
       expect(first.slice(1, 4).every(isDeeplyFrozenPlainData)).toBe(true);
+      expect(inspect.mock.calls.filter(([value]) => value === context.messages[1])).toHaveLength(1);
     });
   });
 
@@ -474,10 +472,9 @@ describe("convertResponsesMessages", () => {
       const model = { ...nativeOpenAIModel, api };
       const summary =
         api === "openai-chatgpt-responses" ? [{ type: "summary_text", text: "safe summary" }] : [];
-      const content =
-        api === "openai-chatgpt-responses"
-          ? [{ type: "reasoning_text", text: "safe content" }]
-          : undefined;
+      const content = summary.length
+        ? [{ type: "reasoning_text", text: "safe content" }]
+        : undefined;
       const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
       const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
         ...reasoningReplayIdentity,
@@ -518,7 +515,7 @@ describe("convertResponsesMessages", () => {
           expect(item).toEqual(
             preservesCiphertext
               ? {
-                  ...(replayIds ? { id: "rs_route_fenced" } : {}),
+                  ...(replayIds && api !== "openai-responses" ? { id: "rs_route_fenced" } : {}),
                   type: "reasoning",
                   summary,
                   ...(content ? { content } : {}),

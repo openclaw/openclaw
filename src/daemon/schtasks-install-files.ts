@@ -6,7 +6,6 @@ import {
   readScheduledTaskDefinition,
   restoreScheduledTaskDefinition,
   resumeScheduledTaskAutoStartAfterUpdate,
-  setScheduledTaskXmlEnabled,
   suspendScheduledTaskAutoStartForUpdate,
 } from "./schtasks-control.js";
 import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js";
@@ -22,6 +21,11 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import {
+  sameScheduledTaskRegistration,
+  scheduledTaskXmlPolicy,
+  setScheduledTaskXmlEnabled,
+} from "./schtasks-xml-enabled.js";
 import {
   matchesServiceFilePublication,
   publishServiceFile,
@@ -94,12 +98,14 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   let stoppedProcess = false;
   // Disabling is our only allowed registration change during settlement.
   const withoutEnabled = (xml: string | null) =>
-    xml === null ? null : setScheduledTaskXmlEnabled(xml, false);
+    xml === null ? null : scheduledTaskXmlPolicy(xml);
+  const same = (left: string | null, right: string | null) =>
+    left === null || right === null ? left === right : sameScheduledTaskRegistration(left, right);
   const assertReceipt = async (disabled = false) => {
     const current = unsettled ? null : await readXml();
     if (
       unsettled ||
-      (disabled ? withoutEnabled(current) !== withoutEnabled(receipt) : current !== receipt)
+      (disabled ? withoutEnabled(current) !== withoutEnabled(receipt) : !same(current, receipt))
     ) {
       throw new Error(`Scheduled Task ${taskName} registration ownership could not be verified.`);
     }
@@ -123,7 +129,15 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
       }
       unsettled = false;
     },
-    restore: async (files: ScheduledTaskFileRecovery, activated: boolean) => {
+    /**
+     * `beforeRestart` runs only once registration ownership is verified and the replacement task
+     * is stopped and its processes settled, before any file, definition or launch is restored.
+     */
+    restore: async (
+      files: ScheduledTaskFileRecovery,
+      activated: boolean,
+      beforeRestart?: () => Promise<void>,
+    ) => {
       await files.assertPublished();
       await assertReceipt();
       if (changed || activated) {
@@ -157,6 +171,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           }
         }
         await assertReceipt(true);
+        await beforeRestart?.();
       }
       const restoredFiles = await files.restore();
       if (!changed && !activated) {

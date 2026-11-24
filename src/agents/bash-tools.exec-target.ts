@@ -1,3 +1,4 @@
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { requireValidExecTarget, type ExecTarget } from "../infra/exec-approvals-core.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -132,4 +133,22 @@ export function resolveExecHost(
     sandboxAvailable: Boolean(defaults?.sandbox),
     sandboxRequired: defaults?.sandboxRequired,
   }).effectiveHost;
+}
+
+/** Foreground cancellation joins the local supervisor; remote/detached work has another owner. */
+export function canInterruptExec(args: unknown, defaults?: ExecToolDefaults): boolean {
+  try {
+    const params = asNonArrayRecord(args);
+    if (params.background === true || params.durable) {
+      return false;
+    }
+    const host = resolveExecHost(params, defaults);
+    return (
+      host === "gateway" ||
+      (host === "sandbox" && Boolean(defaults?.sandbox?.prepareProcessCleanup))
+    );
+  } catch {
+    // The execution owner reports target-policy refusals through the normal tool result.
+    return false;
+  }
 }

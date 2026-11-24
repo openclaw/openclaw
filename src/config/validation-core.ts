@@ -32,10 +32,7 @@ import { attachAgentListProjection } from "./agent-list-projection.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { findLegacyConfigRuleIssues } from "./legacy.shared.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import {
-  createModelPolicyRefValidator,
-  parseOperatorModelPolicyWildcardRef,
-} from "./model-policy-ref.js";
+import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
@@ -257,24 +254,20 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     refs: readonly string[] | undefined,
     configPath: string,
     agentModels?: typeof defaultModels,
-    allowModelPrefix = false,
   ) => {
     if (!refs?.length) {
       return;
     }
     const isValidRef = createModelPolicyRefValidator(defaultModels, agentModels);
     for (const [index, raw] of refs.entries()) {
-      if (isValidRef(raw) || (allowModelPrefix && parseOperatorModelPolicyWildcardRef(raw))) {
+      if (isValidRef(raw)) {
         continue;
       }
       issues.push({
         path: `${configPath}.${index}`,
         message:
           `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
-          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".' +
-          (allowModelPrefix
-            ? ' Role policies also accept a model-name prefix such as "provider/family-*".'
-            : ""),
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*", "provider/namespace/*" or "provider/family-*".',
       });
     }
   };
@@ -305,8 +298,8 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
       continue;
     }
     const models = listAgentEntries(config).find((agent) => agent.id === sourceAgent)?.models;
-    validateRefs(policy.allow, `${pathPrefix}.allow`, models, true);
-    validateRefs(policy.deny, `${pathPrefix}.deny`, models, true);
+    validateRefs(policy.allow, `${pathPrefix}.allow`, models);
+    validateRefs(policy.deny, `${pathPrefix}.deny`, models);
   }
   return issues;
 }
@@ -385,7 +378,7 @@ function collectSandboxContainerEnvIssues(
 }
 
 /**
- * Validates config without applying runtime defaults.
+ * Validates config as loaded (with the implicit `main` roster) without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
  */
 export function validateConfigObjectRaw(
@@ -400,7 +393,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    raw,
+    applyImplicitAgentRosterDefaults(raw),
     opts?.preservedLegacyRootKeys,
   );
   const rosterIssues = findLegacyConfigRuleIssues(normalizedRaw, LEGACY_AGENT_ROSTER_RULES);
@@ -483,7 +476,7 @@ export function validateConfigObject(
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(raw), opts);
+  const result = validateConfigObjectRaw(raw, opts);
   if (!result.ok) {
     return result;
   }

@@ -48,7 +48,7 @@ const store = {
 } as PluginStateKeyedStore<VisitorGrant>;
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 const service = new VisitorAccessService(
-  config,
+  () => config,
   store,
   new VisitorPolicyClient(config, unexpected),
   logger,

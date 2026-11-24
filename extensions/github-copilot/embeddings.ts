@@ -1,5 +1,7 @@
+import type { EmbeddingProviderCallOptions } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
+  extractEmbeddingUsage,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
@@ -215,7 +217,10 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
 
     const fetchImpl = fetch;
     const providerHeaders = { ...headers, Authorization: `Bearer ${runtimeAuth.apiKey}` };
-    const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+    const embedMany = async (
+      input: string[],
+      callOptions?: EmbeddingProviderCallOptions,
+    ): Promise<number[][]> => {
       if (input.length === 0) {
         return [];
       }
@@ -225,7 +230,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         url,
         fetchImpl,
         ssrfPolicy,
-        signal,
+        signal: callOptions?.signal,
         init: {
           method: "POST",
           headers: providerHeaders,
@@ -242,7 +247,9 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
           const payload = await readProviderJsonResponse(response, "github-copilot.embeddings", {
             maxBytes: COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES,
           });
-          return parseGitHubCopilotEmbeddingPayload(payload, input.length);
+          const vectors = parseGitHubCopilotEmbeddingPayload(payload, input.length);
+          callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+          return vectors;
         },
       });
     };
@@ -252,7 +259,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       embed: async (input, callOptions) => {
         const [vector] = await embedMany(
           [typeof input === "string" ? input : input.text],
-          callOptions?.signal,
+          callOptions,
         );
         return vector ?? [];
       },
@@ -260,10 +267,10 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
         if (callOptions?.inputType === "query") {
           return await Promise.all(
-            texts.map(async (text) => (await embedMany([text], callOptions.signal))[0] ?? []),
+            texts.map(async (text) => (await embedMany([text], callOptions))[0] ?? []),
           );
         }
-        return await embedMany(texts, callOptions?.signal);
+        return await embedMany(texts, callOptions);
       },
     };
 

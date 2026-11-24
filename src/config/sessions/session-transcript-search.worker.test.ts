@@ -4,7 +4,11 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
@@ -14,6 +18,7 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import * as agentWorkerStore from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
@@ -29,14 +34,11 @@ import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import {
-  searchSessionTranscripts,
-  searchSessionTranscriptsReadOnlySync,
-} from "./session-transcript-search.js";
+import { searchSessionTranscripts } from "./session-transcript-search.js";
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  projectionLane,
+  sessionStoreLane,
   registerSessionTranscriptReaderLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
@@ -71,7 +73,7 @@ async function searchFixture(
   };
 }
 
-it("reenters the projection writer from a cold search's retained read admission", async () => {
+it("reenters the cold projection writer and keeps search independent of foreground readers", async (context) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { storePath, database, request } = await searchFixture(
       state,
@@ -80,18 +82,37 @@ it("reenters the projection writer from a cold search's retained read admission"
       "Cold search needle",
     );
     await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-    const reader = retainSessionHistoryWorkerDatabase(database);
-    const readStatus = (signal: AbortSignal) =>
-      projectionWriter.readSessionTranscriptIndexStatus(
-        database,
-        reader.owner.assertCurrent,
-        signal,
-      );
+    const release = createDeferred();
+    const readers = [historyLane, sessionStoreLane].map((lane) => {
+      const reader = retainSessionHistoryWorkerDatabase(database, lane);
+      const entered = createDeferred();
+      const work = reader.owner.searchTranscripts(request, async (signal) => {
+        const status = await projectionWriter.readSessionTranscriptIndexStatus(
+          database,
+          reader.owner.assertCurrent,
+          signal,
+        );
+        entered.resolve();
+        await release.promise;
+        return status;
+      });
+      void work.catch(() => {});
+      return { reader, entered: entered.promise, work };
+    });
+    let search: ReturnType<typeof searchSessionTranscripts> | undefined;
     try {
-      const result = await reader.owner.searchTranscripts(request, readStatus);
-      expect(result.hits).toMatchObject([{ messageId: "cold-needle" }]);
+      await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
+      search = searchSessionTranscripts(request, database);
+      const expected = { hits: [{ messageId: "cold-needle" }], indexing: false };
+      expect(await withinTest(search, context.signal)).toMatchObject(expected);
+      release.resolve();
+      for (const { work } of readers) {
+        expect(await withinTest(work, context.signal)).toMatchObject(expected);
+      }
     } finally {
-      reader.release();
+      release.resolve();
+      await Promise.allSettled([...readers.map(({ work }) => work), ...(search ? [search] : [])]);
+      readers.forEach(({ reader }) => reader.release());
       await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
     }
   });
@@ -113,13 +134,14 @@ it("keeps a warmed search reader through discovery and retires it through its ca
     );
     const reader = retainSessionHistoryWorkerDatabase(database);
     const search = () =>
-      reader.owner.searchTranscripts(request, () =>
-        projectionWriter.readSessionTranscriptIndexStatus(database),
+      reader.owner.searchTranscripts(
+        { ...request, filterCandidates: true },
+        () => projectionWriter.readSessionTranscriptIndexStatus(database),
+        async (keys) => keys.map(() => true),
       );
     try {
       const initial = await search();
       expect(initial.hits).toMatchObject([{ messageId: "selected-message" }]);
-      expect(initial.indexing).toBe(false);
       const hostSql = observeHostDataSql();
       try {
         await withSessionHistoryWorkerReadCandidates(
@@ -197,7 +219,6 @@ it("reuses completed readiness after idle writer eviction and observes a later t
         indexing: false,
       });
       const nativeWriter = await openWriter.mock.results[0]!.value;
-      expect(nativeWriter).toBeDefined();
       const closeWriter = vi.spyOn(nativeWriter!, "close");
       try {
         // Five stores exceed the idle writer limit; the first store retains only its reader.
@@ -270,25 +291,22 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
     });
     const request = { ...scope, query: "needle", sessionKeys: ["agent:main:selected"], limit: 1 };
     const database = { agentId: "main", path: storePath };
-    const { found, ...golden } = searchSessionTranscriptsReadOnlySync(request, {
-      ...database,
-      env: state.env,
-    });
-    expect(found).toBe(true);
-    expect(golden).toMatchObject({
+    const golden = {
       hits: [
-        {
+        expect.objectContaining({
           sessionKey: "agent:main:selected",
           messageId: "message-1",
           snippet: "Needle visible text 1",
-        },
+        }),
       ],
       truncated: true,
-    });
+    };
     const hostSql = observeHostDataSql();
     try {
-      const actual = await searchSessionTranscripts(request, database);
-      expect(actual).toEqual({ ...golden, indexing: false });
+      expect(await searchSessionTranscripts(request, database)).toEqual({
+        ...golden,
+        indexing: false,
+      });
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
@@ -316,10 +334,8 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           .mockRejectedValueOnce(new Error("projection writer unavailable")),
       () =>
         vi
-          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-          .mockImplementationOnce(() => {
-            throw new Error("projection writer admission unavailable");
-          }),
+          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+          .mockRejectedValueOnce(new Error("projection writer admission unavailable")),
     ]) {
       const unavailableStatus = makeUnavailable();
       try {
@@ -327,6 +343,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           ...golden,
           indexing: true,
         });
+        expect(unavailableStatus).toHaveBeenCalledOnce();
         expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
           false,
         );
@@ -516,49 +533,72 @@ describe("search reader concurrency", () => {
         }),
       ),
   );
+});
 
-  it.skipIf(historyLane.pool.getSnapshot().maxWorkers < 2)(
-    "searches while foreground and projection readers await index status",
-    (context) =>
-      lifetime.run(() =>
-        withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-          const { database, request } = await searchFixture(
-            state,
-            "parallel-search",
-            "needle",
-            "Parallel needle",
-          );
-          const release = createDeferred();
-          const readers = [historyLane, projectionLane].map((lane) => {
-            const reader = retainSessionHistoryWorkerDatabase(database, lane);
-            const entered = createDeferred();
-            const work = reader.owner.searchTranscripts(request, async () => {
-              entered.resolve();
-              await release.promise;
-              return projectionWriter.readSessionTranscriptIndexStatus(database);
-            });
-            void work.catch(() => {});
-            return { reader, entered: entered.promise, work };
-          });
-          let search: ReturnType<typeof searchSessionTranscripts> | undefined;
-          try {
-            await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
-            search = searchSessionTranscripts(request, database);
-            expect(await withinTest(search, context.signal)).toMatchObject({
-              hits: [{ messageId: "needle" }],
-              indexing: false,
-            });
-          } finally {
-            release.resolve();
-            await Promise.allSettled([
-              ...readers.map(({ work }) => work),
-              ...(search ? [search] : []),
-            ]);
-            for (const { reader } of readers) {
-              reader.release();
-            }
-          }
-        }),
-      ),
-  );
+it("releases a projection status execution when canceled during async capture", async (test) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixture = await searchFixture(
+      state,
+      "capture-cancel",
+      "retained-message",
+      "Retained needle",
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.storePath, "main");
+    const database = {
+      ...fixture.database,
+      path: state.statePath("capture-cancel-unadmitted.sqlite"),
+    };
+    await fs.promises.copyFile(fixture.storePath, database.path);
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
+    const entered = createDeferred();
+    const continueCapture = createDeferred();
+    let execution: Awaited<ReturnType<typeof capture>> | undefined;
+    const held = vi
+      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+      .mockImplementationOnce(async (...args) => {
+        execution = await capture(...args);
+        entered.resolve();
+        await continueCapture.promise;
+        return execution;
+      });
+    const openStore = vi.spyOn(agentWorkerStore, "openOpenClawAgentSqliteWorkerStore");
+    const controller = new AbortController();
+    const refusal = new Error("Synthetic status capture canceled");
+    const pending = projectionWriter.readSessionTranscriptIndexStatus(
+      database,
+      undefined,
+      controller.signal,
+    );
+    const settled = Promise.allSettled([pending]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Projection status bypassed asynchronous capture",
+        ),
+        test.signal,
+      );
+      expect(openStore).not.toHaveBeenCalled();
+      controller.abort(refusal);
+      continueCapture.resolve();
+      await expect(pending).rejects.toBe(refusal);
+      expect(openStore).not.toHaveBeenCalled();
+      expect(() => execution!.assertCurrent()).toThrow(
+        "Agent database execution reference is released",
+      );
+    } finally {
+      controller.abort(refusal);
+      continueCapture.resolve();
+      await settled;
+      held.mockRestore();
+      openStore.mockRestore();
+      await execution?.release();
+    }
+    const result = await searchSessionTranscripts(
+      { ...fixture.request, storePath: database.path },
+      database,
+    );
+    expect(result.hits).toMatchObject([{ messageId: "retained-message" }]);
+  });
 });

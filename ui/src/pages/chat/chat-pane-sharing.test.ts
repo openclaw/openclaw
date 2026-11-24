@@ -238,6 +238,13 @@ describe("public session sharing", () => {
         enabled: false,
       });
       expect(confirmPublicShare).toHaveBeenCalledTimes(1);
+      expect(confirmPublicShare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Make this session public?",
+          message: expect.stringContaining("disabling access cannot recall downloaded copies"),
+          confirmLabel: "Make public",
+        }),
+      );
       expect(request.mock.calls.every(([method]) => method !== "session.visibility.set")).toBe(
         true,
       );

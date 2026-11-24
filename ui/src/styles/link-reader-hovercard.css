@@ -8,10 +8,12 @@
   max-height: calc(100vh - 24px);
   overflow-y: auto;
   padding: 16px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--overlay-shadow);
+  border: 1px solid transparent;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  corner-shape: superellipse(1.5);
   color: var(--text);
   font-family: var(--font-body);
   /* Interactive by design: hover intent and text selection both need the card to
@@ -193,7 +195,7 @@
   overflow: hidden;
   border-radius: 50%;
   background: var(--bg-muted);
-  box-shadow: 0 0 0 2px var(--card);
+  box-shadow: 0 0 0 2px var(--popover);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }

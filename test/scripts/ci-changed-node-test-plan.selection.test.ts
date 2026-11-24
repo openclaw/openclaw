@@ -1,7 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { writeFiles } from "./ci-changed-node-test-plan.test-support.js";
+import { createFixtureGit, writeFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Mode = "aggressive" | "full";
@@ -71,7 +73,7 @@ it.each(["aggressive", "full"] as const)(
   },
 );
 
-it("bounds protected regressions to nearby consumers and restores area coverage in full mode", () => {
+it("selects distant consumers of agent owners and restores area coverage in full mode", () => {
   const source = "src/agents/example/subject.ts";
   const direct = "src/agents/example/subject.test.ts";
   const nearby = "src/infra/device-pairing.test.ts";
@@ -92,10 +94,11 @@ it("bounds protected regressions to nearby consumers and restores area coverage 
     selectionMode: "aggressive",
     onSelection: (selection) => reasons.push(selection),
   });
-  expect(selected).toEqual([direct, nearby]);
+  // Agent owners walk every transitive importer (#204252); other sources stop at depth two.
+  expect(selected).toEqual([direct, nearby, distant]);
   expect(
     reasons.filter(({ rule }) => rule === "import-consumer").flatMap(({ targets }) => targets),
-  ).toContain(nearby);
+  ).toEqual(expect.arrayContaining([nearby, distant]));
   expect(new Set(reasons.flatMap(({ targets }) => targets))).toEqual(new Set(selected));
   const full = select(cwd, [source], "full");
   expect(full).toEqual([unrelated, direct, nearby, distant].toSorted());
@@ -170,3 +173,126 @@ it.each(["aggressive", "full"] as const)(
     expect(select(cwd, [optIn], selectionMode)).not.toContain(optIn);
   },
 );
+
+it.each(
+  ["packages", "extensions"].flatMap((root) => [false, true].map((deleted) => ({ root, deleted }))),
+)("selects resolved $root subpaths independently (deleted: $deleted)", ({ root, deleted }) => {
+  const changed = `${root}/subject/src/value.ts`;
+  const companion = `${root}/subject/src/value.test.ts`;
+  const manifest = `${root}/subject/package.json`;
+  const cwd = fixture({
+    [manifest]: JSON.stringify({
+      name: "@fixture/subject",
+      exports: {
+        "./value": "./src/value.ts",
+        "./other": "./src/other.ts",
+        ".": "./src/index.ts",
+      },
+    }),
+    [changed]: "export const value = 1;",
+    [companion]: 'import "./value.js";',
+    [`${root}/subject/src/value.test-support.ts`]: "export {};",
+    [`${root}/subject/scripts/generate.mjs`]: "export {};",
+    [`${root}/subject/src/other.ts`]: "export const other = 1;",
+    [`${root}/subject/src/index.ts`]: 'export * from "./bridge.js";',
+    [`${root}/subject/src/bridge.ts`]: 'export * from "./value.js";',
+    "src/readers/value.test.ts": 'import "@fixture/subject/value";',
+    "src/readers/barrel.test.ts": 'import "@fixture/subject";',
+    "src/readers/other.test.ts": 'import "@fixture/subject/other";',
+    "src/readers/unknown.test.ts": 'import "@fixture/subject/generated";',
+    "src/readers/types.test.ts": 'import type { Other } from "@fixture/subject/other";',
+  });
+  const expected = ["barrel", "unknown", "value"].map((name) => `src/readers/${name}.test.ts`);
+  if (deleted) {
+    fs.unlinkSync(path.join(cwd, changed));
+  }
+  expect(select(cwd, [changed])).toEqual([companion, ...expected]);
+  expect(select(cwd, [changed, companion])).toEqual([companion, ...expected]);
+  const all = [...expected, "src/readers/other.test.ts"].toSorted();
+  expect(select(cwd, [manifest])).toEqual(all);
+  expect(select(cwd, [changed, `${root}/subject/src/value.test-support.ts`])).toEqual([
+    companion,
+    ...all,
+  ]);
+  expect(select(cwd, [`${root}/subject/scripts/generate.mjs`])).toEqual(all);
+});
+
+it.each([
+  "added",
+  "moved",
+  "removed",
+  "metadata",
+  "other-script",
+  "invalid-list",
+  "duplicate",
+  "missing-base",
+  "invalid-base",
+])("bounds Windows package inventory changes with %s inputs", (kind) => {
+  const first = "src/platform/one.windows.test.ts";
+  const second = "src/platform/two.windows.test.ts";
+  const added = "src/platform/three.windows.test.ts";
+  const reader = "src/manifest/read.test.ts";
+  const unrelated = "src/consumer/package.test.ts";
+  const own = "src/feature/own.test.ts";
+  const command = (files: string[]) => `node scripts/test-projects.mts ${files.join(" ")}`;
+  const before = {
+    name: "@fixture/subject",
+    exports: { ".": "./src/value.ts" },
+    scripts: {
+      "test:windows:ci:1": command(kind === "removed" ? [first, added] : [first]),
+      "test:windows:ci:2": command([second]),
+      build: "node scripts/build.mjs",
+    },
+  };
+  const cwd = fixture({
+    "package.json": JSON.stringify(before),
+    "src/value.ts": "export const value = 1;",
+    "src/feature/own.ts": "export const own = 1;",
+    [own]: 'import "./own.js";',
+    [reader]: 'new URL("../../package.json", import.meta.url);',
+    [unrelated]: 'import "@fixture/subject";',
+    [first]: "export {};",
+    [second]: "export {};",
+    [added]: "export {};",
+  });
+  const git = createFixtureGit(cwd);
+  git("init", "--quiet");
+  git("add", ".");
+  git("commit", "--quiet", "-m", "fixture baseline");
+  const baseRef =
+    kind === "missing-base"
+      ? undefined
+      : kind === "invalid-base"
+        ? "a".repeat(40)
+        : git("rev-parse", "HEAD");
+  const after = structuredClone(before);
+  after.scripts["test:windows:ci:1"] = command([first, added]);
+  if (kind === "moved") {
+    after.scripts["test:windows:ci:1"] = command([second]);
+    after.scripts["test:windows:ci:2"] = command([first]);
+  } else if (kind === "removed") {
+    after.scripts["test:windows:ci:1"] = command([first]);
+  } else if (kind === "duplicate") {
+    after.scripts["test:windows:ci:1"] = command([first, second]);
+  } else if (kind === "metadata") {
+    after.exports["."] = "./src/feature/own.ts";
+  } else if (kind === "other-script") {
+    after.scripts.build += " --changed";
+  } else if (kind === "invalid-list") {
+    after.scripts["test:windows:ci:1"] += " --run";
+  }
+  writeFiles(cwd, { "package.json": JSON.stringify(after) });
+  const selected = resolveChangedNodeTestTargets(["package.json", "src/feature/own.ts"], {
+    cwd,
+    baseRef,
+    selectionMode: "aggressive",
+  });
+  expect(selected).toContain(reader);
+  expect(selected).toContain(own);
+  if (["added", "moved", "removed"].includes(kind)) {
+    expect(selected).not.toContain(unrelated);
+    expect(selected.includes(added)).toBe(kind === "added");
+  } else {
+    expect(selected).toContain(unrelated);
+  }
+});

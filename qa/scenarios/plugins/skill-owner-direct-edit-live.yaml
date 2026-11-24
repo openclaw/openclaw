@@ -19,8 +19,8 @@ scenario:
   docsRefs:
     - docs/tools/skill-workshop.md
   codeRefs:
-    - src/agents/skill-workshop-prompt.ts
-    - src/agents/tools/skill-workshop-tool.ts
+    - extensions/skill-workshop/src/prompt.ts
+    - extensions/skill-workshop/src/tool.ts
   execution:
     kind: flow
     summary: Seed a workspace skill, ask a live model to change it, and read the skill file afterward.

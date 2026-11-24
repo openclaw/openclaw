@@ -1,8 +1,7 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { requestGoogleApi } from "./google-api.js";
 
-const GOOGLE_MEET_API_ORIGIN = "https://meet.googleapis.com";
-const GOOGLE_MEET_API_BASE_URL = `${GOOGLE_MEET_API_ORIGIN}/v2`;
+const GOOGLE_MEET_API_BASE_URL = "https://meet.googleapis.com/v2";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
 const GOOGLE_MEET_MEDIA_SCOPE =
@@ -158,10 +157,6 @@ function normalizeGoogleMeetSpaceName(input: string): string {
   return `spaces/${trimmed}`;
 }
 
-function encodeSpaceNameForPath(name: string): string {
-  return name.split("/").map(encodeURIComponent).join("/");
-}
-
 function encodeResourceNameForPath(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) {
@@ -240,6 +235,7 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
   operation: string;
 }): Promise<T[]> {
   const items: T[] = [];
+  const seenPageTokens = new Set<string>();
   let pageToken: string | undefined;
   do {
     const payload = await fetchGoogleMeetJson<Record<string, unknown>>({
@@ -258,6 +254,12 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
       break;
     }
     pageToken = typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
+    if (pageToken && seenPageTokens.has(pageToken)) {
+      throw new Error(`Google Meet ${params.operation} repeated nextPageToken; retry later.`);
+    }
+    if (pageToken) {
+      seenPageTokens.add(pageToken);
+    }
   } while (pageToken);
   return items;
 }
@@ -269,7 +271,7 @@ export async function fetchGoogleMeetSpace(params: {
   const name = normalizeGoogleMeetSpaceName(params.meeting);
   const payload = await fetchGoogleMeetJson<GoogleMeetSpace>({
     accessToken: params.accessToken,
-    path: encodeSpaceNameForPath(name),
+    path: encodeResourceNameForPath(name),
     operation: "spaces.get",
     scopes: [GOOGLE_MEET_SPACE_SCOPE],
   });
@@ -313,7 +315,7 @@ export async function endGoogleMeetActiveConference(params: {
   await requestGoogleMeetApi(
     {
       accessToken: params.accessToken,
-      path: `${encodeSpaceNameForPath(space)}:endActiveConference`,
+      path: `${encodeResourceNameForPath(space)}:endActiveConference`,
       method: "POST",
       body: "{}",
       operation: "spaces.endActiveConference",
@@ -353,10 +355,7 @@ async function listGoogleMeetConferenceRecords(params: {
     accessToken: params.accessToken,
     path: "conferenceRecords",
     collectionKey: "conferenceRecords",
-    query: {
-      pageSize: params.pageSize,
-      filter,
-    },
+    query: { pageSize: params.pageSize, filter },
     maxItems: params.maxItems,
     operation: "conferenceRecords.list",
   });

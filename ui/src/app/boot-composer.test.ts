@@ -45,10 +45,39 @@ describe("boot composer", () => {
       submit: true,
       focused: true,
       selection: [2, 4, "backward"],
+      scroll: [0, 0],
     });
     expect(textarea.isConnected).toBe(false);
     expect(takeBootComposer()).toBeNull();
     expect(canReloadControlUiDocument()).toBe(true);
+  });
+
+  it("captures the connected viewport before a frame move without waiting for scroll events", () => {
+    const textarea = bootDocument();
+    textarea.value = "First line\nSecond line\nThird line";
+    textarea.setAttribute("data-focused", "");
+    textarea.scrollLeft = 11;
+    textarea.scrollTop = 43;
+    adoptBootComposer(true);
+
+    // A native scroll event can still be queued when the next frame takes the editor.
+    textarea.scrollLeft = 17;
+    textarea.scrollTop = 67;
+    const moving = bootComposerElement()!;
+    document.getElementById("frame")!.remove();
+    textarea.scrollLeft = 0;
+    textarea.scrollTop = 0;
+    expect(bootComposerElement()).toBe(moving);
+    document.getElementById("next")!.append(moving);
+    settleBootComposer();
+    expect([textarea.scrollLeft, textarea.scrollTop]).toEqual([17, 67]);
+    expect(document.activeElement).toBe(textarea);
+
+    document.getElementById("next")!.remove();
+    textarea.scrollLeft = 0;
+    textarea.scrollTop = 0;
+    expect(bootComposerElement()).toBe(textarea);
+    expect(takeBootComposer()?.scroll).toEqual([17, 67]);
   });
 
   it("protects current text until cleared and releases browser protection when retired", () => {

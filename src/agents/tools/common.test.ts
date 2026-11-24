@@ -1,6 +1,6 @@
 // Common tool helper tests cover shared parsing used by multiple agent tools.
 import { describe, expect, test } from "vitest";
-import { isTrustedToolExecutionPreflightError } from "../tool-result-error.js";
+import { isTrustedToolExecutionPreflightError } from "../tool-execution-error.js";
 import { parseAvailableTags, ToolAuthorizationError, ToolInputError } from "./common.js";
 
 describe("trusted tool-input error ownership", () => {

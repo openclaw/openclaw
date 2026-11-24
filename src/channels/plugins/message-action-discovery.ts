@@ -15,6 +15,7 @@ import {
   resolveBundledChannelMessageToolDiscoveryAdapter,
   type ChannelMessageToolDiscoveryAdapter,
 } from "./message-tool-api.js";
+import { createConfiguredMessageToolDiscoveryAdapter } from "./outbound-message-tool-discovery.js";
 import type {
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionName,
@@ -144,16 +145,17 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
   }
   const catalog = preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   const prepared = catalog?.getChannel(channelId);
-  if (prepared?.actions) {
-    return { pluginId: prepared.id, actions: prepared.actions };
+  const preparedActions = prepared?.actions ?? prepared?.outboundDiscovery;
+  if (prepared && preparedActions) {
+    return { pluginId: prepared.id, actions: preparedActions };
   }
   if (!catalog) {
     const loadedPlugin = getLoadedChannelPlugin(channelId);
-    if (loadedPlugin?.actions) {
-      return {
-        pluginId: loadedPlugin.id,
-        actions: loadedPlugin.actions,
-      };
+    const actions =
+      loadedPlugin &&
+      (loadedPlugin.actions ?? createConfiguredMessageToolDiscoveryAdapter(loadedPlugin));
+    if (actions) {
+      return { pluginId: channelId, actions };
     }
   }
   // Prefer the bundled public artifact before full plugin materialization so
@@ -166,7 +168,21 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
     };
   }
   const plugin = catalog ? undefined : getChannelPlugin(channelId);
-  return plugin?.actions ? { pluginId: plugin.id, actions: plugin.actions } : null;
+  const actions = plugin && (plugin.actions ?? createConfiguredMessageToolDiscoveryAdapter(plugin));
+  return actions ? { pluginId: channelId, actions } : null;
+}
+
+/** Registered send configuration is independent of transport health or action readiness. */
+export function resolveConfiguredOutboundMessageToolDiscoveryAdapter(
+  channel: string,
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog,
+): ChannelMessageToolDiscoveryAdapter | undefined {
+  const catalog = preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
+  if (catalog) {
+    return catalog.getChannel(channel)?.outboundDiscovery;
+  }
+  const plugin = getLoadedChannelPlugin(channel);
+  return plugin ? createConfiguredMessageToolDiscoveryAdapter(plugin) : undefined;
 }
 
 type MessageActionDiscoveryRequest = {

@@ -37,15 +37,15 @@ it("reuses immutable projections across attempts and replacement publications", 
 });
 
 it("still bounds published JSON before caching its diagnostic projection", () => {
-  const source = { description: "x".repeat(32_769) };
+  const source = { description: "x".repeat(65_537) };
   const published = publishRuntimeToolInputSchema(source).schema;
   for (const parameters of [source, published, source, published]) {
     expect(projectParameters(parameters)).toEqual({
       description: {
         truncated: true,
         reason: "trajectory-field-size-limit",
-        originalChars: 32_769,
-        limitChars: 32_768,
+        originalChars: 65_537,
+        limitChars: 65_536,
       },
     });
   }

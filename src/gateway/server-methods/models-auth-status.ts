@@ -25,6 +25,7 @@ import {
 import { refreshRuntimeAuthProfileStoreSources } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { signInNeedsApiKeyForVoice } from "../../agents/voice-sign-in-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -51,6 +52,7 @@ import type {
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -183,7 +185,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    let assertCurrent: (() => void) | undefined;
+    // The save writes credentials and can widen the model allowlist: both need live requester authority.
+    const requestAuthority = readGatewayRequestMutationAuthority(options);
+    let assertCurrent: () => void = requestAuthority.assertCurrent;
     if (expectedOwnerId !== undefined) {
       if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
         respondError(
@@ -198,7 +202,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        const assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        assertCurrent = () => {
+          requestAuthority.assertCurrent();
+          assertOwnerCurrent();
+        };
       } catch (error) {
         respond(false, undefined, localStateOwnerChangedError(error));
         return;
@@ -208,28 +216,37 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const config = context.getRuntimeConfig();
       // CLI-only target semantics must not load the model-command runtime during Gateway startup.
-      const scope = assertCurrent
-        ? {
-            ok: true as const,
-            ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
-              config,
-              params.agentId,
-              { kind: "mutation" },
-            ),
-          }
-        : resolveModelAuthAgentScope(config, params.agentId);
+      const scope =
+        expectedOwnerId !== undefined
+          ? {
+              ok: true as const,
+              ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
+                config,
+                params.agentId,
+                { kind: "mutation" },
+              ),
+            }
+          : resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
-      const { profileId, warning: configWarning } = await saveModelProviderApiKey({
+      const {
+        profileId,
+        warning: configWarning,
+        modelAccess,
+      } = await saveModelProviderApiKey({
         config,
         provider,
         apiKey: params.apiKey,
+        agentId: scope.agentId,
         agentDir: scope.agentDir,
         assertCurrent,
       });
+      if (modelAccess) {
+        log.info(modelAccess);
+      }
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelsAuthSetApiKeyResult = {
@@ -504,6 +521,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               ? { profileOrderLocked: "auth-config" as const }
               : {}),
           ...(apiKey ? { apiKey } : {}),
+          ...(!apiKey &&
+          !prov.profiles.some((profile) => profile.type === "api_key") &&
+          signInNeedsApiKeyForVoice(store, prov.provider)
+            ? { voiceApiKeyRequired: true as const }
+            : {}),
           usage:
             usage && usageKey
               ? {
@@ -512,12 +534,34 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
                   ...(usage.summary ? { summary: usage.summary } : {}),
                   ...(usage.plan ? { plan: usage.plan } : {}),
                   ...(usage.billing?.length ? { billing: usage.billing } : {}),
+                  ...(includeProfileIdentity && usage.authProfileId
+                    ? { authProfileId: usage.authProfileId }
+                    : {}),
                   ...(includeProfileIdentity && usage.accountEmail
                     ? { accountEmail: usage.accountEmail }
                     : {}),
                 }
               : undefined,
         });
+      }
+      // Native login has no saved profile. Project the already-prepared display facts;
+      // a status read must never probe a CLI or manufacture a removable account.
+      for (const [provider, mode] of Object.entries(preparedSnapshot.authModes)) {
+        if (typeof mode !== "object" || !mode.display) {
+          continue;
+        }
+        const existing = providers.find((entry) => entry.provider === provider);
+        if (existing) {
+          existing.nativeAuth = mode.display;
+        } else {
+          providers.push({
+            provider,
+            displayName: providerDisplayName(provider),
+            status: "ok",
+            profiles: [],
+            nativeAuth: mode.display,
+          });
+        }
       }
       const result: ModelAuthStatusResult = {
         ts: now,

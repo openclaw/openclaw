@@ -235,7 +235,6 @@ export function abortDormantSubagentSession(
           },
           onSnapshot: publishSnapshot,
           beforeSessionKill: async () => {
-            await params.beforeAbort?.();
             assertCurrent();
             plan = prepareChatSessionAbort(
               {
@@ -334,10 +333,7 @@ export async function abortChatRunsForSessionKeyWithPartials(
         prepareSelection: prepare ? { acceptsRequest: plan.acceptsRequest, prepare } : undefined,
         assertCurrent: params.assertCurrent,
         beforeKill: async () => {
-          await params.beforeAbort?.();
           plan.abort();
-          // Parent cancellation observers can replace the conversation before child effects.
-          await params.beforeAbort?.();
           return plan.canCascade;
         },
       });
@@ -345,12 +341,9 @@ export async function abortChatRunsForSessionKeyWithPartials(
       if (prepare) {
         await prepare();
       }
-      await params.beforeAbort?.();
       plan.abort();
     }
     if (!result.unauthorized && !result.error) {
-      // Observe child-triggered changes before persisting this Stop's own partial output.
-      await params.beforeAbort?.();
       params.assertCurrent?.();
       params.onCancellationStarted?.();
     }

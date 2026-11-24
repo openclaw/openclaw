@@ -33,7 +33,7 @@ const {
   enqueueSystemEventEntry: enqueue,
   captureSessionEventTargetForHost: captureTarget,
   enqueueSessionEventForHost: handoff,
-  agentCommandFromIngress: dispatch,
+  agentCommandFromGatewayIngress: dispatch,
   upsertSessionEntryCore: touchSession,
   loadSessionEntry: lookupSession,
   registerApnsRegistration: registerApns,
@@ -404,7 +404,7 @@ describe("voice transcript events", () => {
               loaded: buildSessionLookup(sessionKey),
               assertCurrent: () => {
                 if (opts === firstConnection && !current) {
-                  throw new Error("Node event session authority changed");
+                  throw new Error("Node event session changed. Retry the event.");
                 }
               },
               pending,
@@ -420,7 +420,7 @@ describe("voice transcript events", () => {
         firstConnection,
       );
       if (phase === "reservation") {
-        await expect(first).rejects.toThrow("Node event session authority changed");
+        await expect(first).rejects.toThrow("Node event session changed. Retry the event.");
       } else {
         await entered.promise;
       }
@@ -628,7 +628,12 @@ describe("notifications changed events", () => {
       );
       expect(handoff).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ source: "device", agentId, sessionKey }),
+        expect.objectContaining({
+          source: "device",
+          agentId,
+          sessionKey,
+          replyExpectation: "optional",
+        }),
       );
     },
   );
@@ -772,10 +777,9 @@ describe("agent request events", () => {
     });
 
     const { request } = nodeFixture("node-revoked-before-detached-start");
-    await request(
-      { sessionKey: "agent:main:revoked-before-detached-start" },
-      { isConnectionCurrent },
-    );
+    await expect(
+      request({ sessionKey: "agent:main:revoked-before-detached-start" }, { isConnectionCurrent }),
+    ).resolves.toEqual(eventResult("agent.request", "pairing_changed"));
 
     await waitForFast(() => {
       expect(runtimeMocks.deleteMediaBuffer).toHaveBeenCalledWith("saved-after-admission");

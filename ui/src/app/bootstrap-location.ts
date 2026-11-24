@@ -28,6 +28,7 @@ import {
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
+import { finishBootFrame } from "./boot-composer.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -41,7 +42,7 @@ import { loadGatewaySessionSelection } from "./settings.ts";
 // candidates remain explicit, even before Gateway hello registers plugin tabs.
 function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
   return (
-    isDefaultChatLanding(location, basePath, routeIdFromPath) &&
+    isDefaultChatLanding(location, basePath) &&
     !/^\/chat\/main\/?$/u.test(location.pathname.slice(basePath.length))
   );
 }
@@ -157,7 +158,7 @@ export function resolveBootstrapModelCatalogTarget(
       ...(target.slugHint ? { slugHint: target.slugHint } : {}),
     };
   }
-  if (isDefaultChatLanding(location, basePath, routeIdFromPath)) {
+  if (isDefaultChatLanding(location, basePath)) {
     const agentId =
       parseAgentSessionKey(selection.sessionKey)?.agentId ?? selection.selectedAgentId;
     return { sessionKey: selection.sessionKey, ...(agentId ? { agentId } : {}) };
@@ -204,9 +205,7 @@ export async function isResolvedDefaultLanding(
 ): Promise<boolean> {
   const landing = await resolved;
   const current = history.location();
-  return (
-    isDefaultChatLanding(current, basePath, routeIdFromPath) || sameRouteLocation(current, landing)
-  );
+  return isDefaultChatLanding(current, basePath) || sameRouteLocation(current, landing);
 }
 
 export function createInitialApplicationLocationResolver(params: {
@@ -323,6 +322,7 @@ export function subscribeForegroundChatBootstrap({
   initialChatRoute: boolean;
 }): () => void {
   connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
+  const bootPath = window.location.pathname;
   const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
     const match = state.pendingMatches[0] ?? state.matches[0];
     if (!match && state.status === "idle") {
@@ -333,8 +333,10 @@ export function subscribeForegroundChatBootstrap({
       data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
     // Admission previews have no transcript controller and cannot claim its
     // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
-    connectionBootstrap.setForegroundRoute(
-      !isSessionRouteId(match?.routeId) || chatSubmissions.creation
+    const foregroundRoute =
+      !isSessionRouteId(match?.routeId) ||
+      chatSubmissions.creation ||
+      (key !== null && chatSubmissions.creationFor(key)?.admitted === false)
         ? null
         : match.status === "pending"
           ? undefined
@@ -352,8 +354,11 @@ export function subscribeForegroundChatBootstrap({
                   agentId: typeof data?.agentId === "string" ? data.agentId : undefined,
                 },
               )
-            : null,
-    );
+            : null;
+    connectionBootstrap.setForegroundRoute(foregroundRoute);
+    if (window.location.pathname !== bootPath || foregroundRoute === null) {
+      finishBootFrame();
+    }
   };
   const synchronize = () => synchronizeRoute(router.getState());
   const stopConnection = gateway.subscribe((snapshot) => {

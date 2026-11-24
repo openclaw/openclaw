@@ -1,27 +1,30 @@
-import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
-
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 const INCOMPLETE_USAGE_RETRY_LIMIT = 3;
 
 type UsageRefreshReason = "focus" | "manual" | "poll" | "publication" | "reconnect";
 
 type UsageRefreshPolicyOptions = {
-  isLoading: () => boolean;
-  reload: (reason: UsageRefreshReason) => void | Promise<void>;
+  isSessionLoading: () => boolean;
+  isProviderLoading: () => boolean;
+  reload: (reads: {
+    sessions: boolean;
+    provider: boolean;
+    manual?: boolean;
+  }) => void | Promise<void>;
   onIncompleteUsageExhausted?: () => void;
 };
 
 /** Owns Usage's page-specific TTL, interruption, and refresh coalescing policy. */
 export class UsageRefreshPolicy {
-  private lastLoadedAtMs: number | null = null;
-  // A deferred refresh keeps its reason: a provider-only retry must not replay as a full reload.
-  private pendingAutomaticRefresh: UsageRefreshReason | null = null;
+  private sessionsLoadedAtMs: number | null = null;
+  private providerLoadedAtMs: number | null = null;
+  private activationPending = false;
+  private pollPending = false;
   private publicationPending = false;
   private reloadPending = false;
   private retryTimer: number | null = null;
   private retryAttempts = 0;
   private exhaustionReported = false;
-  private connection: unknown;
 
   constructor(private readonly options: UsageRefreshPolicyOptions) {}
 
@@ -29,49 +32,32 @@ export class UsageRefreshPolicy {
     return this.exhaustionReported;
   }
 
-  setLastLoadedAtMs(
-    value: number | null,
-    params?: { incomplete?: boolean; connection?: unknown },
-  ): void {
-    this.applyLoadState(value, params?.incomplete === true, params?.connection);
+  markSessionsLoaded(loadedAtMs: number | null): void {
+    this.sessionsLoadedAtMs = loadedAtMs;
   }
 
-  markProviderUsage(
-    result: ProviderUsageRequestResult | null,
-    value: number | null,
-    connection: unknown,
-  ): void {
-    const incomplete =
-      result?.ok === false || (result?.ok === true && result.value.refreshing === true);
-    this.applyLoadState(value, incomplete, connection);
+  markProviderLoaded(loadedAtMs: number | null): void {
+    this.providerLoadedAtMs = loadedAtMs;
+    if (loadedAtMs !== null) {
+      this.pollPending = false;
+      this.resetRetryCycle();
+    } else if (this.retryTimer === null && !this.pollPending) {
+      this.armRetry();
+    }
   }
 
   resetPayload(): void {
-    this.applyLoadState(null, false);
+    this.sessionsLoadedAtMs = null;
+    this.providerLoadedAtMs = null;
+    this.activationPending = false;
+    this.pollPending = false;
     this.reloadPending = false;
     this.publicationPending = false;
+    this.resetRetryCycle();
   }
 
   dispose(): void {
     this.resetRetryCycle();
-  }
-
-  private applyLoadState(
-    loadedAtMs: number | null,
-    incomplete: boolean,
-    connection?: unknown,
-  ): void {
-    if (connection !== this.connection) {
-      this.connection = connection;
-      this.resetRetryCycle();
-    }
-    if (!incomplete) {
-      this.resetRetryCycle();
-    } else if (this.retryTimer === null) {
-      this.armRetry();
-    }
-    // Incomplete usage must not start the TTL or focus/reconnect can skip recovery.
-    this.lastLoadedAtMs = incomplete ? null : loadedAtMs;
   }
 
   private armRetry(): void {
@@ -87,7 +73,7 @@ export class UsageRefreshPolicy {
     this.retryTimer = window.setTimeout(
       () => {
         this.retryTimer = null;
-        void this.requestAndWait("poll").catch(() => undefined);
+        void this.request("poll").catch(() => undefined);
       },
       5_000 * 2 ** (this.retryAttempts - 1),
     );
@@ -103,58 +89,65 @@ export class UsageRefreshPolicy {
   }
 
   interrupt(): void {
-    this.reloadPending ||= this.options.isLoading();
+    this.reloadPending ||= this.options.isSessionLoading();
   }
 
   markLoadDeferred(): void {
     this.reloadPending = true;
   }
 
-  beginLoad(): void {
+  beginSessionsLoad(): void {
     this.reloadPending = false;
+    // This query starts after every publication received so far, but does not read provider plans.
+    this.publicationPending = false;
   }
 
-  request(reason: UsageRefreshReason): Promise<void> {
-    return this.requestAndWait(reason);
-  }
-
-  private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
+  async request(reason: UsageRefreshReason): Promise<void> {
+    if (reason === "manual") {
+      this.activationPending = false;
+      this.pollPending = false;
+      this.resetRetryCycle();
+      return this.options.reload({ sessions: true, provider: true, manual: true });
+    }
     if (reason === "publication") {
       this.publicationPending = true;
-      this.reloadPending = true;
+    } else if (reason === "poll") {
+      this.pollPending = true;
+    } else {
+      this.activationPending = true;
+      if (reason === "reconnect") {
+        this.resetRetryCycle();
+      }
     }
-    if (this.options.isLoading() && reason !== "manual") {
-      // Any broader reason outranks a deferred provider-only retry.
-      this.pendingAutomaticRefresh =
-        this.pendingAutomaticRefresh && this.pendingAutomaticRefresh !== "poll"
-          ? this.pendingAutomaticRefresh
-          : reason;
-      return;
-    }
-    this.pendingAutomaticRefresh = null;
+    return this.flushPending();
+  }
+
+  async flushPending(): Promise<void> {
     if (
-      reason !== "manual" &&
-      (document.visibilityState !== "visible" ||
-        !document.hasFocus() ||
-        (!this.reloadPending &&
-          this.lastLoadedAtMs !== null &&
-          Date.now() - this.lastLoadedAtMs < USAGE_PAYLOAD_TTL_MS))
+      this.options.isSessionLoading() ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
     ) {
       return;
     }
-    if (reason === "manual" || (reason !== "poll" && !this.publicationPending)) {
-      this.resetRetryCycle();
+    const now = Date.now();
+    const expired = (loadedAtMs: number | null) =>
+      loadedAtMs === null || now - loadedAtMs >= USAGE_PAYLOAD_TTL_MS;
+    const sessions =
+      this.publicationPending ||
+      (this.activationPending && (this.reloadPending || expired(this.sessionsLoadedAtMs)));
+    const provider =
+      !this.options.isProviderLoading() &&
+      (this.pollPending || (this.activationPending && expired(this.providerLoadedAtMs)));
+    this.activationPending = false;
+    if (provider) {
+      if (!this.pollPending && !this.publicationPending) {
+        this.resetRetryCycle();
+      }
+      this.pollPending = false;
     }
-    this.publicationPending = false;
-    await this.options.reload(reason);
-  }
-
-  flushPending(): void {
-    const pending = this.pendingAutomaticRefresh;
-    if (!pending) {
-      return;
+    if (sessions || provider) {
+      await this.options.reload({ sessions, provider });
     }
-    this.pendingAutomaticRefresh = null;
-    void this.request(pending === "poll" ? "poll" : "focus");
   }
 }

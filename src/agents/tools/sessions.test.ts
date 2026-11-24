@@ -675,8 +675,8 @@ describe("sessions_send gating", () => {
     expect(flowParams?.targetSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
   });
 
-  it("does not start requester delivery for an isolated cron run", async () => {
-    await executeFireAndForgetA2AFrom("agent:main:cron:job:run:abc", { expectReplyFlow: false });
+  it.each(["run:abc", "trigger"])("skips detached delivery for cron %s", async (kind) => {
+    await executeFireAndForgetA2AFrom(`agent:main:cron:job:${kind}`, { expectReplyFlow: false });
     expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
   });
 

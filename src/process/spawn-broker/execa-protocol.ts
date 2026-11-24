@@ -69,6 +69,20 @@ function decodeExecaMessage(encoded: EncodedExecaMessage, output: ExecaMessageOu
 
 export type BrokerOutputOption = "pipe" | "ignore" | "inherit" | { file: string };
 
+export function isBrokerOutputOption(value: unknown): value is BrokerOutputOption | undefined {
+  return (
+    value === undefined ||
+    value === "pipe" ||
+    value === "ignore" ||
+    value === "inherit" ||
+    (typeof value === "object" &&
+      value !== null &&
+      "file" in value &&
+      typeof value.file === "string" &&
+      Object.keys(value).length === 1)
+  );
+}
+
 export type BrokerExecaOptions = Omit<
   CommandSpawnOptions,
   | "cancelSignal"
@@ -157,4 +171,25 @@ export function restoreExecaResult(result: BrokerExecaResult) {
     return Object.assign(restored, properties, { cause: restored.cause });
   }
   return { ...properties, cause: undefined };
+}
+
+/** Failed admission has no command or native process metadata. */
+export function createBrokerExecaAdmissionFailure(
+  error: Error & { code: string },
+): BrokerExecaResult {
+  return {
+    failed: true,
+    code: error.code,
+    timedOut: false,
+    isCanceled: false,
+    isGracefullyCanceled: false,
+    isMaxBuffer: false,
+    isTerminated: false,
+    isForcefullyTerminated: false,
+    command: "",
+    escapedCommand: "",
+    cwd: process.cwd(),
+    durationMs: 0,
+    error: serializeExecaError(error),
+  };
 }

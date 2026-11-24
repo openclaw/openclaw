@@ -12,7 +12,11 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  isArtifactPreservingStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -63,7 +67,7 @@ export async function collectRepointedWorkspaceAliasFindings(
   cfg: OpenClawConfig,
 ): Promise<WorkspaceAliasFinding[]> {
   const workspaceDirs = await configuredWorkspaceDirs(cfg);
-  return withSynchronousArtifactPreservingStateSnapshot(() => {
+  const collect = () => {
     const findings: WorkspaceAliasFinding[] = [];
     for (const workspaceDir of workspaceDirs) {
       let message: string;
@@ -86,6 +90,13 @@ export async function collectRepointedWorkspaceAliasFindings(
       });
     }
     return findings;
+  };
+  if (!isArtifactPreservingStateRead()) {
+    return collect();
+  }
+  return withOpenClawStateDatabaseReadSnapshot(async () => {
+    await getActiveOpenClawStateDatabaseReadSnapshotAsync();
+    return collect();
   });
 }
 

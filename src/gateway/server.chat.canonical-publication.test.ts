@@ -75,7 +75,7 @@ it(
     const root = tempDirs.make("openclaw-canonical-display-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
-    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory)));
+    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory, { mode: 0o700 })));
     const attachment = Buffer.from("canonical publication attachment\n");
     const media = path.join(workspace, "proof.txt");
     await fs.writeFile(media, attachment);

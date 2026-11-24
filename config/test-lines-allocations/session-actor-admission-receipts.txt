@@ -1,0 +1,2 @@
+# Extend existing receipt wire-size and settlement regressions for command-local admission references; preserve oversized changed-result transfer coverage.
+53

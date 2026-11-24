@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   appendTranscriptEvent,
@@ -15,6 +16,16 @@ import { initSessionState as initSessionStateRaw } from "../session.js";
 
 type ProjectedSessionEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 type SessionFixtureScope = { storePath: string; sessionKey: string; sessionId: string };
+
+export function expectEntryFields(
+  entry: SessionEntry,
+  expected: Record<string, unknown>,
+  label?: string,
+): void {
+  for (const [key, value] of Object.entries(expected)) {
+    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
+  }
+}
 
 function projectSessionEntry(entry: SessionEntry): ProjectedSessionEntry {
   return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };

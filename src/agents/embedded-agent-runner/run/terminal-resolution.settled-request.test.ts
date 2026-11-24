@@ -8,14 +8,16 @@ import {
 import { isReplaySafeToolCall } from "../../tool-mutation.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { buildAttemptReplayMetadata } from "./attempt-terminal-evidence.js";
+import { resolveSettledTurnFinalizationRequest } from "./incomplete-turn-recovery.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
+import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import {
-  createTerminalToolPresentationTracker,
-  resolveEmbeddedRunTerminal,
-  resolveSettledTurnFinalizationRequest,
-} from "./terminal-resolution.js";
-import { makeTerminalInput } from "./terminal-resolution.test-support.js";
+  makeTerminalInput,
+  textAssistant,
+  expectComplete,
+} from "./terminal-resolution.test-support.js";
+import { createTerminalToolPresentationTracker } from "./terminal-tool-presentation.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
@@ -23,6 +25,47 @@ const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 
 describe("resolveSettledTurnFinalizationRequest", () => {
+  it.each([undefined, "", "NO_REPLY"])(
+    "settles a human's empty post-exec response in a kept child (final=%j)",
+    async (text) => {
+      const input = makeTerminalInput({
+        assistant: text === undefined ? undefined : textAssistant(text),
+        attemptOverrides: {
+          assistantTexts: text ? [text] : [],
+          toolMetas: [
+            { toolName: "exec", asyncStarted: true, replaySafe: false },
+            { toolName: "sessions_yield", replaySafe: true },
+          ],
+          itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        },
+        runParams: {
+          sessionKey: "agent:main:subagent:kept-child",
+          messageChannel: "webchat",
+          inputProvenance: { kind: "external_user" },
+          senderIsOwner: false,
+          trigger: "user",
+        },
+      });
+      const resolved = await resolveEmbeddedRunTerminal(input);
+      expectComplete(resolved);
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+      if (text) {
+        expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
+        expect(resolved.result.meta.error).toBeUndefined();
+        expect(resolved.result.payloads).toBeUndefined();
+      } else {
+        expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
+        expect(resolved.result.payloads).toEqual([
+          expect.objectContaining({
+            text: "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
+            isStatusNotice: true,
+          }),
+        ]);
+      }
+    },
+  );
+
   it.each([
     { toolName: "read", missingEvidence: false, keepsTools: true },
     { toolName: "read", toolError: true, missingEvidence: false, keepsTools: true },

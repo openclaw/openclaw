@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
@@ -13,16 +14,21 @@ import {
   publishStateRuntimeSchemaAdmission,
 } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-lifecycle.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  OPENCLAW_STATE_SCHEMA_VERSION,
+  type OpenClawStateDatabase,
+} from "./openclaw-state-db-contract.js";
 import {
   assertCurrentStateRuntimeSchema,
   assertNoLegacyStateRuntimeRepair,
 } from "./openclaw-state-db-fast-path.js";
+import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js";
 import {
   assertOpenClawStateRuntimeIntegrity,
   type OpenClawStateIntegrityPolicy,
 } from "./openclaw-state-db-integrity-admission.js";
 import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
+import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -127,4 +133,25 @@ export function assertExistingOpenClawStateRuntimeSchema(
   );
   publishIntegrity?.();
   publishStateRuntimeSchemaAdmission(database, true);
+}
+
+export function assertStateDatabaseSchemaAdmission(database: OpenClawStateDatabase): void {
+  if (isExistingOpenClawStateSchema(database.path, database.db)) {
+    const location = readTrackedStateDatabaseIdentity(database.db)?.canonicalPath;
+    if (!location) {
+      throw new Error(
+        "Existing shared-state schema admission requires a filesystem-backed database.",
+      );
+    }
+    if (!isExistingOpenClawStateSchema(location, database.db)) {
+      throw new Error(
+        "Existing shared-state schema admission requires its selected physical database.",
+      );
+    }
+    if (isPostgresSqlConnection(database.db)) {
+      assertSupportedStateSchemaVersion(database.db, database.path);
+      return;
+    }
+    assertExistingOpenClawStateRuntimeSchema(database.db, database.path);
+  }
 }

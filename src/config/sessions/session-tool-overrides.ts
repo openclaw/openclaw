@@ -39,7 +39,7 @@ export function normalizeSessionToolOverrides(
     ...(mcpServers ? { mcpServers } : {}),
     ...(mcpToolsDeny ? { mcpToolsDeny } : {}),
     ...(skills ? { skills } : {}),
-    ...(raw.webSearch === false ? { webSearch: false } : {}),
+    ...(raw.webSearch !== undefined ? { webSearch: raw.webSearch } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

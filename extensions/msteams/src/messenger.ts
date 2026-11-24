@@ -1,5 +1,5 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -18,7 +18,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -35,7 +35,6 @@ import {
 } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -117,11 +116,7 @@ export function renderReplyPayloadsToMessages(
     }
 
     if (reply.text) {
-      const chunks = getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
-        reply.text,
-        chunkLimit,
-        chunkMode,
-      );
+      const chunks = chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
       for (const chunk of chunks) {
         const text = chunk.trim();
         if (text) {
@@ -240,10 +235,18 @@ export async function sendMSTeamsMessages(
           if (!isPersonal && !isImage) {
             // Non-images in group chats/channels require SharePoint because an
             // application token has no signed-in `/me/drive` to fall back to.
-            const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
             if (!tokenProvider) {
               throw new Error("MS Teams Graph token provider unavailable for SharePoint file send");
             }
+            const siteId = await resolveMSTeamsSharePointSiteId({
+              ...options,
+              siteId: sharePointSiteId,
+              accountId: params.accountId,
+              app: params.app,
+              conversationRef,
+              tokenProvider,
+              serviceUrlBoundary: params.serviceUrlBoundary,
+            });
             const chatId = conversationRef.conversation?.id;
 
             const uploaded = await uploadAndShareSharePoint({

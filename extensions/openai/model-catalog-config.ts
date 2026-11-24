@@ -1,3 +1,4 @@
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelDefinitionConfig,
@@ -8,7 +9,6 @@ import {
   isOpenAICodexBaseUrl,
   isOpenAIApiBaseUrl,
   resolveOpenAIDefaultBaseUrl,
-  type OpenAICodexModelsEndpointContext,
 } from "./base-url.js";
 import { OPENAI_CHAT_LATEST_MODEL_ID } from "./model-route-contract.js";
 import type { OpenAILiveProviderCatalog } from "./model-service-tiers.js";
@@ -35,7 +35,6 @@ type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
   baseUrl: string;
   discoveryApiKey?: string;
-  catalogContext?: OpenAICodexModelsEndpointContext;
 };
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
@@ -69,11 +68,8 @@ export async function buildOpenAILiveProviderConfig(
   if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
   }
-  const [{ buildLiveModelProviderConfig, LiveModelCatalogHttpError }, { isNonSecretApiKeyMarker }] =
-    await Promise.all([
-      import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
-      import("openclaw/plugin-sdk/provider-auth"),
-    ]);
+  const { buildLiveModelProviderConfig, LiveModelCatalogHttpError } =
+    await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const rejectionScope =
     params.apiKey && !params.discoveryApiKey && isNonSecretApiKeyMarker(params.apiKey)
       ? "catalog"
@@ -111,7 +107,6 @@ export async function buildOpenAILiveProviderConfig(
     const modelAccessPrograms = (
       await discoverOpenAIPlatformAccessPrograms({
         apiKey: params.discoveryApiKey ?? params.apiKey,
-        catalogContext: params.catalogContext,
       })
     )?.filter((observation) => listedModels.has(observation.modelId));
     return {
@@ -127,6 +122,7 @@ export async function buildOpenAILiveProviderConfig(
         provider: PROVIDER_ID,
         status: "ready",
         ...(modelAccessPrograms?.length ? { modelAccessPrograms } : {}),
+        modelIdCatalog: { baseUrl, modelIds: [...listedModels] },
       },
     };
   } catch (error) {

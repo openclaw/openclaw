@@ -67,6 +67,18 @@ export function getChangedPathFacts(inputPath) {
   };
 }
 
+/** Numeric test-budget records stay guarded, but cannot change compiler inputs.
+ * @param {string} path
+ */
+export function isTestLineAllocationPath(path) {
+  return (
+    path.startsWith("config/test-lines-allocations/") &&
+    path.endsWith(".txt") &&
+    posix.normalize(path) === path &&
+    !path.includes("\\")
+  );
+}
+
 /** @param {string} arg */
 export function isTestFileTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);

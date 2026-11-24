@@ -1,6 +1,4 @@
 import { createServer } from "node:http";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
@@ -10,6 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { registerRecordedInferenceAccessTests } from "./environment-access.inference.suite.js";
@@ -39,9 +38,12 @@ describe("worker environment service", () => {
         return workerService.reconcileDesktopPolicy();
       }
     }
-    await new RetiredPublisher().publish();
-    await nextTurn();
-    expect(queryObjects(RetiredPublisher)).toBe(0);
+    const publisherRef = await (async () => {
+      const publisher = new RetiredPublisher();
+      await publisher.publish();
+      return new WeakRef(publisher);
+    })();
+    await expectCollected(publisherRef);
     expect(workerService.list()).toEqual([]);
   });
 
@@ -745,7 +747,7 @@ describe("worker environment service", () => {
     ).rejects.toMatchObject({
       code: "invalid_state",
       message:
-        "worker desktop observe is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)",
+        "worker desktop observe is disabled; enable the Desktop lab under Settings -> Labs in the OpenClaw app (config: cloudWorkers.desktop)",
     });
     support.testState.config.cloudWorkers!.desktop = true;
 

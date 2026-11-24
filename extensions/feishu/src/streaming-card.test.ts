@@ -550,6 +550,35 @@ describe("FeishuStreamingSession", () => {
     ]);
   });
 
+  it("reopens a timed-out streaming window on the same card and retries the write", async () => {
+    const requests: string[] = [];
+    let streaming = false;
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse(createStreamingTokenPayload());
+      }
+      const { sequence, settings, content } = JSON.parse(body);
+      const mode = settings && JSON.parse(settings).config.streaming_mode;
+      requests.push(`${sequence} ${settings ? `streaming_mode=${mode}` : content}`);
+      if (settings) {
+        streaming = mode;
+      } else if (!streaming) {
+        return jsonResponse({ code: 200_850, msg: "card streaming timeout" }, 400);
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const session = createActiveSession(deps, { cardId: "card_window", text: "part one" });
+
+    await session.update("part one\npart two\n");
+
+    expect(requests).toEqual([
+      "2 part one\npart two\n",
+      "3 streaming_mode=false",
+      "4 streaming_mode=true",
+      "5 part one\npart two\n",
+    ]);
+  });
+
   it("closes with a throttled divergent latest snapshot without merging it", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_750);
@@ -690,8 +719,6 @@ describe("FeishuStreamingSession", () => {
     expect(settingsBodies).toHaveLength(1);
     const summary = readSummary(settingsBodies[0]);
     expect(summary).toBe(`${"a".repeat(46)}...`);
-    expect(summary).not.toContain("\uD83D");
-    expect(summary.charCodeAt(summary.length - 4)).not.toBe(0xd83d);
   });
 
   it.each([

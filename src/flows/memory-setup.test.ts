@@ -7,12 +7,12 @@ import {
   providerEntry,
 } from "../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { EmbeddingProvider } from "../plugins/embedding-provider-runtime-types.js";
 import type {
   EmbeddingProviderAdapter,
-  EmbeddingProvider,
   EmbeddingProviderCreateResult,
 } from "../plugins/embedding-provider-types.js";
-import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/registry-contribution-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { runMemorySetupFlow } from "./memory-setup.js";

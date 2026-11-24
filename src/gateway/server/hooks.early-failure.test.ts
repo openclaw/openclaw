@@ -6,7 +6,6 @@ import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { consumeAcpTurnStream } from "../../acp/control-plane/manager.turn-stream.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HookMappingConfig } from "../../config/types.hooks.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
@@ -20,6 +19,8 @@ import {
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { loggingState } from "../../logging/state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import {
@@ -195,6 +196,39 @@ describe("gateway hook early-failure recovery", () => {
 
   afterAll(async () => {
     await logPathTracker.cleanup();
+  });
+
+  it("resolves the live transport registry when each queued hook starts", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    let currentRegistry = createEmptyPluginRegistry();
+    const firstRegistry = currentRegistry;
+    const releaseFirst = createDeferred();
+    const seen: unknown[] = [];
+    mocks.runCronIsolatedAgentTurn.mockImplementation(async (params) => {
+      seen.push(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+      params.onExecutionStarted?.();
+      if (seen.length === 1) {
+        await releaseFirst.promise;
+      }
+      return { status: "ok" as const, summary: "done" };
+    });
+    const dispatcher = createGatewayHookDispatcher({
+      deps: {} as never,
+      logHooks: { warn: vi.fn(), info: vi.fn() } as never,
+      resolvePluginRegistry: () => currentRegistry,
+    });
+    const dispatch = () => dispatcher.dispatchHookAgentTurn(pluginHookTurn, "fixture");
+    try {
+      const first = await dispatch();
+      expect(first.ok).toBe(true);
+      const queued = dispatch();
+      currentRegistry = createEmptyPluginRegistry();
+      releaseFirst.resolve();
+      expect((await queued).ok).toBe(true);
+      expect(seen).toEqual([firstRegistry, currentRegistry]);
+    } finally {
+      releaseFirst.resolve();
+    }
   });
 
   it.each([
@@ -560,9 +594,10 @@ describe("gateway hook early-failure recovery", () => {
     async (expire) => {
       const config = { agents: createConfig(false).agents };
       mocks.getRuntimeConfig.mockReturnValue(config);
-      applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
+      const lanes = resolveGatewayLaneConcurrency(config);
+      applyGatewayLaneConcurrency(lanes);
       const releaseCron = createDeferred();
-      const cronRuns = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
+      const cronRuns = Array.from({ length: lanes.cron }, () =>
         enqueueCommandInLane(CommandLane.CronNested, async () => await releaseCron.promise),
       );
       const onStart = queueHookRunner();
@@ -574,7 +609,7 @@ describe("gateway hook early-failure recovery", () => {
       try {
         await vi.waitFor(() =>
           expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
-            activeCount: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+            activeCount: lanes.cron,
             queuedCount: 1,
           }),
         );

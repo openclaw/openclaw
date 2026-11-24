@@ -18,6 +18,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
+import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
@@ -61,6 +62,10 @@ it.each([true, false])(
     };
     const harness = createDispatchTestHarness({
       buildRequestContext: () => context,
+      getRequiredSharedGatewaySessionGeneration: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }).reader,
       extraHandlers: { "chat.send": handleChatSend },
     });
     const publish = (next: typeof current) => {
@@ -103,8 +108,7 @@ it.each([true, false])(
       const pending = await listSessionPendingInputs(scope);
       expect(pending.total).toBe(1);
       const expectRetained = async () => {
-        expect(authority.assertCurrent).not.toThrow();
-        expect(authority.signal?.aborted).toBe(false);
+        expect(authority.signal?.aborted).not.toBe(true);
         expect(isRpcSourceQueued(active)).toBe(true);
         expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
         expect(await listSessionPendingInputs(scope)).toEqual(pending);
@@ -127,11 +131,9 @@ it.each([true, false])(
       publish(narrowed);
       publish(granted);
       if (verified) {
-        expect(authority.signal?.aborted).toBe(true);
-        expect(authority.assertCurrent).toThrow(/authority is no longer active/);
         expect(client.invalidated).toBe(true);
-        expect(active.input.abortSignal.aborted).toBe(true);
-        expect(getExistingFollowupQueue(key)?.items ?? []).toHaveLength(0);
+        expect(active.input.abortSignal.aborted).toBe(false);
+        await expectRetained();
       } else {
         publish({ ...current, gateway: { ...current.gateway, allowRealIpFallback: true } });
         expect(client.invalidated).toBe(true);

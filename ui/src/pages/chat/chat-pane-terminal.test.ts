@@ -131,7 +131,6 @@ it("disables terminal continuation with query-specific guidance", async () => {
   paint(row);
 
   const menu = container.querySelector<HTMLElement>("openclaw-chat-header-session-menu")!;
-  await selectNativeMenu(menu, "submenu:advanced");
   await selectNativeMenu(menu, "submenu:open-in");
   const continuation = await waitForSolid(() => {
     const item = menu.querySelector<HTMLButtonElement>('[data-value="continue-in-terminal"]');
@@ -140,7 +139,7 @@ it("disables terminal continuation with query-specific guidance", async () => {
   });
   expect(continuation.disabled).toBe(true);
   expect(continuation.title).toBe(
-    "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+    "This Gateway address can’t open a terminal. Use the CLI or a Gateway address without a query string.",
   );
 });
 

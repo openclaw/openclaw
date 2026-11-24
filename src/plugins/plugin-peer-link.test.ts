@@ -1,10 +1,14 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { safeRealpathSync } from "./path-safety.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
@@ -16,7 +20,22 @@ import {
 } from "./plugin-peer-link.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
+vi.mock("./path-safety.js", { spy: true });
+
 const tempDirs: string[] = [];
+
+it("rebinds an installed peer without synchronous filesystem operations", async () => {
+  const { packageDir, linkPath, root } = peerFixture("stale-link");
+  using observation = observeMainThreadFs();
+  expect(
+    await linkOpenClawPeerDependencies({ ...peerInstall(packageDir), hostRoot: root }),
+  ).toEqual({
+    repaired: 1,
+    skipped: 0,
+  });
+  expect(observation.calls()).toEqual({});
+  expect(await fsPromises.realpath(linkPath)).toBe(await fsPromises.realpath(root));
+});
 
 function writeJson(filePath: string, data: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(data), "utf8");
@@ -133,6 +152,25 @@ describe("plugin peer links", () => {
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(bundle));
     expect(await linkOpenClawPeerDependencies(install)).toEqual({ repaired: 1, skipped: 0 });
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(seed));
+  });
+
+  it("admits another spelling of the host directory but not a different directory", () => {
+    const { root, packageDir, linkPath, oldHost: host } = peerFixture("stale-link");
+    const otherHost = path.join(root, "other-host");
+    fs.mkdirSync(otherHost);
+    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${host}/`).href);
+    // Windows realpath returns the spelling a junction stored, not the on-disk spelling.
+    vi.mocked(safeRealpathSync).mockImplementation((target) =>
+      fs.existsSync(target) ? target : null,
+    );
+    try {
+      expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
+      fs.unlinkSync(linkPath);
+      fs.symlinkSync(otherHost, linkPath, "junction");
+      expect(auditOpenClawPeerDependencyLinkSync({ packageDir })?.reason).toContain("instead of");
+    } finally {
+      vi.mocked(safeRealpathSync).mockReset();
+    }
   });
 
   it.each([
@@ -271,7 +309,7 @@ describe("plugin peer links", () => {
       const release = createDeferred();
       const failure = new Error("managed root could not be read");
       const readdir = fsPromises.readdir.bind(fsPromises);
-      const symlink = fs.symlinkSync.bind(fs);
+      const symlink = fsPromises.symlink.bind(fsPromises);
       let reachedFirst = false;
       let completed = false;
       const finishFirst = () => {
@@ -292,8 +330,8 @@ describe("plugin peer links", () => {
         }
         return await readdir(...args);
       });
-      vi.spyOn(fs, "symlinkSync").mockImplementation((...args) => {
-        symlink(...args);
+      vi.spyOn(fsPromises, "symlink").mockImplementation(async (...args) => {
+        await symlink(...args);
         if (String(args[1]) === first.linkPath) {
           finishFirst();
         }
@@ -334,6 +372,98 @@ describe("plugin peer links", () => {
       }
     },
   );
+
+  it("preserves pending cohort peers while repairing fresh managed and registered siblings", async () => {
+    const root = makeTempDir();
+    const priorManaged = peerFixture("stale-link", false, path.join(root, "npm"));
+    const priorRegistered = peerFixture("stale-link", true, root);
+    const freshManaged = peerFixture("missing-modules", false, path.join(root, "fresh-npm"));
+    const freshRegistered = path.join(priorRegistered.extensionsDir, "z-peer-plugin");
+    peerPackage(freshRegistered);
+    const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
+    const { createUpdateRun } = await import("../infra/update-run-ledger.js");
+    const { beginPluginCohortRecovery, deletePluginCohortRecovery } =
+      await import("../infra/update-run-recovery-store.js");
+    const { closeOpenClawStateDatabaseByPathAsync } =
+      await import("../state/openclaw-state-db-cache.js");
+    const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+    const { sha256Hex } = await import("../infra/crypto-digest.js");
+    try {
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const transactionId = randomUUID();
+      const fence = { assertCurrent() {} };
+      const pair = beginPluginCohortRecovery(
+        {
+          runId: run.runId,
+          transactionId,
+          revision: 0,
+          claimId: randomUUID(),
+          claimKind: "initial",
+          handoff: null,
+          source: { stateDir: root, configPath: path.join(root, "openclaw.json") },
+          from: { root, nodePath: process.execPath, version: "2026.10.9", buildId: "old" },
+          to: { root, nodePath: process.execPath, version: "2026.10.10", buildId: "new" },
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          effects: [],
+          restore: null,
+          verification: null,
+          primaryFailure: null,
+        },
+        {
+          runId: run.runId,
+          transactionId,
+          revision: 0,
+          disposition: "pending",
+          installKey: root,
+          priorArtifacts: [priorManaged, priorRegistered].map(({ packageDir }) => {
+            const stat = fs.statSync(packageDir, { bigint: true });
+            return {
+              pluginId: "peer-plugin",
+              packageDir,
+              identity: {
+                realPath: fs.realpathSync(packageDir),
+                dev: String(stat.dev),
+                ino: String(stat.ino),
+                manifestSha256: sha256Hex(fs.readFileSync(path.join(packageDir, "package.json"))),
+              },
+              markerBefore: null,
+              markerAfter: null,
+            };
+          }),
+          artifacts: [],
+          publications: [],
+          settledPublications: 0,
+        },
+        fence,
+        options,
+      );
+      const repair = () =>
+        repairInstalledOpenClawHostLinks({
+          ...options,
+          ...registeredRepair(priorRegistered.packageDir, freshRegistered),
+          managedNpmRoots: [priorManaged.root, freshManaged.root],
+          logger: {},
+        });
+      expect(await repair()).toEqual({ managedRepaired: 1, registeredRepaired: 1 });
+      expect(fs.readlinkSync(priorManaged.linkPath)).toBe(priorManaged.oldHost);
+      expect(fs.readlinkSync(priorRegistered.linkPath)).toBe(priorRegistered.oldHost);
+      expectHostLink(freshManaged.linkPath);
+      expectHostLink(path.join(freshRegistered, "node_modules", "openclaw"));
+      expect(
+        auditOpenClawPeerDependencyLinkSync({ packageDir: priorManaged.packageDir }),
+      ).not.toBeNull();
+      expect(
+        auditOpenClawPeerDependencyLinkSync({ packageDir: priorRegistered.packageDir }),
+      ).not.toBeNull();
+      deletePluginCohortRecovery(pair, fence, options);
+      expect(await repair()).toEqual({ managedRepaired: 1, registeredRepaired: 1 });
+      expectHostLink(priorManaged.linkPath);
+      expectHostLink(priorRegistered.linkPath);
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(options.env));
+    }
+  });
 
   it.each([
     ["managed", false],
@@ -381,9 +511,9 @@ describe("plugin peer links", () => {
       );
       const { guard, failure } = oneShotAuthority();
       if (existingKind === "symlink") {
-        const unlink = fs.unlinkSync.bind(fs);
-        vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
-          unlink(target);
+        const unlink = fsPromises.unlink.bind(fsPromises);
+        vi.spyOn(fsPromises, "unlink").mockImplementation(async (target) => {
+          await unlink(target);
           guard.current = false;
         });
         syncBuiltinESMExports();
@@ -411,7 +541,7 @@ describe("plugin peer links", () => {
   it("preserves filesystem failure reporting while caller authority remains current", async () => {
     const { packageDir, linkPath } = peerFixture("missing-link");
     const failure = new Error("peer link write denied");
-    vi.spyOn(fs, "symlinkSync").mockImplementationOnce(() => {
+    vi.spyOn(fsPromises, "symlink").mockImplementationOnce(async () => {
       throw failure;
     });
     syncBuiltinESMExports();

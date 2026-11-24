@@ -1,6 +1,7 @@
 import type { JSX } from "../../types/solid-elements.js";
 import type { DefaultModelSelection } from "./data.ts";
 import type { DefaultModelsViewProps } from "./default-models-view.tsx";
+import type { LoginProvider } from "./login-providers.ts";
 import type { ModelProvidersOwner } from "./model-providers-controller.ts";
 import type { ProviderProfilesViewProps } from "./profiles-view.tsx";
 
@@ -24,7 +25,10 @@ export type ModelProvidersViewProps = SharedModelProvidersProps & {
   catalogDiscoveryError: string | null;
   providerDetailsReady?: boolean;
   installedAgents: JSX.Element | typeof undefined;
-  providerScope?: JSX.Element;
   accountRecovery?: JSX.Element | typeof undefined;
   providerQuery?: string;
+  /** The page owner supplies the catalog and its entry points. */
+  catalogProviders: LoginProvider[];
+  onCatalogConnect: (providerId: string) => void;
+  discoverDisabled: boolean;
 };

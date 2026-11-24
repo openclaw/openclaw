@@ -10,7 +10,7 @@ const QA_AGENTIC_PARITY_SCENARIOS = [
   ["compaction-retry-mutating-tool", "Compaction retry after mutating tool", true],
   ["subagent-handoff", "Subagent handoff", true],
   ["subagent-fanout-synthesis", "Subagent fanout synthesis", true],
-  ["subagent-stale-child-links", "Subagent stale child links", false],
+  ["subagent-stale-child-links", "Durable native and stale non-native child links", false],
   ["memory-recall", "Memory recall after context switch", false],
   ["thread-memory-isolation", "Thread memory isolation", true],
   ["config-restart-capability-flip", "Config restart capability flip", true],

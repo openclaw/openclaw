@@ -44,13 +44,21 @@ afterEach(() => vi.restoreAllMocks());
 function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {}) {
   const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
   const catalogs: SessionCatalogProvider[] = [];
-  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+  const services: Extract<
+    Parameters<OpenClawPluginApi["registerService"]>[0],
+    { apiVersion: 2 }
+  >[] = [];
   const api = createTestPluginApi({
     runtime,
     config,
     registerNodeHostCommand: (command) => nodeCommands.push(command),
     registerSessionCatalog: (catalog) => catalogs.push(catalog),
-    registerService: (service) => services.push(service),
+    registerService: (service) => {
+      if (service.apiVersion !== 2) {
+        throw new Error("Expected Session Share service API version 2");
+      }
+      services.push(service);
+    },
   });
   sessionSharePlugin.register(api);
   const catalog = catalogs.find((entry) => entry.id === "openclaw");
@@ -118,6 +126,12 @@ function commandFixture(groups: string[] = ["Team"]) {
   return {
     config,
     commands,
+    listWithLinks: async () =>
+      JSON.parse(
+        await commands
+          .find((command) => command.command === "openclaw.sessions.catalog.list.v1")!
+          .handle(JSON.stringify({ includeOriginalPath: true })),
+      ) as { sessions: Array<SessionCatalogSession & { originalPath?: string }> },
     list: async (params: Record<string, unknown> = {}) =>
       JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
     read: async (threadId: string, params: Record<string, unknown> = {}) =>
@@ -545,8 +559,16 @@ describe("session-share receiver identity integration", () => {
         }
         const page = await catalog.read({ hostId, threadId: nativeSession.threadId });
         expect(page.items.map((item) => item.sender)).toEqual([
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
+          {
+            identity: { type: "profile", id: profile.id },
+            label: "Catalog Person",
+            avatarUrl: "/api/users/" + profile.id + "/avatar?v=" + profile.updatedAt,
+          },
+          {
+            identity: { type: "profile", id: profile.id },
+            label: "Catalog Person",
+            avatarUrl: "/api/users/" + profile.id + "/avatar?v=" + profile.updatedAt,
+          },
           { identity: { ...namespacedIdentity, id: "9999" }, label: "Remote Person" },
         ]);
       } finally {
@@ -560,3 +582,21 @@ describe("session-share receiver identity integration", () => {
     });
   });
 });
+
+it("adds source paths only to the optional command while keeping selection and read-only authority", () =>
+  withCommands(async ({ list, listWithLinks }) => {
+    await writeSession("shared");
+    await writeSession("private", { category: "Private" });
+    const plain = await list();
+    const linked = await listWithLinks();
+    expect(plain.sessions).toHaveLength(1);
+    expect(plain.sessions[0]).not.toHaveProperty("originalPath");
+    expect(linked.sessions).toHaveLength(1);
+    expect(linked.sessions[0]).toMatchObject({
+      threadId: "agent:main:shared",
+      originalPath: "/chat/main/shared",
+      canContinue: false,
+      canArchive: false,
+      canOpenTerminal: false,
+    });
+  }));

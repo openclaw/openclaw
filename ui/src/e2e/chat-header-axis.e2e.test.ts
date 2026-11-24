@@ -81,7 +81,21 @@ suite.define(() => {
         const { top, height } = rect(selector);
         return top + height / 2;
       };
+      // Every desktop header control shares the rail action size and radius.
+      const controls = [
+        ".chat-pane__session-title-button",
+        ".chat-header-session-menu__trigger",
+        ".chat-details-toggle",
+      ].map((selector) => ({
+        selector,
+        height: rect(selector).height,
+        radius: getComputedStyle(element(selector)).borderRadius,
+      }));
       return {
+        controls,
+        radiusToken: getComputedStyle(document.documentElement)
+          .getPropertyValue("--radius-md")
+          .trim(),
         nav: centerY(".chat-details-toggle svg"),
         menu: centerY(".chat-header-session-menu__trigger svg"),
         headerBottom: root.getBoundingClientRect().bottom,
@@ -92,6 +106,10 @@ suite.define(() => {
     });
 
     expect(Math.abs(geometry.menu - geometry.nav)).toBeLessThanOrEqual(0.1);
+    for (const control of geometry.controls) {
+      expect(control.height, control.selector).toBe(28);
+      expect(control.radius, control.selector).toBe(geometry.radiusToken);
+    }
     expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
     expect(geometry.headerOverflow).toBeLessThanOrEqual(1);
     expect(geometry.titleWidth).toBeGreaterThan(0);
@@ -144,12 +162,13 @@ suite.define(() => {
           shellBottom: element.closest(".shell")!.getBoundingClientRect().bottom,
         };
       });
-      // The draft's 6px gap must not reserve the physical inset again.
+      // The draft's chat-composer gap must not reserve the physical inset again.
       expect(bounds.shellBottom).toBeCloseTo(viewport.height - 34, 0);
-      expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(6, 0);
+      expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(10, 0);
       expect(bounds.bottom).toBeLessThanOrEqual(bounds.shellBottom);
-      expect(bounds.left).toBeGreaterThanOrEqual(20);
-      expect(bounds.right).toBeLessThanOrEqual(viewport.width - 20);
+      // The same edges as the chat composer it becomes.
+      expect(bounds.left).toBeGreaterThanOrEqual(16);
+      expect(bounds.right).toBeLessThanOrEqual(viewport.width - 16);
       expect(bounds.left).toBeCloseTo(viewport.width - bounds.right, 0);
     });
   }

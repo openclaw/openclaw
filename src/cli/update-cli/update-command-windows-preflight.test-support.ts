@@ -5,6 +5,7 @@ import * as assertions from "../update-cli-assertions.test-support.js";
 import type { createUpdateCliFixture } from "../update-cli-fixture.test-support.js";
 import * as service from "../update-cli-mocks.test-support.js";
 import * as api from "../update-cli-modules.test-support.js";
+import { prepareUpdateCommand } from "./update-command-run.js";
 
 await vi.hoisted(() => import("../update-cli-mocks.test-support.js"));
 
@@ -13,20 +14,20 @@ export function registerWindowsTaskAdmissionTests(
 ) {
   const callerSid = "S-1-5-21-111-222-333-1001";
   const ownTask = { callerSid, callerElevated: false, taskUserSid: callerSid, taskRunLevel: 0 };
-  it.each(
-    [
-      { scenario: "own per-user task", facts: ownTask, proceeds: true },
-      {
-        scenario: "another principal",
-        facts: { ...ownTask, taskUserSid: "S-1-5-21-111-222-333-1002" },
-      },
-      { scenario: "highest privileges", facts: { ...ownTask, taskRunLevel: 1 } },
-      { scenario: "timeout" },
-      { scenario: "access denied", tag: "openclaw@2026.9.8" },
-    ].map((row) => Object.assign({ tag: "2026.9.8" }, row)),
-  )(
+  it.each([
+    { scenario: "own per-user task", facts: ownTask, proceeds: true },
+    {
+      scenario: "another principal",
+      facts: { ...ownTask, taskUserSid: "S-1-5-21-111-222-333-1002" },
+    },
+    { scenario: "highest privileges", facts: { ...ownTask, taskRunLevel: 1 } },
+    { scenario: "timeout" },
+    { scenario: "access denied", tag: "openclaw@2026.9.8" },
+    { scenario: "access denied", tag: "main" },
+    { scenario: "access denied", tag: "openclaw@MAIN" },
+  ])(
     "checks stopped Windows task admission from native facts: $scenario ($tag)",
-    async ({ scenario, facts, proceeds, tag }) => {
+    async ({ scenario, facts, proceeds, tag = "2026.9.8" }) => {
       const nativeProbe = await vi.importActual<
         typeof import("../../daemon/schtasks-state-probe.js")
       >("../../daemon/schtasks-state-probe.js");
@@ -62,28 +63,29 @@ export function registerWindowsTaskAdmissionTests(
         };
       });
 
-      const update = () => api.invokeUpdateCli({ tag, timeout: "2400", json: true });
       if (proceeds) {
-        await update();
+        expect(await prepareUpdateCommand({ tag, timeout: "2400", json: true })).toMatchObject({
+          installKind: "package",
+          timeoutMs: 2_400_000,
+        });
         // Native HRESULTs must come from the adapter, not be invented from token type.
         expect(queriedScript).not.toMatch(/Write-Output\s+['"]-2147024891['"]/);
         expect(queriedScript).toContain(".RunLevel");
         expect(queriedScript).toContain(".UserId");
-        expect(assertions.lastWriteJsonCall(), assertions.getErrorOutput()).toMatchObject({
-          status: "ok",
-        });
-        expect(assertions.packageInstallCommandCall()).toBeDefined();
       } else {
-        await expect(update()).rejects.toEqual(new api.ExitError(1));
-        expect(assertions.lastWriteJsonCall()).toMatchObject({
-          status: "error",
-          reason: "managed-service-preflight",
-        });
+        await expect(api.invokeUpdateCli({ tag, timeout: "2400", json: true })).rejects.toEqual(
+          new api.ExitError(1),
+        );
         const output = assertions.getErrorOutput();
         expect(output).toContain("elevated terminal");
-        expect(output).toContain("npm i -g openclaw@2026.9.8 --allow-scripts=openclaw");
-        expect(output).toContain("openclaw doctor --fix");
-        expect(output).toContain("openclaw gateway restart");
+        if (tag === "main" || tag === "openclaw@MAIN") {
+          expect(output).toContain("openclaw update --channel dev");
+          expect(output).not.toContain("npm i -g");
+        } else {
+          expect(output).toContain("npm i -g openclaw@2026.9.8 --allow-scripts=openclaw");
+          expect(output).toContain("openclaw doctor --fix");
+          expect(output).toContain("openclaw gateway restart");
+        }
         if (scenario === "timeout") {
           expect(output).toContain("Task Scheduler task lookup/elevation check timed out");
           expect(output).toContain("60000 ms");
@@ -93,8 +95,12 @@ export function registerWindowsTaskAdmissionTests(
           service.suspendScheduledTaskAutoStartForUpdate,
           api.fetchNpmPackageTargetStatus,
         );
-        expect(assertions.packageInstallCommandCall()).toBeUndefined();
+        expect(assertions.lastWriteJsonCall(), assertions.getErrorOutput()).toMatchObject({
+          status: "error",
+          reason: "managed-service-preflight",
+        });
       }
+      expect(assertions.packageInstallCommandCall()).toBeUndefined();
     },
   );
 }

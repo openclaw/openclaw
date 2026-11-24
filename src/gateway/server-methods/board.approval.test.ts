@@ -1,5 +1,8 @@
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  BoardSnapshot,
+  BoardWidgetDataQuery,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import * as execApprovalsStore from "../../infra/exec-approvals-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -93,6 +96,48 @@ it("refuses a cached assessment when grant authority is revoked during write adm
   expect(response.mock.calls[0]?.[0]).toBe(false);
   expect(reviewWidgetApproval).toHaveBeenCalledTimes(1);
   expect((await harness.store.getSnapshot(target)).widgets[0]?.grantState).toBe("pending");
+});
+
+it("reviews a changed named query even with identical HTML and a narrower field set", async () => {
+  vi.stubEnv("GH_TOKEN", "synthetic-actions-token");
+  onTestFinished(() => void vi.unstubAllEnvs());
+  const github = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ id: 100, login: "fixture-user", avatar_url: null })),
+    );
+  onTestFinished(() => github.mockRestore());
+  reviewWidgetApproval.mockResolvedValue(approved);
+  const { invoke } = createHarness(undefined, undefined, undefined, {
+    getRuntimeConfig: () => ({ tools: { exec: { mode: "auto" as const } } }),
+  });
+  const query: BoardWidgetDataQuery = {
+    name: "main-ci",
+    bindingId: "github.actions.runs",
+    params: {
+      repository: "owner/repo",
+      workflow: "ci.yml",
+      branch: "main",
+      status: null,
+      created: null,
+      perPage: 1,
+      excludePullRequests: true,
+    },
+    fields: ["conclusion", "id"],
+  };
+  const request = {
+    sessionKey,
+    name: "ci",
+    content: { kind: "html" as const, html: "<p>CI</p>" },
+    declared: { queries: [query] },
+  };
+  const initial = await invoke("board.widget.put", request);
+  expect(initial.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "granted" }] }]);
+  reviewWidgetApproval.mockResolvedValue({ ...approved, decision: "deny" });
+  const narrowed = { queries: [{ ...query, fields: ["id" as const] }] };
+  const changed = await invoke("board.widget.put", { ...request, declared: narrowed });
+  expect(changed.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "rejected" }] }]);
 });
 
 it.each([

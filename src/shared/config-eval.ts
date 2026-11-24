@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { getOrCreatePromise } from "./lazy-promise.js";
 import { isOsRequirementSatisfied, type RequirementsMetadata } from "./requirements.js";
 
@@ -89,14 +90,17 @@ function windowsPathExtensions(raw: string | undefined): string[] {
 const pendingBinaryAccess = new Map<string, Promise<boolean>>();
 
 // Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
-let binaryCache: { path: string; pathExt: string; hits: Set<string> } | undefined;
+let binaryCache: { path: string; pathExt: string; cwd?: string; hits: Set<string> } | undefined;
 
 function resolveBinaryCache() {
-  const isWindows = process.platform === "win32";
   const pathEnv = process.env.PATH ?? "";
-  const pathExt = isWindows ? (process.env.PATHEXT ?? "") : "";
-  if (binaryCache?.path !== pathEnv || binaryCache.pathExt !== pathExt) {
-    binaryCache = { path: pathEnv, pathExt, hits: new Set() };
+  const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
+  // Only relative PATH entries depend on cwd; absolute-only hits keep their cache.
+  const cwd = pathEnv.split(path.delimiter).some((part) => part && !path.isAbsolute(part))
+    ? tryProcessCwd()
+    : undefined;
+  if (binaryCache?.path !== pathEnv || binaryCache.pathExt !== pathExt || binaryCache.cwd !== cwd) {
+    binaryCache = { path: pathEnv, pathExt, cwd, hits: new Set() };
   }
   return binaryCache;
 }
@@ -104,7 +108,6 @@ function resolveBinaryCache() {
 function resolveBinarySearch(cache = resolveBinaryCache()) {
   const isWindows = process.platform === "win32";
   return {
-    cache,
     parts: cache.path.split(path.delimiter).filter(Boolean),
     extensions: isWindows ? windowsPathExtensions(process.env.PATHEXT) : [""],
   };
@@ -131,7 +134,7 @@ export function hasBinary(bin: string): boolean {
         continue;
       }
       fs.accessSync(candidate, fs.constants.X_OK);
-      search.cache.hits.add(bin);
+      cache.hits.add(bin);
       return true;
     } catch {
       // keep scanning

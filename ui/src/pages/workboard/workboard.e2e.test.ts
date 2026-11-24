@@ -7,7 +7,8 @@ import {
 } from "../../../../packages/workboard-contract/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { waitForControlUiProofSurface } from "../../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, type MockGatewayControls } from "../../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayControls } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { openPicker } from "../../test-helpers/select-picker-e2e.ts";
 import {
@@ -80,9 +81,9 @@ function cardsListResponse(
 function installWorkboard(
   page: Page,
   cards: WorkboardCard[],
-  extra: Parameters<typeof installMockGateway>[1] = {},
+  extra: Parameters<typeof installNativePluginMockGateway>[1] = {},
 ) {
-  return installMockGateway(page, {
+  return installNativePluginMockGateway(page, {
     ...workboardUi,
     ...extra,
     methodResponses: {
@@ -198,6 +199,48 @@ suite.define(() => {
       expect(await page.locator(".workboard-detail__note").count()).toBe(0);
       expect(await page.getByRole("button", { name: /Add note/u }).count()).toBe(0);
     });
+  });
+
+  it("keeps the linked session name and status readable with mobile card actions", async () => {
+    const sessionKey = "agent:main:pilot-review";
+    const sessionName = "Atlas pilot review";
+    const linked = card({
+      id: "pilot",
+      title: "Review pilot release notes",
+      agentId: "main",
+      sessionKey,
+    });
+    await suite.withPage(
+      { hasTouch: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installWorkboard(page, [linked], {
+          methodResponses: {
+            "sessions.list": {
+              ts: 1,
+              count: 1,
+              defaults: {},
+              sessions: [
+                { key: sessionKey, displayName: sessionName, kind: "direct", status: "running" },
+              ],
+            },
+            "workboard.cards.get": { card: linked, events: [], notes: [] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "workboard");
+        await cardInColumn(page, "Todo", linked.title).click();
+        const overview = page.getByRole("tabpanel", { name: "Overview" });
+        await button(overview, "Stop session").click({ trial: true });
+        await button(overview, "Open session").click({ trial: true });
+        for (const text of [sessionName, "Active run in progress"]) {
+          const lines = await overview.getByText(text, { exact: true }).evaluate((element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size;
+          });
+          expect(lines, text).toBe(1);
+        }
+      },
+    );
   });
 
   it("keeps card titles visible when a column overflows its height", async () => {

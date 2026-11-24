@@ -34,6 +34,12 @@ export type CriticalPathCapture = {
   elapsedMs: number;
   capturedMs: number;
   presentation?: CriticalPathPresentation;
+  navigation?: {
+    startedMs: number;
+    cpuMilliseconds: Record<string, number>;
+    documentRpcsCapturedMs: number;
+    documentRpcs: CriticalPathCapture["rpcs"];
+  };
   rpcs: Array<{
     method: string;
     params: unknown;
@@ -268,6 +274,15 @@ export async function navigateCriticalPath(
   beforeMeasurement?: () => Promise<void>,
   intentMs = 0,
 ) {
+  if (beforeMeasurement) {
+    await beforeMeasurement();
+  }
+  const navigationCpuBefore = await readCriticalPathCpu(cdp);
+  const navigationStartedMs = await page.evaluate((name) => {
+    const startedMs = performance.now();
+    performance.mark(`critical-path:${name}:navigation`);
+    return startedMs;
+  }, route);
   let target: Locator | undefined;
   if (route === "settings") {
     if (intentMs > 0) {
@@ -295,9 +310,6 @@ export async function navigateCriticalPath(
     }
     await target.waitFor({ state: "visible" });
   }
-  if (beforeMeasurement) {
-    await beforeMeasurement();
-  }
   const cpuBefore = await readCriticalPathCpu(cdp);
   if (target && intentMs > 0) {
     await page.evaluate((name) => Reflect.get(window, "__criticalPath").intent(name), route);
@@ -319,8 +331,26 @@ export async function navigateCriticalPath(
     const state = Reflect.get(window, "__coldLoad").read();
     return !state.pending && !state.queued && state.idleMs > 750;
   });
+  const capture = await readCriticalPath(page);
+  const cpuAfter = await readCriticalPathCpu(cdp);
+  // Keep the full-document census after CPU capture so serializing boot RPCs is not timed.
+  const document = await page.evaluate(
+    (): {
+      capturedMs: number;
+      rpcs: CriticalPathCapture["rpcs"];
+    } => {
+      const rpcs: CriticalPathCapture["rpcs"] = Reflect.get(window, "__coldLoad").read().rpcs;
+      return { capturedMs: performance.now(), rpcs };
+    },
+  );
   return {
-    ...(await readCriticalPath(page)),
-    cpuMilliseconds: criticalPathCpuDelta(cpuBefore, await readCriticalPathCpu(cdp)),
+    ...capture,
+    cpuMilliseconds: criticalPathCpuDelta(cpuBefore, cpuAfter),
+    navigation: {
+      startedMs: navigationStartedMs,
+      cpuMilliseconds: criticalPathCpuDelta(navigationCpuBefore, cpuAfter),
+      documentRpcsCapturedMs: document.capturedMs,
+      documentRpcs: document.rpcs,
+    },
   };
 }
