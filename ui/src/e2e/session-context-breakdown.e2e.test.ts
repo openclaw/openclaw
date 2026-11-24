@@ -405,7 +405,6 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
         sessionKey,
-        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
         sessions: [
           {
             key: sessionKey,
