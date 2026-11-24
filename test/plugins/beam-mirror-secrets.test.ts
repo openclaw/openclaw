@@ -45,7 +45,9 @@ process.stdin.on("end", () => {
 );
 vi.mock("../../extensions/beam/package.json", async (importOriginal) => {
   const current = await importOriginal<{ default: Record<string, unknown> }>();
-  if (process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT) return current;
+  if (process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT) {
+    return current;
+  }
   const { createHash } = await import("node:crypto");
   return {
     ...current,
