@@ -384,6 +384,8 @@ export function installDeferredCompletionFixture() {
     vi.spyOn(shared, "readPackageVersion").mockImplementation(readPackageVersion);
     readPackageVersion.mockResolvedValue("1.0.0");
     vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
+    baseSnapshot.path = path.join(tempHome.home, "openclaw-config.json");
+    await fs.writeFile(baseSnapshot.path, baseSnapshot.raw ?? "{}", { mode: 0o600 });
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     // Finalization failure observes the fixture's absent Gateway without contacting the host.
     observeUpdateGatewayReadiness.mockImplementation(async ({ gatewayPort, assertCurrent }) => {

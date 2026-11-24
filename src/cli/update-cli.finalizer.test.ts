@@ -374,7 +374,8 @@ describe("update-cli", () => {
           installs: postDoctorRecords,
         },
       });
-      expect(lastReplaceConfigCall()?.baseHash).toBe("post-doctor");
+      // The refreshed plugin records are ledger-owned; no authored config changed.
+      expect(lastReplaceConfigCall()).toBeUndefined();
       expect(vi.mocked(runExec).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
         loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder[0] ?? 0,
       );

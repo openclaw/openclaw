@@ -326,12 +326,12 @@ it.each([
           }
         };
         const mutate = config.mutateConfigFileWithRetry;
-        const replace = config.replaceConfigFile;
+        const transform = config.transformConfigFileWithRetry;
         const mutationBoundary =
           flow === "plugins"
             ? vi
-                .spyOn(config, "replaceConfigFile")
-                .mockImplementation((params) => duringMutation(() => replace(params)))
+                .spyOn(config, "transformConfigFileWithRetry")
+                .mockImplementation((params) => duringMutation(() => transform(params)))
             : preparationFlow
               ? undefined
               : vi.spyOn(config, "mutateConfigFileWithRetry").mockImplementation((params) =>
@@ -462,6 +462,8 @@ it.each([
                   configSnapshot: prepared.snapshot,
                   configWriteOptions: prepared.writeOptions,
                   configChanged: true,
+                  // A substantive change goes through the fenced config transaction.
+                  restoredAuthoredChannels: { discord: { enabled: false } },
                   pluginInstallRecords: {},
                   json: true,
                   timeoutMs: 1_000,

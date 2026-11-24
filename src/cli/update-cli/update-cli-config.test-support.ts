@@ -71,6 +71,13 @@ export function createUpdateCliBaseSnapshot(config: OpenClawConfig): ConfigFileS
   };
 }
 
+/** Materialize the mocked snapshot for the real link/target checks. */
+export async function materializeUpdateCliBaseSnapshot(snapshot: ConfigFileSnapshot, home: string) {
+  const configPath = path.join(home, "openclaw-config.json");
+  await fs.writeFile(configPath, snapshot.raw ?? "{}", { mode: 0o600 });
+  snapshot.path = configPath;
+}
+
 export const pluginSyncResult = (
   config: OpenClawConfig,
   changed = false,

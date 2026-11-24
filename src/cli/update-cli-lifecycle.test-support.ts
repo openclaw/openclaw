@@ -108,6 +108,7 @@ import {
   updateGitCheckout,
 } from "./update-cli-modules.test-support.js";
 import {
+  materializeUpdateCliBaseSnapshot,
   npmPluginUpdateResult,
   pluginSyncResult,
 } from "./update-cli/update-cli-config.test-support.js";
@@ -348,6 +349,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       indeterminate: [],
     });
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
+    await materializeUpdateCliBaseSnapshot(baseSnapshot, tempHome.home);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(readSourceConfigBestEffort).mockResolvedValue(baseSnapshot.config);
     setupConfigMutationWithRetryMock();
