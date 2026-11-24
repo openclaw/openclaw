@@ -8,7 +8,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.hardware.camera2.CameraCharacteristics
 import android.util.Base64
-import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.cameraCharacteristics
+import androidx.camera.camera2.interop.cameraId
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -418,7 +419,7 @@ class CameraCaptureManager(
     val cameraId = cameraIdOrNull(info) ?: return null
     val lensFacing =
       runCatching {
-        Camera2CameraInfo.from(info).getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
+        info.cameraCharacteristics.get(CameraCharacteristics.LENS_FACING)
       }.getOrNull()
     return when (lensFacing) {
       CameraCharacteristics.LENS_FACING_FRONT -> CameraDeviceInfo(cameraId, "Front Camera", "front", "builtIn")
@@ -429,7 +430,7 @@ class CameraCaptureManager(
   }
 
   @SuppressLint("UnsafeOptInUsageError")
-  private fun cameraIdOrNull(info: CameraInfo): String? = runCatching { Camera2CameraInfo.from(info).cameraId }.getOrNull()
+  private fun cameraIdOrNull(info: CameraInfo): String? = runCatching { info.cameraId }.getOrNull()
 }
 
 internal fun resolveCameraFacing(

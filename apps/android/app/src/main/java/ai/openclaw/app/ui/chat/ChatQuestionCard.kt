@@ -190,6 +190,8 @@ private fun ChatQuestionSummary(
   }
 }
 
+// The value-based editor preserves prompt-owned draft updates and question-controlled secret masking.
+@Suppress("DEPRECATION")
 @Composable
 private fun QuestionSection(
   question: Question,
