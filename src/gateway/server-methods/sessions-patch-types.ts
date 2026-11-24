@@ -1,38 +1,13 @@
-import type {
-  ErrorShape,
-  SessionsPatchParams,
-} from "../../../packages/gateway-protocol/src/index.js";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
-import type { ArchiveUndoCaller } from "./sessions-patch-archive-undo.js";
 import type {
   SessionPatchArchivePreparation,
   SessionPatchArchiveTarget,
 } from "./sessions-patch-archive.types.js";
-import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import type { ActiveSessionPermissionChange } from "./sessions-patch-permissions.runtime.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  SessionMutationAuthorization,
-} from "./types.js";
-
-export type SessionPatchExecutionParams = {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  signal?: AbortSignal;
-  archiveUndo?: ArchiveUndoCaller;
-  diagnostics?: SessionPatchDiagnostics;
-  operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
-  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
-  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
-  onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
-  patch: Omit<SessionsPatchParams, keyof SessionPatchTargetIdentity>;
-  targets: readonly MutationTarget[];
-};
 
 export type MutationTarget = SessionPatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
@@ -51,13 +26,11 @@ export type MutationOutcome =
       applied: boolean;
       accessChanged: boolean;
       entry: SessionEntry;
-      archiveUndoToken?: string;
     }
   | { ok: false; error: ErrorShape };
 
 export type GroupMutationOperation = {
   replacements?: SessionEntryCanonicalReplacement[];
-  archiveReceipts?: Map<string, { token: string; outcome: Extract<MutationOutcome, { ok: true }> }>;
   result: GroupMutationResult;
 };
 

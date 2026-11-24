@@ -176,7 +176,7 @@ export async function restoreSessionWorktree(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
   commitGuard?: SessionSourceAssertion;
-  assertRestoreAllowed?: (effect: "validate" | "recreate") => void;
+  assertRestoreAllowed?: () => void;
 }): Promise<SessionSourceAssertion> {
   const { entry, scope: requestedScope } = params;
   const id = entry.worktree?.id;
@@ -190,7 +190,7 @@ export async function restoreSessionWorktree(params: {
   };
   const metadata = captureSessionEntryMetadataRead(scope, () => {
     params.commitGuard?.();
-    params.assertRestoreAllowed?.("validate");
+    params.assertRestoreAllowed?.();
   });
   const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
   const record = await readRegistryWorktree(context, id);
@@ -288,7 +288,7 @@ export async function restoreSessionWorktree(params: {
       );
     }
     if (record.removedAt !== undefined) {
-      params.assertRestoreAllowed?.("recreate");
+      params.assertRestoreAllowed?.();
       try {
         await new ManagedWorktreeService({ env: scope.env }).restore({
           id,

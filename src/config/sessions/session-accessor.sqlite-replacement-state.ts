@@ -147,7 +147,6 @@ export function commitSessionEntryReplacementsInDatabase(
       { ...next },
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
-        archiveUndo: replacement.archiveUndo,
         previousEntry: selectedBefore ?? null,
         canonicalPreviousEntry: canonical?.entry ?? null,
         canonicalPreviousRow: canonical?.row,

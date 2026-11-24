@@ -23,9 +23,6 @@ extension OpenClawChatViewModel {
             return nil
         }
         switch evt {
-        case .personalPinsChanged:
-            self.refreshSessions(limit: Self.sessionListFetchLimit)
-            self.refreshSidebarData(coalescing: true)
         case let .health(ok):
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
@@ -348,14 +345,9 @@ extension OpenClawChatViewModel {
         }
         var updated = self.sessions
         updated[index] = merged
-        if self.sidebarData != nil {
-            self.sessions = updated // Preserve live membership order across this field-only write.
-            updated = self.sessions // Only cache rows accepted by the roster owner.
-        }
-        let organized = OpenClawChatSessionListOrganizer.organize(updated)
-        if self.sidebarData == nil { self.sessions = organized }
+        self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
         self.persistSessionsToCache(
-            organized,
+            self.sessions,
             agentID: self.currentSessionSnapshot().deliveryAgentID)
         return true
     }

@@ -17,10 +17,6 @@ extension OpenClawChatViewModel {
         }
     }
 
-    var sidebarRosterClock: OpenClawChatSessionSnooze.RosterClock {
-        self.sidebarData?.queryState?.rosterClock ?? self.rosterClock
-    }
-
     public func enableSidebarData() {
         guard self.sidebarData == nil else { return }
         let owner = OpenClawChatSessionSidebarData()
@@ -61,9 +57,9 @@ extension OpenClawChatViewModel {
         self.refreshSidebarData(debounce: search != nil)
     }
 
-    func refreshSidebarData(debounce: Bool = false, coalescing: Bool = false, afterRosterExpiry: Bool = false) {
+    func refreshSidebarData(debounce: Bool = false, coalescing: Bool = false) {
         guard !self.isTransportDetached, self.healthOK, self.sidebarData?.isQueryEnabled == true else { return }
-        self.sidebarData?.scheduleLoad(debounce: debounce, coalescing: coalescing, afterRosterExpiry: afterRosterExpiry)
+        self.sidebarData?.scheduleLoad(debounce: debounce, coalescing: coalescing)
     }
 
     func rosterEntry(key: String, agentID: String?) -> OpenClawChatSessionEntry? {

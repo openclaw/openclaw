@@ -47,8 +47,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   archived_at INTEGER,
   last_read_at INTEGER,
   last_interaction_at INTEGER,
-  last_activity_at INTEGER,
-  archive_undo_marker TEXT
+  last_activity_at INTEGER
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_entry_snapshots (

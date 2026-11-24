@@ -97,7 +97,6 @@ import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
-  migrateSessionArchiveUndoMarker,
   migrateSessionCreatorNamespaces,
   migrateSessionTranscriptActiveProjection,
   migrateSessionTranscriptGenerations,
@@ -138,7 +137,6 @@ import {
   withoutTrajectoryPayloadColumns,
 } from "./openclaw-agent-trajectory-storage-migration.js";
 import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
-import { AGENT_ARCHIVE_UNDO_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -408,9 +406,6 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_MEMBER_ACCESS_SCHEMA_VERSION)) {
           migrateAgentMemberAccessInTransaction(db);
-        }
-        if (crossesVersion(AGENT_ARCHIVE_UNDO_SCHEMA_VERSION)) {
-          migrateSessionArchiveUndoMarker(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

@@ -23,23 +23,6 @@ public struct ChatSessionsSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
     private let agentID: String?
     @Environment(\.dismiss) private var dismiss
-    #if os(macOS)
-    @Environment(\.openClawChatWindowCommands) private var windowCommands
-    private var canEditPins: Bool {
-        self.windowCommands?.sessionMenuActions.canEditPins == true
-    }
-
-    private func canTogglePin(_ session: OpenClawChatSessionEntry) -> Bool {
-        self.windowCommands?.sessionMenuActions.canTogglePin(
-            session,
-            at: self.viewModel.sidebarRosterClock.gatewayDate()) == true
-    }
-    #else
-    private let canEditPins = true
-    private func canTogglePin(_: OpenClawChatSessionEntry) -> Bool {
-        true
-    }
-    #endif
     @State private var searchText = ""
     @State private var scope: SessionScope = .active
     @State private var scopedIDs: [String] = []
@@ -315,7 +298,7 @@ public struct ChatSessionsSheet: View {
             }
         } label: { self.sessionRowContent(session) }
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                if !session.isArchived, self.canTogglePin(session) {
+                if !session.isArchived {
                     self.pinButton(session)
                         .tint(OpenClawChatTheme.accent)
                 }
@@ -350,7 +333,6 @@ public struct ChatSessionsSheet: View {
                 }
                 if !session.isArchived {
                     self.pinButton(session)
-                        .disabled(!self.canTogglePin(session))
                 }
                 if ChatSessionSidebarModel.canArchiveSession(
                     session,
@@ -390,23 +372,16 @@ public struct ChatSessionsSheet: View {
     }
 
     private func pinButton(_ session: OpenClawChatSessionEntry) -> some View {
-        #if os(macOS)
-        let saved = self.windowCommands?.sessionMenuActions.isPinnedForAction(
-            session,
-            at: self.viewModel.sidebarRosterClock.gatewayDate()) ?? session.isPinned
-        #else
-        let saved = session.isPinned
-        #endif
-        return Button {
+        Button {
             self.viewModel.setSessionPinned(
                 key: session.key,
-                pinned: !saved,
+                pinned: !session.isPinned,
                 agentID: session.agentId)
             self.refreshScopedSessionsSoon()
         } label: {
             chatActionLabel(
-                saved ? "Unpin" : "Pin",
-                systemImage: saved ? "pin.slash" : "pin")
+                session.isPinned ? "Unpin" : "Pin",
+                systemImage: session.isPinned ? "pin.slash" : "pin")
         }
     }
 
@@ -455,18 +430,8 @@ public struct ChatSessionsSheet: View {
 
     private var batchActionBar: some View {
         HStack(spacing: 12) {
-            Group {
-                Button("Pin") { Task { await self.runBatch(.pin) } }
-                    #if os(macOS)
-                        .disabled(self.displayedSessions
-                            .contains {
-                                self.selectedSessionKeys.contains($0.key) && $0
-                                    .isSnoozed(at: self.viewModel.sidebarRosterClock.gatewayDate())
-                            })
-                    #endif
-                Button("Unpin") { Task { await self.runBatch(.unpin) } }
-            }
-            .disabled(!self.canEditPins)
+            Button("Pin") { Task { await self.runBatch(.pin) } }
+            Button("Unpin") { Task { await self.runBatch(.unpin) } }
             Button("Archive") { Task { await self.runBatch(.archive) } }
             Spacer()
             Button("Delete", role: .destructive) {
@@ -514,8 +479,7 @@ public struct ChatSessionsSheet: View {
         let rows = await self.viewModel.fetchSessionList(
             search: query.isEmpty ? nil : query,
             archived: self.scope == .archived,
-            agentID: self.agentID,
-            preservingPersonalPinOrder: owner != nil)
+            agentID: self.agentID)
         // A superseded task must not repaint stale rows over the newer query.
         guard !Task.isCancelled else { return }
         if let owner, let read {

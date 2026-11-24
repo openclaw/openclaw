@@ -118,7 +118,6 @@ describe("pending input additive schema", () => {
       ALTER TABLE session_members DROP COLUMN access;
       ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
       ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
-      ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
       PRAGMA user_version = 42;
       UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
     `);
@@ -206,7 +205,6 @@ describe("pending input additive schema", () => {
       old.exec(`
         ALTER TABLE session_members DROP COLUMN access;
         DROP TABLE session_pending_inputs;
-        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);
@@ -426,7 +424,6 @@ describe("pending input additive schema", () => {
         ALTER TABLE session_members DROP COLUMN access;
         ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
         ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
-        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);

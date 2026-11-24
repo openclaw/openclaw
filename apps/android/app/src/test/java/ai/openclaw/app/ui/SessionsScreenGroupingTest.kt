@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.PersonalSessionPinAccess
 import ai.openclaw.app.chat.ChatSessionAgentStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import kotlinx.coroutines.runBlocking
@@ -27,12 +26,6 @@ class SessionsScreenGroupingTest {
 
     assertEquals(listOf("active", "expired"), keys(SessionFilter.Recent))
     assertEquals(listOf("sleeping"), keys(SessionFilter.Snoozed))
-    val sleeping = entries[1]
-    val writable = PersonalSessionPinAccess.Verified(ownSessionsOnly = false)
-    assertEquals(null, writable.nextSessionPin(sleeping, nowMs + 999))
-    assertEquals(true, writable.nextSessionPin(sleeping, nowMs + 1_000))
-    assertEquals(null, PersonalSessionPinAccess.ReadOnly.nextSessionPin(sleeping, nowMs + 1_000))
-    assertEquals(false, writable.copy(savedKeys = setOf(sleeping.key)).nextSessionPin(sleeping.copy(pinned = false), nowMs))
     assertEquals(emptyList<String>(), keys(SessionFilter.Current, current = "sleeping"))
     assertEquals(listOf("expired"), keys(SessionFilter.Current, current = "expired"))
     assertEquals(listOf("archived"), keys(SessionFilter.Archived))

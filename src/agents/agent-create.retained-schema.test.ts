@@ -10,7 +10,6 @@ import { readAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deletion-
 import { completeDeletion } from "../state/agent-deletion-journal.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-schema-versions.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -129,7 +128,7 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
     {
       using database = openNodeSqliteDatabase(pathname);
       database.exec(
-        "DROP TABLE agent_tool_usage; DROP TABLE session_pending_inputs; ALTER TABLE session_nodes DROP COLUMN archive_undo_marker; ALTER TABLE session_members DROP COLUMN access; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41",
+        "DROP TABLE agent_tool_usage; DROP TABLE session_pending_inputs; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41",
       );
     }
     const original = await fs.readFile(pathname);
@@ -157,9 +156,7 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
     });
     {
       using database = openNodeSqliteDatabase(pathname, { readOnly: true });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
     }
     expect(await fs.readFile(pathname)).not.toEqual(original);
     expect(await readAgentDeletionRecoveryHoldsInWorker()).toEqual([]);

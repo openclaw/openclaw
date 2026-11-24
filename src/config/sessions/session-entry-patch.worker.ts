@@ -36,10 +36,7 @@ import {
 import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
-import {
-  projectSessionEntryPatch,
-  type SessionEntryPatchWriteIntent,
-} from "./session-entry-patch-operation.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
@@ -257,10 +254,8 @@ export function commitSessionEntryPatch(
           };
           return transferSessionEntryWorkerCandidate(database, admit, result);
         }
-        const writeIntent: SessionEntryPatchWriteIntent = {};
         const next = projectSessionEntryPatch({
           ...input,
-          writeIntent,
           existing,
           writeBase,
           operation: input.operation,
@@ -269,7 +264,6 @@ export function commitSessionEntryPatch(
           },
         });
         mutation = writeSessionEntryPatchInDatabase(database, {
-          ...writeIntent,
           sessionKey: input.sessionKey,
           fresh,
           writeBase,
