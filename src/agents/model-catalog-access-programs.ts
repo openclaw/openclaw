@@ -70,7 +70,11 @@ export function resolveModelCatalogAccessPrograms(params: {
   return observation ? [...observation.cyber] : undefined;
 }
 
-/** One default selection for catalog presentation and physical runtime requests. */
+/**
+ * One default selection for catalog presentation and physical runtime requests. Configuration
+ * wins; otherwise a model whose advertised programs exclude Standard (cyber models advertise
+ * only Daybreak Red) uses its one program, and unknown or Standard-capable models use Standard.
+ */
 export function resolveModelCyberAccessProgramDefault(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -78,8 +82,10 @@ export function resolveModelCyberAccessProgramDefault(params: {
   modelId: string;
   runtimeId: string;
   route?: ModelAuthAvailabilityEvaluation["selectedRoute"];
+  /** The selected account's programs for this model, route, and runtime; undefined when unknown. */
+  advertised?: readonly CyberAccessProgram[];
 }): CyberAccessProgram | undefined {
-  const { provider, modelId, runtimeId, route } = params;
+  const { provider, modelId, runtimeId, route, advertised } = params;
   const consumesAccessPrograms =
     normalizeProviderId(provider) === "openai" &&
     (runtimeId === "codex" ||
@@ -106,7 +112,7 @@ export function resolveModelCyberAccessProgramDefault(params: {
           provider,
           modelId,
         },
-        "standard",
+        advertised?.length === 1 ? advertised[0] : "standard",
       )
     : undefined;
 }
@@ -189,6 +195,7 @@ export function projectModelCatalogAccessPrograms(
     modelId: params.entry.id,
     runtimeId: params.runtimeId,
     route: params.evaluation.selectedRoute,
+    advertised: cyber,
   });
   return {
     ...(cyber === undefined ? {} : { availableAccessPrograms: { cyber } }),

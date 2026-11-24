@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
 import {
   assertOperatorAccessProgramAllowed,
@@ -7,9 +8,12 @@ import {
 } from "../../admitted-run-context.js";
 import type { AuthProfileCredential } from "../../auth-profiles/types.js";
 import { FailoverError } from "../../failover-error.js";
+import { resolveAgentHarnessPreparedAuthSupport } from "../../harness/support.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { resolveModelCatalogAccessPrograms } from "../../model-catalog-access-programs.js";
 import { getPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
+import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
+import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // OAuth refresh rotates tokens without changing the account that discovery observed.
@@ -34,6 +38,103 @@ function isSameDiscoveredAccount(
     provider?.auth.some((method) => method.matchesPersonalAccount?.(credential, discovered)) ===
       true
   );
+}
+
+/**
+ * Reads the programs the prepared catalog advertises for one attempt's account, model, route,
+ * and runtime. Harness-owned auth reads that runtime's native observations.
+ */
+export async function prepareAttemptAccessPrograms(
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    "preparedModelRuntime" | "authProfileId" | "authProfileStore" | "provider" | "modelId"
+  > & { auth?: AgentRuntimeAuthPlan; runtimeId: string },
+): Promise<() => CyberAccessProgram[] | undefined> {
+  const runtime = attempt.preparedModelRuntime;
+  const profileId = attempt.authProfileId;
+  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  const runtimeAuth =
+    resolveAgentHarnessPreparedAuthSupport({ plan: attempt.auth })?.source === "harness"
+      ? { id: attempt.runtimeId, source: "native" as const }
+      : undefined;
+  const selectedCredential = resolveSelectedModelCredential({
+    provider: attempt.provider,
+    profileId,
+    mode: credential?.type ?? attempt.auth?.selectedAuthMode,
+    runtimeAuth,
+  });
+  const account =
+    runtime?.accountCatalog && profileId && credential
+      ? await runtime.accountCatalog.acquire({
+          profileId,
+          credential,
+          allowDiscovery: false,
+          load: async () => [],
+        })
+      : undefined;
+  return () => {
+    const snapshot = runtime?.readFullModelCatalog?.() ?? runtime?.modelCatalog;
+    // Direct discovery belongs to the current prepared runtime generation.
+    // A cold private catalog can reuse shared discovery only for the same account.
+    // A published empty private catalog is authoritative and must not fall back.
+    const providerOutcomes =
+      selectedCredential?.source === "direct"
+        ? (snapshot?.providerOutcomes ?? [])
+        : account?.hasPublishedCatalog
+          ? account.outcomes
+          : snapshot &&
+              profileId &&
+              credential &&
+              isSameDiscoveredAccount(
+                getPreparedModelFullCatalogAuth(snapshot)?.authStore.profiles[profileId],
+                credential,
+                runtime?.pluginRegistry?.providers.find(
+                  ({ provider }) => provider.id === attempt.provider,
+                )?.provider,
+              )
+            ? snapshot.providerOutcomes
+            : [];
+    return snapshot
+      ? resolveModelCatalogAccessPrograms({
+          snapshot: { ...snapshot, providerOutcomes },
+          entry: { provider: attempt.provider, id: attempt.modelId },
+          evaluation: {
+            availability: true,
+            routeResolution: null,
+            selectedCredential,
+            selectedRoute: attempt.auth?.modelRoute,
+            ...(runtimeAuth ? { runtimeAuth } : {}),
+          },
+          runtimeId: attempt.runtimeId,
+          isCurrent: () => runtime?.isCurrent() === true && account?.isCurrent() !== false,
+        })
+      : undefined;
+  };
+}
+
+/**
+ * Programs for one dispatch's Access default. A saved session choice replaces the default,
+ * and a superseded prepared runtime leaves the programs unknown.
+ */
+export async function readDispatchAccessPrograms(
+  input: Pick<PreparedEmbeddedAttemptDispatchInput, "runInput" | "preparedRuntime">,
+  runtime: ReturnType<PreparedEmbeddedAttemptDispatchInput["preparedRuntime"]["snapshot"]>,
+  program: CyberAccessProgram | undefined,
+): Promise<CyberAccessProgram[] | undefined> {
+  const { preparedModelRuntime } = input.runInput;
+  if (program !== undefined || preparedModelRuntime?.isCurrent() !== true) {
+    return undefined;
+  }
+  const read = await prepareAttemptAccessPrograms({
+    preparedModelRuntime,
+    authProfileId: runtime.lastProfileId,
+    authProfileStore: input.preparedRuntime.resolveRunAttemptAuthProfileStore(),
+    provider: input.preparedRuntime.provider,
+    modelId: input.preparedRuntime.modelId,
+    auth: runtime.activePreparedAuthPlan,
+    runtimeId: runtime.agentHarness.id,
+  });
+  return read();
 }
 
 /** Effective Access, including configured defaults, requires current role and account authority. */
@@ -67,60 +168,14 @@ export async function prepareEmbeddedAccessProgramGuard(
   if (program === undefined || program === "standard") {
     return assertRole;
   }
-  const runtime = attempt.preparedModelRuntime;
-  const profileId = attempt.authProfileId;
-  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
-  const selectedCredential = resolveSelectedModelCredential({
-    provider: attempt.provider,
-    profileId,
-    mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
+  const readPrograms = await prepareAttemptAccessPrograms({
+    ...attempt,
+    auth: attempt.runtimePlan?.auth,
+    runtimeId: "openclaw",
   });
-  const account =
-    runtime?.accountCatalog && profileId && credential
-      ? await runtime.accountCatalog.acquire({
-          profileId,
-          credential,
-          allowDiscovery: false,
-          load: async () => [],
-        })
-      : undefined;
   const check = () => {
     assertRole();
-    const snapshot = runtime?.readFullModelCatalog?.() ?? runtime?.modelCatalog;
-    // Direct discovery belongs to the current prepared runtime generation.
-    // A cold private catalog can reuse shared discovery only for the same account.
-    // A published empty private catalog is authoritative and must not fall back.
-    const providerOutcomes =
-      selectedCredential?.source === "direct"
-        ? (snapshot?.providerOutcomes ?? [])
-        : account?.hasPublishedCatalog
-          ? account.outcomes
-          : snapshot &&
-              profileId &&
-              credential &&
-              isSameDiscoveredAccount(
-                getPreparedModelFullCatalogAuth(snapshot)?.authStore.profiles[profileId],
-                credential,
-                runtime?.pluginRegistry?.providers.find(
-                  ({ provider }) => provider.id === attempt.provider,
-                )?.provider,
-              )
-            ? snapshot.providerOutcomes
-            : [];
-    const programs =
-      snapshot &&
-      resolveModelCatalogAccessPrograms({
-        snapshot: { ...snapshot, providerOutcomes },
-        entry: { provider: attempt.provider, id: attempt.modelId },
-        evaluation: {
-          availability: true,
-          routeResolution: null,
-          selectedCredential,
-          selectedRoute: attempt.runtimePlan?.auth.modelRoute,
-        },
-        runtimeId: "openclaw",
-        isCurrent: () => runtime?.isCurrent() === true && account?.isCurrent() !== false,
-      });
+    const programs = readPrograms();
     if (!programs?.includes(program)) {
       throw new FailoverError(
         "This Daybreak program is not advertised for the current account, model, and runtime. Select Standard or refresh account capabilities.",
