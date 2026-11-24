@@ -13,7 +13,8 @@ live run that stopped after digesting a meeting instead of finishing ingestion:
 target in step 5 addresses runs that ingested one meeting while others stayed
 pending ([#199744](https://github.com/openclaw/openclaw/pull/199744)). The
 `gone` state in step 3 addresses runs that failed every time on a pending
-meeting deleted from Granola.
+meeting deleted from Granola
+([#202388](https://github.com/openclaw/openclaw/pull/202388)).
 
 The prompt names which meetings (the owner's, or every meeting the account can
 read) and how far back to start (today, or the last 7 or 30 days, in the owner's
