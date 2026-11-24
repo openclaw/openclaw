@@ -2,6 +2,7 @@ import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
 import type { WorkerInferenceModelRef } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   normalizeProviderId,
@@ -53,13 +54,13 @@ async function resolveApprovedWorkerModelSelection(params: ResolveApprovedWorker
   const policy = createModelVisibilityPolicy({
     ...selection,
     catalog: runtimeSnapshot.modelCatalog.entries,
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     defaultModel,
   });
   const resolved = resolveModelRefFromString({
     ...selection,
     raw: `${modelRef.provider}/${modelRef.model}`,
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     aliasIndex: policy.selectionAliasIndex,
   });
   if (

@@ -1,4 +1,5 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatAppContextAttachment } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -25,6 +26,7 @@ type UserChatMessageContentBlock = {
 };
 
 type LocalUserMessageInput = {
+  appContext?: ChatAppContextAttachment[];
   workContext?: ChatWorkContext;
   attachments?: readonly ChatAttachment[];
   mentions?: readonly HumanMention[];
@@ -53,7 +55,10 @@ type LocalUserMessage = {
 /** Bind initial display bytes to their explicit submission, before releasing the draft. */
 export function buildInitialChatSubmission(
   sessionKey: string,
-  input: Pick<LocalUserMessageInput, "text" | "mentions" | "attachments" | "createdAt" | "sender">,
+  input: Pick<
+    LocalUserMessageInput,
+    "text" | "mentions" | "attachments" | "createdAt" | "sender" | "appContext"
+  >,
   owner: object,
   runId?: string,
 ) {
@@ -122,6 +127,7 @@ export function buildLocalUserMessage(
     content,
     timestamp: input.createdAt,
     __openclaw: {
+      ...(input.appContext ? { appContext: input.appContext } : {}),
       ...(input.workContext
         ? { workContext: { snapshot: input.workContext, text: input.text } }
         : {}),

@@ -1,5 +1,6 @@
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { AgentEventPayload, AgentAssistantSourceReceipt } from "../infra/agent-events.js";
+import type { ChatRef } from "../sessions/chat-ref.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   createLiveAssistantTextProjection,
@@ -33,7 +34,11 @@ export type ChatRunEntry = ChatRunRegistration & {
   registeredSequence: number;
 };
 
-export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
+export type ChatAbortMarker = {
+  abortedAtMs: number;
+  sequence: number;
+  pendingInputCancellation?: { chat: ChatRef; endCause: "user-stop" };
+};
 
 let chatRunOrderingSequence = 0;
 
@@ -45,6 +50,22 @@ export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
 /** Return the wall-clock timestamp used by maintenance TTL pruning. */
 export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
   return marker.abortedAtMs;
+}
+
+/** Read the admitted cancellation for this input's session while its receipt settles. */
+export function chatAbortPendingInputEndCause(
+  marker: ChatAbortMarker | undefined,
+  chat: Pick<ChatRef, "agentId" | "storePath" | "sessionKey">,
+): "user-stop" | undefined {
+  const cancellation = marker?.pendingInputCancellation;
+  if (
+    cancellation?.chat.agentId === chat.agentId &&
+    cancellation.chat.storePath === chat.storePath &&
+    cancellation.chat.sessionKey === chat.sessionKey
+  ) {
+    return cancellation.endCause;
+  }
+  return undefined;
 }
 
 /**
@@ -436,6 +457,7 @@ export type SessionMessageSubscriberRegistry = {
     sessionKey: string,
     opts?: {
       includeApprovals?: boolean;
+      includeLiveToolOutput?: boolean;
       provisional?: boolean;
       mode?: "narration";
       subscriptionId?: string;
@@ -445,6 +467,7 @@ export type SessionMessageSubscriberRegistry = {
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
   getApprovals: (sessionKey: string) => ReadonlySet<string>;
+  getLiveToolOutput: (sessionKey: string) => ReadonlySet<string>;
   getNarration: (sessionKey: string) => ReadonlySet<string>;
   onChange: (
     listener: (sessionKey: string, connId: string, baselineOnly?: true) => void,
@@ -455,6 +478,7 @@ type SessionMessageSubscription = (() => void) & { commit: () => void };
 
 type SessionMessageSubscriptionMode = {
   includeApprovals: boolean;
+  includeLiveToolOutput: boolean;
   mode?: "narration";
 };
 
@@ -503,6 +527,7 @@ export function createSessionMessageSubscriberRegistry(
   // Removing a record fences late replay settlements, including connection/session reuse.
   const connections = new Map<string, Map<string, SessionMessageSubscriptionOwners>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
+  const liveToolOutputSessionToConnIds = new Map<string, Set<string>>();
   const narrationSessionToConnIds = new Map<string, Set<string>>();
   const changeListeners = new Set<Parameters<SessionMessageSubscriberRegistry["onChange"]>[0]>();
   const empty = new Set<string>();
@@ -538,6 +563,12 @@ export function createSessionMessageSubscriberRegistry(
       (narrationSessionToConnIds.get(sessionKey)?.has(connId) === true) !== narration;
     setMembership(sessionToConnIds, connId, sessionKey, subscribed);
     setMembership(approvalSessionToConnIds, connId, sessionKey, mode?.includeApprovals === true);
+    setMembership(
+      liveToolOutputSessionToConnIds,
+      connId,
+      sessionKey,
+      mode?.includeLiveToolOutput === true,
+    );
     setMembership(narrationSessionToConnIds, connId, sessionKey, narration);
     if (changed) {
       changeListeners.forEach((listener) => listener(sessionKey, connId));
@@ -555,6 +586,7 @@ export function createSessionMessageSubscriberRegistry(
         mode = { ...interest };
       } else {
         mode.includeApprovals ||= interest.includeApprovals;
+        mode.includeLiveToolOutput ||= interest.includeLiveToolOutput;
         if (interest.mode !== "narration") {
           mode.mode = undefined;
         }
@@ -598,6 +630,7 @@ export function createSessionMessageSubscriberRegistry(
       const provisionalRecency = subscriptionSequence;
       const mode: SessionMessageSubscriptionMode = {
         includeApprovals: opts?.includeApprovals === true,
+        includeLiveToolOutput: opts?.includeLiveToolOutput === true,
         mode: opts?.mode,
       };
       state.inflight.set(provisionalRecency, mode);
@@ -677,6 +710,8 @@ export function createSessionMessageSubscriberRegistry(
     },
     get: (sessionKey) => sessionToConnIds.get(sessionKey.trim()) ?? empty,
     getApprovals: (sessionKey) => approvalSessionToConnIds.get(sessionKey.trim()) ?? empty,
+    getLiveToolOutput: (sessionKey) =>
+      liveToolOutputSessionToConnIds.get(sessionKey.trim()) ?? empty,
     getNarration: (sessionKey) => narrationSessionToConnIds.get(sessionKey.trim()) ?? empty,
     onChange: (listener) => {
       changeListeners.add(listener);

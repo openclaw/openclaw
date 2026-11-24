@@ -1,4 +1,4 @@
-import { onTestFinished, vi } from "vitest";
+import { vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
@@ -24,8 +24,7 @@ export function createState(
   vi.spyOn(host.sessions, "reconcileMutation").mockResolvedValue({ status: "refreshed" });
   vi.spyOn(host.sessions, "reconcileRunTerminal").mockReturnValue(false);
   vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
-  onTestFinished(() => host.sessions.dispose());
-  return { ...host, connectionEpoch: 1 };
+  return Object.assign(host, { connectionEpoch: 1 });
 }
 
 export function activeHistory(runId: string): ChatHistoryResult {

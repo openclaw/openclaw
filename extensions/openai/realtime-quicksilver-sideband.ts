@@ -91,8 +91,7 @@ function waitForSocketOpen(params: {
     const timeout = setTimeout(
       () => finish(new Error("GPT-Live sideband connection timed out")),
       SIDEBAND_CONNECT_TIMEOUT_MS,
-    );
-    timeout.unref?.();
+    ).unref();
     params.socket.once("open", onOpen);
     params.socket.on("error", onError);
     params.socket.on("close", onClose);

@@ -73,10 +73,53 @@ it("requires independent runs, preserves runner profiles and prefers complete na
   ]);
   const { toolingFileSeconds, compactGroupSeconds, runtimePlacementTimings } = result.timings;
   expect({ toolingFileSeconds, compactGroupSeconds, runtimePlacementTimings }).toEqual({
-    toolingFileSeconds: { blacksmith: { [file]: 130 }, github: { [file]: 60 } },
-    compactGroupSeconds: { blacksmith: {}, github: {} },
-    runtimePlacementTimings: { blacksmith: [], github: [] },
+    toolingFileSeconds: { blacksmith: { [file]: 130 }, github: { [file]: 60 }, boat: {} },
+    compactGroupSeconds: { blacksmith: {}, github: {}, boat: {} },
+    runtimePlacementTimings: { blacksmith: [], github: [], boat: [] },
   });
+});
+
+it("excludes Boat and unsupported self-hosted tooling from existing runner profiles", () => {
+  const labels = [["boat"], ["boat-large/from=snapshot"], ["ubuntu-24.04", "self-hosted"]];
+  const runs = labels.flatMap((runnerLabels, index) =>
+    [1, 2].map((id) =>
+      Object.assign(run(index * 2 + id), {
+        logs: [{ kind: "tooling" as const, text: toolingLog(200), labels: runnerLabels }],
+      }),
+    ),
+  );
+  expect(refitTestTimings(runs).timings.toolingFileSeconds).toEqual({
+    blacksmith: {},
+    boat: {},
+    github: {},
+  });
+});
+
+it("keeps resource-qualified Boat tooling separate and rejects mixed worker ceilings", () => {
+  const boatRun = (id: number, cost: number, workers = 2): CiTimingRun => ({
+    ...run(id),
+    logs: [
+      {
+        kind: "tooling",
+        labels: ["boat-xlarge"],
+        text: [
+          `2026-09-20T01:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${workers}`,
+          `2026-09-20T01:00:00Z [shard:resources] logicalCpuCount=16 totalMemoryBytes=${31 * 1024 ** 3} requested plans=1 admitted plans=1`,
+          toolingLog(cost),
+        ].join("\n"),
+      },
+    ],
+  });
+  const result = refitTestTimings([run(1), run(2), boatRun(3, 40), boatRun(4, 60)]);
+  expect(result.timings.toolingFileSeconds).toEqual({
+    blacksmith: { [file]: 200 },
+    github: {},
+    boat: { [file]: 50 },
+  });
+  expect(result.contributingRunIds.toolingBoat).toEqual([3, 4]);
+  expect(
+    refitTestTimings([boatRun(3, 40), boatRun(4, 60, 4)]).timings.toolingFileSeconds.boat,
+  ).toEqual({});
 });
 
 type TimingCase = [
@@ -122,6 +165,54 @@ it.each<TimingCase>([
   expect(weights(mutate?.(text) ?? text)).toEqual(
     expected === undefined ? {} : { [file]: expected },
   );
+});
+
+const processStart = logLine(`[test] starting ${config}`);
+const processEnd = logLine("[test] passed 1 Vitest shard in 4.50s");
+function toolingProcessLog(nativeSeconds?: number) {
+  return toolingLog(12, nativeSeconds, file, {
+    testFiles: ["1 passed (1)", "1 passed (1)"],
+    durations: ["2.51s", "2.50s"],
+  })
+    .replace(/(\] begin\n)/u, `$1${processStart}\n`)
+    .replace(/(\n[^\n]+\] end)/u, `\n${processEnd}$1`);
+}
+
+it.each<[string, number | undefined, (text: string) => string]>([
+  ["duplicate reporters", 5, (text) => text],
+  ["no process start", 12, replace(`${processStart}\n`, "")],
+  ["no process completion", 12, replace(`${processEnd}\n`, "")],
+  ["repeated process", 12, replace(processStart, `${processStart}\n${processStart}`)],
+  ["wrong config", 12, replace(processStart, logLine("[test] starting other.config.ts"))],
+  ["reordered completion", 12, replace(processStart, `${processEnd}\n${processStart}`)],
+  ["multiple shards", 12, replace(processEnd, logLine("[test] passed 2 Vitest shards in 4.50s"))],
+  ["failed", undefined, replace("end (exit 0)", "end (exit 1)")],
+  ["unfinished", undefined, replace(/\n[^\n]+$/u, "")],
+  ["invalid timestamp", 12, replace("01:00:05Z", "01:99:05Z")],
+  ["reversed timestamps", 12, replace("01:00:05Z", "00:59:59Z")],
+  ["nested end", undefined, replace(/(01:00:05Z )/u, "$1[shard:nested] ")],
+  [
+    "foreign file",
+    12,
+    replace(
+      processEnd,
+      `${logLine("✓ tooling other.test.ts > nested case 9000ms")}\n${processEnd}`,
+    ),
+  ],
+])("uses the complete singleton process wall: %s", (_label, expected, mutate) => {
+  expect(weights(mutate(toolingProcessLog()))).toEqual(
+    expected === undefined ? {} : { [file]: expected },
+  );
+});
+
+it("retains native file time and separates multiple runtime processes", () => {
+  expect(weights(toolingProcessLog(3))).toEqual({ [file]: 3 });
+  const text = [
+    "2026-09-20T01:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all",
+    toolingProcessLog(),
+    toolingProcessLog().replace(/\[shard:/gu, "[shard:bun:"),
+  ].join("\n");
+  expect(weights(text)).toEqual({ [`bun-all:${file}`]: 24 });
 });
 
 it("seeds one explicit run, retains absent files in partial PRs, and respects the write threshold", () => {

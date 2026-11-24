@@ -10,7 +10,10 @@ import {
 } from "../../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import {
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "../../infra/update-install-root.js";
 import { createManagedHandoffProcessIdentityReader } from "../../infra/update-managed-service-handoff-process.js";
 import type { HandoffProcessIdentity } from "../../infra/update-managed-service-handoff-schema.js";
 import {
@@ -29,6 +32,7 @@ import {
 } from "../../infra/update-requester-authority.js";
 import { recordPostCoreUpdateEvidence } from "../../infra/update-run-interruption.js";
 import { getUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -39,6 +43,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isUnfencedUpdateDriver } from "../../state/openclaw-state-schema-publication.js";
 import { VERSION } from "../../version.js";
+import { formatUpdateReportReadHint } from "./report-path.js";
 import { parseUpdateTimeoutMs, readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import {
@@ -46,6 +51,7 @@ import {
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
   readUpdateConfigFileSnapshot,
+  withUpdatePluginCohortConfigCapture,
 } from "./update-command-config.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -107,8 +113,9 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
       );
     }
     let completed: Awaited<ReturnType<typeof resumePostCoreUpdateInternal>>;
-    if (runId && record && isUnfencedUpdateDriver(record.before.version)) {
-      if (!parent) {
+    if (runId && record) {
+      const legacyPackageBridge = isUnfencedUpdateDriver(record.before.version);
+      if (legacyPackageBridge && !parent) {
         throw new UpdateCommandRecoveryPendingError(
           "Legacy package parent identity is unavailable.",
           { cause: parentError },
@@ -121,19 +128,21 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
         current.steps.findLast((entry) => entry.step === "post-update verification")?.status ===
           "in_progress";
       const root = resolveUpdateInstallRoot(params.root);
-      const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+      const executingRoot = legacyPackageBridge
+        ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
+        : null;
       if (
-        !inPostCore(record) ||
-        !executingRoot ||
-        resolveUpdateInstallRoot(executingRoot) !== root
+        legacyPackageBridge &&
+        (!inPostCore(record) || !executingRoot || !updateInstallRootsMatch(executingRoot, root))
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "Legacy post-core update does not match its running installation.",
         );
       }
-      const meta = await readControlPlaneUpdateSentinelMeta(env);
+      const meta = legacyPackageBridge ? await readControlPlaneUpdateSentinelMeta(env) : undefined;
       const managedHandoff =
-        env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" || Boolean(meta?.handoffId || meta?.root);
+        legacyPackageBridge &&
+        (env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" || Boolean(meta?.handoffId || meta?.root));
       if (
         (meta?.runId && meta.runId !== runId) ||
         (managedHandoff && (!meta?.runId || !meta.handoffId || !meta.root))
@@ -145,10 +154,13 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
       if (meta?.handoffId && meta.root) {
         const { assertManagedServiceUpdateHandoffRoot } =
           await import("../../infra/update-managed-service-handoff.js");
+        // A release link and the release it selects are one installation; pass one spelling.
+        const sameInstallation = (candidate: string | null) =>
+          candidate && updateInstallRootsMatch(meta.root!, candidate) ? meta.root! : candidate;
         await assertManagedServiceUpdateHandoffRoot({
           expectedRoot: meta.root,
-          root,
-          executingRoot,
+          root: sameInstallation(root)!,
+          executingRoot: sameInstallation(executingRoot),
           postCore: true,
         });
       }
@@ -188,14 +200,16 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
             },
           });
         },
-        {
-          legacyPackageParent: parent,
-          // Metadata correlates the shipped handoff, never substitutes for its
-          // unchanged lease row and the captured live package parent's identity.
-          ...(meta?.handoffId && meta.root
-            ? { legacyPackageHandoff: { handoffId: meta.handoffId, root: meta.root } }
-            : {}),
-        },
+        legacyPackageBridge && parent
+          ? {
+              legacyPackageParent: parent,
+              // Metadata correlates the shipped handoff, never substitutes for its
+              // unchanged lease row and the captured live package parent's identity.
+              ...(meta?.handoffId && meta.root
+                ? { legacyPackageHandoff: { handoffId: meta.handoffId, root: meta.root } }
+                : {}),
+            }
+          : undefined,
       );
     } else {
       completed = await resumePostCoreUpdateInternal(resumed);
@@ -486,6 +500,7 @@ async function resumePostCoreUpdateInternal(
         defaultRuntime.error(
           `Post-plugin Doctor report (update completion pending): ${reportPath}`,
         );
+        defaultRuntime.error(formatUpdateReportReadHint(reportPath));
       }
     } catch (error) {
       defaultRuntime.error(
@@ -509,51 +524,84 @@ export async function convergePostCoreUpdatePlugins(params: {
   /** Only an explicitly forwarded update start makes an empty index authoritative. */
   updateStartedAtMs?: number;
   assertCurrent?: () => void;
+  requiresCohort?: boolean;
 }): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 }> {
   const { assertCurrent } = params;
   assertCurrent?.();
-  return await withPluginLifecycleLease({ assertCurrent }, async () => {
-    // Entry points complete runtime artifacts and any legacy pre-convergence
-    // Doctor before capturing config. This phase consumes that committed generation.
-    const preparedConfig = await preparePostCorePluginConfig({
-      requestedChannel: params.requestedChannel,
-      preUpdateConfig: params.preUpdateConfig,
-      suppressFutureVersionWarning: true,
-      observe: false,
-      assertCurrent,
-    });
-    // The updated doctor may have repaired or removed plugin installs before this process resumed.
-    const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    const persistedPluginIndex = params.parentPluginInstallRecords
-      ? await readPersistedInstalledPluginIndex()
-      : null;
-    assertCurrent?.();
-    const currentIndexIsAuthoritative =
-      Object.keys(currentPluginInstallRecords).length > 0 ||
-      Boolean(
-        persistedPluginIndex &&
-        params.updateStartedAtMs !== undefined &&
-        persistedPluginIndex.generatedAtMs >= params.updateStartedAtMs,
-      );
-    const pluginInstallRecords = currentIndexIsAuthoritative
-      ? currentPluginInstallRecords
-      : (params.parentPluginInstallRecords ?? currentPluginInstallRecords);
+  // Shipped parents that predate the run ledger never pass a run id, so they
+  // cannot provide an executor or a plugin cohort; they keep plain convergence.
+  const runlessLegacyParent =
+    !params.opts.run && !process.env[UPDATE_RUN_ID_ENV]?.trim() && !params.requiresCohort;
+  if (
+    (params.requiresCohort || process.env[POST_CORE_UPDATE_ENV] === "1") &&
+    !params.opts.run?.executorFence &&
+    !runlessLegacyParent
+  ) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Plugin cohort convergence requires its live outer update executor.",
+    );
+  }
+  return await withUpdatePluginCohortConfigCapture(params.opts, () =>
+    withPluginLifecycleLease({ assertCurrent }, async () => {
+      // Entry points complete runtime artifacts and any legacy pre-convergence
+      // Doctor before capturing config. This phase consumes that committed generation.
+      const preparedConfig = await preparePostCorePluginConfig({
+        requestedChannel: params.requestedChannel,
+        preUpdateConfig: params.preUpdateConfig,
+        suppressFutureVersionWarning: true,
+        observe: false,
+        assertCurrent,
+      });
+      // The updated doctor may have repaired or removed plugin installs before this process resumed.
+      const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+      const persistedPluginIndex = params.parentPluginInstallRecords
+        ? await readPersistedInstalledPluginIndex()
+        : null;
+      assertCurrent?.();
+      const currentIndexIsAuthoritative =
+        Object.keys(currentPluginInstallRecords).length > 0 ||
+        Boolean(
+          persistedPluginIndex &&
+          params.updateStartedAtMs !== undefined &&
+          persistedPluginIndex.generatedAtMs >= params.updateStartedAtMs,
+        );
+      const pluginInstallRecords = currentIndexIsAuthoritative
+        ? currentPluginInstallRecords
+        : (params.parentPluginInstallRecords ?? currentPluginInstallRecords);
 
-    const pluginUpdate = await updatePluginsAfterCoreUpdate({
-      root: params.root,
-      channel: params.channel,
-      ...preparedConfig,
-      json: params.opts.json,
-      acceptCapabilities: params.opts.acceptCapabilities,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? null,
-      pluginInstallRecords,
-      assertCurrent,
-    });
-    assertCurrent?.();
-    return { pluginUpdate, configSnapshot: preparedConfig.configSnapshot };
-  });
+      const pluginUpdate = await updatePluginsAfterCoreUpdate({
+        root: params.root,
+        channel: params.channel,
+        ...preparedConfig,
+        json: params.opts.json,
+        acceptCapabilities: params.opts.acceptCapabilities,
+        timeoutMs: params.timeoutMs,
+        workTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? null,
+        pluginInstallRecords,
+        assertCurrent,
+        // An unchanged core copies its originals once plugins changed, before records publish.
+        ...(params.opts.run?.captureOriginal
+          ? { beforeRecordPublication: params.opts.run.captureOriginal }
+          : {}),
+        // Shipped post-core markers predate cohort capture. A real retained pair
+        // still selects its owner; only the originating outer caller requires one.
+        ...(params.opts.run?.executorFence &&
+        (params.requiresCohort ||
+          loadPluginCohortRecovery(params.opts.run.runId, { env: params.opts.run.env }))
+          ? {
+              cohort: {
+                runId: params.opts.run.runId,
+                env: params.opts.run.env,
+                fence: params.opts.run.executorFence,
+              },
+            }
+          : {}),
+      });
+      assertCurrent?.();
+      return { pluginUpdate, configSnapshot: preparedConfig.configSnapshot };
+    }),
+  );
 }

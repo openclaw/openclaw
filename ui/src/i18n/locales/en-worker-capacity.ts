@@ -4,7 +4,7 @@ import { en } from "./en.ts";
 const enWorkerCapacity = {
   capacityMeter: {
     workerSlots: "{used} of {total} slots busy",
-    unavailable: "Slot utilization unavailable",
+    unavailable: "Couldn’t load device capacity. Try again.",
     execHost: "Codex exec",
   },
 } satisfies TranslationMap;

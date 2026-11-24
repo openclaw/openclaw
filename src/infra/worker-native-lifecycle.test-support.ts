@@ -14,6 +14,7 @@ import {
 import { getTrackedWorkerLifecycleSnapshot } from "./worker-cpu.js";
 import {
   captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
 import {
@@ -519,11 +520,127 @@ async function runExplicitUnboundLifecycle() {
   );
 }
 
-async function runReferenceLiveness() {
-  const worker = createRetainedNativeWorker(
+async function runCloseRetry(ending: "close-live-worker" | "close-owner-retry") {
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const worker = source.create(echoWorkerSource, { eval: true, execArgv: [] });
+  let reply = createDeferredCore<unknown>();
+  worker.on("message", (value) => reply.resolve(value));
+  worker.on("error", (error) => reply.reject(error));
+  const ownerEntered = createDeferredCore();
+  const ownerRelease = createDeferredCore();
+  let ownerAttempts = 0;
+  if (ending === "close-owner-retry") {
+    source.retain({}, async () => {
+      if (++ownerAttempts === 1) {
+        throw new Error("synthetic owner close refusal");
+      }
+      ownerEntered.resolve();
+      await ownerRelease.promise;
+      await worker.terminate();
+    });
+  }
+  try {
+    worker.postMessage(41, []);
+    assert.equal(await reply.promise, 42);
+    await assert.rejects(
+      closeDefaultRetainedNativeWorkerSource(),
+      ending === "close-live-worker"
+        ? /execution owners have not joined/
+        : /execution owner cleanup failed/,
+    );
+    assert.equal(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
+    reply = createDeferredCore<unknown>();
+    worker.postMessage(8, []);
+    assert.equal(await reply.promise, 9);
+    // A refused close must not block new work on the same native source either.
+    const sibling = source.create(echoWorkerSource, { eval: true, execArgv: [] });
+    await sibling.terminate();
+    if (ending === "close-live-worker") {
+      await worker.terminate();
+    }
+    const closing = closeDefaultRetainedNativeWorkerSource();
+    if (ending === "close-owner-retry") {
+      await Promise.race([ownerEntered.promise, closing]);
+    }
+    const concurrent = closeDefaultRetainedNativeWorkerSource();
+    ownerRelease.resolve();
+    await Promise.all([closing, concurrent]);
+    assert.equal(ownerAttempts, ending === "close-owner-retry" ? 2 : 0);
+    assert.equal(source.hasActiveWorkers, false);
+    assert.throws(() => source.create(echoWorkerSource, { eval: true }), /closing/);
+    const fresh = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+    assert.notEqual(fresh, source);
+    const renewed = fresh.create(echoWorkerSource, { eval: true, execArgv: [] });
+    const renewedReply = createDeferredCore<unknown>();
+    renewed.on("message", renewedReply.resolve);
+    renewed.on("error", renewedReply.reject);
+    renewed.postMessage(41, []);
+    assert.equal(await renewedReply.promise, 42);
+    await renewed.terminate();
+    await closeDefaultRetainedNativeWorkerSource();
+    console.log(
+      JSON.stringify({
+        ending,
+        refusedSourceUsable: true,
+        retryJoined: true,
+        freshSourceUsable: true,
+      }),
+    );
+  } finally {
+    ownerRelease.resolve();
+    await worker.terminate();
+  }
+}
+
+async function runCloseTeardownFailure() {
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const worker = source.create(echoWorkerSource, { eval: true, execArgv: [] });
+  await worker.terminate();
+  const terminateDescriptor = Object.getOwnPropertyDescriptor(Worker.prototype, "terminate");
+  assert.ok(terminateDescriptor);
+  const failure = new Error("synthetic native teardown failure");
+  let joinSupervisor: (() => Promise<number>) | undefined;
+  let ownerAttempts = 0;
+  source.retain({}, async () => {
+    ownerAttempts++;
+  });
+  // Fault only the real supervisor's native teardown, not source admission or settlement.
+  Worker.prototype.terminate = function () {
+    assert.notEqual(this.threadId, -1);
+    joinSupervisor = () => this.terminate();
+    throw failure;
+  };
+  try {
+    await assert.rejects(closeDefaultRetainedNativeWorkerSource(), (error) => error === failure);
+    assert.ok(joinSupervisor);
+    assert.equal(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
+    assert.throws(() => source.create(echoWorkerSource, { eval: true }), /closing/);
+    await assert.rejects(closeDefaultRetainedNativeWorkerSource(), (error) => error === failure);
+    assert.equal(ownerAttempts, 1);
+    assert.throws(() => source.create(echoWorkerSource, { eval: true }), /closing/);
+    console.log(
+      JSON.stringify({
+        ending: "close-teardown-failure",
+        failedSourceRetained: true,
+        overlapRefused: true,
+      }),
+    );
+  } finally {
+    Object.defineProperty(Worker.prototype, "terminate", terminateDescriptor);
+    await joinSupervisor?.();
+  }
+}
+
+async function runReferenceLiveness(directory: string) {
+  const { createPluginCaptureOwner } =
+    await import("../plugins/plugin-capture-native-resource.client.js");
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const captures = await createPluginCaptureOwner(source);
+  const worker = source.create(
     `const { parentPort } = require("node:worker_threads");
     parentPort.on("message", value => setImmediate(() => parentPort.postMessage(value + 1)));`,
     { eval: true, execArgv: [] },
+    captures.descriptor,
   );
   let reply = createDeferredCore<unknown>();
   worker.on("message", (value) => reply.resolve(value));
@@ -539,8 +656,26 @@ async function runReferenceLiveness() {
   await roundTrip();
   worker.unref();
   await worker.getHeapStatistics();
-  console.log(JSON.stringify({ ending: "reference-liveness", activeCompleted: true }));
-  // Deliberately leave the idle child open: only the host reference owner permits exit.
+  // Neither idle execution nor passive capture may keep this process alive, but
+  // independent-port creation and asynchronous disposal must finish before exit.
+  const storage = { stateDir: directory, placement: "state" } as const;
+  const [first, retained] = await Promise.all([
+    captures.createSource(1, storage, "liveness-first-"),
+    captures.createSource(2, storage, "liveness-retained-"),
+  ]);
+  assert.equal(existsSync(first.directory), true);
+  assert.equal(existsSync(retained.directory), true);
+  await captures.releaseSource(1);
+  assert.equal(existsSync(first.directory), false);
+  assert.equal(existsSync(retained.directory), true);
+  console.log(
+    JSON.stringify({
+      ending: "reference-liveness",
+      activeCompleted: true,
+      activeCaptureCompleted: true,
+    }),
+  );
+  // Leave both capture claims and one real artifact open: they retain custody, not liveness.
 }
 
 assert.equal(isMainThread, true, "the fixture must block the process main thread");
@@ -554,13 +689,20 @@ assert.ok(
     ending === "resource-idle-broker" ||
     ending === "resource-late-attachment" ||
     ending === "callback-context" ||
-    ending === "reference-liveness",
+    ending === "reference-liveness" ||
+    ending === "close-live-worker" ||
+    ending === "close-owner-retry" ||
+    ending === "close-teardown-failure",
 );
 const directory = process.argv[3];
 assert.ok(directory);
 const databasePath = path.join(directory, "nested.sqlite");
-if (ending === "reference-liveness") {
-  await runReferenceLiveness();
+if (ending === "close-live-worker" || ending === "close-owner-retry") {
+  await runCloseRetry(ending);
+} else if (ending === "close-teardown-failure") {
+  await runCloseTeardownFailure();
+} else if (ending === "reference-liveness") {
+  await runReferenceLiveness(directory);
 } else if (ending === "generation") {
   await runGenerationLifecycle(directory, databasePath);
 } else if (ending === "explicit-unbound") {

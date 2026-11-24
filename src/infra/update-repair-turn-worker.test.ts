@@ -37,6 +37,11 @@ const connected = Object.getOwnPropertyDescriptor(process, "connected");
 beforeEach(() => {
   Object.defineProperty(process, "connected", { configurable: true, value: true });
   vi.clearAllMocks();
+  runtime.withUpdateRepairEnvironment
+    .mockReset()
+    .mockImplementation((_target, operation) => operation());
+  runtime.prepareUpdateRepairInference.mockReset();
+  runtime.runUpdateRepairTurn.mockReset();
   runtime.prepareUpdateRepairInference.mockResolvedValue(selected);
   runtime.runUpdateRepairTurn.mockImplementation(async ({ isCurrent }) => {
     isCurrent();
@@ -44,6 +49,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (connected) {
     Object.defineProperty(process, "connected", connected);
@@ -147,6 +153,37 @@ it("keeps in-turn liveness cheap and refuses revoked authority before tool effec
     expect(snapshots).toHaveBeenCalled();
   });
 });
+it.each([-5_000, 5_000])(
+  "preserves the delegated budget and deadline after a %ims wall-clock step",
+  async (jump) => {
+    await withRun("chat", requester, async (state, runId) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      runtime.withUpdateRepairEnvironment.mockImplementationOnce(async (_target, operation) => {
+        vi.advanceTimersByTime(1_000);
+        vi.setSystemTime(Date.now() + jump);
+        return operation();
+      });
+      runtime.prepareUpdateRepairInference.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(1_000);
+        return selected;
+      });
+      runtime.runUpdateRepairTurn.mockImplementationOnce(async ({ timeoutMs, signal }) => {
+        expect(timeoutMs).toBe(28_000);
+        await vi.advanceTimersByTimeAsync(27_999);
+        expect(signal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(signal.aborted).toBe(true);
+        return completed;
+      });
+      expect(await runTurn(runId, state, requester)).toMatchObject({
+        status: "completed",
+        timedOut: true,
+      });
+      expect(runtime.prepareUpdateRepairInference).toHaveBeenCalledWith(expect.anything(), 29_000);
+    });
+  },
+);
+
 function runTurn(
   runId: string,
   state: OpenClawTestState,

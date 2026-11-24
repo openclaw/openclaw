@@ -33,6 +33,16 @@ it("maps runtime context and chat-template capabilities", () => {
   });
 });
 
+it.each([
+  [65_536, 32_768],
+  [32_768, 16_384],
+  [8_192, 8_192],
+])("sizes the unadvertised output default to n_ctx %i", (nCtx, maxTokens) => {
+  expect(mapProps({ default_generation_settings: { n_ctx: nCtx } })?.config.maxTokens).toBe(
+    maxTokens,
+  );
+});
+
 it("preserves image input advertised by router rows or runtime properties", () => {
   expect(
     mapLlamaServerModel({

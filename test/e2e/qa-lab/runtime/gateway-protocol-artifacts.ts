@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { x as extractTar } from "tar";
+import { x as extractTar } from "tar/raw";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
@@ -172,10 +172,6 @@ struct GatewayProtocolArtifactHarness {
     }
 }
 `;
-}
-
-export function buildPortableSwiftAnyCodableSource(source: string) {
-  return source.includes("import CoreFoundation") ? source : `import CoreFoundation\n${source}`;
 }
 
 export function parseGatewayProtocolArtifactOptions(
@@ -436,8 +432,7 @@ async function compileAndRunSwiftProtocolModels(params: {
     path.join(params.repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawProtocol/AnyCodable.swift"),
     "utf8",
   );
-  // Linux Foundation does not re-export the CoreFoundation type-ID helpers.
-  await fs.writeFile(anyCodablePath, buildPortableSwiftAnyCodableSource(anyCodableSource), "utf8");
+  await fs.writeFile(anyCodablePath, anyCodableSource, "utf8");
   await fs.writeFile(harnessPath, buildSwiftProtocolCompatibilityHarness(), "utf8");
   await runCommand({
     args: [

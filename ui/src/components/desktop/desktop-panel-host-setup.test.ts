@@ -12,7 +12,7 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
-const UNAVAILABLE = "The requested desktop is unavailable. Retry when the machine is ready.";
+const UNAVAILABLE = "This desktop is unavailable. Try again when the device is ready.";
 const ENABLE = "Enable desktop access in OpenClaw";
 const gatewayHost: EnvironmentSummary = {
   id: "gateway",

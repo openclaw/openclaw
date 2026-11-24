@@ -1,9 +1,19 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
-import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime-admission-errors.js";
+import {
+  isPreparedModelRuntimePluginLifecycleFailure,
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePluginGenerationRetiredError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime-admission-errors.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-export { PreparedModelRuntimeOwnerNotPublishedError };
+export {
+  isPreparedModelRuntimePluginLifecycleFailure,
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePluginGenerationRetiredError,
+  PreparedModelRuntimePublicationSupersededError,
+};
 
 const refreshErrorSnapshots = new WeakMap<Error, Error>();
 
@@ -64,18 +74,6 @@ export function isPreparedModelRuntimeMissingOwnerError(
   error: unknown,
 ): error is PreparedModelRuntimeOwnerNotPublishedError {
   return error instanceof PreparedModelRuntimeOwnerNotPublishedError && !error.admissionBlocked;
-}
-
-export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
-
-export class PreparedModelRuntimePluginGenerationRetiredError extends Error {}
-
-export function isPreparedModelRuntimePluginLifecycleFailure(error: unknown): boolean {
-  return (
-    error instanceof PluginInstanceUnavailableError ||
-    error instanceof PreparedModelRuntimePluginGenerationRetiredError ||
-    error instanceof PreparedModelRuntimePublicationSupersededError
-  );
 }
 
 export function assertPreparedModelRuntimeInputCurrent(

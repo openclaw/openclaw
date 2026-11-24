@@ -11,6 +11,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "heartbeatTaskState",
   "pluginExtensions",
   "initializationPending",
+  "templateInitialization",
+  "templateSetup",
   "pluginExtensionSlotKeys",
   "pluginNextTurnInjections",
   "sessionId",
@@ -45,6 +47,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionDiffBaseline",
   "sessionDiffBaselineCapture",
   "worktree",
+  "localWorkspaceHandoff",
   "deviceFolder",
   "projectId",
   "repositoryWorkspaceId",
@@ -80,9 +83,12 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolAllow",
   "delegatedToolPolicy",
   "lifecycleRunId",
+  "lifecycleRestartScope",
   "lastRunId",
   "activeWriterRunId",
   "resumeAfterRestart",
+  "operatorSources",
+  "mainRestartRecovery",
   "pluginOwnerId",
   "systemSent",
   "abortedLastRun",
@@ -161,6 +167,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "compactionQualityDegraded",
   "transcriptByteCompactionLatch",
   "memoryFlush",
+  "promptCacheKeepWarm",
   "cliHistoryBoundary",
   "cliSessionIds",
   "cliSessionBindings",
@@ -181,6 +188,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "groupChannel",
   "space",
   "skillsSnapshot",
+  "toolUsageRankingSeed",
   "skillLibrarySelections",
   "systemPromptReport",
   "pluginDebugEntries",
@@ -193,6 +201,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "publicShare",
   "profileInvolvement",
   "priorWorkspace",
+  "scheduledMemoryParent",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;
@@ -212,7 +221,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
   // Retired fields remain reserved so plugins cannot reinterpret historical core state.
-  "mainRestartRecovery",
   "pendingExecNotifications",
   "restartRecoveryOperatorSource",
   "restartRecoveryRequesterSource",

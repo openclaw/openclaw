@@ -70,10 +70,7 @@ export type SessionChangedEventInfo = {
 export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
   let next = row;
   for (const [key, value] of Object.entries(row)) {
-    if (
-      value === undefined ||
-      (key === "totalTokensFresh" && value === false && row.totalTokens === undefined)
-    ) {
+    if (value === undefined) {
       if (next === row) {
         next = { ...row };
       }
@@ -343,11 +340,12 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
   return parseSessionChangedEvent(payload)?.[0] ?? null;
 }
 
-// Null source confirms inheritance; omission on a lifecycle event preserves selection.
+// Null is a fact here: inherited pin source, allowed workspace read; omission preserves selection.
 const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
   "updatedAt",
   "activeLeafEntryId",
   "modelOverrideSource",
+  "workspaceReadDisabledReason",
 ]);
 
 export type SessionRowObservation = {

@@ -127,6 +127,8 @@ export const SessionRowSchema = Type.Object(
     /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
     sharedFacts: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }))),
     sessionId: Type.Optional(Type.String()),
+    /** Saved transcript messages exist; omission means the history fact is not yet known. */
+    hasMessages: Type.Optional(Type.Boolean()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),
     /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
@@ -197,6 +199,8 @@ export const SessionRowSchema = Type.Object(
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
+    /** Running background exec processes; absent when none remain. */
+    backgroundProcessCount: Type.Optional(Type.Integer({ minimum: 1 })),
     lastRunError: Type.Optional(Type.String()),
     suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
@@ -226,6 +230,13 @@ export const SessionRowSchema = Type.Object(
         branch: Type.String(),
         repoRoot: Type.String(),
       }),
+    ),
+    worktreeState: Type.Optional(
+      Type.Union([
+        Type.Literal("ready"),
+        Type.Literal("removed-snapshot"),
+        Type.Literal("removed-fresh"),
+      ]),
     ),
     repositoryWorkspaceId: Type.Optional(NonEmptyString),
     repository: Type.Optional(
@@ -265,7 +276,9 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     /** Immutable presentation surface; independent of creation provenance. */
-    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
+    createdSurface: Type.Optional(
+      Type.Union([Type.Literal("plugin-dock"), Type.Literal("github-publication")]),
+    ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(
@@ -279,6 +292,8 @@ export const SessionRowSchema = Type.Object(
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    /** Recipient-local workspace admission; null clears a previous read restriction. */
+    workspaceReadDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({

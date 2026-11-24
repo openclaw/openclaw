@@ -5,6 +5,7 @@ import {
   coerceErrorMessage as normalizeErrorMessage,
   toStringifiedError,
 } from "@openclaw/normalization-core/error-coercion";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   resolveIntegerOption,
   resolvePositiveTimerTimeoutMs,
@@ -38,7 +39,7 @@ import { formatTimestamp } from "../logging/timestamps.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
-import { throwExpectedCliError } from "./failure-output.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
@@ -383,7 +384,18 @@ export function registerLogsCli(program: Command) {
         }
       }
       const level = parsed.level ?? "";
-      const message = parsed.message || parsed.raw;
+      let message = parsed.message;
+      if (message === "") {
+        // When every positional log argument is empty (for example a blank console line), show an empty
+        // message. Records without positional arguments (for example single-object logger records) keep
+        // the raw line.
+        const positional = Object.entries(safeParseJsonRecord(raw) ?? {}).filter(([key]) =>
+          /^\d+$/.test(key),
+        );
+        const blank =
+          positional.length > 0 && positional.every(([, value]) => value === "" || value === null);
+        message = blank ? "" : raw;
+      }
       if (!pretty) {
         return [time, level, label, message].filter(Boolean).join(" ").trim();
       }

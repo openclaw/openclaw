@@ -29,6 +29,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 import {
   buildChannelUserTurnSender,
@@ -42,8 +43,6 @@ import {
 } from "./user-turn-transcript.test-support.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
-  PersistedUserTurnMessage,
-  UserTurnInput,
   UserTurnOriginalInputCommit,
 } from "./user-turn-transcript.types.js";
 
@@ -132,17 +131,37 @@ describe("persistUserTurnTranscript", () => {
       }),
     ).toMatchObject({ archivedTranscripts: 1, externalizedTranscripts: 0 });
     const descriptor = readSessionColdTranscript(database.db, target.sessionId)!;
+    const before = database.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all();
     fs.unlinkSync(resolveSessionColdArchivePath(database.path, descriptor.archive_name));
     const recorder = makeRecorder({
       input: { text: "Continue this conversation", timestamp: Date.now() },
       updateMode: "none",
     });
     await expect(recorder.persistApproved()).rejects.toThrow(/missing|unreadable/);
-    expect(database.db.prepare("SELECT * FROM transcript_events").all()).toEqual([]);
+    expect(database.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all()).toEqual(
+      before,
+    );
     expect(readSessionColdTranscript(database.db, target.sessionId)).toEqual(descriptor);
     expect(database.db.prepare("SELECT current_session_id FROM session_nodes").get()).toEqual(
       owner,
     );
+  });
+
+  it("keeps shared App references in saved history without changing user text", async () => {
+    const appContext = [
+      {
+        title: "Helmet shell",
+        uri: "shell://specimens/helmet",
+        icon: "https://example.test/shell.png",
+      },
+    ];
+    await writeInput(
+      { text: "Describe this shell.", appContext, timestamp: 123 },
+      { updateMode: "none" },
+    );
+    const displayed = stripEnvelopeFromMessages([await readMessage()])[0];
+    expect(displayed).toHaveProperty("content", "Describe this shell.");
+    expect(displayed).toHaveProperty("__openclaw.appContext", appContext);
   });
 
   it("does not undo hook redaction when round-tripping captured context", async () => {
@@ -150,7 +169,12 @@ describe("persistUserTurnTranscript", () => {
     const text = "Explain this task";
     const modelText = text + "\n\n" + formatChatWorkContext(snapshot);
     await writeInput(
-      { text: modelText, workContext: { snapshot, text }, timestamp: 123 },
+      {
+        text: modelText,
+        workContext: { snapshot, text },
+        appContext: [{ title: "Private reference" }],
+        timestamp: 123,
+      },
       {
         updateMode: "none",
         beforeMessageWrite: ({ message }) => ({ ...message, content: "[redacted]" }),
@@ -160,6 +184,7 @@ describe("persistUserTurnTranscript", () => {
     const displayed = stripEnvelopeFromMessages([stored])[0];
     expect(stored).toHaveProperty("content", "[redacted]");
     expect(displayed).toHaveProperty("content", "[redacted]");
+    expect(stored).not.toHaveProperty("__openclaw.appContext");
     expect(stored).not.toHaveProperty("__openclaw.workContext");
     expect(displayed).not.toHaveProperty("__openclaw.workContext.text");
   });
@@ -209,6 +234,31 @@ describe("persistUserTurnTranscript", () => {
       content: "approved continuation",
     });
     expect(persisted).not.toHaveProperty("__openclaw.workContext");
+  });
+
+  it("keeps the human-addressed marker when a write hook replaces metadata", async () => {
+    const recorder = makeRecorder({
+      input: {
+        text: "@Bob some of the stickers are cool",
+        timestamp: 123,
+        idempotencyKey: "addressed:user",
+        mentions: [{ profileId: "bob", start: 0, end: 4 }],
+        humanAddressed: true,
+      },
+      // A rewrite drops the selections with the text, never the admitted dispatch decision.
+      beforeMessageWrite: ({ message }) => ({
+        ...message,
+        content: "[redacted]",
+        __openclaw: {},
+      }),
+    });
+    await recorder.persistApproved();
+    const persisted = await readMessage();
+    expect(persisted).toMatchObject({
+      content: "[redacted]",
+      __openclaw: { humanAddressed: true },
+    });
+    expect(persisted).not.toHaveProperty("__openclaw.humanMentions");
   });
 
   it("resolves committed hook metadata and redacted content for runtime replay", async () => {
@@ -308,6 +358,54 @@ describe("persistUserTurnTranscript", () => {
         senderKind: "unknown",
       },
     });
+  });
+
+  it("marks a platform-forwarded channel message without changing who sent it", async () => {
+    const forwardedTarget = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    const sender = buildChannelUserTurnSender({
+      SenderId: "4242",
+      Provider: "telegram",
+      ForwardedFrom: "Someone Else",
+      ForwardedFromType: "user",
+    });
+    await persistUserTurnTranscript({
+      ...forwardedTarget,
+      input: { text: "I moved to Austin", sender },
+    });
+    const [message] = await readTranscriptMessages(forwardedTarget);
+    expect(message?.["__openclaw"]).toMatchObject({
+      senderId: "4242",
+      senderIdentity: { type: "observation", id: "4242", pluginId: "telegram" },
+      forwarded: true,
+    });
+  });
+
+  it("leaves the forward marker off ordinary and non-external channel messages", async () => {
+    const plain = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    await persistUserTurnTranscript({
+      ...plain,
+      input: {
+        text: "hello",
+        sender: buildChannelUserTurnSender({ SenderId: "4242", Provider: "telegram" }),
+      },
+    });
+    const relayed = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    await persistUserTurnTranscript({
+      ...relayed,
+      input: {
+        text: "relayed",
+        provenance: { kind: "inter_session" },
+        sender: buildChannelUserTurnSender({
+          SenderId: "4242",
+          Provider: "telegram",
+          ForwardedFrom: "Someone Else",
+        }),
+      },
+    });
+    for (const transcript of [plain, relayed]) {
+      const [message] = await readTranscriptMessages(transcript);
+      expect(message?.["__openclaw"]).not.toHaveProperty("forwarded");
+    }
   });
 
   it.each(["retain", "in-place", "raw-redact", "forge"] as const)(

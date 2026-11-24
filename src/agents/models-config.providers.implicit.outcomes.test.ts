@@ -9,7 +9,10 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.j
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
-import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import {
+  prepareImplicitProviderStaticCatalog,
+  resolveImplicitProviders,
+} from "./models-config.providers.implicit.js";
 
 const fixture = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
@@ -133,3 +136,93 @@ it("preserves merge order across bounded concurrent catalogs", async ({ signal }
     }
   });
 });
+
+it.each([false, true])(
+  "reports a failed static catalog as unavailable (prepared=%s)",
+  async (prepared) => {
+    await withOpenClawTestState({ label: "static-catalog-failure" }, async (state) => {
+      const staticOnly = (
+        id: string,
+        run: () => Promise<{ provider: ReturnType<typeof catalog> }>,
+      ) => ({ id, label: id, auth: [], pluginId: id, staticCatalog: { run } }) as ProviderPlugin;
+      fixture.providers = [
+        staticOnly("broken", async () => {
+          throw new Error("static catalog bug");
+        }),
+        staticOnly("healthy", async () => ({
+          provider: { ...catalog("Healthy"), api: "openai-completions" },
+        })),
+      ];
+      const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          { id: "broken", providers: ["broken"] },
+          { id: "healthy", providers: ["healthy"] },
+        ],
+      });
+      const outcomes: ProviderCatalogOutcome[] = [];
+      const providers = await resolveImplicitProviders({
+        agentDir: state.agentDir(),
+        env: state.env,
+        ...discovery(),
+        pluginMetadataSnapshot,
+        ...(prepared
+          ? {
+              preparedStaticProviderCatalog: await prepareImplicitProviderStaticCatalog({
+                config: {},
+                env: state.env,
+                pluginMetadataSnapshot,
+              }),
+            }
+          : {}),
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      });
+      expect(Object.keys(providers ?? {})).toEqual(["healthy"]);
+      expect(outcomes).toEqual([{ provider: "broken", status: "unavailable" }]);
+    });
+  },
+);
+
+it.each([false, true])(
+  "reports a failed shared static hook for its selected identity (prepared=%s)",
+  async (prepared) => {
+    await withOpenClawTestState({ label: "static-family-failure" }, async (state) => {
+      fixture.providers = [
+        {
+          id: "family",
+          label: "family",
+          auth: [],
+          pluginId: "family-owner",
+          hookAliases: ["family-plan"],
+          staticCatalog: {
+            run: async () => {
+              throw new Error("static catalog bug");
+            },
+          },
+        },
+      ];
+      const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "family-owner", providers: ["family", "family-plan"] }],
+      });
+      const outcomes: ProviderCatalogOutcome[] = [];
+      await resolveImplicitProviders({
+        agentDir: state.agentDir(),
+        env: state.env,
+        ...discovery(),
+        pluginMetadataSnapshot,
+        providerDiscoveryProviderIds: ["family-plan"],
+        ...(prepared
+          ? {
+              preparedStaticProviderCatalog: await prepareImplicitProviderStaticCatalog({
+                config: {},
+                env: state.env,
+                pluginMetadataSnapshot,
+                providerDiscoveryProviderIds: ["family-plan"],
+              }),
+            }
+          : {}),
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      });
+      expect(outcomes).toEqual([{ provider: "family-plan", status: "unavailable" }]);
+    });
+  },
+);

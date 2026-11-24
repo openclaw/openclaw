@@ -38,7 +38,8 @@ export function createSubscribedCodeModeHarness(params: {
       codeMode: {
         enabled: true,
         executor: params.executor,
-        timeoutMs: params.timeoutMs ?? 1_500,
+        // Lifecycle cases use product admission defaults; deadline tests opt into their own budget.
+        timeoutMs: params.timeoutMs,
       },
     },
   } as never;
@@ -56,7 +57,7 @@ export function createSubscribedCodeModeHarness(params: {
   guardSessionManager(sessionManager, { config: {}, runId, sessionKey });
   const activeSession = Object.assign(session, {
     sessionManager,
-    agent: params.agent ?? { hasQueuedMessages: () => false },
+    agent: params.agent ?? session.agent,
     isStreaming: false,
     messages: [],
     pendingMessageCount: 0,

@@ -78,26 +78,26 @@ function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): 
   return call?.[2];
 }
 
-const VAULT_BACKED_GATEWAY_CASES = [
-  ["wiki.status", {}],
-  ["wiki.importRuns", {}],
-  ["wiki.importInsights", {}],
-  ["wiki.overview", {}],
-  ["wiki.init", {}],
-  ["wiki.doctor", {}],
-  ["wiki.compile", {}],
-  ["wiki.ingest", { inputPath: "/tmp/alpha-notes.txt" }],
-  ["wiki.lint", {}],
-  ["wiki.bridge.import", {}],
-  ["wiki.unsafeLocal.import", {}],
-  ["wiki.search", { query: "alpha" }],
-  ["wiki.apply", { op: "create_synthesis" }],
-  ["wiki.get", { lookup: "alpha" }],
-  ["wiki.obsidian.search", { query: "alpha" }],
-  ["wiki.obsidian.open", { path: "syntheses/alpha.md" }],
-  ["wiki.obsidian.command", { id: "workspace:save-file" }],
-  ["wiki.obsidian.daily", {}],
-] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>;
+const VAULT_BACKED_GATEWAY_METHODS = [
+  "wiki.status",
+  "wiki.importRuns",
+  "wiki.importInsights",
+  "wiki.overview",
+  "wiki.init",
+  "wiki.doctor",
+  "wiki.compile",
+  "wiki.ingest",
+  "wiki.lint",
+  "wiki.bridge.import",
+  "wiki.unsafeLocal.import",
+  "wiki.search",
+  "wiki.apply",
+  "wiki.get",
+  "wiki.obsidian.search",
+  "wiki.obsidian.open",
+  "wiki.obsidian.command",
+  "wiki.obsidian.daily",
+] as const;
 
 const scopedAppConfig = { agents: { entries: { support: {}, marketing: {} } } };
 type GatewayOptions = Partial<Omit<Parameters<typeof registerMemoryWikiGatewayMethods>[0], "api">>;
@@ -246,7 +246,7 @@ describe("memory-wiki gateway methods", () => {
       registerGatewayMethod.mock.calls
         .map(([method]) => method)
         .filter((method) => method !== "wiki.obsidian.status"),
-    ).toEqual(VAULT_BACKED_GATEWAY_CASES.map(([method]) => method));
+    ).toEqual(VAULT_BACKED_GATEWAY_METHODS);
   });
 
   it("rejects official Obsidian CLI actions for agent-scoped vaults", async () => {

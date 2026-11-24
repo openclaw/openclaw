@@ -1,5 +1,6 @@
-import { action, createOptimistic, Show } from "solid-js";
+import { action, createOptimistic } from "solid-js";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
+import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerSessionMachineEnglish } from "../../../i18n/locales/en-session-machine.ts";
 import "./session-worker-stop-dialog.css";
@@ -10,7 +11,7 @@ registerEnglishCatalog(registerSessionMachineEnglish);
 /** The placement owner retains the captured identity and performs the effect. */
 function SessionWorkerStopDialog(props: {
   description: string;
-  machineName?: string;
+  title?: string;
   pending: boolean;
   onConfirm: () => void;
   onCancel: () => boolean;
@@ -20,39 +21,21 @@ function SessionWorkerStopDialog(props: {
     <openclaw-modal-dialog
       prop:initialFocus={() => cancelButton}
       class="session-worker-stop-dialog"
-      label={t("sessionsView.workerStopTitle")}
+      label={props.title ?? t("sessionsView.workerStopTitle")}
       onModal-cancel={(event) => {
         if (!props.onCancel()) {
           event.preventDefault();
         }
       }}
     >
-      <section class="session-worker-stop">
-        <header class="session-worker-stop__heading">
-          <h2>{t("sessionsView.workerStopTitle")}</h2>
-          <button
-            type="button"
-            class="session-worker-stop__close"
-            aria-label={t("common.close")}
-            disabled={props.pending}
-            onClick={() => props.onCancel()}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
-        <p class="session-worker-stop__description">
-          {props.description}
-          <Show when={props.machineName}>
-            {(name) => (
-              <>
-                {" "}
-                <strong>{name()}</strong>.
-              </>
-            )}
-          </Show>{" "}
-          {t("sessionsView.workerStopContinue")}
-        </p>
-        <openclaw-modal-actions class="exec-approval-actions session-worker-stop__actions">
+      <section class="oc-dialog">
+        <DialogHeader
+          title={props.title ?? t("sessionsView.workerStopTitle")}
+          description={props.description}
+          closeDisabled={props.pending}
+          onClose={props.onCancel}
+        />
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button
             type="button"
             class="btn"
@@ -83,7 +66,7 @@ function SessionWorkerStopDialog(props: {
               style={{ visibility: props.pending ? "visible" : "hidden" }}
               aria-hidden={props.pending ? "false" : "true"}
             >
-              <span class="session-worker-stop__spinner" />
+              <span class="btn__spinner" />
               {t("sessionsView.workerStopping")}
             </span>
           </button>
@@ -97,7 +80,7 @@ let stopDialogActive = false;
 
 export async function showSessionWorkerStopDialog(options: {
   description: string;
-  machineName?: string;
+  title?: string;
   confirm: () => Promise<"close" | "retry">;
 }): Promise<void> {
   if (stopDialogActive) {
@@ -138,7 +121,7 @@ export async function showSessionWorkerStopDialog(options: {
         return (
           <SessionWorkerStopDialog
             description={options.description}
-            machineName={options.machineName}
+            title={options.title}
             pending={pending()}
             onCancel={cancel}
             onConfirm={() => void confirm()}

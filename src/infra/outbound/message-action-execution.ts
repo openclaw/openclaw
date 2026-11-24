@@ -1,6 +1,5 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
@@ -41,6 +40,8 @@ import {
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
+  GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS,
+  isUnsettledGatewayRequestTimeout,
   loadMessageGatewayRuntime,
   resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
@@ -51,7 +52,6 @@ import {
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction } from "./outbound-send-service.js";
-const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
 
@@ -224,8 +224,7 @@ export async function executeGatewayAction(
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       idempotencyKey,
     };
-    const { callGatewayLeastPrivilege, isGatewayTransportError } =
-      await loadMessageGatewayRuntime();
+    const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
     const gateway = resolveOutboundMessageGatewayOptions(messageGateway);
     // A timed-out send is reattached with the same idempotency key. Cap only the
     // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
@@ -257,13 +256,7 @@ export async function executeGatewayAction(
         { checkAfter: false },
       );
     } catch (error) {
-      if (
-        !(
-          (isGatewayTransportError(error) && error.kind === "timeout") ||
-          (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent)
-        ) ||
-        actionParams.action !== "send"
-      ) {
+      if (actionParams.action !== "send" || !(await isUnsettledGatewayRequestTimeout(error))) {
         throw error;
       }
       // The Gateway may still finish the first request after the local timer.
@@ -279,7 +272,7 @@ export async function executeGatewayAction(
         // reconnecting every minute or inheriting the run's much longer lifetime.
         timeoutMs: abortSignal
           ? null
-          : Math.max(call.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+          : Math.max(call.timeoutMs, GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS),
         signal: reconciliationSignal,
       };
       // A caller-side timeout does not cancel Gateway work. Reattach once with the

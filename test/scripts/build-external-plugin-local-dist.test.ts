@@ -29,6 +29,7 @@ import {
 import { resolvePluginRuntimeArtifact } from "../../src/plugins/plugin-runtime-artifact-resolution.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetPluginCache);
@@ -56,14 +57,6 @@ function runModule(code: string, options: SpawnSyncOptions = {}) {
     ...options,
     encoding: "utf8",
   });
-}
-
-function writeFiles(root: string, files: Record<string, string | object>) {
-  for (const [name, value] of Object.entries(files)) {
-    const file = path.join(root, name);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
-  }
 }
 
 function linkDirectory(target: string, link: string) {

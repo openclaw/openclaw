@@ -5,13 +5,24 @@ import { afterEach, expect, it } from "vitest";
 import {
   assertPackageTree,
   capturePackageTree,
+  startInstalledRecoveryRun,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { runProcess } from "./upgrade-survivor-shard.test-support.js";
+import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
+
+function runNodeRecoveryScript(source: string): void {
+  const result = runProcess(
+    node,
+    ["--input-type=module", "-e", source],
+    { ...process.env, NODE_OPTIONS: "" },
+    10_000,
+  );
+  expect(result.status, result.stderr).toBe(0);
+}
 
 // The installed cell is Linux; use real POSIX modes and direct renames while
 // keeping the portable comparator/diagnostic coverage below active on Windows.
@@ -22,12 +33,7 @@ it.skipIf(process.platform === "win32")(
     const observations = pathToFileURL(
       path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs"),
     ).href;
-    const result = runProcess(
-      node,
-      [
-        "--input-type=module",
-        "-e",
-        `
+    runNodeRecoveryScript(`
         import assert from 'node:assert/strict';
         import fs from 'node:fs';
         import path from 'node:path';
@@ -42,7 +48,7 @@ it.skipIf(process.platform === "win32")(
         fs.writeFileSync(path.join(original, 'node_modules/.package-lock.json'), 'hidden cache');
         fs.chmodSync(original, 0o755);
         fs.chmodSync(path.join(original, 'node_modules'), 0o750);
-        fs.chmodSync(path.join(original, 'payload'), 0o644);
+        fs.chmodSync(path.join(original, 'payload'), 0o664);
         fs.chmodSync(path.join(original, 'node_modules/.package-lock.json'), 0o664);
         const before = capturePackageTree(original);
         assert(before.some(entry => entry.path === ''));
@@ -51,16 +57,16 @@ it.skipIf(process.platform === "win32")(
           before.find(entry => entry.path === 'alias').identity);
         assert.throws(() => assertPackageTree(before, before, { tightenPermissions: true }), /mode/);
         for (const entry of before) {
-          if (entry.kind !== 'link') fs.chmodSync(path.join(original, entry.path), entry.mode & 0o7700);
+          if (entry.kind !== 'link') fs.chmodSync(path.join(original, entry.path), entry.mode & 0o7755);
         }
         fs.renameSync(original, displaced);
         const after = capturePackageTree(displaced);
         assert.throws(() => assertPackageTree(before, after), /mode/);
         assert.equal(assertPackageTree(before, after, { tightenPermissions: true }), after);
         assertPackageTree(after, capturePackageTree(displaced));
-        fs.chmodSync(path.join(displaced, 'payload'), 0o644);
+        fs.chmodSync(path.join(displaced, 'payload'), 0o664);
         assert.throws(() => assertPackageTree(after, capturePackageTree(displaced)), /mode/);
-        fs.chmodSync(path.join(displaced, 'payload'), 0o600);
+        fs.chmodSync(path.join(displaced, 'payload'), 0o644);
         for (const [name, contents] of [['payload', 'different bytes'],
           ['node_modules/.package-lock.json', 'different cache']]) {
           const file = path.join(displaced, name);
@@ -82,12 +88,7 @@ it.skipIf(process.platform === "win32")(
         assert.throws(() => assertPackageTree(complete, capturePackageTree(displaced)), /removed/);
         assert.throws(() => capturePackageTree(displaced, { maxEntries: 1 }), /entry budget/);
         assert.throws(() => capturePackageTree(displaced, { maxBytes: 1 }), /byte budget/);
-      `,
-      ],
-      { ...process.env, NODE_OPTIONS: "" },
-      10_000,
-    );
-    expect(result.status, result.stderr).toBe(0);
+      `);
   },
 );
 
@@ -96,8 +97,8 @@ it("rejects owner, special-bit, alias and partial-mode drift at the tightening b
   fs.writeFileSync(path.join(directory, "payload"), "package bytes");
   const captured = capturePackageTree(directory);
   const file = captured.find((entry) => entry.path === "payload")!;
-  const before = [{ ...file, mode: 0o6755 }];
-  const tightened = [{ ...before[0]!, mode: 0o6700 }];
+  const before = [{ ...file, mode: 0o6777 }];
+  const tightened = [{ ...before[0]!, mode: 0o6755 }];
   expect(assertPackageTree(before, tightened, { tightenPermissions: true })).toBe(tightened);
   for (const [field, value] of [
     ["uid", `${file.uid}-changed`],
@@ -105,10 +106,11 @@ it("rejects owner, special-bit, alias and partial-mode drift at the tightening b
     ["identity", `${file.identity}-changed`],
     ["kind", "directory"],
     ["content", "changed bytes"],
-    ["mode", 0o6600], // Lost owner execute permission.
-    ["mode", 0o4700], // Lost a special bit.
-    ["mode", 0o6740], // Only partly tightened.
-    ["mode", 0o6777], // Widened access.
+    ["mode", 0o6655], // Lost owner execute permission.
+    ["mode", 0o4755], // Lost a special bit.
+    ["mode", 0o6775], // Only partly tightened: group write remains.
+    ["mode", 0o6700], // Lost the group/other read and execute access that must stay.
+    ["mode", 0o6777], // Not tightened.
   ] as const) {
     expect(() =>
       assertPackageTree(before, [{ ...tightened[0]!, [field]: value }], {
@@ -151,12 +153,7 @@ it("bounds directory discovery before sorting and closes handles on entry overfl
   const observations = pathToFileURL(
     path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs"),
   ).href;
-  const result = runProcess(
-    node,
-    [
-      "--input-type=module",
-      "-e",
-      `
+  runNodeRecoveryScript(`
       import assert from 'node:assert/strict';
       import fs from 'node:fs';
       import path from 'node:path';
@@ -214,10 +211,60 @@ it("bounds directory discovery before sorting and closes handles on entry overfl
         fs.opendirSync = opendir;
         fs.lstatSync = lstat;
       }
-    `,
-    ],
-    { ...process.env, NODE_OPTIONS: "" },
-    10_000,
-  );
-  expect(result.status, result.stderr).toBe(0);
+    `);
+});
+
+it.skipIf(process.platform === "win32")(
+  "keeps private evidence readable through restrictive umask",
+  () => {
+    const directory = dirs.make("installed-recovery-evidence-");
+    const observations = pathToFileURL(
+      path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs"),
+    ).href;
+    runNodeRecoveryScript(`
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { startInstalledRecoveryRun, openInstalledRecoveryEvidence, writeInstalledRecoveryEvidence } from ${JSON.stringify(observations)};
+    const root = ${JSON.stringify(directory)};
+      const mask = process.umask(0o777);
+      try {
+        const run = startInstalledRecoveryRun(root, 'older-runtime');
+        const output = path.join(run.directory, 'install.log');
+        const fd = openInstalledRecoveryEvidence(output);
+        try { fs.writeFileSync(fd, 'private bytes'); } finally { fs.closeSync(fd); }
+        writeInstalledRecoveryEvidence(run.summary, { status: 'running' });
+        assert.equal(fs.statSync(run.directory).mode & 0o7777, 0o700);
+        for (const file of [output, run.summary]) {
+          assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+          assert(fs.readFileSync(file).length > 0);
+        }
+        const link = path.join(root, 'linked'); fs.symlinkSync(run.directory, link);
+        assert.throws(() => openInstalledRecoveryEvidence(path.join(link, 'unsafe')), /physical directory/);
+      } finally { process.umask(mask); }
+  `);
+  },
+);
+
+it("invalidates an earlier PASS before setup and isolates repeated attempts", () => {
+  const artifacts = dirs.make("installed-recovery-runs-");
+  const first = startInstalledRecoveryRun(artifacts, "older-runtime");
+  const earlier = path.join(first.directory, "independent-recovery.mjs");
+  fs.writeFileSync(earlier, "earlier helper");
+  writeJson(first.summary, { status: "passed", runDirectory: path.basename(first.directory) });
+
+  const second = startInstalledRecoveryRun(artifacts, "older-runtime");
+  expect(second.directory).not.toBe(first.directory);
+  expect(second.summary).toBe(first.summary);
+  expect(readJson(second.summary)).toEqual({
+    status: "running",
+    runDirectory: path.basename(second.directory),
+    selectedCuts: ["older-runtime"],
+  });
+  expect(fs.readFileSync(earlier, "utf8")).toBe("earlier helper");
+  const helper = path.join(second.directory, "independent-recovery.mjs");
+  fs.writeFileSync(helper, "current helper", { flag: "wx" });
+  expect(() => fs.writeFileSync(helper, "duplicate setup", { flag: "wx" })).toThrow();
+  expect(readJson(second.summary).status).toBe("running");
+  expect(fs.readFileSync(helper, "utf8")).toBe("current helper");
 });

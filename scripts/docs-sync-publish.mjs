@@ -32,6 +32,7 @@ const SYNC_SUPPORT_FILES = [
     "check-docs-mdx.mjs",
     "check-docs-mdx.mts",
     "lib/arg-utils.runtime.mjs",
+    "lib/numeric-options.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "lib/managed-cleanup-handoff.mts",
@@ -733,6 +734,34 @@ function matchesSlugifyVersion({ packageJson, packageLock }, version) {
   );
 }
 
+function slugifyDependencyPaths(packages) {
+  const paths = new Set();
+  function visit(packagePath) {
+    if (paths.has(packagePath) || !packages[packagePath]) {
+      return;
+    }
+    paths.add(packagePath);
+    const entry = packages[packagePath];
+    for (const name of Object.keys({ ...entry.dependencies, ...entry.optionalDependencies })) {
+      let parent = packagePath;
+      while (true) {
+        const candidate = `${parent ? `${parent}/` : ""}node_modules/${name}`;
+        if (packages[candidate]) {
+          visit(candidate);
+          break;
+        }
+        if (!parent) {
+          break;
+        }
+        const ancestor = parent.lastIndexOf("/node_modules/");
+        parent = ancestor < 0 ? "" : parent.slice(0, ancestor);
+      }
+    }
+  }
+  visit(`node_modules/${SLUGIFY_PACKAGE}`);
+  return paths;
+}
+
 /** Checks sync output here and against fresh publisher main after the workflow rebases. */
 export function validateDocsSyncDependencies(targetRoot, baseline) {
   const current = readPublishDependencies(targetRoot);
@@ -740,13 +769,22 @@ export function validateDocsSyncDependencies(targetRoot, baseline) {
   if (!matchesSlugifyVersion(current, version)) {
     throw new Error(`docs sync publisher manifest and lock must both pin slugify ${version}`);
   }
-  // Only this dependency's declaration and resolved row belong to source sync.
+  // This dependency's declaration and resolved dependency graph belong to source sync.
   // Compare objects, not JSON formatting; never absorb unrelated npm or rebase churn.
   const expected = structuredClone(baseline);
   expected.packageJson.devDependencies[SLUGIFY_PACKAGE] = version;
   expected.packageLock.packages[""].devDependencies[SLUGIFY_PACKAGE] = version;
-  const slugifyPath = `node_modules/${SLUGIFY_PACKAGE}`;
-  expected.packageLock.packages[slugifyPath] = current.packageLock.packages[slugifyPath];
+  const dependencyPaths = new Set([
+    ...slugifyDependencyPaths(baseline.packageLock.packages),
+    ...slugifyDependencyPaths(current.packageLock.packages),
+  ]);
+  for (const packagePath of dependencyPaths) {
+    if (current.packageLock.packages[packagePath]) {
+      expected.packageLock.packages[packagePath] = current.packageLock.packages[packagePath];
+    } else {
+      delete expected.packageLock.packages[packagePath];
+    }
+  }
   if (!isDeepStrictEqual(current, expected)) {
     throw new Error(
       "docs sync changed unrelated publisher dependencies; reconcile the lock before retrying",

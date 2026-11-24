@@ -1,3 +1,4 @@
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import type { GatewayService, GatewayServiceState } from "../../daemon/service-types.js";
 import { VERSION } from "../../version.js";
 import type { CliRuntimeStatus, ServiceRuntimeIntentStatus } from "./status.runtime-intent.js";
@@ -33,7 +34,7 @@ export async function projectDaemonRuntimeStatus(params: {
     service: params.service,
     command,
     env,
-    serviceEnv: { ...env, ...command?.environment },
+    serviceEnv: mergeGatewayServiceEnv(env, command),
     inspectionKnown: loadState.status !== "unknown" && !inspectionFailed && !inspectionReason,
   });
   return { cli: { ...cli, runtime: await inspectCliRuntime() }, runtimeIntent };

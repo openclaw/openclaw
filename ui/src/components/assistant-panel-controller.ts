@@ -46,6 +46,8 @@ export type AssistantPanelProps = {
   custodianAvailable: boolean;
   homeAvailable: boolean;
   custodianSuppressed: boolean;
+  /** First-use setup ran on this page; only an explicit action opens the dock. */
+  firstUse: boolean;
   pageSessionKey: string;
   getPrimaryChatPane?: (sessionKey: string) => ChatPaneElement | undefined;
   pageAgentId: string;
@@ -75,6 +77,8 @@ export function createAssistantPanel(
   let pendingPrimaryPane: { pane: ChatPaneElement } | null = null;
   let publishedSessionKey: string | null = null;
   let handledMinimizeRequestId = 0;
+  // Explicit opens and closes release the first-use hold; the saved choice returns on the next page.
+  let firstUseHold: "none" | "held" | "released" = "none";
   let targetScope = "";
   let refreshing = false;
   let homeDefaults: {
@@ -125,6 +129,9 @@ export function createAssistantPanel(
           hello: context.gateway.snapshot.hello,
         };
       }
+      if (props.firstUse && firstUseHold === "none") {
+        firstUseHold = "held";
+      }
       dockLayout.setSuppressed(restoreSuppressed());
       if (
         props.minimizeRequestId > 0 &&
@@ -133,7 +140,11 @@ export function createAssistantPanel(
         props.store
       ) {
         handledMinimizeRequestId = props.minimizeRequestId;
-        if (typeof destination === "string" && props.store.hasRealUserTurn()) {
+        if (
+          firstUseHold !== "held" &&
+          typeof destination === "string" &&
+          props.store.hasRealUserTurn()
+        ) {
           openDestination("custodian");
         }
       }
@@ -356,7 +367,17 @@ export function createAssistantPanel(
 
   function restoreSuppressed(): boolean {
     // Home follows the visible Settings context; automatic diagnostic restores yield to it.
-    return suppressed() || (destination === "custodian" && isSettingsTakeover(props.pageRouteId));
+    return (
+      suppressed() ||
+      firstUseHold === "held" ||
+      (destination === "custodian" &&
+        isSettingsTakeover(
+          props.pageRouteId,
+          props.context?.gateway.snapshot.hello?.controlUiTabs,
+          props.context?.router.getState().location,
+          props.context?.basePath,
+        ))
+    );
   }
 
   function openSession(
@@ -448,6 +469,9 @@ export function createAssistantPanel(
   }
 
   function setOpen(open: boolean): void {
+    if (firstUseHold === "held") {
+      firstUseHold = "released";
+    }
     if (open && destination === "home") {
       homeStarted = true;
     }
@@ -487,7 +511,8 @@ export function createAssistantPanel(
       dockLayout.setDock(dock, false);
     }
     if (detail?.open === false) {
-      if (destination === requestedDestination) {
+      // A held dock is already closed; an automatic close keeps the saved choice.
+      if (destination === requestedDestination && firstUseHold !== "held") {
         setOpen(false);
       }
     } else if (destination !== requestedDestination || detail?.open === true) {

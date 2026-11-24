@@ -46,6 +46,8 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
+import { assertModelSupportsChat } from "../failover/error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { findModelInCatalog } from "../model-catalog-lookup.js";
@@ -53,7 +55,11 @@ import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { dedupeModelCatalogEntries } from "../model-selection-shared.js";
-import { resolveDefaultModelForAgent, resolveModelAliasFromPair } from "../model-selection.js";
+import {
+  NO_MODEL_CONFIGURED_MESSAGE,
+  resolveDefaultModelForAgent,
+  resolveModelAliasFromPair,
+} from "../model-selection.js";
 import {
   resolveConfiguredThinkingDefault,
   resolveThinkingSelection,
@@ -127,7 +133,6 @@ export async function resolveEmbeddedModelSelection(params: {
   const operatorAuthority = params.opts.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const configuredDefaultRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
@@ -138,7 +143,9 @@ export async function resolveEmbeddedModelSelection(params: {
   const configuredDefaultAuthProfileId = splitTrailingAuthProfile(
     resolveNativeModelPrimary(params.cfg, params.sessionAgentId) ?? "",
   ).profile;
-  const { provider: defaultProvider, model: defaultModel } = configuredDefaultRef;
+  // No configured model leaves only session, channel, and explicit selections to run.
+  const defaultProvider = configuredDefaultRef?.provider ?? DEFAULT_PROVIDER;
+  const defaultModel = configuredDefaultRef?.model;
   let provider = defaultProvider;
   let model = defaultModel;
   let sessionEntry = params.sessionEntry;
@@ -189,7 +196,9 @@ export async function resolveEmbeddedModelSelection(params: {
     // Durable harness locks own their model metadata and bypass generic repair entirely.
     const initialEntry = sessionEntry;
     const entry = { ...sessionEntry };
+    // Without a configured model there is no default to reset to; keep the user's pin.
     const resetToDefaultModel = () =>
+      defaultModel !== undefined &&
       applyModelOverrideToSessionEntry({
         entry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -216,6 +225,17 @@ export async function resolveEmbeddedModelSelection(params: {
         provider: directOverride.provider ?? defaultProvider,
         model: directOverride.model,
       };
+      if (!hasExplicitRunOverride) {
+        // A capability change must fail the turn without erasing the user's pin.
+        assertModelSupportsChat(
+          findModelInCatalog(
+            visibilityPolicy.catalog,
+            normalizedOverride.provider,
+            normalizedOverride.model,
+          )?.inference?.chat,
+          normalizedOverride,
+        );
+      }
       if (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride)) {
         const updated = resetToDefaultModel();
         entryUpdated ||= updated;
@@ -229,7 +249,6 @@ export async function resolveEmbeddedModelSelection(params: {
         storePath: params.storePath,
         initialEntry,
         entry,
-        assertCommitAllowed: operatorAuthority?.assertCurrent,
       });
       hasStoredOverride =
         sessionEntry?.modelOverrideSource !== "default" &&
@@ -350,8 +369,9 @@ export async function resolveEmbeddedModelSelection(params: {
   const autoFallbackPrimaryProbe =
     !hasExplicitRunOverride &&
     !isModelSelectionLocked(sessionEntry) &&
-    (operatorAuthority?.modelPolicy?.allows({ provider: primaryProvider, model: primaryModel }) ??
-      true)
+    (!primaryModel ||
+      (operatorAuthority?.modelPolicy?.allows({ provider: primaryProvider, model: primaryModel }) ??
+        true))
       ? resolveAutoFallbackPrimaryProbe({
           entry: sessionEntry,
           sessionKey: params.sessionKey,
@@ -368,22 +388,27 @@ export async function resolveEmbeddedModelSelection(params: {
   }
 
   if (hasExplicitRunOverride) {
-    const explicitRef = explicitProviderOverride
-      ? normalizeAgentCommandModelRef(
-          params.cfg,
-          explicitProviderOverride,
-          explicitModelOverride ?? model,
-          params.modelManifestContext,
-        )
-      : explicitModelOverride
-        ? parseAgentCommandModelRef(
+    const explicitModel = explicitModelOverride ?? model;
+    if (explicitProviderOverride && !explicitModel) {
+      throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+    }
+    const explicitRef =
+      explicitProviderOverride && explicitModel
+        ? normalizeAgentCommandModelRef(
             params.cfg,
-            params.sessionAgentId,
-            explicitModelOverride,
-            provider,
+            explicitProviderOverride,
+            explicitModel,
             params.modelManifestContext,
           )
-        : null;
+        : explicitModelOverride
+          ? parseAgentCommandModelRef(
+              params.cfg,
+              params.sessionAgentId,
+              explicitModelOverride,
+              provider,
+              params.modelManifestContext,
+            )
+          : null;
     if (!explicitRef) {
       throw new Error("Invalid model override.");
     }
@@ -398,6 +423,9 @@ export async function resolveEmbeddedModelSelection(params: {
     }
     provider = explicitRef.provider;
     model = explicitRef.model;
+  }
+  if (!model) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
   }
   const allowedInitialSelection =
     isModelSelectionLocked(sessionEntry) ||
@@ -615,7 +643,6 @@ export async function resolveEmbeddedModelSelection(params: {
         storePath: params.storePath,
         initialEntry: entry,
         entry: next,
-        assertCommitAllowed: operatorAuthority?.assertCurrent,
       })) ?? sessionEntry;
     sessionEntryForAttempt = {
       ...(sessionEntryForAttempt ?? next),

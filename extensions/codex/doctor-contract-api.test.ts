@@ -166,6 +166,26 @@ afterEach(async () => {
 });
 
 describe("codex doctor contract", () => {
+  it("reports and removes the retired loop-detection relay switch", () => {
+    const appServer = { requestTimeoutMs: 120_000, mode: "guardian" };
+    const original = codexConfig({
+      appServer: { ...appServer, loopDetectionPreToolUseRelay: false },
+    });
+    const rule = legacyConfigRules.find(
+      (candidate) =>
+        candidate.match(original.plugins.entries.codex.config.appServer) &&
+        candidate.message.includes("loopDetectionPreToolUseRelay"),
+    );
+    expect(rule?.message).toContain("openclaw doctor --fix");
+
+    const result = normalizeCompatibilityConfig({ cfg: original });
+
+    expect(result.config).toEqual(codexConfig({ appServer }));
+    expect(result.changes).toEqual([
+      "Removed retired plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay; the tool repeat guard runs in the OpenClaw agent loop.",
+    ]);
+  });
+
   it("reports and removes retired turn idle settings without changing the run budget", () => {
     const legacy = { turnCompletionIdleTimeoutMs: 123_456 };
     const defaults = { timeoutSeconds: 42 };

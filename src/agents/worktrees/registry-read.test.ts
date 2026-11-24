@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { withWorkerPreload } from "../../../test/helpers/runtime-preload.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -73,15 +74,12 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      return actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: { ...options?.workerData, testWorktreeWriteGate: writerGate.buffer },
-      });
+      return actual.createCpuTrackedWorker(
+        filename,
+        withWorkerPreload(options, preload, {
+          testWorktreeWriteGate: writerGate.buffer,
+        }),
+      );
     },
   };
 });
@@ -130,6 +128,7 @@ async function serviceFixture() {
 function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCommit = false) {
   const entered = createDeferred();
   const release = createDeferred();
+  const refused = createDeferred<unknown>();
   let writes = 0;
   const transport = interceptWorktreeWorkerOperation(
     (execute) => async (command, executeOptions) => {
@@ -145,11 +144,15 @@ function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCom
       if (afterCommit) {
         throw new Error("Synthetic lost registry reply after native commit");
       }
-      return execute(command, executeOptions);
+      return execute(command, executeOptions).catch((error: unknown) => {
+        refused.resolve(error);
+        throw error;
+      });
     },
   );
   return {
     entered: entered.promise,
+    refused: refused.promise,
     release: () => release.resolve(),
     writes: () => writes,
     restore: () => transport.mockRestore(),
@@ -371,6 +374,16 @@ it.each(["replacement", "retained lock", "checkout lease", "caller"] as const)(
         current = false;
       }
       publication.release();
+      if (kind === "checkout lease") {
+        // Keep replacement custody through the native refusal, then let settlement reacquire it.
+        await expect(
+          awaitGateBeforeSettlement(publication.refused, pending, "Publication was not refused"),
+        ).resolves.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+        db.prepare("DELETE FROM state_leases WHERE scope = ? AND owner = ?").run(
+          WORKTREE_MUTATION_LEASE_SCOPE,
+          "replacement-owner",
+        );
+      }
       await expect(pending).rejects.toThrow(/changed|lease|revoked/i);
       if (existing) {
         expect(getRegistryWorktree(env, existing.id)).toMatchObject({

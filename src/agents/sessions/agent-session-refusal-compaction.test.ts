@@ -1,12 +1,9 @@
 import http from "node:http";
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-} from "openclaw/plugin-sdk/llm";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
+import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { streamAnthropic } from "../../../packages/ai/src/providers/anthropic.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import {
   appendHistory,
   collectCompactionEnds,
@@ -135,7 +132,13 @@ describe("AgentSession refusal compaction", () => {
           model,
           "Earlier answer.",
           "stop",
-          threshold ? model.contextWindow - 15 : 10,
+          // The current prompt crosses maintenance after refusal, not during preflight.
+          threshold
+            ? resolveCompactionThreshold({
+                contextWindowTokens: model.contextWindow,
+                reserveTokensFloor: 0,
+              }) - 15
+            : 10,
         ),
       );
       streamMocks.streamSimple.mockImplementation(
@@ -145,6 +148,9 @@ describe("AgentSession refusal compaction", () => {
       let queuedUser = false;
       const handlers: ExtensionFactory = (api) => {
         api.on("session_before_compact", async (event) => {
+          if (threshold) {
+            expect(requests).toHaveLength(1);
+          }
           if (queued && !queuedUser) {
             queuedUser = true;
             await session.followUp("explicit queued user turn");
@@ -159,7 +165,7 @@ describe("AgentSession refusal compaction", () => {
         extension: handlers,
       });
       const compactions = collectCompactionEnds(session);
-      const assistants: AssistantMessage[] = [];
+      const assistants: AssistantHistoryMessage[] = [];
       session.subscribe((event) => {
         if (event.type === "message_end" && event.message.role === "assistant") {
           assistants.push(event.message);

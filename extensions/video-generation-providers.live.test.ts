@@ -29,8 +29,8 @@ import {
   parseProviderModelMap,
   parseVideoGenerationModelRef,
   redactLiveApiKey,
-  resolveConfiguredLiveVideoModels,
-  resolveLiveVideoAuthStore,
+  resolveConfiguredLiveProviderModels,
+  resolveLiveAuthStore,
   resolveLiveVideoResolution,
 } from "openclaw/plugin-sdk/test-media-generation";
 import type {
@@ -380,7 +380,9 @@ async function runLiveVideoProviderCase(
   skip: (note: string) => void,
 ): Promise<void> {
   const cfg = withPluginsEnabled(await readLiveTestConfig());
-  const configuredModels = resolveConfiguredLiveVideoModels(cfg);
+  const configuredModels = resolveConfiguredLiveProviderModels(
+    cfg.agents?.defaults?.mediaModels?.video,
+  );
   const agentDir = resolveDefaultAgentDir(cfg as never);
   const attempted: string[] = [];
   const skipped: string[] = [];
@@ -400,7 +402,7 @@ async function runLiveVideoProviderCase(
   }
 
   const hasLiveKeys = collectProviderApiKeys(testCase.providerId).length > 0;
-  const authStore = resolveLiveVideoAuthStore({
+  const authStore = resolveLiveAuthStore({
     requireProfileKeys: REQUIRE_PROFILE_KEYS,
     hasLiveKeys,
   });

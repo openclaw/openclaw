@@ -15,7 +15,6 @@
   --primary-hover: #c22537;
   --primary-foreground: #fafafa;
   --accent-foreground: #fafafa;
-  --link: color-mix(in srgb, var(--accent-hover) 82%, var(--text));
 
   /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
   --destructive: #d32f2f;
@@ -51,6 +50,8 @@
   /* Typography — Geist (fonts/geist.css): a sharp Swiss grotesque to match the
      crimson-on-black identity. Fallbacks keep text painting if the face fails. */
   --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --link: #f43747;
+  --link-on-tint: #ff575d;
 }
 
 :root[data-theme="openknot-light"] {
@@ -93,4 +94,6 @@
   --grid-line: rgba(0, 0, 0, 0.04);
   /* Typography — Geist (fonts/geist.css); see the dark block. */
   --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --link: #b80726;
+  --link-on-tint: #a90021;
 }

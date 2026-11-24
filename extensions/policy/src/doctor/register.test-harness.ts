@@ -196,8 +196,8 @@ export function createDocsMcpPolicyConfig() {
     mcp: {
       servers: {
         DocsServer: {
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-fetch"],
+          command: "uvx",
+          args: ["mcp-server-fetch"],
         },
       },
     },

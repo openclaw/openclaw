@@ -4,8 +4,9 @@ import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-
 import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import * as pathExistence from "../infra/path-existence.js";
+import * as sqliteIdentity from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import * as statePaths from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadCommand,
@@ -321,7 +323,7 @@ it.each(["task", "source"] as const)(
   },
 );
 
-it("reads externally created state after an absent read without allocating a worker first", async () => {
+it("reads newly created state without blocking warm reads or allocating absent-source workers", async () => {
   const root = tempDirs.make("openclaw-read-first-creation-");
   const pathname = path.join(root, "source.sqlite");
   const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
@@ -336,6 +338,37 @@ it("reads externally created state after an absent read without allocating a wor
   const task = queueTask();
   task.result.resolve(emptyReply);
   expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
+
+  const warmed = queueTask();
+  void warmed.captured.then(() => warmed.result.resolve(emptyReply), warmed.result.reject);
+  using existence = vi.spyOn(statePaths, "existingPathOrUndefined");
+  using identity = vi.spyOn(sqliteIdentity, "assertExistingDatabaseIdentity");
+  expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
+  expect(existence).not.toHaveBeenCalled();
+  expect(identity).not.toHaveBeenCalled();
+});
+
+it("refuses an absent result when its owner closes during the filesystem probe", async () => {
+  const { options, pathname } = source();
+  const probing = createDeferredCore<undefined>();
+  const entered = createDeferredCore();
+  using probe = vi.spyOn(pathExistence, "statIfExists").mockImplementationOnce(() => {
+    entered.resolve();
+    return probing.promise;
+  });
+  const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+  void reading.catch(() => {});
+  await entered.promise;
+  const closing = closeOpenClawStateDatabaseByPathAsync(pathname);
+  try {
+    expect(probe).toHaveBeenCalledExactlyOnceWith(pathname);
+    probing.resolve(undefined);
+    await expect(reading).rejects.toThrow(/admission.*closed/);
+    expect(mock.runTask).not.toHaveBeenCalled();
+  } finally {
+    probing.resolve(undefined);
+    await closing;
+  }
 });
 
 it("retains successful read custody until native exit", async () => {
@@ -381,10 +414,12 @@ it("closes one read path without aborting its sibling", async () => {
     type: "backup.runs",
   });
   const assertion = expect(firstRead).rejects.toThrow(/read admission (?:is )?closed/i);
+  // Bind the FIFO task before the sibling source probe can overtake it.
+  await first.captured;
   const siblingRead = executeExistingOpenClawStateRead(siblingSource.options, {
     type: "backup.runs",
   });
-  await Promise.all([first.captured, sibling.captured]);
+  await sibling.captured;
   const firstOptions = await first.submitted;
   const siblingOptions = await sibling.submitted;
   await closeOpenClawStateDatabaseByPathAsync(firstSource.pathname);
@@ -406,37 +441,10 @@ function captureCase<T extends OpenClawStateReadCommand>(
   bytes: number,
   options: {
     prepared?: boolean;
-    queued?: () => void;
     checkFreshAdmission?: boolean;
-    mutateWhenQueued?: boolean;
   } = {},
 ) {
-  return { command, reply, bytes, mutate: () => mutateInput(command), ...options };
-}
-
-// Mutate nested selectors in place and grow every array after capture.
-function mutateInput(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => {
-      value[index] = mutateInput(item);
-    });
-    value.push(structuredClone(value[0]));
-  } else if (isRecord(value)) {
-    for (const [key, item] of Object.entries(value)) {
-      if (key !== "type") {
-        value[key] = mutateInput(item);
-      }
-    }
-  } else {
-    return typeof value === "string"
-      ? "changed"
-      : typeof value === "number"
-        ? 999
-        : typeof value === "boolean"
-          ? !value
-          : value;
-  }
-  return value;
+  return { command, reply, bytes, ...options };
 }
 
 const selector = "租户🦞".repeat(512);
@@ -476,12 +484,27 @@ const metadataEntries = [
 ];
 const captures = [
   captureCase(
+    {
+      type: "subagents.runs",
+      scope: {
+        kind: "descendants",
+        sessionKeys: ["agent:main:cron:parent"],
+        liveTopology: [
+          { childSessionKey: "agent:main:child", requesterSessionKey: "agent:main:cron:parent" },
+        ],
+      },
+    },
+    { ok: true, sourceAdmitted: true, type: "subagents.runs", runs: new Map() },
+    0,
+    { prepared: true },
+  ),
+  captureCase(
     { type: "acpSessions.metadata", entries: metadataEntries },
     { ok: true, type: "acpSessions.metadata", sourceAdmitted: true, rows: [null, null] },
     Buffer.byteLength(
       "principal-根🦞second-principalrevision-根🦞session-根🦞entry-without-optionals",
     ) + 8,
-    { prepared: true, checkFreshAdmission: true, mutateWhenQueued: true },
+    { prepared: true, checkFreshAdmission: true },
   ),
   captureCase(
     {
@@ -508,18 +531,12 @@ const captures = [
     { type: "audit.run.inspect", input: inspectionInput },
     emptyReply,
     Buffer.byteLength("运行🦞") + Buffer.byteLength("游标🦞") + 32,
-    {
-      prepared: true,
-      queued: () => {
-        inspectionInput.now = 1234;
-        inspectionInput.decisionCursor = "changed while queued";
-      },
-    },
+    { prepared: true },
   ),
 ];
 
 it.each(captures)(
-  "captures $command.type selectors and byte charges before queued dispatch (%#)",
+  "preserves owned $command.type selectors and byte charges through queued dispatch (%#)",
   async (fixture) => {
     const { pathname, options } = source();
     const expected = structuredClone(fixture.command);
@@ -540,15 +557,14 @@ it.each(captures)(
     const baselineTransport = fixture.prepared
       ? captureOpenClawStateReadSource().createTransport({ type: "backup.runs" })
       : undefined;
-    if (transport && !fixture.mutateWhenQueued) {
-      fixture.mutate();
-    }
     const dispatch = createDeferredCore();
     const baselineTask = queueTask(dispatch.promise);
     const task = queueTask(dispatch.promise);
     const baseline = baselineTransport
       ? baselineTransport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    // Bind the FIFO baseline before another filesystem probe can overtake it.
+    await baselineTask.submitted;
     const result = transport
       ? transport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, fixture.command);
@@ -562,10 +578,6 @@ it.each(captures)(
           }),
         ]),
       ]);
-      if (!transport || fixture.mutateWhenQueued) {
-        fixture.mutate();
-      }
-      fixture.queued?.();
       options.env.OPENCLAW_STATE_DIR = path.join(originalRoot, "different");
       expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
       expect(submitted.inputBytes).toBeGreaterThanOrEqual(

@@ -10,7 +10,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -181,11 +181,15 @@ export async function runPreparedChannelTurnCore<
         const sourceAgentId =
           params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
         const recordAgentId = parseAgentSessionKey(recordSessionKey)?.agentId ?? sourceAgentId;
-        for (const agentId of new Set([sourceAgentId, recordAgentId])) {
+        const sourceSessionKey = params.ctxPayload.SessionKey ?? params.routeSessionKey;
+        for (const sessionKey of new Set([sourceSessionKey, recordSessionKey])) {
+          const agentId = sessionKey === recordSessionKey ? recordAgentId : sourceAgentId;
           if (!agentId) {
             continue;
           }
-          const preparation = waitForAgentDatabaseWriteAdmission(agentId, {
+          const preparation = waitForAgentInputAdmission(agentId, {
+            storePath: params.storePath,
+            sessionKey,
             signal: getPluginServiceSchedulerBinding()?.().signal,
           });
           if (preparation) {

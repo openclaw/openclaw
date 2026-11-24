@@ -319,6 +319,15 @@ it("rejects lost authority after asynchronous publication work without publishin
   expect((await lib.list()).entries).toEqual([]);
 });
 
+it("leaves no skill files behind when a new skill's name is refused", async () => {
+  const { stateDir, lib } = fixture();
+  const race = await Promise.allSettled([lib.save(), lib.save()]);
+  expectSingleWinner(race, "NAME_CONFLICT");
+  await expectCode(lib.save(), "NAME_CONFLICT");
+  const [entry] = (await lib.list()).entries;
+  expect(await fs.readdir(path.join(stateDir, "skill-library"))).toEqual([entry?.skillId]);
+});
+
 it.each(["canonical", "merged"] as const)(
   "retains same-name skills and permissions for a %s actor after profile merge",
   async (actorKind) => {
@@ -347,7 +356,7 @@ it.each(["canonical", "merged"] as const)(
     const viewerEntries = (
       await lib.list({
         ...authority,
-        getConfig: () => ({ gateway: { roles: { definitions: { viewer } } } }),
+        getConfig: () => ({ gateway: { roles: { default: "viewer", definitions: { viewer } } } }),
       })
     ).entries;
     expect(viewerEntries.map((entry) => entry.skillId)).toEqual(

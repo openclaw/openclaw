@@ -4,12 +4,14 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
+  resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
 import { resolveModelFallbackAvailability } from "../../agents/model-selection-config.js";
 import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -26,9 +28,12 @@ import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { QueueConfig } from "../../config/types.messages.js";
+import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
+import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { captureReplySessionExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
@@ -47,6 +52,7 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import type { UserTurnTranscriptPersistResult } from "../../sessions/user-turn-transcript.types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
@@ -57,12 +63,42 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { GatewayRequestContext } from "./types.js";
 
+const mediaDocumentContextLoader = createLazyImportLoader(
+  () => import("../../media-understanding/file-context.js"),
+);
+
+/** Rendering can fail independently of admission; preserve the raw steer on failure. */
+export async function prepareChatSendSteerDocumentContext(input: {
+  steering: boolean;
+  isInternalTextSlashCommandTurn: boolean;
+  ctx: RuntimeMsgContext;
+  cfg: PreparedChatSendSession["cfg"];
+}) {
+  if (!input.steering || input.isInternalTextSlashCommandTurn || !input.ctx.media?.length) {
+    return undefined;
+  }
+  return mediaDocumentContextLoader
+    .load()
+    .then(async (runtime) => ({
+      status: "rendered" as const,
+      ...(await runtime.renderInboundDocumentContext({ ctx: input.ctx, cfg: input.cfg })),
+    }))
+    .catch((err: unknown) => {
+      mediaDocumentContextLoader.clear();
+      logVerbose(`steer document render failed, injecting raw content: ${formatErrorMessage(err)}`);
+      return { status: "failed" as const };
+    });
+}
+
 /** Captures admitted request data for the detached injection attempt. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   sourceRef: RpcSourceRef;
   abortSignal: AbortSignal;
-  request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
+  request: Pick<
+    NormalizedChatSendRequest,
+    "p" | "rawMessage" | "supportsTaskSuggestions" | "activeSteer"
+  >;
   session: Pick<
     PreparedChatSendSession,
     | "agentId"
@@ -88,18 +124,24 @@ export function createChatSendMessageInjectionStarter(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   diagnostics?: ChatSendDiagnostics;
 }) {
-  const { p, rawMessage, supportsTaskSuggestions } = params.request;
+  const { p, rawMessage, supportsTaskSuggestions, activeSteer } = params.request;
+  const rejectionMessage = activeSteer
+    ? "active-only steering rejected; no fallback"
+    : "chat steering rejected; falling back to follow-up dispatch";
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId, resolvedSessionModel } =
     params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
-  const assertCurrent = () => {
-    params.abortSignal.throwIfAborted();
-    params.assertCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-  };
-  return async (): Promise<ReplyMessageInjectionAttempt | undefined> => {
+  return async function start(
+    assertSendNowCurrent?: () => void,
+  ): Promise<ReplyMessageInjectionAttempt | undefined> {
+    const assertCurrent = () => {
+      params.abortSignal.throwIfAborted();
+      params.assertCurrent?.();
+      assertSendNowCurrent?.();
+    };
     const target = params.target;
-    if (!target || isInternalTextSlashCommandTurn) {
+    // Without a configured model, follow-up dispatch reports the missing model.
+    if (!target || isInternalTextSlashCommandTurn || !resolvedSessionModel) {
       return undefined;
     }
     using phase = params.diagnostics?.scope("detail.run_admission.steer_authority");
@@ -128,7 +170,7 @@ export function createChatSendMessageInjectionStarter(params: {
           if (!(error instanceof MessageInjectionTargetUnavailableError)) {
             throw error;
           }
-          params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+          params.logGateway.warn(rejectionMessage, {
             reason: "terminal-delivery-unavailable",
             runId: clientRunId,
             activeRunId: target.runId,
@@ -144,16 +186,8 @@ export function createChatSendMessageInjectionStarter(params: {
         sessionEntry: entry,
         inlineMode: p.queueMode,
       });
-      const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
       const rendered =
         params.documentContext?.status === "rendered" ? params.documentContext : undefined;
-      const documentContext = rendered?.text.trim();
-      let text = baseText;
-      if (documentContext || params.documentContext?.status === "failed") {
-        text = [buildInboundMediaNoteProjection(ctx).text, baseText.trim(), documentContext]
-          .filter(Boolean)
-          .join("\n\n");
-      }
       const documentImages = rendered?.images ?? [];
       const injectionImages: ChatImageContent[] | undefined =
         documentImages.length > 0
@@ -220,7 +254,7 @@ export function createChatSendMessageInjectionStarter(params: {
         },
       });
       if (join.kind === "deferred") {
-        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+        params.logGateway.warn(rejectionMessage, {
           reason: join.reason,
           error: join.errorMessage,
           runId: clientRunId,
@@ -235,7 +269,7 @@ export function createChatSendMessageInjectionStarter(params: {
         await delivery.prepareCurrent();
       } catch (error) {
         assertCurrent();
-        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+        params.logGateway.warn(rejectionMessage, {
           reason: "terminal-delivery-unavailable",
           runId: clientRunId,
           activeRunId: target.runId,
@@ -244,10 +278,39 @@ export function createChatSendMessageInjectionStarter(params: {
         });
         return undefined;
       }
+      if (ctx.media?.some((fact) => fact.path) && !hasStagedMediaFacts(ctx.media)) {
+        phase?.mark("detail.run_admission.steer_attachments");
+        const { stageReplyMedia } = await import("../../auto-reply/reply/stage-reply-media.js");
+        await stageReplyMedia({
+          ctx,
+          sessionCtx: ctx,
+          cfg,
+          agentId,
+          sessionKey,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+          sessionEntry: entry,
+          skillOverrides: params.admittedSessionSettings?.toolOverrides?.skills,
+          abortSignal: params.abortSignal,
+          assertCurrent: () => {
+            assertCurrent();
+            delivery.assertCurrent();
+          },
+        });
+      }
+      const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+      const documentContext = rendered?.text.trim();
+      const text =
+        ctx.media?.length || documentContext || params.documentContext?.status === "failed"
+          ? [buildInboundMediaNoteProjection(ctx).text, baseText.trim(), documentContext]
+              .filter(Boolean)
+              .join("\n\n")
+          : baseText;
       let admissionRefused = false;
       phase?.mark("detail.run_admission.steer_admit");
       const attempt = await beginSessionControllerSteer({
         input: params.sourceRef.input,
+        retry: start,
+        retryWithdrawnSteer: assertSendNowCurrent !== undefined,
         target,
         text: p.replyToId
           ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
@@ -285,6 +348,10 @@ export function createChatSendMessageInjectionStarter(params: {
           inboundAudio: hasInboundAudio(ctx),
           steeringMode: "all",
           isInboundUserMessage: true,
+          ...(ctx.ApprovalReviewerDeviceId
+            ? { inputRequesterDeviceId: ctx.ApprovalReviewerDeviceId }
+            : {}),
+          allowPendingUserInputAnswer: preparedJoin?.allowPendingUserInputAnswer,
           allowCollaborativeSteering:
             cfg.messages?.queue?.allowCollaborativeSteering === true &&
             (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),
@@ -297,12 +364,19 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(injectionImages?.length ? { images: injectionImages } : {}),
           ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
           ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
+          ...(activeSteer ? { debounceMs: 0 } : {}),
           waitForTranscriptCommit: true,
           abortSignal: params.abortSignal,
-          ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
+          ...(!activeSteer &&
+          !isProgressCardRefreshInputProvenance(ctx.InputProvenance) &&
+          debounceMs !== undefined
             ? { debounceMs }
             : {}),
-          taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
+          // A prepared continuation keeps the incumbent's negotiated tool
+          // surface, so this connection's capability must not retarget it.
+          ...(preparedJoin
+            ? {}
+            : { taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined }),
           userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         },
       });
@@ -326,6 +400,9 @@ export function createChatSendInjectionDisposition(
   queue: QueueConfig | undefined,
 ) {
   let collaborationBlocked = false;
+  let rejection:
+    | Extract<Awaited<ReplyMessageInjectionAttempt["outcome"]>, { status: "rejected" }>
+    | undefined;
   const runState: ReplyOperationRunState = {};
   const isRefused = () =>
     (collaborationBlocked && queue?.collaborativeSteeringFallback === "reject") ||
@@ -334,9 +411,17 @@ export function createChatSendInjectionDisposition(
   return {
     runState,
     isRefused,
-    isCollaborationBlocked: () => collaborationBlocked,
+    replyOptions: (
+      attempted: boolean,
+    ): Pick<GetReplyOptions, "messageInjectionDisposition" | "messageInjectionRejection"> =>
+      collaborationBlocked
+        ? { messageInjectionDisposition: "collaborative-steering-disabled" }
+        : attempted
+          ? { messageInjectionDisposition: "rejected", messageInjectionRejection: rejection }
+          : {},
     async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
       const outcome = await attempt?.outcome;
+      rejection = outcome?.status === "rejected" ? outcome : undefined;
       if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
         collaborationBlocked = true;
         if (queue?.collaborativeSteeringFallback === "reject") {

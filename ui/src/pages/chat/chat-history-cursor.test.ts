@@ -553,14 +553,14 @@ describe("chat history cursor revalidation", () => {
     },
   );
 
-  it("clears a rejected cursor before falling back to a full tail fetch", async () => {
+  it("replaces a rejected cursor after accepting the full tail fetch", async () => {
     const cached = message("user", "cached", "cached-user", 1);
     const fresh = message("assistant", "fresh", "fresh-assistant", 2);
     const handler = vi
       .fn()
       .mockImplementationOnce(async () => ({ kind: "reset" }))
       .mockImplementationOnce(async () => {
-        expect(cachedSnapshot(state)?.deltaCursor).toBeUndefined();
+        expect(cachedSnapshot(state)?.deltaCursor).toBe("cursor-stale");
         return {
           messages: [cached, fresh],
           deltaCursor: "cursor-fresh",

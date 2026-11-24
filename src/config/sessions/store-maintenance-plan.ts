@@ -29,6 +29,8 @@ export function planSessionEntryMaintenance(params: {
   modelRunPrune?: boolean;
   nowMs?: number;
   readPreserveKeys: () => ReadonlySet<string> | undefined;
+  /** Defer dashboard, age and cap archiving; disposable runtime rows are still removed. */
+  deferArchiving?: boolean;
   log?: boolean;
   readAgeCandidates: (
     minimumAgeMs: number | null,
@@ -62,6 +64,7 @@ export function planSessionEntryMaintenance(params: {
     log: params.log,
     nowMs: params.nowMs,
     preserveRecentMs: params.maintenance.preserveRecentMs,
+    deferArchiving: params.deferArchiving,
   };
   let protectedOptions: (typeof options & { preserveKeys?: ReadonlySet<string> }) | undefined;
   const readProtectedOptions = () =>

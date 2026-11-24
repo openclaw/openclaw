@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
@@ -15,15 +16,9 @@ struct ChatWorkChunksTests {
     }
 
     @Test func `shared Markdown envelope context`() throws {
-        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while directory.path != "/",
-              !FileManager.default.fileExists(atPath: directory.appendingPathComponent(
-                  "test/fixtures/chat-work-chunks.json").path)
-        {
-            directory.deleteLastPathComponent()
-        }
-        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: directory.appendingPathComponent(
-            "test/fixtures/chat-work-chunks.json")))
+        let url = try #require(Bundle.module.url(
+            forResource: "chat-work-chunks", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
         for item in fixture.markdownEnvelopes {
             let work = OpenClawChatMessageContent(type: "thinking", thinking: "Recorded work")
             var content: [OpenClawChatMessageContent] = []
@@ -104,9 +99,12 @@ struct ChatWorkChunksTests {
         #expect(visible.map { ChatMessageVisibleText.visibleText(in: $0) } == [
             "First finding.", "Second finding.", "Final answer.",
         ])
-        try #require(work.count == 3)
+        // The answer's own reasoning and tool parts gather in one disclosure above its text.
+        try #require(work.count == 1)
+        try #require(work[0].messages.count == 3)
         #expect(work[0].messages[0].content[0].type == "thinking")
-        #expect(work[1].messages[0].content.map(\.type) == ["toolCall", "tool_result"])
+        #expect(work[0].messages[1].content.map(\.type) == ["toolCall", "tool_result"])
+        #expect(work[0].messages[2].content.map(\.type) == ["toolCall", "tool_result"])
         #expect(visible.allSatisfy { $0.id == source.id })
         #expect(Set(rows.map(\.id)).count == rows.count)
         #expect(rows.map(\.id) == ChatTranscriptRow.collapseCompletedWork(
@@ -185,6 +183,26 @@ struct ChatWorkChunksTests {
         #expect(items[0].state == (failed ? .failed : .finished))
         #expect(items[0].resultText == nil)
         #expect(items[1].resultText == "Recorded outcome")
+    }
+
+    @Test(arguments: ["yielded", "waiting"])
+    func `split yield result stays visible until a handoff is confirmed`(status: String) {
+        let content: [OpenClawChatMessageContent] = [
+            .init(type: "toolCall", id: "yield", name: "sessions_yield", arguments: AnyCodable([String: String]())),
+            .init(type: "text", text: "Checking background work"),
+            .init(
+                type: "tool_result",
+                text: "Waiting for review",
+                id: "yield",
+                name: "sessions_yield",
+                details: AnyCodable(["status": status]),
+                isError: false),
+        ]
+        let source = OpenClawChatMessage(role: "assistant", content: content, timestamp: nil)
+        let results = source.workPresentationParts
+            .flatMap { ChatToolActivity.items(message: $0) }
+            .compactMap(\.resultText)
+        #expect(results == (status == "yielded" ? [] : ["Waiting for review"]))
     }
 
     @Test func `unfinished source cannot steal answer actions after splitting`() {

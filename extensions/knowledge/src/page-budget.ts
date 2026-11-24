@@ -307,9 +307,13 @@ export function pageBudgetRejection(input: {
     return undefined;
   }
   const [first] = pages;
+  // Entity Timelines are derived from records, so a written one is retired rather than moved.
+  const timeline = pages.some((page) =>
+    page.sections.some((section) => section.heading.trim().toLowerCase() === "timeline"),
+  );
   return {
     message: clip(
-      `Nothing was saved: ${first!.title} would grow to ${first!.attemptedChars} characters, past its ${first!.budgetChars}-character ${first!.hub.hub ? "hub " : ""}page budget${pages.length > 1 ? ` (and ${pages.length - 1} more page${pages.length > 2 ? "s" : ""})` : ""}. Edits that keep a body the same size or smaller always succeed. Move a whole section to its own page, new or one of the listed connected candidates, with knowledge_extract_section, then retry. Save discrete facts as claims with knowledge_remember. Do not truncate or drop content to fit.`,
+      `Nothing was saved: ${first!.title} would grow to ${first!.attemptedChars} characters, past its ${first!.budgetChars}-character ${first!.hub.hub ? "hub " : ""}page budget${pages.length > 1 ? ` (and ${pages.length - 1} more page${pages.length > 2 ? "s" : ""})` : ""}. Edits that keep a body the same size or smaller always succeed.${timeline ? " Never extract a written Timeline section: Timelines are derived from records, so retire it as the knowledge-entities profiles reference describes: a discusses note for each dated source without one, a dated event claim for every other entry, verify every entry, then delete the section." : ""} Otherwise move a whole section to its own page, new or one of the listed connected candidates, with knowledge_extract_section, then retry. Save discrete facts as claims with knowledge_remember. Do not truncate or drop content to fit.`,
       1000,
     ),
     budget: { pages },

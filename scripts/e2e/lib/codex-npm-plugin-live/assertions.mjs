@@ -861,6 +861,42 @@ function assertAudit() {
   console.log(`codex_audit_identity: ${JSON.stringify(result)}`);
 }
 
+// Project only route shape and settlement, never message text, destination values,
+// tool errors, or credentials. Use the existing bounded transcript reader so a
+// failed prerequisite remains diagnosable without exporting the transcript.
+function diagnoseFollowthrough(sessionId = process.argv[3]) {
+  let diagnostic;
+  try {
+    const { sessionKey, transcriptEvents } = readSessionEntry(sessionId);
+    const timeline = extractOpenClawToolTimeline(transcriptEvents);
+    const calls = timeline.filter((entry) => entry.type === "call" && entry.name === "message");
+    diagnostic = {
+      status: "available",
+      sessionKeyPresent: Boolean(sessionKey),
+      messageCalls: calls.slice(0, 16).map((call) => {
+        const args = call.args && typeof call.args === "object" ? call.args : {};
+        const result = findToolResult(timeline, call, Number.POSITIVE_INFINITY, false);
+        return {
+          action: args.action === "send" ? "send" : "other-or-missing",
+          final: typeof args.final === "boolean" ? args.final : "omitted-or-invalid",
+          routeFields: Object.fromEntries(
+            ["channel", "target", "to", "channelId", "targets"].map((key) => [
+              key,
+              Object.hasOwn(args, key),
+            ]),
+          ),
+          result: !result ? "missing" : result.isError ? "failed" : "completed",
+        };
+      }),
+      truncated: calls.length > 16,
+    };
+  } catch {
+    // Missing/oversized/unreadable evidence must not replace the original failure.
+    diagnostic = { status: "unavailable" };
+  }
+  console.log("codex_followthrough_routing: " + JSON.stringify(diagnostic));
+}
+
 function assertFollowthrough() {
   const progressMarker = process.argv[3];
   const completeMarker = process.argv[4];
@@ -971,6 +1007,7 @@ const commands = {
   "assert-agent-turn": assertAgentTurn,
   "assert-audit": assertAudit,
   "assert-followthrough": assertFollowthrough,
+  "diagnose-followthrough": diagnoseFollowthrough,
   "assert-uninstalled": assertUninstalled,
   "assert-agent-error": assertAgentError,
 };

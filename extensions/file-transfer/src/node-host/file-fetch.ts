@@ -58,7 +58,13 @@ function isLikelyPlainText(buffer: Buffer): boolean {
   if (buffer.byteLength === 0) {
     return true;
   }
-  const sample = buffer.subarray(0, TEXT_SNIFF_MAX_BYTES);
+  const prefix = buffer.subarray(0, TEXT_SNIFF_MAX_BYTES);
+  // Complete only the last sampled UTF-8 sequence, with at most three extra bytes.
+  const tail = prefix.subarray(-4);
+  const leadIndex = tail.findLastIndex((byte) => (byte & 0xc0) !== 0x80);
+  const lead = tail[leadIndex] ?? 0;
+  const width = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc2 ? 2 : 1;
+  const sample = buffer.subarray(0, prefix.length + Math.max(0, leadIndex + width - tail.length));
   if (sample.includes(0)) {
     return false;
   }

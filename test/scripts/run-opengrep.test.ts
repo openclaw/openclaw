@@ -6,6 +6,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -246,7 +250,7 @@ describe("run-opengrep.sh", () => {
     );
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.31.0");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.32.0");
     expect(sarif.runs[0].results).toEqual([]);
     expect(fs.existsSync(argsPath)).toBe(false);
   });
@@ -279,13 +283,12 @@ describe("run-opengrep.sh", () => {
 
       const { argsPath, binDir } = installOpengrepStub(repo);
       if (failedGitCommand) {
-        const realGit = execFileSync("bash", ["-lc", "command -v git"], {
-          encoding: "utf8",
-        }).trim();
+        const realGit = resolveGitOutsideFixtures();
         writeFile(
           path.join(binDir, "git"),
           [
             "#!/usr/bin/env bash",
+            gitPathShimShellPrelude(),
             `if [[ "\${1:-}" == ${JSON.stringify(failedGitCommand)} ]]; then`,
             '  echo "forced git ls-files failure" >&2',
             "  exit 71",

@@ -100,7 +100,9 @@ export function toolCallXmlTextFilter(
               // Only the unfinished candidate line can be classified from the carried tail.
               const completed = { ...protectionScan };
               advanceProtectionScanState(completed, "\n");
-              if (!completed.paragraphAmbiguous && !completed.structuralUnknown) {
+              // A trailing prefix cannot close an inline span; only block ownership
+              // can make it literal before later bytes complete the candidate.
+              if (!completed.blockAmbiguous && !completed.structuralUnknown) {
                 if (completed.fenceChar) {
                   deferredStart = start;
                   relative = nextRelative;

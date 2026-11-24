@@ -119,7 +119,7 @@ function selectFixture(fixture: InstallFixture = {}) {
     restores.push(() => setEnv(key, previous));
   }
   if (fixture.now) {
-    const now = vi.spyOn(Date, "now").mockImplementation(fixture.now);
+    const now = vi.spyOn(performance, "now").mockImplementation(fixture.now);
     restores.push(() => now.mockRestore());
   }
   if (fixture.sleep) {

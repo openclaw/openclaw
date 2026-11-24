@@ -5,27 +5,40 @@ import {
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
-import { iconData, type IconName } from "../components/icon-data.ts";
+import { isIconName, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
+import { formatUiError } from "../lib/format-error.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { runControlUiPluginAction } from "./control-ui-actions.ts";
+import {
+  runControlUiPluginAction,
+  type BindComposerActionMenu,
+  type ControlUiComposerDraft,
+} from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { PluginContribution } from "./control-ui-view.solid.tsx";
+import { navigationItemCurrent } from "./navigation-sections.ts";
 
 type ContributionsProps = {
-  kind: "navigation" | "session-header" | "composer" | "header";
+  kind: "navigation" | "session-header" | "composer" | "composer-toolbar" | "header";
   sessionKey: string;
   agentId: string | undefined;
   navigationKey: string;
   navigationChildren: boolean;
+  /** The item stands for its whole section, so a child's open page marks it too. */
+  navigationSection: boolean;
   navigationMenus: SidebarMenus | undefined;
   presented: boolean;
+  /** The pane's draft owner, exposed to composer actions. */
+  composer: ControlUiComposerDraft | undefined;
+  /** The pane has a composer toolbar for icon actions; without one they render as text buttons. */
+  composerToolbar: boolean;
+  bindActionMenu: BindComposerActionMenu | undefined;
 };
 export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
@@ -37,7 +50,6 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     AbortSignal,
     { entry: ControlUiRegistration<ControlUiAction>; abort: AbortController }
   >();
-  host.style.display = "contents";
   const currentSession = () =>
     context ? findUiSessionRow(context, host.sessionKey, host.agentId) : undefined;
   const retireAction = (signal: AbortSignal) => {
@@ -52,6 +64,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         sessionKey: host.sessionKey,
         agentId: host.agentId ?? session?.agentId,
         session: session ? structuredClone(session) : undefined,
+        draft: host.composer?.draft,
       });
     } catch (error) {
       retireAction(entry.signal);
@@ -85,7 +98,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
           const sources = [
             current?.plugins,
             ...(kind === "navigation" ? [current?.router] : []),
-            ...(kind === "header" || kind === "composer" ? [current?.sessions] : []),
+            ...(kind === "header" || kind === "composer" || kind === "composer-toolbar"
+              ? [current?.sessions]
+              : []),
           ];
           const stops = sources.map((owner) => owner?.subscribe(changed));
           return () => stops.forEach((stop) => stop?.());
@@ -99,32 +114,29 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     actionLifetimes.clear();
   });
   const navigation = createMemo(() => {
-    const runtime = source().read();
-    const search = new URLSearchParams(window.location.search);
-    return (
-      runtime?.registrations("navigation").map((entry) => {
-        const href = entry.host.navigation.pageHref(entry.value.page);
-        const target = new URL(href, window.location.href);
-        const active =
-          target.pathname === window.location.pathname &&
-          [...target.searchParams].every(([key, value]) => search.get(key) === value);
-        return { entry, href, active };
-      }) ?? []
-    );
+    const registrations = source().read()?.registrations("navigation") ?? [];
+    return registrations.map((entry) => ({
+      entry,
+      href: entry.host.navigation.pageHref(entry.value.page),
+      active: navigationItemCurrent(
+        registrations,
+        entry,
+        window.location,
+        !props.navigationChildren && props.navigationSection,
+      ),
+    }));
   });
   type Navigation = ReturnType<typeof navigation>[number];
   const iconName = (entry: Navigation["entry"], fallback = "plug"): IconName => {
     const icon = entry.value.icon;
-    const name = icon && Object.hasOwn(iconData, icon) ? icon : fallback;
-    // SAFETY: the own-key check admits only names from the fixed icon registry.
-    return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
+    const name = isIconName(icon) ? icon : fallback;
+    return isIconName(name) ? name : "plug";
   };
   // Destinations may carry an emoji appearance instead of an icon name (Workboard boards);
   // show it as the board page does instead of the fallback icon.
   const emojiIcon = (entry: Navigation["entry"]) => {
     const icon = entry.value.icon;
-    const appearance =
-      icon && !Object.hasOwn(iconData, icon) ? normalizeSessionIconValue(icon) : null;
+    const appearance = icon && !isIconName(icon) ? normalizeSessionIconValue(icon) : null;
     return appearance?.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX) ? null : appearance;
   };
   function NavigationLink(link: { item: Navigation; child?: boolean; fallbackIcon?: string }) {
@@ -171,7 +183,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         <span class="nav-item__icon" aria-hidden="true">
           <Show
             when={emojiIcon(link.item.entry)}
-            fallback={<Icon name={iconName(link.item.entry, link.fallbackIcon)} />}
+            fallback={
+              <Icon name={iconName(link.item.entry, link.fallbackIcon)} filled={link.item.active} />
+            }
           >
             {(icon) => <span class="session-glyph__emoji">{icon()}</span>}
           </Show>
@@ -180,6 +194,8 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       </a>
     );
   }
+  // Composer actions with an icon render compact in the composer toolbar; the rest above it.
+  const placement = () => (props.kind === "composer-toolbar" ? "composer" : props.kind);
   const actions = createMemo(() => {
     const runtime = source().read();
     // Target changes retire the invocation before this presentation is recomputed.
@@ -187,7 +203,12 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     return (
       runtime
         ?.registrations("actions")
-        .filter((entry) => entry.value.placement === props.kind)
+        .filter(
+          (entry) =>
+            entry.value.placement === placement() &&
+            (props.kind !== "composer" || !entry.value.icon || !props.composerToolbar) &&
+            (props.kind !== "composer-toolbar" || Boolean(entry.value.icon)),
+        )
         .flatMap((entry) => {
           const state = resolveAction(entry);
           if (state?.hidden) {
@@ -195,20 +216,129 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
             return [];
           }
           let action = actionLifetimes.get(entry.signal);
+          const attach = !action;
           if (!action) {
             action = { entry, abort: new AbortController() };
             actionLifetimes.set(entry.signal, action);
           }
-          return [
-            {
-              entry,
-              state,
-              signal: AbortSignal.any([lifetime.signal, entry.signal, action.abort.signal]),
-            },
-          ];
+          const current = {
+            entry,
+            state,
+            signal: AbortSignal.any([lifetime.signal, entry.signal, action.abort.signal]),
+          };
+          // A new lifetime is a new presentation of this chat: once per lifetime, after this
+          // render settles, the action may show work it started earlier for the chat.
+          if (attach && entry.value.placement === "composer" && entry.value.attach) {
+            queueMicrotask(() => attachAction(current));
+          }
+          return [current];
         }) ?? []
     );
   });
+  type Action = ReturnType<typeof actions>[number];
+  // A composer action whose task is working shows pressed; clicking it again cancels the task.
+  const runningTask = (action: Action) => {
+    const card = host.composer?.tasks()?.card;
+    return card?.kind === "working" && card.actionKey === action.entry.key;
+  };
+  const runAction = (current: Action) => {
+    if (runningTask(current)) {
+      host.composer?.tasks()?.cancel();
+      return;
+    }
+    const runtime = context?.plugins;
+    if (!runtime || current.signal.aborted || !host.presented || !host.isConnected) {
+      return;
+    }
+    // Keep this outside a Solid action so owner updates render while it is pending.
+    const promise = runControlUiPluginAction({
+      runtime,
+      id: current.entry.key,
+      placement: current.entry.value.placement,
+      sessionKey: host.sessionKey,
+      agentId: host.agentId,
+      session: currentSession(),
+      composer: host.composer,
+      signal: current.signal,
+      isCurrent: () => host.isConnected && host.presented,
+      retry: () => {
+        const next = actions().find((action) => action.entry.key === current.entry.key);
+        if (next) {
+          runAction(next);
+        }
+      },
+    }).catch((error: unknown) => {
+      if (current.signal.aborted) {
+        return;
+      }
+      // A toolbar action has no row of its own: its failure shows in the pane's task card,
+      // unless another task owns the card; then it falls back to the inline alert.
+      if (
+        props.kind === "composer-toolbar" &&
+        host.composer
+          ?.tasks()
+          ?.report(current.state?.label ?? current.entry.value.label, formatUiError(error))
+      ) {
+        return;
+      }
+      throw error;
+    });
+    // An earlier concurrent invocation can fail after this one starts.
+    void promise.catch(() => setActionRead({ promise }));
+    setActionRead({ promise });
+  };
+  const attachAction = (current: Action) => {
+    const runtime = context?.plugins;
+    if (
+      !runtime ||
+      !host.composer ||
+      current.signal.aborted ||
+      !host.presented ||
+      !host.isConnected
+    ) {
+      return;
+    }
+    void runControlUiPluginAction({
+      runtime,
+      id: current.entry.key,
+      placement: current.entry.value.placement,
+      sessionKey: host.sessionKey,
+      agentId: host.agentId,
+      session: currentSession(),
+      composer: host.composer,
+      signal: current.signal,
+      isCurrent: () => host.isConnected && host.presented,
+      phase: "attach",
+      retry: () => {
+        const next = actions().find((action) => action.entry.key === current.entry.key);
+        if (next) {
+          runAction(next);
+        }
+      },
+    }).catch((error: unknown) => {
+      if (!current.signal.aborted) {
+        runtime.reportError(current.entry.pluginId, error);
+      }
+    });
+  };
+  const accessories = (kind: "session-header") => (
+    <For
+      each={source()
+        .read()
+        ?.registrations("accessories")
+        .filter((entry) => entry.value.placement === kind)}
+      keyed={(entry) => entry.signal}
+    >
+      {(entry) => (
+        <PluginContribution
+          kind="accessories"
+          contributionKey={entry().key}
+          props={{ sessionKey: props.sessionKey, agentId: props.agentId }}
+          presented={props.presented}
+        />
+      )}
+    </For>
+  );
   return (
     <Show
       when={props.kind === "navigation"}
@@ -219,81 +349,74 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
             <>
               <For each={actionRead() ? [actionRead()!] : []}>
                 {(read) => (
-                  <Errored
-                    fallback={(error) => {
-                      const message = () => {
-                        const failure = error();
-                        return failure instanceof Error ? failure.message : String(failure);
-                      };
-                      return <span role="alert">{message()}</span>;
-                    }}
-                  >
+                  <Errored fallback={(error) => <span role="alert">{formatUiError(error())}</span>}>
                     <Loading>
                       <ActionCompletion promise={read.promise} />
                     </Loading>
                   </Errored>
                 )}
               </For>
-              <For each={actions()} keyed={(action) => action.entry.signal}>
+              <For
+                each={props.bindActionMenu ? [] : actions()}
+                keyed={(action) => action.entry.signal}
+              >
                 {(action) => (
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    disabled={action().state?.disabled ?? false}
-                    onClick={() => {
-                      const current = action();
-                      const runtime = context?.plugins;
-                      if (
-                        !runtime ||
-                        current.signal.aborted ||
-                        !host.presented ||
-                        !host.isConnected
-                      ) {
-                        return;
-                      }
-                      // Keep this outside a Solid action so owner updates render while it is pending.
-                      const promise = runControlUiPluginAction({
-                        runtime,
-                        id: current.entry.key,
-                        placement: current.entry.value.placement,
-                        sessionKey: host.sessionKey,
-                        agentId: host.agentId,
-                        session: currentSession(),
-                        signal: current.signal,
-                        isCurrent: () => host.isConnected && host.presented,
-                      }).catch((error: unknown) => {
-                        if (!current.signal.aborted) {
-                          throw error;
-                        }
-                      });
-                      // An earlier concurrent invocation can fail after this one starts.
-                      void promise.catch(() => setActionRead({ promise }));
-                      setActionRead({ promise });
-                    }}
+                  <Show
+                    when={props.kind === "composer-toolbar"}
+                    fallback={
+                      <button
+                        class="btn btn--sm"
+                        type="button"
+                        disabled={action().state?.disabled ?? false}
+                        onClick={() => runAction(action())}
+                      >
+                        {action().state?.label ?? action().entry.value.label}
+                      </button>
+                    }
                   >
-                    {action().state?.label ?? action().entry.value.label}
-                  </button>
+                    <openclaw-tooltip
+                      prop:content={action().state?.label ?? action().entry.value.label}
+                    >
+                      <button
+                        class="agent-chat__input-btn agent-chat__composer-action"
+                        type="button"
+                        aria-label={action().state?.label ?? action().entry.value.label}
+                        aria-pressed={runningTask(action()) ? "true" : "false"}
+                        disabled={action().state?.disabled ?? false}
+                        onClick={() => runAction(action())}
+                      >
+                        <Icon
+                          name={
+                            runningTask(action()) ? "square" : actionIcon(action().entry.value.icon)
+                          }
+                        />
+                      </button>
+                    </openclaw-tooltip>
+                  </Show>
                 )}
               </For>
+              <Show when={props.bindActionMenu} keyed>
+                {(bind) => {
+                  const menuActions = createMemo(() =>
+                    actions().map((action) => ({
+                      key: action.entry.key,
+                      pluginId: action.entry.pluginId,
+                      pluginName: action.entry.pluginName ?? action.entry.pluginId,
+                      label: action.state?.label ?? action.entry.value.label,
+                      icon: actionIcon(action.entry.value.icon),
+                      disabled: action.state?.disabled ?? false,
+                      running: runningTask(action),
+                      run: () => runAction(action),
+                    })),
+                  );
+                  onSettled(() => bind(menuActions));
+                  return null;
+                }}
+              </Show>
             </>
           }
         >
-          <For
-            each={source()
-              .read()
-              ?.registrations("accessories")
-              .filter((entry) => entry.value.placement === "session-header")}
-            keyed={(entry) => entry.signal}
-          >
-            {(entry) => (
-              <PluginContribution
-                kind="accessories"
-                contributionKey={entry().key}
-                props={{ sessionKey: props.sessionKey, agentId: props.agentId }}
-                presented={props.presented}
-              />
-            )}
-          </For>
+          {accessories("session-header")}
         </Show>
       }
     >
@@ -348,6 +471,10 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   );
 }
 
+function actionIcon(icon: string | undefined): IconName {
+  return isIconName(icon) ? icon : "plug";
+}
+
 function ActionCompletion(props: { promise: Promise<void> }) {
   const completion = createMemo(() => props.promise.then(() => null));
   return <>{completion()}</>;
@@ -360,8 +487,12 @@ defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginCon
     agentId: { default: undefined, attribute: false },
     navigationKey: { default: "", attribute: false },
     navigationChildren: { default: true, type: Boolean },
+    navigationSection: { default: false, type: Boolean },
     navigationMenus: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
+    composer: { default: undefined, attribute: false },
+    composerToolbar: { default: true, type: Boolean },
+    bindActionMenu: { default: undefined, attribute: false },
   },
 });
 

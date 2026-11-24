@@ -61,6 +61,7 @@ export async function createIsolatedGhosttyTerminal(
           return;
         }
         showToast({
+          severity: "success",
           message: t("terminal.copiedToClipboard"),
           anchor: options.parent,
           durationMs: 2_000,

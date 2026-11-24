@@ -1,4 +1,9 @@
 import { onTestFinished, vi } from "vitest";
+import type {
+  ThemesGetResult,
+  ThemesListResult,
+} from "../../../packages/gateway-protocol/src/schema/themes.ts";
+import type { UsersPrefsGetResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createConfigCapabilityHarness } from "../lib/config/config-test-harness.ts";
@@ -9,12 +14,17 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.t
 export function createProfileAppearanceGateway(profileId: string | null) {
   const pendingResponses: Array<ReturnType<typeof createDeferred<ProfileAppearanceReply>>> = [];
   let requestStarted = createDeferred();
-  const request = vi.fn(() => {
-    const reply = createDeferred<ProfileAppearanceReply>();
-    pendingResponses.push(reply);
-    requestStarted.resolve();
-    return reply.promise;
-  });
+  const request = vi.fn(
+    (
+      _method: string,
+      _params?: unknown,
+    ): Promise<ProfileAppearanceReply | ThemesGetResult | ThemesListResult> => {
+      const reply = createDeferred<ProfileAppearanceReply>();
+      pendingResponses.push(reply);
+      requestStarted.resolve();
+      return reply.promise;
+    },
+  );
   const client = { gatewayUrl: "ws://profile.test", request } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
@@ -97,8 +107,8 @@ export function holdProfileAppearanceRead(
   return { readStarted, reply };
 }
 
-type ProfileAppearanceReply = ReturnType<typeof profileAppearanceReply>;
+type ProfileAppearanceReply = UsersPrefsGetResult;
 
-export function profileAppearanceReply(accent: string) {
+export function profileAppearanceReply(accent: string): UsersPrefsGetResult {
   return { status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } };
 }

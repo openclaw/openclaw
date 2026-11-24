@@ -7,6 +7,7 @@ import { escapeRegExp } from "../shared/regexp.js";
 import { visitDirectoryTreeStrictSync } from "./directory-walk.js";
 import { isMissingPathError } from "./errors.js";
 import { unquoteGitPath } from "./git-path-quote.js";
+import { safeStat } from "./path-existence.js";
 
 function walkUpFrom<T>(
   startDir: string,
@@ -36,6 +37,22 @@ function hasGitMarker(repoRoot: string): boolean {
 export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}): string | null {
   // A `.git` file counts as a repo marker even if it is not a valid gitdir pointer.
   return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
+}
+
+/** Prompt preparation must not block the Gateway while discovering external checkouts. */
+export async function findGitRootAsync(startDir: string): Promise<string | null> {
+  let current = path.resolve(startDir);
+  for (;;) {
+    const stat = await safeStat(path.join(current, ".git"));
+    if (stat?.isDirectory() || stat?.isFile()) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
 }
 
 function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {

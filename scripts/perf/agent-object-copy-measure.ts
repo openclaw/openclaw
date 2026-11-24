@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SessionMcpRuntime } from "../../src/agents/agent-bundle-mcp-types.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -213,12 +214,7 @@ for (const workload of workloads) {
   global.gc?.();
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const loadBefore = loadavg();
   const cpuStart = process.cpuUsage();

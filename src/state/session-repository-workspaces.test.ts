@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -248,6 +249,23 @@ it("creates one stable logical-session owner without widening replayed setup int
   expect(await store.create({ ...source, runSetupScript: true })).toEqual(initial);
   expect(initial.runSetupScript).toBe(false);
   expect(initial.branch).toBe(`openclaw/${initial.workspaceId}`);
+  expect((await store.create({ ...source, branchPrefix: "clawson" })).branch).toBe(initial.branch);
+  const prefixed = await store.create({
+    ...source,
+    sessionKey: "agent:main:prefixed",
+    branchPrefix: "clawson",
+  });
+  expect(prefixed.branch).toBe(`clawson/${prefixed.workspaceId}`);
+  const explicit = await store.create({
+    ...source,
+    sessionKey: "agent:main:explicit",
+    branch: "saved/branch",
+    branchPrefix: "changed-prefix",
+  });
+  expect(explicit.branch).toBe("saved/branch");
+  await expect(
+    store.create({ ...source, sessionKey: "agent:main:invalid", branchPrefix: "refs/heads" }),
+  ).rejects.toThrow("branch prefix is invalid");
   await expect(store.create({ ...source, requestedRef: "other" })).rejects.toThrow(
     "different repository",
   );
@@ -423,7 +441,7 @@ it.runIf(process.platform !== "win32")(
         message: expect.stringContaining("SQLite database file identity changed"),
       });
       await expect.soft(fs.stat(store.artifactPath(workspace.workspaceId))).resolves.toBeDefined();
-      expect(await fs.readFile(database.path)).toEqual(replacementBytes);
+      expectBytesEqual(await fs.readFile(database.path), replacementBytes, "successor database");
     } finally {
       unsubscribe();
       for (const undo of restore) {

@@ -1,0 +1,2 @@
+# Extend the existing palette table to prove readiness notification without reapplication or retirement of a pending palette.
+9

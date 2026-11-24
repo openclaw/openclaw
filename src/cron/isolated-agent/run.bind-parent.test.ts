@@ -11,8 +11,9 @@ import {
   type CronToolsAllowCaptureRef,
 } from "../../agents/tools/cron-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recovery.test-support.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../../gateway/server-methods/cron-creator-authority-admission.js";
 import {
@@ -79,7 +80,7 @@ const DEVICE: PairedDevice = {
 const channelOwnerTurn = (runId: string): GatewayCronCreatorAuthorityAdmission => ({
   runId,
   callerOrigin: { kind: "unknown" },
-  managementEntitlement: { source: "channel-owner", isCurrent: () => true },
+  managementEntitlement: { source: "channel-owner" },
 });
 
 const groupMemberTurn = (runId: string): GatewayCronCreatorAuthorityAdmission => ({
@@ -206,6 +207,7 @@ async function runOccurrence(
 ) {
   let operatorAdmitted = false;
   let memoryParent: ReturnType<typeof readScheduledMemoryParent>;
+  let runRowParent: unknown;
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
     const admitted = await expectDefined(params.preparedRunAdmission, "scheduled admission").admit(
       "gateway",
@@ -213,6 +215,10 @@ async function runOccurrence(
     );
     operatorAdmitted = readAdmittedRunOperatorAuthority(admitted) !== undefined;
     memoryParent = readScheduledMemoryParent(admitted.operationalRunInstance);
+    // Sessions the run spawns walk to its row, so the receipt must be stored before the agent runs.
+    const sessionKey = expectDefined(params.sessionKey, "run session key");
+    runRowParent = (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))
+      ?.scheduledMemoryParent;
     return { payloads: [{ text: "Deploy checked" }], meta: { agentMeta: {} } };
   });
   const clock = createGatewaySchedulerClock(Date.now());
@@ -234,7 +240,7 @@ async function runOccurrence(
     await execution.waitForIdle();
     const after = expectDefined(execution.getJob(job.id), "settled job");
     expect(after.state.lastRunStatus, after.state.lastError).toBe(expectedStatus);
-    return { operatorAdmitted, memoryParent, lastError: after.state.lastError };
+    return { operatorAdmitted, memoryParent, runRowParent, lastError: after.state.lastError };
   } finally {
     execution.stop();
     await execution.waitForIdle();
@@ -278,7 +284,7 @@ it.each([
   try {
     if (scenario.startsWith("control ui owner binds")) {
       const original = expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: recovery.client,
           context,
           sourceAuthority: null,
@@ -335,9 +341,10 @@ it.each([
     expect(job.operatorSource?.source).toMatchObject({
       agentId: "main",
       sessionKey: SESSION,
-      sessionId: SESSION_ID,
       snapshot: { profileId: profile.id, device: { deviceId: DEVICE.deviceId } },
     });
+    // The source links the conversation by key; edits and resets keep it valid.
+    expect(job.operatorSource?.source).not.toHaveProperty("sessionId");
   } else {
     expect(job.operatorSource).toBeUndefined();
   }
@@ -359,6 +366,7 @@ it.each([
     return;
   }
   const occurrence = await runOccurrence(config, job, context as never);
+  expect(occurrence.runRowParent).toEqual(occurrence.memoryParent);
   if (scenario === "unbound") {
     // Unbound jobs keep the run-session decisions: no parent memory, no operator source.
     expect(occurrence.memoryParent).toBeUndefined();
@@ -456,42 +464,4 @@ it.each([
     await creatorCron.waitForIdle();
   }
   expect((await fixture.read()).find((entry) => entry.id === jobId)).toEqual(before);
-});
-
-it("refuses the stored write when the owner loses authority while bind waits for the store", async () => {
-  const config = await prepareAuthorityConfig({ tools: { allow: [AUTOMATIONS_TOOL_NAME] } });
-  const fixture = createCronFixture(undefined, config);
-  const { context } = fixture;
-  context.resolveGatewayContext = () => context;
-  const seeded = await seedKeyOnlyJob(context.cron);
-  const before = (await fixture.read()).find((entry) => entry.id === seeded.id);
-  let ownerCurrent = true;
-  const update = context.cron.updateWithPrecondition.bind(context.cron);
-  // Revoke between the handler's checks and the commit under the cron lock.
-  const commit = vi
-    .spyOn(context.cron, "updateWithPrecondition")
-    .mockImplementation(async (...args) => {
-      ownerCurrent = false;
-      return await update(...args);
-    });
-  try {
-    await expect(
-      bindFromParent({
-        config,
-        context,
-        runId: "revoked-bind",
-        jobId: seeded.id,
-        admitted: {
-          runId: "revoked-bind",
-          callerOrigin: { kind: "unknown" },
-          managementEntitlement: { source: "channel-owner", isCurrent: () => ownerCurrent },
-        },
-      }),
-    ).rejects.toThrow(/admin grant is missing, expired, or already used/);
-  } finally {
-    context.cron.stop();
-    await creatorCron.waitForIdle();
-  }
-  expect(commit).toHaveBeenCalledTimes(1);
-  expect((await fixture.read()).find((entry) => entry.id === seeded.id)).toEqual(before);
 });

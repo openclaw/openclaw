@@ -1,24 +1,15 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
-import { findTranscriptEvent } from "../../../config/sessions/session-transcript-match.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { waitForAgentJob } from "../../../gateway/agent-turn/agent-job.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
-import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
-import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
-import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
-import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -26,7 +17,6 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentSessionCompletion = {
   startedAt?: number;
@@ -35,98 +25,6 @@ export type SubagentSessionCompletion = {
   reason: SubagentLifecycleEndedReason;
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
-
-export async function resolveCompletionForSubagentRun(
-  entry: SubagentRunRecord,
-  session: SessionEntry | undefined,
-  assertCurrent: () => void,
-): Promise<SubagentSessionCompletion | null> {
-  const authority = resolveSubagentChildAuthority(entry, session);
-  if (!session || authority.status !== "verified") {
-    return null;
-  }
-  const executionRunId = entry.runId;
-  const snapshot = await waitForAgentJob({ runId: executionRunId, timeoutMs: 0 });
-  assertCurrent();
-  if (!snapshot) {
-    // A previous boot has no job snapshot; persisted timing must name this execution.
-    if (session.lastRunId !== executionRunId) {
-      return null;
-    }
-    const completion = resolveCompletionFromSessionEntry(session, entry.createdAt, {
-      notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-    });
-    if (!completion) {
-      return null;
-    }
-    const { agentId, storePath } = resolveSubagentChildSessionOwner(entry, getRuntimeConfig());
-    const final = await withSubagentSessionSource(
-      { agentId, storePath, sessionKey: entry.childSessionKey, assertCurrent },
-      async (source) => {
-        if (!source && isIncognitoSessionKey(entry.childSessionKey)) {
-          return undefined;
-        }
-        return findTranscriptEvent(
-          {
-            agentId,
-            storePath: source?.path ?? storePath,
-            sessionKey: entry.childSessionKey,
-            sessionId: session.sessionId,
-          },
-          { kind: "visible-final", runId: executionRunId },
-        );
-      },
-    );
-    assertCurrent();
-    const text = extractStoredAssistantText(
-      isRecord(final?.event) ? final.event.message : undefined,
-    );
-    return {
-      ...completion,
-      terminalReply: text ? sanitizeAgentRunTerminalReply(text) : undefined,
-    };
-  }
-  if (
-    !snapshot.session ||
-    snapshot.session.sessionId !== session.sessionId ||
-    snapshot.session.sessionKey !== entry.childSessionKey ||
-    (snapshot.session.agentId !== undefined &&
-      snapshot.session.agentId !== authority.childAgentId) ||
-    !isAgentEventLifecycleGenerationCurrent(snapshot.session.lifecycleGeneration) ||
-    (snapshot.yielded && !entry.collect) ||
-    typeof snapshot.endedAt !== "number"
-  ) {
-    return null;
-  }
-  const terminal = buildAgentRunTerminalOutcomeFromWaitResult(snapshot);
-  if (!terminal) {
-    return null;
-  }
-  const classification =
-    snapshot.yielded && terminal.status !== "timeout" && terminal.reason !== "blocked"
-      ? "success"
-      : classifySubagentTerminalOutcome(terminal);
-  return {
-    startedAt: snapshot.startedAt,
-    endedAt: snapshot.endedAt,
-    terminalReply: snapshot.terminalReply,
-    outcome:
-      classification === "success"
-        ? { status: "ok" }
-        : classification === "timeout"
-          ? { status: "timeout" }
-          : {
-              status: "error",
-              error: classification === "cancellation" ? "subagent run terminated" : terminal.error,
-            },
-    reason:
-      classification === "cancellation"
-        ? SUBAGENT_ENDED_REASON_KILLED
-        : classification === "success" || classification === "timeout"
-          ? SUBAGENT_ENDED_REASON_COMPLETE
-          : SUBAGENT_ENDED_REASON_ERROR,
-  };
-}
 
 function terminalSessionTimestamp(sessionEntry: SessionEntry | undefined): number | undefined {
   return asFiniteNumber(sessionEntry?.endedAt) ?? asFiniteNumber(sessionEntry?.updatedAt);

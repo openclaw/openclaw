@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { element, settleTooltip, tooltipSurface } from "./tooltip.test-support.ts";
+import { element, tooltipSurface } from "./tooltip.test-support.ts";
 import "../styles/base.css";
 
 it("keeps an escaped preview closed when hiding exposes its hovered trigger", async () => {
@@ -15,7 +15,6 @@ it("keeps an escaped preview closed when hiding exposes its hovered trigger", as
   document.body.append(tooltip, outside);
   const events: string[] = [];
   try {
-    await settleTooltip(tooltip);
     for (const type of ["overlay-show", "overlay-hide", "overlay-after-hide"]) {
       tooltip.addEventListener(type, () => events.push(type));
     }
@@ -25,6 +24,7 @@ it("keeps an escaped preview closed when hiding exposes its hovered trigger", as
     const target = trigger.getBoundingClientRect();
     const popup = surface.getBoundingClientRect();
     surface.style.translate = `${target.x + target.width / 2 - popup.x - popup.width / 2}px ${target.y + target.height / 2 - popup.y - popup.height / 2}px`;
+    await page.elementLocator(rich).hover();
     await expect.poll(() => trigger.matches(":hover")).toBe(false);
     await expect.poll(() => rich.matches(":hover")).toBe(true);
     trigger.focus();

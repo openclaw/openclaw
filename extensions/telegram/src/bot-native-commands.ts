@@ -10,7 +10,10 @@ import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-r
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
-import type { TelegramNativeCommandCallbackDispatcher } from "./bot-handlers.types.js";
+import type {
+  TelegramNativeCommandCallbackDispatcher,
+  TelegramPluginCommandContinuation,
+} from "./bot-handlers.types.js";
 import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
 import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
 import {
@@ -44,6 +47,7 @@ type RegisterTelegramNativeCommandsParams = Omit<
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
+  continuePluginCommandTurn: TelegramPluginCommandContinuation;
 };
 
 export const registerTelegramNativeCommands = async ({
@@ -52,6 +56,7 @@ export const registerTelegramNativeCommands = async ({
   nativeEnabled,
   nativeSkillsEnabled,
   shouldSkipUpdate,
+  continuePluginCommandTurn,
   ...executorParams
 }: RegisterTelegramNativeCommandsParams): Promise<{
   nativeCommandNames: ReadonlyMap<string, string>;
@@ -233,13 +238,19 @@ export const registerTelegramNativeCommands = async ({
         return;
       }
       const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
+      const message = ctx.message;
       await executeTelegramPluginCommand({
         ...executorParams,
         botUser: ctx.me,
-        msg: ctx.message,
+        msg: message,
         rawText: ctx.match?.trim() ?? "",
         commandName: pluginCommand.command,
         candidate: pluginCommand.spec,
+        continueAgentTurn: (turn) =>
+          continuePluginCommandTurn({
+            ...turn,
+            ctx: { message, update: ctx.update, me: ctx.me, getFile: ctx.getFile.bind(ctx) },
+          }),
       });
     });
   }

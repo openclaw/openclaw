@@ -1,26 +1,8 @@
-import type { Api } from "../types.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Api, ToolCall } from "../types.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import type { ReplayableResponseReasoningItem } from "./openai-responses-contracts.js";
 
-/** Resolves the assistant message id that can be replayed to OpenAI Responses. */
-export function resolveReplayableResponsesMessageId(params: {
-  replayResponsesItemIds: boolean;
-  textSignatureId?: string;
-  fallbackId: string;
-  fallbackOrdinal: number;
-  previousReplayItemWasReasoning: boolean;
-}): string | undefined {
-  if (!params.replayResponsesItemIds) {
-    return undefined;
-  }
-  if (!params.textSignatureId) {
-    // Id-less text signatures get a deterministic synthetic id per fallback
-    // ordinal; signed text can only replay when paired with preceding reasoning.
-    return params.fallbackOrdinal === 0
-      ? params.fallbackId
-      : `${params.fallbackId}_${params.fallbackOrdinal}`;
-  }
-  return params.previousReplayItemWasReasoning ? params.textSignatureId : undefined;
-}
 export function normalizeOpenAIResponsesReasoningReplayItem(
   item: ReplayableResponseReasoningItem,
   api: Api,
@@ -37,4 +19,30 @@ export function normalizeOpenAIResponsesReasoningReplayItem(
     status: item.status,
     encrypted_content: item.encrypted_content,
   };
+}
+
+/** Replay original bytes only while the normalized arguments still match the saved call. */
+export function replayOpenAIResponsesToolArguments(
+  block: ToolCall,
+  providerStyle: boolean,
+  sameModel: boolean,
+): string {
+  const value = providerStyle
+    ? JSON.stringify(block.arguments)
+    : typeof block.arguments === "string"
+      ? block.arguments
+      : JSON.stringify(block.arguments ?? {});
+  const signature = sameModel && block.argumentsSignature;
+  return signature && signature.value === value && typeof signature.raw === "string"
+    ? signature.raw
+    : value;
+}
+
+/** New transcripts retain exact bytes; legacy callers may still replay normalized values. */
+export function normalizeOpenAIResponsesToolArguments(value: unknown, replayed: unknown): unknown {
+  if (isRecord(replayed) && replayed.arguments === value) {
+    return value;
+  }
+  const args = parseJsonObjectPreservingUnsafeIntegers(value);
+  return args ? JSON.stringify(args) : value;
 }

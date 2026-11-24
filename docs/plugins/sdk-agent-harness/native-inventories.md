@@ -31,6 +31,11 @@ Unexpected thrown discovery errors keep the host’s generic partial-failure beh
 The host does not infer a provider or authentication rejection from a runtime name
 or arbitrary exception text; a harness must supply its own known provider outcome.
 
+Discovery holds a plugin only while its call into that plugin is running, so
+other plugins, including ones whose lookup already finished, reload while
+discovery continues. A call that is still running keeps its own plugin from
+reloading until it settles, so bound your own native requests with a deadline.
+
 An optional synchronous `readModelCatalogReadiness(params)` returns only
 `{ accountType: string }` for a current native account observation
 covering that exact scope and model. Preserve the native account type; it does

@@ -44,6 +44,12 @@ import {
   loadFreshManagedPluginMetadata,
   refreshManagedPluginMetadata,
 } from "./management-service.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import {
+  clearRemovedPluginMcpOAuth,
+  listPluginMcpOAuthEndpoints,
+  type PluginMcpOAuthEndpoint,
+} from "./mcp-auth-status.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import {
   tracePluginLifecyclePhase,
@@ -75,6 +81,8 @@ export type PreparedPluginUninstall = {
   policyPluginIds: string[];
   name: string;
   channelIds: string[] | undefined;
+  /** Read before removal: the plugin files that declare these endpoints are deleted. */
+  mcpOAuthEndpoints: PluginMcpOAuthEndpoint[];
   plan: Extract<ReturnType<typeof planPluginUninstall>, { ok: true }>;
   planForConfig: (config: OpenClawConfig) => ReturnType<typeof planPluginUninstall>;
 };
@@ -226,6 +234,18 @@ export async function preparePluginUninstall(
         : plan.error,
     );
   }
+  const mcpOAuthEndpoints = listPluginMcpOAuthEndpoints(
+    !pluginIds.length
+      ? []
+      : metadata
+        ? pluginIds.flatMap((id) => metadata.byPluginId.get(id) ?? [])
+        : loadPluginManifestRegistryForInstalledIndex({
+            index,
+            config,
+            pluginIds,
+            includeDisabled: true,
+          }).plugins,
+  );
   return ok({
     snapshot,
     installRecords,
@@ -235,6 +255,7 @@ export async function preparePluginUninstall(
     policyPluginIds,
     name: plugin?.name || pluginId,
     channelIds,
+    mcpOAuthEndpoints,
     plan,
     planForConfig,
   });
@@ -478,6 +499,14 @@ export async function uninstallPluginWithPolicy(
           });
         }
         await prepareEffect();
+        for (const warning of await clearRemovedPluginMcpOAuth({
+          endpoints: prepared.mcpOAuthEndpoints,
+          config: nextConfig,
+          assertCurrent: beforePersistentApply,
+        })) {
+          warnings.push(warning);
+          params.onWarning?.(warning);
+        }
         const application = await applyRuntime?.({
           config: nextConfig,
           write: committed.configWrite,

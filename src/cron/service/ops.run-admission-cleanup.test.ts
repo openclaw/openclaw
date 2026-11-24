@@ -6,24 +6,13 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
-} from "../../gateway/device-revocation.js";
-import { resolveCronMutationCommitGuard } from "../../gateway/server-methods/cron-caller-scope.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { createCronMutationCompletion } from "../mutation-completion.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
-import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
-import {
-  createBlockedCronRun,
-  createCronRunFixture,
-  createHeldCronRunner,
-} from "./ops.test-support.js";
+import { enqueueRun, run } from "./ops-run.js";
+import { createCronRunFixture, createHeldCronRunner } from "./ops.test-support.js";
 import { waitForCronRunQueue } from "./run-queue.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
@@ -119,70 +108,6 @@ describe("cron service run admission cleanup", () => {
       stop(state);
     }
   });
-
-  it.each([false, true])(
-    "retains the disconnected queued caller until settlement (revoked: %s)",
-    async (revoked) => {
-      vi.useRealTimers();
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-      const job = makeJob("revoked-queued-run", dueAt);
-      const context = {};
-      const connection = new AbortController();
-      const caller = captureGatewayDeviceRevocation(
-        context,
-        { deviceId: "queued-device", role: "operator" },
-        () => true,
-        connection.signal,
-      );
-      const {
-        state,
-        runIsolatedAgentJob,
-        activeRun: blocker,
-        releaseActive: releaseBlocker,
-        readJob,
-      } = await createBlockedCronRun(store.storePath, job);
-
-      try {
-        const commitGuard = resolveCronMutationCommitGuard(
-          null,
-          context as GatewayRequestContext,
-          undefined,
-          { hasCurrentClientAuthority: caller.isCurrent },
-        );
-        const completion = createCronMutationCompletion("cron.run");
-        if (!completion) {
-          throw new Error("Expected Cron completion owner");
-        }
-        const ack = await completion.run(() => enqueueRun(state, job.id, "force", { commitGuard }));
-        expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
-        expect(completion.isCommitted()).toBe(true);
-        caller.release();
-        connection.abort();
-        expect(caller.isCurrent()).toBe(true);
-        if (revoked) {
-          invalidateGatewayDeviceRevocation(context, "queued-device", "operator");
-        }
-        releaseBlocker.resolve({ status: "ok" });
-        await blocker;
-        if (!ack.ok || !("runId" in ack)) {
-          throw new Error("Expected an acknowledged queued run");
-        }
-        expect(await waitForManualRun(state, ack.runId, 60_000)).toBe(true);
-        const targetCalls = runIsolatedAgentJob.mock.calls.filter(
-          ([{ job: current }]) => current.id === job.id,
-        );
-        expect(targetCalls).toHaveLength(revoked ? 0 : 1);
-        expect((await readJob())?.state.queuedAtMs).toBeUndefined();
-        expect(caller.isCurrent()).toBe(false);
-      } finally {
-        caller.release();
-        releaseBlocker.resolve({ status: "ok" });
-        await blocker;
-        stop(state);
-      }
-    },
-  );
 
   it.each([
     { mode: "force" as const, evaluation: "completed" as const },

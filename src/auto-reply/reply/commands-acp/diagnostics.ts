@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,6 +13,7 @@ import {
 } from "../../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listSessionBindingsBySessionsAsync } from "../../../infra/outbound/session-binding-service.js";
+import { canAccess } from "../../../infra/path-existence.js";
 import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -27,7 +27,7 @@ import {
 import { resolveAcpTargetSessionKey } from "./targets.js";
 
 /** Resolves the install command hint shown when the configured ACP backend is missing. */
-function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
+async function resolveAcpInstallCommandHint(cfg: OpenClawConfig): Promise<string> {
   const configured = normalizeOptionalString(cfg.acp?.runtime?.installCommand);
   if (configured) {
     return configured;
@@ -36,7 +36,7 @@ function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
   const backendId = normalizeOptionalLowercaseString(cfg.acp?.backend) ?? "acpx";
   if (backendId === "acpx") {
     const workspaceLocalPath = path.join(workspaceDir, "extensions", "acpx");
-    if (existsSync(workspaceLocalPath)) {
+    if (await canAccess(workspaceLocalPath)) {
       return `openclaw plugins install ${workspaceLocalPath}`;
     }
     const bundledInstallHint = resolveBundledPluginInstallCommandHint({
@@ -51,7 +51,7 @@ function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
       const belongsToWorkspace =
         relativeToWorkspace.length === 0 ||
         (!relativeToWorkspace.startsWith("..") && !path.isAbsolute(relativeToWorkspace));
-      if (belongsToWorkspace && existsSync(resolvedLocalPath)) {
+      if (belongsToWorkspace && (await canAccess(resolvedLocalPath))) {
         return bundledInstallHint;
       }
     }
@@ -69,7 +69,7 @@ export async function handleAcpDoctorAction(
   }
 
   const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
-  const installHint = resolveAcpInstallCommandHint(params.cfg);
+  const installHint = await resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
   const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot();
   const lines = [
@@ -157,15 +157,15 @@ export async function handleAcpDoctorAction(
   return commandReply(lines.join("\n"));
 }
 
-export function handleAcpInstallAction(
+export async function handleAcpInstallAction(
   params: HandleCommandsParams,
   restTokens: string[],
-): CommandHandlerResult {
+): Promise<CommandHandlerResult> {
   if (restTokens.length > 0) {
     return commandReply(`⚠️ ${ACP_INSTALL_USAGE}`);
   }
   const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
-  const installHint = resolveAcpInstallCommandHint(params.cfg);
+  const installHint = await resolveAcpInstallCommandHint(params.cfg);
   const lines = [
     "ACP install:",
     "-----",
@@ -200,15 +200,12 @@ export async function handleAcpSessionsAction(
         cfg: params.cfg,
         sessionKey: currentSessionKey,
         agentId: target.agentId,
-        assertCurrent: params.command.assertOwnerCurrent,
       });
-  params.command.assertOwnerCurrent?.();
   const visibleEntries = params.command.senderIsOwner
     ? await listAcpSessionEntries({ cfg: params.cfg })
     : currentEntry?.entry && currentEntry.acp
       ? [currentEntry]
       : [];
-  params.command.assertOwnerCurrent?.();
 
   const selectedEntries = visibleEntries
     .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
@@ -218,7 +215,6 @@ export async function handleAcpSessionsAction(
       .filter(({ entry, acp }) => entry && acp)
       .map(({ storeSessionKey }) => storeSessionKey),
   );
-  params.command.assertOwnerCurrent?.();
   const rows = selectedEntries
     .map(({ storeSessionKey, agentId, entry, acp }) => {
       if (!entry || !acp) {

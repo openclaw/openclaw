@@ -66,6 +66,7 @@ async function recoverCapture(
   await surface.getByText("Paused: uncertain", { exact: true }).waitFor();
   await button(surface, "Recover").click();
   const dialog = await waitForConfirmModal(page);
+  expect(await dialog.getAttribute("label")).toBe("Recover this paused snapshot?");
   const recover = button(dialog, "Recover");
   expect(await recover.isDisabled()).toBe(true);
   await dialog.getByRole("checkbox").check();
@@ -78,6 +79,31 @@ async function recoverCapture(
   await expect.poll(() => surface.getByText("Paused: uncertain", { exact: true }).count()).toBe(0);
 }
 suite.define(() => {
+  it("keeps a long snapshot profile and its actions inside the phone detail card", async () => {
+    const result = snapshot();
+    const first = { ...result.images[0]!, profileId: "regionalengineering".repeat(4) };
+    result.images = [first, { ...first, profileId: "secondary", profileKey: "secondary-key" }];
+    await withSnapshots({ "crabbox.images.list": result }, async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const group = sheet(page).getByRole("group", { name: first.profileId, exact: true });
+      const actions = button(group, "Environment actions");
+      await actions.waitFor();
+      const fits = await group.evaluate((row) => {
+        const bounds = row.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(row.querySelector("strong")!);
+        return (
+          range.getBoundingClientRect().right <= bounds.right &&
+          row.querySelector("button")!.getBoundingClientRect().right <= bounds.right
+        );
+      });
+      expect(fits).toBe(true);
+      await actions.click();
+      await menuItem(page, "Pin").waitFor();
+      await page.keyboard.press("Escape");
+    });
+  });
+
   it("refreshes snapshots and saved machines after lazy plugin activation without reconnecting", async () => {
     await withSnapshots(
       {
@@ -96,12 +122,12 @@ suite.define(() => {
       async (page, gateway) => {
         await gateway.waitForRequest("config.get");
         await page
-          .getByText("The first cloud session for a repository prepares it and saves a snapshot.", {
+          .getByText(/^No cloud devices yet[.]/, {
             exact: false,
           })
           .waitFor();
-        await page.locator(".cloud-environments__advanced > summary").click();
-        const emptyMachines = page.getByText("No cloud worker profiles are configured.", {
+        await page.locator(".settings-disclosure > summary").click();
+        const emptyMachines = page.getByText("No cloud device profiles yet.", {
           exact: true,
         });
         await emptyMachines.waitFor();
@@ -149,7 +175,7 @@ suite.define(() => {
         const cancel = button(page, "Cancel: build-app");
         await cancel.click();
         const dialog = await waitForConfirmModal(page);
-        expect(await dialog.getAttribute("label")).toBe("Cancel build");
+        expect(await dialog.getAttribute("label")).toBe("Cancel this snapshot build?");
         expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
         await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
         await button(dialog, "Cancel build").click();
@@ -212,7 +238,7 @@ suite.define(() => {
         const repositoryRecovered = snapshot();
         repositoryRecovered.images.push(machineCapture);
         await recoverCapture(page, gateway, repositorySheet, "capture-app", repositoryRecovered);
-        const advanced = page.locator(".cloud-environments__advanced");
+        const advanced = page.locator(".settings-disclosure");
         await advanced.locator("summary").click();
         await recoverCapture(page, gateway, advanced, "capture-machine", snapshot(), 1);
         expect(await page.locator(".cloud-environments__row").count()).toBe(1);
@@ -279,6 +305,7 @@ suite.define(() => {
         });
         await menu("Roll back");
         const rollback = await waitForConfirmModal(page);
+        expect(await rollback.getAttribute("label")).toBe("Roll back this snapshot?");
         await gateway.setMethodResponse("crabbox.images.list", restored);
         await button(rollback, "Roll back").click();
         expect((await gateway.waitForRequest("crabbox.images.rollback")).params).toEqual({
@@ -286,6 +313,7 @@ suite.define(() => {
         });
         await menu("Delete");
         const deletion = await waitForConfirmModal(page);
+        expect(await deletion.getAttribute("label")).toBe("Delete this snapshot?");
         await deletion.getByText("image-arm-previous", { exact: true }).waitFor();
         await gateway.setMethodResponse("crabbox.images.list", { ...result, images: [firstImage] });
         await button(deletion, "Delete").click();

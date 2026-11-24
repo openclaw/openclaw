@@ -43,7 +43,10 @@ function transcriptMethod<T>(
     const cfg = context.getRuntimeConfig();
     // Meeting rows have agent attribution but no person owner. Mirror global
     // aggregate visibility; an agent filter cannot make hidden archive data readable.
-    if (!isGatewayAdmin(client) && operatorSessionCap(client, cfg) === "none") {
+    if (
+      !isGatewayAdmin(client) &&
+      ["none", "invited"].includes(operatorSessionCap(client, cfg) ?? "")
+    ) {
       respond(
         false,
         undefined,
@@ -65,7 +68,7 @@ function transcriptMethod<T>(
         authority.assertCurrent();
         if (
           !isGatewayAdmin(client) &&
-          operatorSessionCap(client, context.getRuntimeConfig()) === "none"
+          ["none", "invited"].includes(operatorSessionCap(client, context.getRuntimeConfig()) ?? "")
         ) {
           throw new Error("Transcript archive access changed");
         }

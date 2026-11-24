@@ -7,8 +7,10 @@ import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { requestOneShotSettledExitWatchdog } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
+import { hasCliProcessScope } from "./runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "./update-cli/shared.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
@@ -117,6 +119,9 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     )
     .action(
       createUpdateLeafAction(async (opts, actionCommand) => {
+        if (hasCliProcessScope()) {
+          requestOneShotSettledExitWatchdog();
+        }
         const repair = hidden
           ? (await import("./update-cli/update-command-finalize.js")).updateFinalizeCommand
           : (await import("./update-cli/update-repair-command.js")).updateRepairCommand;
@@ -229,6 +234,53 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     });
 
   update
+    .command("check-release")
+    .description("Check a staged release without changing configuration or state")
+    .option("--json", "Output result as JSON", false)
+    .action(async () => {
+      const deadline = setTimeout(() => {
+        defaultRuntime.writeJson({ ok: false, reason: "check-release-timeout", surfaces: [] }, 0);
+        defaultRuntime.exit(1);
+      }, 3 * 60_000);
+      try {
+        const { checkRelease } = await import("../update/check-release.js");
+        const result = await checkRelease();
+        defaultRuntime.writeJson(result, 0);
+        if (!result.ok) {
+          process.exitCode = 1;
+        }
+      } finally {
+        clearTimeout(deadline);
+      }
+    });
+
+  update
+    .command("plugins")
+    .description("Update installed plugins for this release (run by openclaw update)")
+    .requiredOption("--channel <channel>", "Update channel the plugins follow")
+    .requiredOption("--timeout <seconds>", "Budget for plugin maintenance in seconds")
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
+    .option("--json", "Output result as JSON", false)
+    .action(async (opts: { channel: string; timeout: string; acceptCapabilities: boolean }) => {
+      const [{ maintainPlugins }, { normalizeUpdateChannel }, { parseUpdateTimeoutMs }] =
+        await Promise.all([
+          import("../update/plugins.js"),
+          import("../infra/update-channels.js"),
+          import("./update-cli/shared.js"),
+        ]);
+      const channel = normalizeUpdateChannel(opts.channel);
+      if (!channel) {
+        throw new Error(`Unknown update channel: ${opts.channel}`);
+      }
+      const result = await maintainPlugins({
+        channel,
+        timeoutMs: parseUpdateTimeoutMs(opts.timeout)!,
+        acceptCapabilities: opts.acceptCapabilities,
+      });
+      defaultRuntime.writeJson(result, 0);
+    });
+
+  update
     .command("adopt-immutable")
     .description("Explicitly record ownership of an existing sealed release installation")
     .requiredOption("--root <path>", "Stable installation root containing current and releases")
@@ -329,6 +381,21 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       await updateAdmitCommand(opts.context);
     });
 
+  setCommandJsonMode(update.command("preflight", { hidden: true }), "output", () => true)
+    .description("Internal isolated candidate readiness protocol")
+    .option("--json", "Output the readiness receipt as JSON", true)
+    .option("--source-root <path>", "Absolute serving package root")
+    .option("--timeout <seconds>", "Override candidate check deadlines in seconds")
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updatePreflightCommand } = await import("./update-cli/update-command-preflight.js");
+        await updatePreflightCommand({
+          sourceRoot: typeof opts.sourceRoot === "string" ? opts.sourceRoot : undefined,
+          timeout: inheritedUpdateTimeout(opts, command),
+        });
+      }),
+    );
+
   for (const action of ["migrate", "restore", "finish"] as const) {
     setCommandJsonMode(update.command(action, { hidden: true }), "output", () => true)
       .description(`Internal externally supervised update ${action}`)
@@ -401,7 +468,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
 
   update
     .command("migration-plan", { hidden: true })
-    .description("Plan Doctor-owned state migrations against an isolated snapshot")
+    .description(
+      "Diagnostic only: list Doctor-owned state migrations for an isolated snapshot (always refused; never authorizes update repair)",
+    )
     .requiredOption("--snapshot-home <path>", "Copied environment home")
     .requiredOption("--snapshot-config <path>", "Copied OpenClaw config")
     .requiredOption("--snapshot-state <path>", "Copied OpenClaw state directory")
@@ -426,7 +495,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
+    .option(
+      "--full-integrity-check",
+      "Unavailable for prepared-release updates; use openclaw doctor --fix --full-integrity-check",
+      false,
+    )
     .option("--timeout <seconds>", "Set an overall update budget in seconds")
     .addHelpText(
       "after",

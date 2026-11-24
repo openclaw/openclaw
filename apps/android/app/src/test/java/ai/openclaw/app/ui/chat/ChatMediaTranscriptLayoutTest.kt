@@ -93,7 +93,10 @@ class ChatMediaTranscriptLayoutTest {
           }
         }
       }
-      composeRule.waitUntil { model.chatMessages.value.isNotEmpty() && !model.chatHistoryLoading.value }
+      // History loads on the runtime's IO scope and reaches the ViewModel through Android Main.
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        composeRule.runOnIdle { model.chatMessages.value.isNotEmpty() && !model.chatHistoryLoading.value }
+      }
       val controller =
         ChatController::class.java.cast(
           NodeRuntime::class.java

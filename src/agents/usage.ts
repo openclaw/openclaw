@@ -447,11 +447,17 @@ export function deriveSessionTotalTokens(params: {
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
-  // SessionEntry.totalTokens is an unclamped prompt/context snapshot, excluding
-  // completion tokens. Display layers own percentage caps.
-  const tokens = deriveContextPromptTokens(params);
+  // Only the last request owns context occupancy; billing totals can span requests.
   const currentUsage = params.lastCallUsage ?? params.usage;
-  return currentUsage?.usageReport?.state === "available"
+  const promptTokens = deriveContextPromptTokens(params);
+  const tokens =
+    currentUsage?.contextUsage?.state === "available"
+      ? currentUsage.contextUsage.totalTokens
+      : promptTokens === undefined
+        ? undefined
+        : promptTokens + (currentUsage?.output ?? 0);
+  return currentUsage?.usageReport?.state === "available" ||
+    currentUsage?.contextUsage?.state === "available"
     ? asNonNegativeFiniteNumber(tokens)
     : asPositiveFiniteNumber(tokens);
 }

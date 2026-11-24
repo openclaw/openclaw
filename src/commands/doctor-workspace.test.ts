@@ -55,6 +55,10 @@ describe("root memory repair", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-memory-"));
+    // Canonicalize like the shared temp-dir helpers do: on macOS tmpdir sits
+    // behind a symlink, and the publication failure tests intercept renames by
+    // comparing against the resolved destination the repair publishes to.
+    tmpDir = await fs.realpath(tmpDir);
     canonicalPath = path.join(tmpDir, "MEMORY.md");
     legacyPath = path.join(tmpDir, "memory.md");
     scope = { agentId: "main", workspaceDir: tmpDir, labelAgent: false };
@@ -89,6 +93,7 @@ describe("root memory repair", () => {
   }
 
   afterEach(async () => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -191,11 +196,135 @@ describe("root memory repair", () => {
     expect(canonical).toContain("# Legacy 旧版 �");
     await expectPathMissing(legacyPath);
     const archive = await expectArchivedLegacyMemory();
+    const canonicalBackup = path.join(path.dirname(archive), "MEMORY.md.pre-merge");
     expect(note).toHaveBeenCalledExactlyOnceWith(
-      `Workspace memory root merged:\n- current: ${canonicalPath}\n- backup: ${archive}\n- merged legacy content from: ${legacyPath}\n- removed legacy file: ${legacyPath}`,
+      `Workspace memory root merged:\n- current: ${canonicalPath}\n- backup: ${archive}\n- pre-merge backup: ${canonicalBackup}\n- merged legacy content from: ${legacyPath}\n- removed legacy file: ${legacyPath}`,
       "Doctor changes",
     );
     await expect(fs.readFile(archive, "utf8")).resolves.toBe("# Legacy 旧版 �\n");
+    await expect(fs.readFile(canonicalBackup, "utf8")).resolves.toBe("# Canonical 合法 😀 �\n");
+  });
+
+  it("keeps earlier backups when repairs share a timestamp and skips an already merged workspace", async () => {
+    if (!(await seedMemory())) {
+      return;
+    }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-29T00:00:00.000Z"));
+    await repair();
+    const archive = await expectArchivedLegacyMemory();
+    const firstMerged = await fs.readFile(canonicalPath, "utf8");
+
+    note.mockClear();
+    await repair();
+    expect(note).not.toHaveBeenCalled();
+    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe(firstMerged);
+    expect(await expectArchivedLegacyMemory()).toBe(archive);
+
+    await fs.writeFile(legacyPath, "# Later legacy\n");
+    await repair();
+
+    await expect(fs.readFile(archive, "utf8")).resolves.toBe("# Legacy\n");
+    await expect(
+      fs.readFile(path.join(path.dirname(archive), "MEMORY.md.pre-merge"), "utf8"),
+    ).resolves.toBe("# Canonical\n");
+    const repairDir = path.dirname(path.dirname(archive));
+    const archives = await fs.readdir(repairDir);
+    expect(archives).toHaveLength(2);
+    const laterArchive = archives.find((entry) => entry !== path.basename(path.dirname(archive)))!;
+    await expect(
+      fs.readFile(path.join(repairDir, laterArchive, "memory.md"), "utf8"),
+    ).resolves.toBe("# Later legacy\n");
+    await expect(
+      fs.readFile(path.join(repairDir, laterArchive, "MEMORY.md.pre-merge"), "utf8"),
+    ).resolves.toBe(firstMerged);
+    expect(await fs.readFile(canonicalPath, "utf8")).toContain("# Later legacy\n");
+  });
+
+  it.each(["ENOSPC", "EPERM"])(
+    "preserves canonical memory when publication fails with %s",
+    async (errorCode) => {
+      if (!(await seedMemory())) {
+        return;
+      }
+      const realRename = fs.rename.bind(fs);
+      const failure = Object.assign(new Error(`publication failed: ${errorCode}`), {
+        code: errorCode,
+      });
+      vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        if (target === canonicalPath) {
+          throw failure;
+        }
+        return realRename(source, target);
+      });
+
+      await repair();
+
+      expect(note).toHaveBeenCalledTimes(1);
+      const message = String(note.mock.calls[0]?.[0]);
+      expect(message).toContain("Workspace memory repair could not be completed");
+      // A failed publication must not tear the only durable memory file, and no
+      // fallback may recreate it behind the caller's back.
+      await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
+      const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory");
+      const archives = await fs.readdir(repairDir);
+      await expect(
+        fs.readFile(path.join(repairDir, archives[0]!, "MEMORY.md.pre-merge"), "utf8"),
+      ).resolves.toBe("# Canonical\n");
+      await expectPathMissing(legacyPath);
+    },
+  );
+
+  it("merges through a symlinked workspace directory alias", async () => {
+    if (!(await seedMemory())) {
+      return;
+    }
+    // Configured workspace aliases are supported inputs: the repair must
+    // resolve the alias for atomic publication instead of failing on the
+    // symlinked parent, while still writing the same canonical file.
+    const aliasDir = `${tmpDir}-alias`;
+    await fs.symlink(tmpDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+    try {
+      await maybeRepairWorkspaceMemoryHealth({
+        prompter,
+        scope: { ...scope, workspaceDir: aliasDir },
+      });
+
+      const canonical = await fs.readFile(canonicalPath, "utf8");
+      expect(canonical).toContain("# Canonical\n");
+      expect(canonical).toContain("# Legacy\n");
+      await expectPathMissing(legacyPath);
+      const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory");
+      const archives = await fs.readdir(repairDir);
+      await expect(
+        fs.readFile(path.join(repairDir, archives[0]!, "MEMORY.md.pre-merge"), "utf8"),
+      ).resolves.toBe("# Canonical\n");
+      await expect(fs.readFile(path.join(aliasDir, "MEMORY.md"), "utf8")).resolves.toBe(canonical);
+    } finally {
+      await fs.rm(aliasDir, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves the workspace mode across a successful merge", async () => {
+    if (!(await seedMemory())) {
+      return;
+    }
+    const { mode: modeBefore } = await fs.stat(tmpDir);
+    await fs.chmod(tmpDir, 0o700);
+    await fs.chmod(canonicalPath, 0o640);
+
+    await repair();
+
+    const canonical = await fs.readFile(canonicalPath, "utf8");
+    expect(canonical).toContain("# Canonical\n");
+    expect(canonical).toContain("# Legacy\n");
+    if (process.platform !== "win32") {
+      // Publication must never widen a private workspace.
+      const { mode } = await fs.stat(tmpDir);
+      expect(mode & 0o777).toBe(0o700);
+      expect((await fs.stat(canonicalPath)).mode & 0o777).toBe(0o640);
+    }
+    await fs.chmod(tmpDir, modeBefore & 0o777);
   });
 
   it("follows a symlinked AGENTS.md while keeping its target bounded", async () => {

@@ -1,0 +1,40 @@
+{
+  "models": [
+    {
+      "id": "fixture:latest",
+      "name": "Fixture model",
+      "provider": "ollama",
+      "contextWindow": 8192,
+      "local": true,
+      "input": [
+        "text"
+      ],
+      "reasoning": false,
+      "tags": [
+        "default",
+        "configured"
+      ],
+      "thinkingLevels": [
+        {
+          "id": "off",
+          "label": "off"
+        },
+        {
+          "id": "ultra",
+          "label": "ultra"
+        }
+      ],
+      "thinkingDefault": "off",
+      "available": true
+    }
+  ],
+  "defaultModels": {
+    "automaticUtilityModel": null
+  },
+  "providerOutcomes": [
+    {
+      "provider": "ollama",
+      "status": "ready"
+    }
+  ]
+}

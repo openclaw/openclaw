@@ -3,7 +3,7 @@ import {
   classifyOAuthRefreshFailureError,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
 import { isSignalTimeoutReason } from "../agents/failover/error.js";
-import { formatToolExecutionErrorMessage } from "../agents/tool-result-error.js";
+import { formatToolExecutionErrorMessage } from "../agents/tool-execution-error.js";
 import { diagnosticHttpStatusCode } from "../infra/diagnostic-error-metadata.js";
 import type { RunWebSearchResult } from "./runtime-types.js";
 

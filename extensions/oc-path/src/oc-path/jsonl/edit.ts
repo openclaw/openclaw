@@ -5,9 +5,11 @@
  * @module @openclaw/oc-path/jsonl/edit
  */
 
-import { findNodeAtLocation, parseTree } from "jsonc-parser/lib/esm/main.js";
+import { parseTree } from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
+import { emitJsoncObjectEntries } from "../emit.js";
 import type { JsoncValue } from "../jsonc/ast.js";
+import { findEffectiveJsoncNode } from "../jsonc/parse.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
@@ -39,7 +41,10 @@ function renderJsoncValue(
     const parts = value.items.map((v, i) => renderJsoncValue(v, guardPath, [...walked, String(i)]));
     return `[${parts.join(",")}]`;
   }
-  const parts = value.entries.map(
+  const parentPath = walked.length ? `${guardPath}/${walked.join("/")}` : guardPath;
+  const parts = emitJsoncObjectEntries(
+    value.entries,
+    parentPath,
     (e) => `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`,
   );
   return `{${parts.join(",")}}`;
@@ -68,7 +73,7 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
   const editPath = match.path;
   const bomLength = target.raw.startsWith("\uFEFF") ? 1 : 0;
   const tree = parseTree(target.raw.slice(bomLength), [], { allowTrailingComma: true });
-  const node = tree && findNodeAtLocation(tree, editPath);
+  const node = tree && findEffectiveJsoncNode(tree, editPath);
   if (!node) {
     throw new OcPathEditError("unresolved");
   }
@@ -77,7 +82,8 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     `oc://${path.file}/L${target.line}`,
     editPath.map(String),
   );
-  const start = sourceLineOffset(ast.raw, target.line) + bomLength + node.offset;
+  // JSONL records are separated by LF; CR may be whitespace inside a record.
+  const start = sourceLineOffset(ast.raw, target.line, /\n/g) + bomLength + node.offset;
   // Replace only the selected source token. Re-rendering parsed siblings rounds
   // large integers and removes comments, escapes, and record separators.
   const raw = ast.raw.slice(0, start) + replacement + ast.raw.slice(start + node.length);

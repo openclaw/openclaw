@@ -14,6 +14,8 @@ import {
 } from "../../llm-core/src/model-data.js";
 import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
 
+export type { DecisionAnswerCapabilities } from "./decision-answer-capabilities.js";
+
 export type {
   ModelInferenceCapabilities,
   ModelDecisionCapabilities,
@@ -53,6 +55,8 @@ export type ModelCatalogCompatConfig = {
   supportsTemperature?: boolean;
   /** Whether the provider honors top-level `instructions` on Responses requests. */
   supportsInstructions?: boolean;
+  /** Whether the model caches top-level `instructions`; false sends the system prompt as input. */
+  cachesInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;
@@ -85,6 +89,16 @@ export type ModelCatalogCompatConfig = {
   supportedReasoningEfforts?: string[];
   reasoningEffortMap?: Record<string, string>;
   visibleReasoningDetailTypes?: string[];
+  /** Thinking level a new session starts at. Its presence makes the row own the thinking profile. */
+  defaultThinkingLevel?: string;
+  /** Offered thinking levels, in order. Replaces the ladder derived from the map and efforts. */
+  thinkingLevels?: string[];
+  /** Offers the `adaptive` level, which lets the model choose its own effort. */
+  adaptiveThinking?: boolean;
+  /** Thinking stays on even when the row says `reasoning: false` (the route cannot turn it off). */
+  thinkingRequired?: boolean;
+  /** Display labels per level, e.g. `{ low: "on" }` for a binary thinking switch. */
+  thinkingLevelLabels?: Record<string, string>;
 };
 
 /** OpenRouter routing preferences copied into request metadata. */
@@ -154,6 +168,13 @@ export function resolveOpenAIThinkingApi(api: unknown): string | undefined {
 }
 
 /** Map keys describe logical choices; provider-native values retain their spelling. */
+/** A row owns its thinking profile when it states a default level or an offered ladder. */
+export function ownsThinkingProfile(
+  compat: { defaultThinkingLevel?: string; thinkingLevels?: readonly string[] } | null | undefined,
+): boolean {
+  return compat?.defaultThinkingLevel !== undefined || (compat?.thinkingLevels?.length ?? 0) > 0;
+}
+
 export function listMappedModelThinkingLevels(model: {
   api?: string | null;
   compat?: unknown;

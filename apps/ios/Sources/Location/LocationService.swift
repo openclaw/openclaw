@@ -4,7 +4,7 @@ import OpenClawKit
 import UIKit
 
 @MainActor
-final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLocationServiceCommon {
+final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLocationServiceCommon, LocationServicing {
     enum Error: Swift.Error {
         case timeout
         case unavailable

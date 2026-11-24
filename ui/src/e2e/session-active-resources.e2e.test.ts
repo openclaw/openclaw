@@ -5,7 +5,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -136,7 +136,10 @@ suite.define(() => {
         const explicitEnvironmentId = "manual-desktop";
         const gateway = await openResources(page, {
           sessions: [row, notes],
-          deferredMethods: ["desktop.observe"],
+          deferredMethods: [
+            "desktop.observe",
+            ...(scenario === "mobile" ? ["environments.status"] : []),
+          ],
           historyMessages: [{ role: "assistant", content: "Your existing desktop is ready." }],
           methodResponses: {
             "sessions.list": list(!staleRoster, staleRoster ? 1000 : undefined),
@@ -157,6 +160,12 @@ suite.define(() => {
             "desktop.observe": desktop,
           },
         });
+        if (scenario === "mobile") {
+          await gateway.waitForRequest("environments.status");
+          await openChatSidePanelType(page, "Subagents");
+          await selectChatLayoutAction(pane(page), "Minimize side panel");
+          await gateway.resolveDeferred("environments.status", environment);
+        }
         await desktopTab(page).waitFor();
         const observe = await gateway.waitForRequest("desktop.observe");
         expect(observe.params).toEqual({
@@ -437,7 +446,7 @@ suite.define(() => {
   );
 
   it.each([390, 1280])(
-    "keeps browser results inline until explicitly opened at width %s",
+    "keeps the browser closed until its panel is explicitly opened at width %s",
     async (width) => {
       await suite.withPage(
         { serviceWorkers: "block", viewport: { width, height: 900 } },
@@ -522,28 +531,18 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat/main/resource-demo`);
           await ready(page);
-          const card = pane(page).locator("openclaw-browser-tab-card");
-          await card.locator(".shot img").waitFor({ state: "attached" });
           const panel = pane(page).locator("openclaw-browser-panel[embedded]");
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const shown = (await panel.isVisible()) ? panel.locator(".bp-shot") : card;
-            const initial = await takeControlUiScreenshotFrame(page, pane(page), [shown], {
-              animations: "disabled",
-            });
-            await writeFile(
-              path.join(suite.artifactDir, `browser-inline-${width}.png`),
-              initial.png,
-            );
-          }
+          expect(await pane(page).locator("openclaw-browser-tab-card").count()).toBe(0);
           expect(await panel.count()).toBe(0);
+          expect(await gateway.getRequests("browser.request")).toHaveLength(0);
           expect(
             await pane(page).locator(".agent-chat__composer-combobox textarea").isVisible(),
           ).toBe(true);
           await page.reload();
           await ready(page);
-          await card.locator(".shot img").waitFor();
+          expect(await pane(page).locator("openclaw-browser-tab-card").count()).toBe(0);
           expect(await panel.count()).toBe(0);
-          await card.getByRole("button", { name: "Open", exact: true }).click();
+          await openChatSidePanelType(pane(page), "Browser");
           await panel.locator(".bp-shot").waitFor();
           expect(await panel.count()).toBe(1);
           const reads = await gateway.getRequests("browser.request", { path: "/tabs" });
@@ -555,7 +554,7 @@ suite.define(() => {
               query: { profile: "session-profile" },
             });
           }
-          // Explicit preview opening may focus that exact tab, but must not start a browser or create tabs.
+          // Opening the panel must not start a browser or create tabs.
           const browserRequests = await gateway.getRequests("browser.request");
           expect(
             browserRequests.some((request) =>
@@ -564,6 +563,10 @@ suite.define(() => {
           ).toBe(false);
           await page.reload();
           await ready(page);
+          if (width === 390) {
+            await pane(page).locator(".agent-chat__header--mobile").waitFor();
+            await openChatPanels(pane(page), "mobile");
+          }
           await pane(page).locator("openclaw-browser-panel[embedded] .bp").waitFor();
           await pane(page).locator("openclaw-browser-panel .bp-shot").waitFor();
           expect(await panel.count()).toBe(1);

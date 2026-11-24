@@ -72,6 +72,26 @@ afterEach(async () => {
 });
 
 describe("subagent maintenance protection", () => {
+  it.each(["pending", "dispatching"] as const)(
+    "protects a %s requester wake after child cleanup, including restored rows",
+    async (status) => {
+      const run = createRun({
+        cleanupCompletedAt: 3,
+        requesterSettleWake: { status, attemptCount: 1 },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      expect(await protectedKeys()).toEqual([run.childSessionKey]);
+      subagentRuns.set(run.runId, run);
+      expect(await protectedKeys()).toEqual([run.childSessionKey]);
+      subagentRuns.set(run.runId, {
+        ...run,
+        requesterSettleWake: undefined,
+        delivery: { status: "delivered" },
+      });
+      expect(await protectedKeys()).toEqual([]);
+    },
+  );
+
   it("does not revisit settled live facts while capturing current protection", async () => {
     const pending = createRun();
     const rows = new Map([[pending.runId, pending]]);
@@ -178,9 +198,10 @@ describe("subagent maintenance protection", () => {
       ["in progress", payload({ delivery: { status: "in_progress" } }), true],
       ["no completion expected", payload({ expectsCompletionMessage: false }), false],
       ["pending without expectation", payload({ expectsCompletionMessage: undefined }), true],
+      // Legacy suspended rows stay protected until the sweeper settles them into history.
       ["suspended", suspended(0), true],
-      ["suspended without timestamp", suspended(), false],
-      ["suspended string timestamp", suspended("1"), false],
+      ["suspended without timestamp", suspended(), true],
+      ["suspended string timestamp", suspended("1"), true],
       [
         "kill reconciliation after cleanup",
         afterCleanup({ killReconciliation: { killedAt: 0 } }),

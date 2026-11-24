@@ -1,38 +1,26 @@
-import fs from "node:fs/promises";
 /**
  * Integration-style tests for before_tool_call behavior.
- * Covers loop detection, diagnostics, plugin approval, and skill telemetry
+ * Covers diagnostics, plugin approval, and skill telemetry
  * around wrapped tool execution.
  */
 import os from "node:os";
 import path from "node:path";
-import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   onInternalDiagnosticEvent,
-  onDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
-  type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
-import {
-  getDiagnosticSessionActivitySnapshot,
-  markDiagnosticArgumentChurnObservation,
-  markDiagnosticEmbeddedRunStarted,
-  resetDiagnosticRunActivityForTest,
-} from "../logging/diagnostic-run-activity.js";
-import {
-  getDiagnosticSessionState,
-  resetDiagnosticSessionStateForTest,
-} from "../logging/diagnostic-session-state.js";
+import { resetDiagnosticRunActivityForTest } from "../logging/diagnostic-run-activity.js";
+import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -52,15 +40,8 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { createExecTool } from "./bash-tools.exec-run.js";
-import { nodeCommand as currentNodeEvalCommand } from "./bash-tools.lifecycle.test-support.js";
-import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
-
-const CRITICAL_THRESHOLD = 20;
-const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -113,13 +94,6 @@ function createTestHookRunner(): TestHookRunner {
   };
 }
 
-function createStableNoProgressWriteResult() {
-  return {
-    content: [{ type: "text" as const, text: "write made no changes" }],
-    details: { ok: true, changed: false },
-  };
-}
-
 function asAgentTool(tool: { name: string; execute: ReturnType<typeof vi.fn> }): AnyAgentTool {
   return tool as unknown as AnyAgentTool;
 }
@@ -131,13 +105,8 @@ afterEach(() => {
   mockGetGlobalHookRunner.mockImplementation(() => getGlobalHookRunnerForTest());
 });
 
-describe("before_tool_call loop detection behavior", () => {
+describe("before_tool_call diagnostics behavior", () => {
   let hookRunner: TestHookRunner;
-  const enabledLoopDetectionContext = {
-    agentId: "main",
-    sessionKey: "main",
-    loopDetection: { enabled: true },
-  };
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
@@ -147,45 +116,12 @@ describe("before_tool_call loop detection behavior", () => {
     hookRunner.hasHooks.mockReturnValue(false);
   });
 
-  function createObservedChurnWriteTool(sessionId: string, sessionKey: string, runId: string) {
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
-      sessionId,
-      sessionKey,
-      runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
-    return { progressReasonsDuringExecution, execute, tool };
-  }
-
-  function createWrappedTool(
-    name: string,
-    execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext: Parameters<
-      typeof wrapToolWithBeforeToolCallHook
-    >[1] = enabledLoopDetectionContext,
+  async function withToolExecutionEvents(
+    run: (emitted: DiagnosticEventPayload[]) => Promise<void>,
   ) {
-    return wrapToolWithBeforeToolCallHook(
-      { name, execute } as unknown as AnyAgentTool,
-      loopDetectionContext,
-    );
-  }
-
-  async function withToolLoopEvents(
-    run: (emitted: DiagnosticToolLoopEvent[]) => Promise<void>,
-    filter: (evt: DiagnosticToolLoopEvent) => boolean = () => true,
-  ) {
-    const emitted: DiagnosticToolLoopEvent[] = [];
-    const stop = onDiagnosticEvent((evt) => {
-      if (evt.type === "tool.loop" && filter(evt)) {
+    const emitted: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((evt) => {
+      if (evt.type.startsWith("tool.execution.")) {
         emitted.push(evt);
       }
     });
@@ -196,31 +132,13 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
-  async function withToolExecutionEvents(
-    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
-  ) {
-    const emitted: DiagnosticEventPayload[] = [];
-    const stop = onInternalDiagnosticEvent((evt) => {
-      if (evt.type.startsWith("tool.execution.")) {
-        emitted.push(evt);
-      }
-    });
-    try {
-      await run(emitted, flushDiagnosticEvents);
-    } finally {
-      stop();
-    }
-  }
-
-  async function withDiagnosticEvents(
-    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
-  ) {
+  async function withDiagnosticEvents(run: (emitted: DiagnosticEventPayload[]) => Promise<void>) {
     const emitted: DiagnosticEventPayload[] = [];
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
     try {
-      await run(emitted, flushDiagnosticEvents);
+      await run(emitted);
     } finally {
       stop();
     }
@@ -230,7 +148,6 @@ describe("before_tool_call loop detection behavior", () => {
     run: (
       emitted: DiagnosticEventPayload[],
       privateData: DiagnosticEventPrivateData[],
-      flush: () => Promise<void>,
     ) => Promise<void>,
   ) {
     const emitted: DiagnosticEventPayload[] = [];
@@ -242,129 +159,17 @@ describe("before_tool_call loop detection behavior", () => {
       }
     });
     try {
-      await run(emitted, skillUsagePrivateData, flushDiagnosticEvents);
+      await run(emitted, skillUsagePrivateData);
     } finally {
       stopTrusted();
       stopShared();
     }
   }
 
-  function createPingPongTools(options?: { withProgress?: boolean }) {
-    const readExecute = options?.withProgress
-      ? vi.fn().mockImplementation(async (toolCallId: string) => ({
-          content: [{ type: "text", text: `read ${toolCallId}` }],
-          details: { ok: true },
-        }))
-      : vi.fn().mockResolvedValue({
-          content: [{ type: "text", text: "read ok" }],
-          details: { ok: true },
-        });
-    const listExecute = options?.withProgress
-      ? vi.fn().mockImplementation(async (toolCallId: string) => ({
-          content: [{ type: "text", text: `list ${toolCallId}` }],
-          details: { ok: true },
-        }))
-      : vi.fn().mockResolvedValue({
-          content: [{ type: "text", text: "list ok" }],
-          details: { ok: true },
-        });
-    return {
-      readTool: createWrappedTool("read", readExecute),
-      listTool: createWrappedTool("list", listExecute),
-    };
-  }
-
-  async function runPingPongSequence(
-    readTool: ReturnType<typeof createWrappedTool>,
-    listTool: ReturnType<typeof createWrappedTool>,
-    count: number,
-  ) {
-    for (let i = 0; i < count; i += 1) {
-      if (i % 2 === 0) {
-        await readTool.execute(`read-${i}`, { path: "/a.txt" }, undefined, undefined);
-      } else {
-        await listTool.execute(`list-${i}`, { dir: "/workspace" }, undefined, undefined);
-      }
-    }
-  }
-
-  function createGenericReadRepeatFixture(
-    loopDetectionContext?: Parameters<typeof createWrappedTool>[2],
-  ) {
-    const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "same output" }],
-      details: { ok: true },
-    });
-    return {
-      tool: createWrappedTool("read", execute, loopDetectionContext),
-      execute,
-      params: { path: "/tmp/file" },
-    };
-  }
-
-  function createNoProgressProcessFixture(sessionId: string) {
-    const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-      details: { status: "running", aggregated: "steady" },
-    });
-    return {
-      tool: createWrappedTool("process", execute),
-      params: { action: "poll", sessionId },
-    };
-  }
-
-  function expectCriticalLoopEvent(
-    loopEvent: DiagnosticToolLoopEvent | undefined,
-    params: {
-      detector: "ping_pong" | "known_poll_no_progress" | "global_circuit_breaker";
-      toolName: string;
-      count?: number;
-    },
-  ) {
-    expect(loopEvent?.type).toBe("tool.loop");
-    expect(loopEvent?.level).toBe("critical");
-    expect(loopEvent?.action).toBe("block");
-    expect(loopEvent?.detector).toBe(params.detector);
-    expect(loopEvent?.count).toBe(params.count ?? CRITICAL_THRESHOLD);
-    expect(loopEvent?.toolName).toBe(params.toolName);
-  }
-
-  function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
-    const record = requireRecord(result, "tool result");
-    const content = requireArray(record.content, "tool result content");
-    const textContent = requireRecord(content[0], "tool result content item");
-    expect(textContent.type).toBe("text");
-    expect(String(textContent.text)).toContain(expectedReason);
-    const details = requireRecord(record.details, "tool result details");
-    expect(details.status).toBe("blocked");
-    expect(details.deniedReason).toBe("tool-loop");
-    expect(String(details.reason)).toContain(expectedReason);
-  }
-
-  async function expectUnblockedToolExecution(
-    tool: ReturnType<typeof createWrappedTool>,
-    toolCallId: string,
-    params: unknown,
-  ) {
-    const result = await tool.execute(toolCallId, params, undefined, undefined);
-    const record = requireRecord(result, "tool result");
-    requireArray(record.content, "tool result content");
-    requireRecord(record.details, "tool result details");
-    return result;
-  }
-
   const requireRecord = createRequireRecord("object", "label-not-object");
 
-  function requireArray(value: unknown, label: string): unknown[] {
-    expect(Array.isArray(value)).toBe(true);
-    if (!Array.isArray(value)) {
-      throw new Error(`${label} was not an array`);
-    }
-    return value;
-  }
-
   function expectEventFields(
-    event: DiagnosticEventPayload | DiagnosticToolLoopEvent | undefined,
+    event: DiagnosticEventPayload | undefined,
     fields: Record<string, unknown>,
   ): Record<string, unknown> {
     const record = requireRecord(event, "diagnostic event");
@@ -373,688 +178,6 @@ describe("before_tool_call loop detection behavior", () => {
     }
     return record;
   }
-
-  it("blocks known poll loops and emits critical and security diagnostics", async () => {
-    const { tool, params } = createNoProgressProcessFixture("sess-1");
-
-    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
-    }
-
-    await withDiagnosticEvents(async (emitted, flush) => {
-      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-      await flush();
-      expectToolLoopBlockedResult(result, "CRITICAL");
-      expectCriticalLoopEvent(
-        emitted.find((event): event is DiagnosticToolLoopEvent => event.type === "tool.loop"),
-        { detector: "known_poll_no_progress", toolName: "process" },
-      );
-      const securityEvent = emitted.find(
-        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
-          event.type === "security.event",
-      );
-      expect(securityEvent).toMatchObject({
-        type: "security.event",
-        category: "tool",
-        action: "tool.execution.blocked",
-        outcome: "denied",
-        reason: "tool-loop",
-        policy: {
-          id: "tool-loop-detection",
-          decision: "deny",
-          reason: "tool-loop",
-        },
-        control: {
-          id: "tool-loop-detection",
-          family: "authorization",
-        },
-        attributes: {
-          params_kind: "object",
-          tool_source: "core",
-        },
-      });
-    });
-  });
-
-  it("does not activate reconciled churn when loop detection is unconfigured", async () => {
-    const sessionId = "write-churn-unconfigured-session";
-    const sessionKey = "main";
-    const runId = "write-churn-unconfigured-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
-    });
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      runId,
-    });
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-
-    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      await expectUnblockedToolExecution(tool, `write-churn-unconfigured-${index}`, {
-        path: paths[index % paths.length] ?? "/tmp/a.md",
-        content: "same content",
-      });
-    }
-    await expectUnblockedToolExecution(tool, "write-churn-unconfigured-next", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
-
-    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
-  });
-
-  it("blocks real exec failures whose process ids drift across a session alias merge", async () => {
-    const workspace = tempDirs.make("openclaw-exec-loop-merge-");
-    const sessionId = "exec-loop-merge-session";
-    const sessionKey = "agent:main:exec-loop-merge";
-    const sessionIdAlias = "agent:main:exec-loop-merge-id";
-    const runId = "exec-loop-merge-run";
-    const script = "process.stderr.write(`retry pid ${process.pid}\\n`); process.exit(1)";
-    const command = currentNodeEvalCommand(script);
-    const execDefaults = {
-      host: "gateway" as const,
-      security: "full" as const,
-      ask: "off" as const,
-      cwd: workspace,
-      allowBackground: false,
-    };
-    const sessionIdTool = wrapToolWithBeforeToolCallHook(createExecTool(execDefaults), {
-      agentId: "main",
-      sessionId,
-      sessionKey: sessionIdAlias,
-      runId,
-      loopDetection: { enabled: true },
-    });
-    const sessionKeyTool = wrapToolWithBeforeToolCallHook(createExecTool(execDefaults), {
-      agentId: "main",
-      sessionKey,
-      runId,
-      loopDetection: { enabled: true },
-    });
-    const outputs = new Set<string>();
-
-    for (const [alias, tool] of [
-      ["id", sessionIdTool],
-      ["key", sessionKeyTool],
-    ] as const) {
-      for (let index = 0; index < CRITICAL_THRESHOLD / 2; index += 1) {
-        const result = await tool.execute(`exec-loop-${alias}-${index}`, { command });
-        const details = requireRecord(result.details, "exec result details");
-        expect(details).toMatchObject({ status: "completed", exitCode: 1 });
-        const aggregated = details.aggregated;
-        expect(aggregated).toBeTypeOf("string");
-        if (typeof aggregated !== "string") {
-          throw new Error("exec result details.aggregated was not a string");
-        }
-        outputs.add(aggregated);
-      }
-    }
-    expect(outputs.size).toBeGreaterThan(1);
-
-    const merged = getDiagnosticSessionState({ sessionId, sessionKey });
-    expect(merged.toolCallHistory).toHaveLength(CRITICAL_THRESHOLD);
-
-    const mergedTool = wrapToolWithBeforeToolCallHook(createExecTool(execDefaults), {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      runId,
-      loopDetection: { enabled: true },
-    });
-    const blocked = await mergedTool.execute("exec-loop-blocked", { command });
-    expectToolLoopBlockedResult(blocked, "identical outcomes");
-  });
-
-  it("blocks changing-argument terminal exec failures and escalates vetoes", async () => {
-    const output = "Traceback: missing package\n\n(Command exited with code 1)";
-    const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: output }],
-      details: { status: "completed", exitCode: 1, aggregated: output },
-    });
-    const tool = createWrappedTool("exec", execute);
-
-    await withToolLoopEvents(async (emitted) => {
-      for (let index = 0; index <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-        const result = await tool.execute(
-          `exec-semantic-${index}`,
-          { command: `python job-${index}.py` },
-          undefined,
-          undefined,
-        );
-        if (index >= CRITICAL_THRESHOLD) {
-          expectToolLoopBlockedResult(
-            result,
-            index === GLOBAL_CIRCUIT_BREAKER_THRESHOLD
-              ? "the runaway-loop limit"
-              : "identical outcomes",
-          );
-        }
-      }
-
-      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-      expect(emitted.find((event) => event.detector === "generic_repeat")).toMatchObject({
-        level: "critical",
-        action: "block",
-        count: CRITICAL_THRESHOLD,
-        toolName: "exec",
-      });
-      expect(emitted.at(-1)).toMatchObject({
-        detector: "global_circuit_breaker",
-        level: "critical",
-        action: "block",
-        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
-        toolName: "exec",
-      });
-    });
-  });
-
-  it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
-    const execute = vi.fn().mockImplementation(async (toolCallId: string, _params: unknown) => {
-      const progressed = toolCallId === "write-churn-progress";
-      return progressed
-        ? {
-            content: [{ type: "text", text: "write updated content" }],
-            details: { ok: true, changed: true, revision: 2 },
-          }
-        : createStableNoProgressWriteResult();
-    });
-    const sessionId = "write-churn-session";
-    const runId = "write-churn-run";
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
-      sessionId,
-      runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-
-    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      const targetPath = paths[index % paths.length] ?? "/tmp/a.md";
-      await expectUnblockedToolExecution(tool, `write-churn-${index}`, {
-        path: targetPath,
-        content: "same content",
-      });
-    }
-
-    await withToolLoopEvents(async (emitted) => {
-      await expectUnblockedToolExecution(tool, "write-churn-warning", {
-        path: "/tmp/a.md",
-        content: "same content",
-      });
-      expect(emitted.at(-1)).toMatchObject({
-        type: "tool.loop",
-        level: "warning",
-        action: "warn",
-        detector: "argument_churn",
-        toolName: "write",
-        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
-      });
-    });
-    expect(getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason).toBe(
-      "tool_loop:argument_churn",
-    );
-
-    await expectUnblockedToolExecution(tool, "write-churn-progress", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
-    expect(
-      getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason,
-    ).not.toBe("tool_loop:argument_churn");
-
-    await expectUnblockedToolExecution(tool, "write-churn-escape", {
-      path: "/tmp/c.md",
-      content: "same content",
-    });
-    expect(
-      getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason,
-    ).not.toBe("tool_loop:argument_churn");
-    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 3);
-  });
-
-  it("detects alternating-path churn from the production write result contract", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-churn-"));
-    const sessionId = "production-write-churn-session";
-    const sessionKey = "main";
-    const runId = "production-write-churn-run";
-    const content = "same content";
-    const paths = ["a.md", "b.md", "a.md", "a.md", "b.md"];
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = wrapToolWithBeforeToolCallHook(
-      createWriteTool(tmpDir) as unknown as AnyAgentTool,
-      {
-        ...enabledLoopDetectionContext,
-        sessionId,
-        sessionKey,
-        runId,
-      },
-    );
-
-    try {
-      await withToolLoopEvents(async (emitted) => {
-        for (let index = 0; index < 16; index += 1) {
-          await expectUnblockedToolExecution(tool, `production-write-churn-${index}`, {
-            path: paths[index % paths.length]!,
-            content,
-          });
-        }
-        expect(emitted.some((event) => event.detector === "argument_churn")).toBe(true);
-      });
-      const history = getDiagnosticSessionState({ sessionId, sessionKey }).toolCallHistory;
-      expect(history?.[0]?.resultHash).toBeTypeOf("string");
-      expect(history?.[0]?.resultHash).not.toBe(history?.[1]?.resultHash);
-      const noProgressHashes = (history ?? [])
-        .filter((record) => record.noProgress)
-        .map((record) => record.resultHash);
-      expect(noProgressHashes.length).toBeGreaterThanOrEqual(6);
-      expect(new Set(noProgressHashes).size).toBe(1);
-      expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
-        lastProgressReason: "tool_loop:argument_churn",
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("suspends churn liveness while a before-tool policy is pending", async () => {
-    vi.useFakeTimers();
-    const startedAt = Date.parse("2026-07-27T00:00:00Z");
-    vi.setSystemTime(startedAt);
-    const sessionId = "write-churn-policy-wait-session";
-    const sessionKey = "main";
-    const runId = "write-churn-policy-wait-run";
-    const activityDuringExecution: ReturnType<typeof getDiagnosticSessionActivitySnapshot>[] = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      activityDuringExecution.push(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }));
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
-      sessionId,
-      sessionKey,
-      runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-
-    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      await expectUnblockedToolExecution(tool, `write-churn-policy-wait-${index}`, {
-        path: paths[index % paths.length] ?? "/tmp/a.md",
-        content: "same content",
-      });
-    }
-    await expectUnblockedToolExecution(tool, "write-churn-policy-wait-warning", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
-    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason).toBe(
-      "tool_loop:argument_churn",
-    );
-
-    let resolvePolicy:
-      | ((value: Awaited<ReturnType<HookRunner["runBeforeToolCall"]>>) => void)
-      | undefined;
-    const policyPending = new Promise<Awaited<ReturnType<HookRunner["runBeforeToolCall"]>>>(
-      (resolve) => {
-        resolvePolicy = resolve;
-      },
-    );
-    let markPolicyEntered!: () => void;
-    const policyEntered = new Promise<void>((resolve) => {
-      markPolicyEntered = resolve;
-    });
-    hookRunner.hasHooks.mockReturnValue(true);
-    hookRunner.runBeforeToolCall.mockImplementation(() => {
-      markPolicyEntered();
-      return policyPending;
-    });
-
-    vi.setSystemTime(startedAt + 4 * 60_000);
-    const pendingExecution = tool.execute(
-      "write-churn-policy-wait-next",
-      { path: "/tmp/b.md", content: "same content" },
-      undefined,
-      undefined,
-    );
-    await policyEntered;
-    vi.setSystemTime(startedAt + 6 * 60_000);
-    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
-      lastProgressAgeMs: 0,
-      lastProgressReason: "tool_policy:pending",
-    });
-
-    resolvePolicy?.({});
-    await pendingExecution;
-    expect(activityDuringExecution.at(-1)).toMatchObject({
-      lastProgressAgeMs: 6 * 60_000,
-      lastProgressReason: "tool_loop:argument_churn",
-    });
-  });
-
-  it("releases churn suspension when a before-tool policy fails", async () => {
-    vi.useFakeTimers();
-    const startedAt = Date.parse("2026-07-27T00:00:00Z");
-    vi.setSystemTime(startedAt);
-    const sessionId = "write-churn-policy-failure-session";
-    const sessionKey = "main";
-    const runId = "write-churn-policy-failure-run";
-
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    markDiagnosticArgumentChurnObservation({
-      sessionId,
-      sessionKey,
-      runId,
-      active: true,
-    });
-    hookRunner.hasHooks.mockReturnValue(true);
-    hookRunner.runBeforeToolCall.mockRejectedValue(new Error("policy failed"));
-
-    vi.setSystemTime(startedAt + 6 * 60_000);
-    await expect(
-      runBeforeToolCallHook({
-        toolName: "write",
-        params: { path: "/tmp/a.md", content: "same content" },
-        toolCallId: "write-churn-policy-failure",
-        ctx: {
-          ...enabledLoopDetectionContext,
-          sessionId,
-          sessionKey,
-          runId,
-        },
-      }),
-    ).resolves.toMatchObject({
-      blocked: true,
-      kind: "failure",
-    });
-
-    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
-      lastProgressAgeMs: 6 * 60_000,
-      lastProgressReason: "tool_loop:argument_churn",
-    });
-  });
-
-  it("clears churn liveness before executing params rewritten to a novel variant", async () => {
-    const sessionId = "write-churn-rewrite-session";
-    const sessionKey = "main";
-    const runId = "write-churn-rewrite-run";
-    const { progressReasonsDuringExecution, execute, tool } = createObservedChurnWriteTool(
-      sessionId,
-      sessionKey,
-      runId,
-    );
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-
-    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      const targetPath = paths[index % paths.length] ?? "/tmp/a.md";
-      await expectUnblockedToolExecution(tool, `write-churn-rewrite-${index}`, {
-        path: targetPath,
-        content: "same content",
-      });
-    }
-
-    hookRunner.hasHooks.mockReturnValue(true);
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      params: { path: "/tmp/c.md", content: "same content" },
-    });
-    await expectUnblockedToolExecution(tool, "write-churn-rewrite-warning", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
-
-    expect(execute).toHaveBeenLastCalledWith(
-      "write-churn-rewrite-warning",
-      { path: "/tmp/c.md", content: "same content" },
-      undefined,
-      undefined,
-    );
-    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
-    expect(
-      getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-    ).not.toBe("tool_loop:argument_churn");
-  });
-
-  it("does not activate reconciled churn below the warning threshold", async () => {
-    const sessionId = "write-churn-below-threshold-session";
-    const sessionKey = "main";
-    const runId = "write-churn-below-threshold-run";
-    const { progressReasonsDuringExecution, tool } = createObservedChurnWriteTool(
-      sessionId,
-      sessionKey,
-      runId,
-    );
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md"];
-
-    for (const [index, targetPath] of paths.entries()) {
-      await expectUnblockedToolExecution(tool, `write-churn-below-threshold-${index}`, {
-        path: targetPath,
-        content: "same content",
-      });
-    }
-    await expectUnblockedToolExecution(tool, "write-churn-below-threshold-next", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
-
-    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
-  });
-
-  it("does not reconcile argument churn across run ids", async () => {
-    const sessionId = "write-churn-cross-run-session";
-    const sessionKey = "main";
-    const oldRunId = "write-churn-old-run";
-    const newRunId = "write-churn-new-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const oldRunTool = createWrappedTool("write", execute, {
-      ...enabledLoopDetectionContext,
-      sessionId,
-      sessionKey,
-      runId: oldRunId,
-    });
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: oldRunId });
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-    for (let index = 0; index < 10; index += 1) {
-      await expectUnblockedToolExecution(oldRunTool, `write-churn-old-run-${index}`, {
-        path: paths[index % paths.length] ?? "/tmp/a.md",
-        content: "same content",
-      });
-    }
-
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: newRunId });
-    const newRunTool = createWrappedTool("write", execute, {
-      ...enabledLoopDetectionContext,
-      sessionId,
-      sessionKey,
-      runId: newRunId,
-    });
-    await expectUnblockedToolExecution(newRunTool, "write-churn-new-run-first", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
-
-    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
-  });
-
-  it("allows a two-pass same-tool batch through the wrapped tool runtime", async () => {
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
-    });
-    const tool = createWrappedTool("write", execute);
-    const paths = Array.from({ length: 15 }, (_, index) => `/tmp/batch-${index}.md`);
-
-    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      const targetPath = paths[index % paths.length]!;
-      await expectUnblockedToolExecution(tool, `write-batch-${index}`, {
-        path: targetPath,
-        content: "same content",
-      });
-    }
-
-    await expectUnblockedToolExecution(tool, "write-batch-next", {
-      path: "/tmp/batch-next.md",
-      content: "same content",
-    });
-    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 1);
-  });
-
-  it.each(["success", "error"])("warns on repeated %s results before blocking", async (status) => {
-    await withToolLoopEvents(async (emitted) => {
-      const { tool, params, execute } = createGenericReadRepeatFixture();
-      const rawResult = {
-        content: [{ type: "text", text: "same output" }],
-        details: { status },
-      };
-      execute.mockResolvedValue(rawResult);
-
-      for (let i = 0; i < 21; i += 1) {
-        const result = await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
-        if (i === 20) {
-          expectToolLoopBlockedResult(result, "identical outcomes");
-        } else {
-          expect(result.content).toEqual([
-            ...rawResult.content,
-            ...(i === 10
-              ? [{ type: "text", text: expect.stringMatching(/\[.*10.*change.*stop.*\]/i) }]
-              : []),
-          ]);
-          expect(result.details).toEqual(rawResult.details);
-        }
-      }
-
-      const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
-      expect(genericEvents.map((evt) => [evt.level, evt.count])).toEqual([
-        ["warning", 10],
-        ["critical", 20],
-      ]);
-      expect(execute).toHaveBeenCalledTimes(20);
-      expect(rawResult.content).toEqual([{ type: "text", text: "same output" }]);
-      const outcomes = getDiagnosticSessionState({ sessionKey: "main" }).toolCallHistory;
-      const resultHashes = outcomes?.flatMap((outcome) => outcome.resultHash ?? []);
-      expect(resultHashes).toHaveLength(20);
-      expect(new Set(resultHashes).size).toBe(1);
-    });
-  });
-
-  it("escalates repeated critical vetoes to the global circuit breaker", async () => {
-    await withToolLoopEvents(async (emitted) => {
-      const runId = "codex-native-global-breaker";
-      const { tool, params, execute } = createGenericReadRepeatFixture({
-        ...enabledLoopDetectionContext,
-        runId,
-      });
-
-      for (let i = 0; i <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-        const toolCallId = `read-global-${i}`;
-        const nativeOutcome = await runBeforeToolCallHook({
-          toolName: "read",
-          params,
-          toolCallId,
-          ctx: {
-            agentId: enabledLoopDetectionContext.agentId,
-            sessionKey: enabledLoopDetectionContext.sessionKey,
-            runId,
-          },
-        });
-        expect(nativeOutcome.blocked).toBe(false);
-        await tool.execute(toolCallId, params, undefined, undefined);
-      }
-
-      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-      expect(emitted.at(-1)).toMatchObject({
-        type: "tool.loop",
-        level: "critical",
-        action: "block",
-        detector: "global_circuit_breaker",
-        count: 30,
-        toolName: "read",
-      });
-    });
-  });
-
-  it("blocks ping-pong loops at critical threshold and emits critical diagnostic events", async () => {
-    await withToolLoopEvents(async (emitted) => {
-      const { readTool, listTool } = createPingPongTools();
-      await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
-
-      const result = await listTool.execute(
-        `list-${CRITICAL_THRESHOLD - 1}`,
-        { dir: "/workspace" },
-        undefined,
-        undefined,
-      );
-      expectToolLoopBlockedResult(result, "CRITICAL");
-      const pingPongWarns = emitted.filter(
-        (evt) => evt.level === "warning" && evt.detector === "ping_pong",
-      );
-      expect(pingPongWarns).toHaveLength(1);
-      const warningEvent = pingPongWarns[0];
-      expect(warningEvent?.type).toBe("tool.loop");
-      expect(warningEvent?.level).toBe("warning");
-      expect(warningEvent?.action).toBe("warn");
-      expect(warningEvent?.detector).toBe("ping_pong");
-      expect(warningEvent?.count).toBe(10);
-      expect(warningEvent?.toolName).toBe("list");
-
-      const loopEvent = emitted.at(-1);
-      expectCriticalLoopEvent(loopEvent, {
-        detector: "ping_pong",
-        toolName: "list",
-      });
-    });
-  });
-
-  it("does not block ping-pong at critical threshold when outcomes are progressing", async () => {
-    await withToolLoopEvents(async (emitted) => {
-      const { readTool, listTool } = createPingPongTools({ withProgress: true });
-      await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
-
-      await expectUnblockedToolExecution(listTool, `list-${CRITICAL_THRESHOLD - 1}`, {
-        dir: "/workspace",
-      });
-
-      const criticalPingPong = emitted.find(
-        (evt) => evt.level === "critical" && evt.detector === "ping_pong",
-      );
-      expect(criticalPingPong).toBeUndefined();
-      const warningPingPong = emitted.find(
-        (evt) => evt.level === "warning" && evt.detector === "ping_pong",
-      );
-      expectEventFields(warningPingPong, {
-        type: "tool.loop",
-        level: "warning",
-        action: "warn",
-        detector: "ping_pong",
-      });
-    });
-  });
 
   it("emits diagnostic tool execution events without parameter values", async () => {
     const trace = {
@@ -1071,17 +194,16 @@ describe("before_tool_call loop detection behavior", () => {
       sessionId: "session-id",
       runId: "run-1",
       trace,
-      loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute(
         "tool-call-1",
         { command: "pwd", token: "sk-1234567890abcdef1234567890abcdef" },
         undefined,
         undefined,
       );
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -1134,15 +256,14 @@ describe("before_tool_call loop detection behavior", () => {
           sessionKey: "session-key",
           sessionId: "session-id",
           runId: "run-1",
-          loopDetection: { enabled: false },
         },
       );
 
-      await withToolExecutionEvents(async (emitted, flush) => {
+      await withToolExecutionEvents(async (emitted) => {
         await expect(
           tool.execute("tool-call-hook-failure", { command: "private" }, undefined, undefined),
         ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
-        await flush();
+        await waitForDiagnosticEventsDrained();
 
         expect(execute).not.toHaveBeenCalled();
         expect(emitted.map((event) => event.type)).toEqual(["tool.execution.error"]);
@@ -1166,27 +287,23 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("emits a terminal diagnostic when hook preflight rejects", async () => {
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
-    const params = Object.defineProperty({}, "private", {
-      enumerable: true,
-      get() {
-        throw new Error("private hook preflight failure");
-      },
-    });
+    const params = { path: "/tmp/file" };
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockRejectedValue(new Error("private hook preflight failure"));
     const tool = wrapToolWithBeforeToolCallHook(
       { name: "read", execute } as unknown as AnyAgentTool,
       {
         agentId: "main",
         sessionKey: "session-key",
         runId: "run-1",
-        loopDetection: { enabled: true },
       },
     );
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await expect(
         tool.execute("tool-call-preflight", params, undefined, undefined),
       ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(execute).not.toHaveBeenCalled();
       expect(emitted.map((event) => event.type)).toEqual(["tool.execution.error"]);
@@ -1258,11 +375,11 @@ describe("before_tool_call loop detection behavior", () => {
         { approvalMode: mode },
       );
 
-      await withToolExecutionEvents(async (emitted, flush) => {
+      await withToolExecutionEvents(async (emitted) => {
         await expect(
           tool.execute(toolCallId, { command: "private" }, undefined, undefined),
         ).rejects.toThrow(reason);
-        await flush();
+        await waitForDiagnosticEventsDrained();
         expect(execute).not.toHaveBeenCalled();
         if (mode === "report") {
           expect(mockCallGateway).not.toHaveBeenCalled();
@@ -1357,12 +474,11 @@ describe("before_tool_call loop detection behavior", () => {
       agentId: "main",
       sessionKey: "session-key",
       runId: "run-1",
-      loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute("tool-call-1", { command: "false" }, undefined, undefined);
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((event) => event.type)).toEqual(["tool.execution.started", terminal.type]);
       expectEventFields(emitted[1], terminal);
@@ -1376,12 +492,11 @@ describe("before_tool_call loop detection behavior", () => {
     const tool = wrapToolWithBeforeToolCallHook(rawTool, {
       agentId: "main",
       sessionKey: "session-key",
-      loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute("tool-call-mcp", { query: "status" }, undefined, undefined);
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expectEventFields(emitted[0], {
         type: "tool.execution.started",
@@ -1528,13 +643,12 @@ describe("before_tool_call loop detection behavior", () => {
       const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
         agentId: "main",
         sessionKey: "session-key",
-        loopDetection: { enabled: false },
         ...ctx,
       });
 
-      await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
+      await withSkillUsageDiagnosticEvents(async (emitted, privateData) => {
         await tool.execute("skill-read", params, undefined, undefined);
-        await flush();
+        await waitForDiagnosticEventsDrained();
         expect(emitted.map((evt) => evt.type)).toEqual([
           "tool.execution.started",
           ...(expected ? ["skill.used"] : []),
@@ -1584,17 +698,16 @@ describe("before_tool_call loop detection behavior", () => {
         skillSource: "workspace",
         toolName: "message",
       },
-      loopDetection: { enabled: false },
     });
 
-    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData) => {
       await tool.execute(
         "tool-call-skill-command",
         { command: "display name", commandName: "set_profile", skillName: "matrix-profile" },
         undefined,
         undefined,
       );
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -1646,10 +759,9 @@ describe("before_tool_call loop detection behavior", () => {
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
-      loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       const execution = tool.execute(
         "tool-call-error",
         { path: "/tmp/file" },
@@ -1660,7 +772,7 @@ describe("before_tool_call loop detection behavior", () => {
       if (errorCode) {
         await expect(execution).rejects.toThrow("failed with key");
       }
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -1720,14 +832,13 @@ describe("before_tool_call loop detection behavior", () => {
       const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
         agentId: "main",
         sessionKey: "session-key",
-        loopDetection: { enabled: false },
       });
 
-      await withToolExecutionEvents(async (emitted, flush) => {
+      await withToolExecutionEvents(async (emitted) => {
         await expect(
           tool.execute(toolCallId, { path: "/tmp/file" }, controller.signal, undefined),
         ).rejects.toThrow(message);
-        await flush();
+        await waitForDiagnosticEventsDrained();
         expectEventFields(emitted[1], {
           type: "tool.execution.error",
           toolCallId,
@@ -1748,12 +859,11 @@ describe("before_tool_call loop detection behavior", () => {
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
-      loopDetection: { enabled: false },
     });
 
-    await withDiagnosticEvents(async (emitted, flush) => {
+    await withDiagnosticEvents(async (emitted) => {
       const result = await tool.execute("tool-call-blocked", { path: "/tmp/file" });
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(result).toEqual({
         content: [{ type: "text", text: "blocked by policy" }],
@@ -1820,7 +930,6 @@ describe("before_tool_call loop detection behavior", () => {
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "bash", execute }), {
       agentId: "main",
       sessionKey: "session-key",
-      loopDetection: { enabled: false },
     });
     const params = new Proxy(
       {},
@@ -1831,9 +940,9 @@ describe("before_tool_call loop detection behavior", () => {
       },
     );
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute("tool-call-proxy", params, undefined, undefined);
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       const started = expectEventFields(emitted[0], {
         type: "tool.execution.started",
@@ -2602,9 +1711,7 @@ describe("before_tool_call tool content private-data capture", () => {
     resetDiagnosticEventsForTest();
   });
 
-  async function withTrustedToolEvents(
-    run: (emitted: TrustedToolEvent[], flush: () => Promise<void>) => Promise<void>,
-  ) {
+  async function withTrustedToolEvents(run: (emitted: TrustedToolEvent[]) => Promise<void>) {
     const emitted: TrustedToolEvent[] = [];
     const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
       if (event.type.startsWith("tool.execution.")) {
@@ -2612,7 +1719,7 @@ describe("before_tool_call tool content private-data capture", () => {
       }
     });
     try {
-      await run(emitted, flushDiagnosticEvents);
+      await run(emitted);
     } finally {
       stop();
     }
@@ -2645,18 +1752,17 @@ describe("before_tool_call tool content private-data capture", () => {
       agentId: "main",
       sessionKey: "session-key",
       runId: "run-1",
-      loopDetection: { enabled: false },
       ...(capture ? { config: configWithToolContent() } : {}),
     });
 
-    await withTrustedToolEvents(async (emitted, flush) => {
+    await withTrustedToolEvents(async (emitted) => {
       const execution = tool.execute("call-1", liveParams, undefined, undefined);
       if (fails) {
         await expect(execution).rejects.toThrow("boom");
       } else {
         await execution;
       }
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       const terminal = emitted.find(
         (e) => e.event.type === (fails ? "tool.execution.error" : "tool.execution.completed"),

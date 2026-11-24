@@ -221,7 +221,7 @@ suite.define(() => {
             throw error;
           });
         await page
-          .getByRole("button", { name: "Stop generating", exact: true })
+          .getByRole("button", { name: "Stop", exact: true })
           .waitFor({ state: "detached" });
         expect(provider.failures).toEqual([]);
         await rm(sourcePath);

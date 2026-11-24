@@ -415,6 +415,7 @@ export function registerForegroundUpdateStopTests({
             consumeIntent.mockResolvedValueOnce({ reason: "update.run" });
           }
           captureSignal(signal)();
+          captureSignal(signal)();
           await setImmediate();
           expectCallCount(0, runtime.exit, respawnUpdate);
           preClose.release();

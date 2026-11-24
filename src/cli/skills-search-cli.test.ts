@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerSkillsSearchCli } from "./skills-search-cli.js";
 
 const { searchSkillsFromClawHubMock, defaultRuntime } = vi.hoisted(() => ({
@@ -13,7 +14,10 @@ const skill = <T extends object>(fields: T) => ({
   ...fields,
 });
 
-vi.mock("../runtime.js", () => ({ defaultRuntime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime,
+}));
 vi.mock("../skills/lifecycle/clawhub.js", () => ({
   searchSkillsFromClawHub: searchSkillsFromClawHubMock,
 }));
@@ -29,66 +33,57 @@ async function runCommand(args: string[]) {
   await program.parseAsync(args, { from: "user" });
 }
 
-it("formats mixed search results with owner refs, trust labels and single-line metadata", async () => {
-  searchSkillsFromClawHubMock.mockResolvedValue([
-    skill({ installRef: "@demo-owner/calendar" }),
-    skill({ installRef: "@work-owner/calendar", displayName: "Team Calendar" }),
-    { slug: "legacy-calendar", displayName: "Legacy Calendar" },
-    skill({
-      slug: "weather",
-      installRef: "skills-sh:openclaw/skills/weather",
-      trustState: "not-scanned-by-clawhub",
-      displayName: "Weather",
-    }),
-    skill({
-      slug: "oauth-helper",
-      installRef: "@demo-owner/oauth-helper",
-      displayName: "Oauth\nHelper",
-      summary: "Login.\nProviders.\n\nFeatures:\n- Confirm first",
-    }),
-  ]);
-  await runCommand(["skills", "search", "calendar"]);
-  expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({ query: "calendar", limit: undefined });
-  expect(loggedLines()).toEqual([
-    "@demo-owner/calendar  Calendar",
-    "@work-owner/calendar  Team Calendar",
-    "legacy-calendar  Legacy Calendar",
-    "skills-sh:openclaw/skills/weather  Weather  Not scanned by ClawHub",
-    "@demo-owner/oauth-helper  Oauth Helper  Login. Providers. Features: - Confirm first",
-  ]);
+it.each([false, true])("preserves search output until cancellation (%s)", async (cancelled) => {
+  const scope = new AsyncWorkScope();
+  searchSkillsFromClawHubMock.mockImplementation(async () => {
+    if (cancelled) {
+      scope.beginClose();
+    }
+    return [
+      skill({ installRef: "@demo-owner/calendar", version: "1.2.3" }),
+      skill({ installRef: "@work-owner/calendar", version: "v1.2.3" }),
+      skill({ slug: "legacy-calendar", version: "V1.2.3" }),
+      skill({
+        slug: "weather",
+        installRef: "skills-sh:openclaw/skills/weather",
+        trustState: "not-scanned-by-clawhub",
+        displayName: "Weather",
+        version: "canary",
+      }),
+      skill({
+        slug: "oauth-helper",
+        installRef: "@demo-owner/oauth-helper",
+        displayName: "Oauth\nHelper",
+        summary: "Login.\nProviders.\n\nFeatures:\n- Confirm first",
+        version: "  v1.2.3\n ",
+      }),
+      skill({}),
+    ];
+  });
+  await scope.run(() => runCommand(["skills", "search", "calendar"]));
+  const request = searchSkillsFromClawHubMock.mock.calls[0]?.[0];
+  expect(request).toEqual({ query: "calendar", limit: undefined, signal: scope.signal });
+  expect(loggedLines()).toEqual(
+    cancelled
+      ? []
+      : [
+          "@demo-owner/calendar v1.2.3  Calendar",
+          "@work-owner/calendar v1.2.3  Calendar",
+          "legacy-calendar V1.2.3  Calendar",
+          "skills-sh:openclaw/skills/weather canary  Weather  Not scanned by ClawHub",
+          "@demo-owner/oauth-helper v1.2.3  Oauth Helper  Login. Providers. Features: - Confirm first",
+          "calendar  Calendar",
+        ],
+  );
 });
 
-it("formats ClawHub skill versions without changing JSON output", async () => {
-  const results = ["1.2.3", "v1.2.3", "V1.2.3", "canary", "  v1.2.3\n ", undefined].map(
-    (version, index) =>
-      skill({
-        score: 0.9,
-        slug: `calendar-${index}`,
-        ownerHandle: "demo-owner",
-        version,
-      }),
-  );
+it("preserves raw versions in parent and leaf JSON output", async () => {
+  const results = [skill({ version: "  v1.2.3\n " })];
   searchSkillsFromClawHubMock.mockResolvedValue(results);
-
   await runCommand(["skills", "search", "calendar", "--json"]);
-
-  expect(defaultRuntime.log).not.toHaveBeenCalled();
-  expect(defaultRuntime.writeJson.mock.calls).toEqual([[{ results }]]);
-
   await runCommand(["skills", "--json", "search", "calendar"]);
   expect(defaultRuntime.log).not.toHaveBeenCalled();
   expect(defaultRuntime.writeJson.mock.calls).toEqual([[{ results }], [{ results }]]);
-
-  await runCommand(["skills", "search", "calendar"]);
-
-  expect(loggedLines()).toEqual([
-    "calendar-0 v1.2.3  Calendar",
-    "calendar-1 v1.2.3  Calendar",
-    "calendar-2 V1.2.3  Calendar",
-    "calendar-3 canary  Calendar",
-    "calendar-4 v1.2.3  Calendar",
-    "calendar-5  Calendar",
-  ]);
 });
 
 it("rejects partial numeric search limits", async () => {

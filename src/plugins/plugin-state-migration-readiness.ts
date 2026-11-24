@@ -31,10 +31,14 @@ function selectReadiness(options: InstalledPluginIndexStoreOptions) {
     ...resolveInstalledPluginIndexStateDatabaseOptions(options),
     path,
     artifactPreservingReadOnly,
+    includeDeferred: true,
   };
+  // Until a migration write publishes a receipt here, the current read admission keys settled
+  // readiness. Synchronous Gateway loads cannot reread the PostgreSQL ledger on the main thread;
+  // closing or replacing the database retires this admission.
   const receipt =
     !artifactPreservingReadOnly && !context.maintenanceScope && !context.existingSchemaPath
-      ? readDeferredPluginMigrationReceipt(path)
+      ? (readDeferredPluginMigrationReceipt(path) ?? context.admission)
       : undefined;
   return {
     database,
@@ -77,10 +81,15 @@ export async function confirmPluginStateMigrationReadiness(params: {
   signal: AbortSignal;
   warn: (message: string) => void;
 }): Promise<void> {
-  const expectedPending = await readDeferredPluginMigrationsAsync({ env: params.env });
-  if (expectedPending.length === 0) {
+  const database = { env: params.env, artifactPreservingReadOnly: false };
+  const obligations = await readDeferredPluginMigrationsAsync({
+    ...database,
+    includeDeferred: true,
+  });
+  if (obligations.length === 0) {
     return;
   }
+  const expectedPending = await readDeferredPluginMigrationsAsync(database);
   const [{ runPostSessionPluginDoctorStateRepairs }, { withPluginLifecycleLeaseAsync }] =
     await Promise.all([
       import("../infra/state-migrations.plugin-doctor.js"),
@@ -92,9 +101,9 @@ export async function confirmPluginStateMigrationReadiness(params: {
       const inspected = await runPostSessionPluginDoctorStateRepairs({
         config: params.config,
         env: params.env,
-        inspectPluginIds: expectedPending.map(({ pluginId }) => pluginId),
+        inspectPluginIds: obligations.map(({ pluginId }) => pluginId),
       });
-      const resolvedPluginIds = expectedPending
+      const resolvedPluginIds = obligations
         .filter(
           ({ pluginId, requiresStateMigration }) =>
             inspected.completedPluginIds?.includes(pluginId) ||
@@ -123,7 +132,7 @@ export async function confirmPluginStateMigrationReadiness(params: {
           });
         }
       }
-      for (const pending of expectedPending) {
+      for (const pending of obligations) {
         if (
           pending.requiresStateMigration &&
           inspected.statelessPluginIds?.includes(pending.pluginId)

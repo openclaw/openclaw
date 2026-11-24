@@ -116,6 +116,7 @@ function sourceReader({ rootDir, ref }) {
         }),
     );
     return {
+      ref: oid,
       files: [...files.keys()],
       read(name) {
         const meta = files.get(name);
@@ -299,7 +300,8 @@ function readRelease(reader, state, requestedVersion) {
 export function findReleaseChangelog(params) {
   const version = normalizeVersion(params.version);
   const reader = sourceReader(params);
-  return readRelease(reader, layout(reader), version);
+  const result = readRelease(reader, layout(reader), version);
+  return result && reader.ref ? { ...result, ref: reader.ref } : result;
 }
 
 /** @param {ChangelogSource & { version: string }} params */
@@ -341,18 +343,6 @@ function versions(reader, state) {
           .filter((name) => /^CHANGELOG\/[^/]+\.md$/u.test(name))
           .map((name) => normalizeVersion(path.basename(name, ".md")));
   return [...new Set(result)].toSorted(newestFirst);
-}
-
-/**
- * Every release changelog artifact with its repository-relative path, for line-level lints.
- * @param {ChangelogSource} params
- * @returns {Array<{ path: string, content: string }>}
- */
-export function readReleaseChangelogFiles(params) {
-  const reader = sourceReader(params);
-  return reader.files
-    .filter((name) => isReleaseChangelogPath(name))
-    .map((name) => ({ path: name, content: reader.read(name) ?? "" }));
 }
 
 /** @param {ChangelogSource & { recordsOnly?: boolean }} params */

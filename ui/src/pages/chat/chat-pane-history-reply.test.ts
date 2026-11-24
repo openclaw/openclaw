@@ -14,7 +14,7 @@ const page = (messages: unknown[], totalMessages = 4, hasMore = false, nextOffse
   messages,
   totalMessages,
   hasMore,
-  ...(nextOffset === undefined ? {} : { nextOffset }),
+  ...(nextOffset === undefined ? {} : { olderCursor: `older-${nextOffset}` }),
 });
 
 function fixture(request = vi.fn(), last = 4) {
@@ -23,7 +23,11 @@ function fixture(request = vi.fn(), last = 4) {
     sessions: {} as SessionCapability,
   });
   result.state.chatMessages = pair(last);
-  result.state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: last };
+  result.state.chatHistoryPagination = {
+    hasMore: true,
+    olderCursor: "older-2",
+    totalMessages: last,
+  };
   return result;
 }
 
@@ -84,7 +88,7 @@ it.each([true, false])(
             limit: 1000,
             maxBytes: 3 * 1024 * 1024,
             toolResultMaxChars: 2_000,
-            offset,
+            cursor: `older-${offset}`,
           },
           { signal: expect.any(AbortSignal) },
         );

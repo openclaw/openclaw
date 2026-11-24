@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { githubPublicationReceipts } from "./github-publication-receipts.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 
 export function waitForPublicationGate(
@@ -38,21 +37,6 @@ export function holdStateRead(type?: string) {
     spy.mockImplementationOnce(delayed);
   }
   return { ready: ready.promise, release: release.resolve, restore: () => spy.mockRestore() };
-}
-
-export function observePublicationAuthority() {
-  const facts = new Map<string, unknown>();
-  const unknown: Array<string | symbol> = [];
-  const stop = githubPublicationReceipts.subscribeFacts((change) => {
-    if (change.kind === "committed") {
-      for (const [key, fact] of change.receipt.facts) {
-        facts.set(key, fact);
-      }
-    } else if (change.kind === "unknown") {
-      unknown.push(change.identity);
-    }
-  });
-  return { facts, unknown, stop };
 }
 
 export function publicationRowDefaults(requestId: string) {

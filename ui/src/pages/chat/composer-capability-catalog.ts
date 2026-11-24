@@ -1,9 +1,31 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
-import type { ChatComposerMenuSkill } from "./composer-capability-types.ts";
+import type {
+  ChatComposerCapabilityMenuProps,
+  ChatComposerMenuSkill,
+} from "./composer-capability-types.ts";
+
+export function composerMcpServers(
+  config: Record<string, unknown> | null,
+  options: { auth: GatewayBrowserClient["auth"]; loading: boolean },
+): Pick<ChatComposerCapabilityMenuProps, "mcpServers" | "mcpServersReadState"> {
+  const mcpServersReadState = !hasOperatorReadAccess(options.auth)
+    ? "restricted"
+    : config !== null
+      ? "ready"
+      : options.loading
+        ? "loading"
+        : "unavailable";
+  return {
+    mcpServers: mcpServersReadState === "ready" ? (summarizeMcpServers(config) ?? []) : [],
+    mcpServersReadState,
+  };
+}
 
 export function composerWebSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;

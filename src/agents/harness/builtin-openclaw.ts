@@ -25,6 +25,7 @@ function buildRestrictedFinalizationAttempt(
     // Finalization is another backend attempt of the same admitted turn, so its
     // native registration borrows that turn instead of needing a second admission.
     replyOperation: internalAttempt.replyOperation,
+    toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,

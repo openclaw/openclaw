@@ -120,6 +120,18 @@ class CameraCaptureManager(
   )
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
+  private val lifecycleOwnerObserver =
+    object : LifecycleEventObserver {
+      override fun onStateChanged(
+        source: LifecycleOwner,
+        event: Lifecycle.Event,
+      ) {
+        if (event == Lifecycle.Event.ON_DESTROY) {
+          source.lifecycle.removeObserver(this)
+          if (lifecycleOwner === source) lifecycleOwner = null
+        }
+      }
+    }
 
   companion object {
     // ProcessCameraProvider is process-wide, including during runtime replacement.
@@ -138,8 +150,11 @@ class CameraCaptureManager(
 
   /** Supplies the foreground Activity lifecycle required by CameraX use-case binding. */
   fun attachLifecycleOwner(owner: LifecycleOwner) {
-    // CameraX binds use cases to an Activity lifecycle; background services cannot capture alone.
+    // The runtime outlives its Activity, including when no capture is active.
+    if (owner.lifecycle.currentState == Lifecycle.State.DESTROYED) return
+    lifecycleOwner?.lifecycle?.removeObserver(lifecycleOwnerObserver)
     lifecycleOwner = owner
+    owner.lifecycle.addObserver(lifecycleOwnerObserver)
   }
 
   /** Lists CameraX devices with stable Camera2 ids where available. */

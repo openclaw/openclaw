@@ -48,6 +48,10 @@ before retrying.
 When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 </Note>
 
+Invalid client ports and combining `--port` with `--url` report their specific
+input error with exit code 1. JSON error envelopes remain unchanged, including
+the separate options-phase errors from `setup` and `onboard`.
+
 WebSocket opening-handshake timeouts report a Gateway transport error with
 `ETIMEDOUT`, including the target and a status-check hint. JSON error output uses
 `error.type: "gateway_transport_error"`, as for other connection failures.
@@ -213,6 +217,15 @@ It is designed to be shared. It keeps operational details useful for debugging â
 
 Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivity/auth check.
 
+Installed-service config, runtime intent, and log diagnostics use the service's
+own state selectors. An inspecting CLI's `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_PROFILE`, and `OPENCLAW_CONFIG_PATH` do not fill in selectors omitted
+from the service definition.
+
+Plugin-version drift checks read committed install records without staging a copy
+of the shared state database. SQLite may update WAL/SHM coordination files; the
+check does not write plugin records or change the schema.
+
 ```bash
 openclaw gateway status
 openclaw gateway status --json
@@ -282,7 +295,7 @@ status does not bypass the live Gateway's artifact-publication safeguards.
     - JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the handshake check cannot supply version metadata.
     - By default, exit 0 means diagnostics completed, not that the Gateway is healthy. A missing listener or failed auth/connectivity check can still exit 0; errors that prevent diagnostics from completing exit non-zero. `--json` changes the output format, not this exit behavior.
     - Use `openclaw gateway status --deep --require-rpc` as a repair acceptance check or in scripts/automation that require working read-scope RPC. It exits non-zero if the read check fails, but does not certify plugin or channel readiness; inspect relevant diagnostics and reproduce the original symptom too. Status never starts or restarts the Gateway.
-    - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant.
+    - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant. With `OPENCLAW_SUPERVISOR_MODE=external`, detected services remain visible, but the single-gateway recommendation is omitted.
     - `--deep` confirms exact npm targets before suggesting repairs for official-plugin version drift. Unpublished versions or registry failures are reported without an update command; retry deep status after registry access or the release cohort is restored. Ordinary status and readiness checks do not query npm for drift repairs.
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
@@ -401,6 +414,12 @@ install the **OpenSSH Client** optional feature; Windows places it under
 
 Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdentity`.
 
+When the selected SSH target and remote port match a configured `wss://` SSH
+route, the probe retains that endpoint's TLS identity and path through the tunnel.
+The saved certificate fingerprint is enforced; without a pin, normal certificate
+verification applies. A different SSH target or remote port, or configured
+`direct` transport does not inherit that endpoint's TLS settings.
+
 ### `gateway call <method>`
 
 Low-level RPC helper.
@@ -509,7 +528,9 @@ openclaw gateway suspend --port 18999 --json
 ```
 
 The ready output includes the suspension ID, lease expiry, and the matching
-resume command. Common RPC options such as `--url`, `--token`, `--password`,
+resume guidance. For an explicit `--url`, reuse that URL and the authentication
+options from the suspend command; the guidance does not echo their values.
+Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
 
 Suspension blocker messages name active root requests and include run IDs and

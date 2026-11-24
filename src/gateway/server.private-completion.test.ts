@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { prepareEmbeddedSessionState } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
@@ -43,6 +44,8 @@ import {
 import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
+import { classifySessionStateActor } from "../sessions/session-state-events.js";
+import { subagentCompletionForOutcome } from "../shared/subagent-completion.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -57,6 +60,7 @@ import * as chatAbort from "./chat-abort.js";
 import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import { createTestGate } from "./server-close.lifecycle.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
@@ -236,6 +240,7 @@ describe("private subagent completion processing receipts", () => {
         return { payloads: [{ text: "Synthetic successor answer" }], meta: { durationMs: 0 } };
       });
       gatewayReplyMock.mockImplementation(getReplyFromConfig);
+      await prepareGatewayReplyRuntimeForTest();
       const { ws } = await harness.openClient({
         browserOrigin: "http://private-completion.test",
         client: {
@@ -310,6 +315,23 @@ describe("private subagent completion processing receipts", () => {
       await command.onExecutionStarted?.();
       const text = command.privateCompletion ? privateText : publicText;
       const currentRunId = expectDefined(command.runId, "Expected admitted run id");
+      // The embedded command re-registers its admitted run before model events.
+      await prepareEmbeddedSessionState({
+        cfg: gatewayContext().getRuntimeConfig(),
+        opts: command,
+        sessionKey,
+        sessionId: command.sessionId ?? sessionId,
+        storePath,
+        sessionAgentId: "main",
+        lifecycleGeneration: expectDefined(command.lifecycleGeneration, "admitted lifecycle"),
+        runId: currentRunId,
+        executionWorkspaceDir: expectDefined(command.workspaceDir, "admitted workspace"),
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: false,
+        suppressVisibleSessionEffects: command.sessionEffects === "internal",
+        sessionStateActor: classifySessionStateActor(command),
+      });
       const operationalRunInstance = expectDefined(
         command.operationalRunInstance,
         "Expected admitted operational instance",
@@ -319,9 +341,14 @@ describe("private subagent completion processing receipts", () => {
           agentId: "main",
           sessionKey,
           operationalRunInstance,
-          receiptAuthority: () =>
-            source(currentRunId)?.adapter.operationalRunInstance === operationalRunInstance &&
-            !command.abortSignal?.aborted,
+          receiptAuthority: () => {
+            if (
+              source(currentRunId)?.adapter.operationalRunInstance !== operationalRunInstance ||
+              command.abortSignal?.aborted
+            ) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         () => captureSessionEventTargetForHost("main", sessionKey),
       );
@@ -437,6 +464,95 @@ describe("private subagent completion processing receipts", () => {
       } else {
         await expectProcessed();
       }
+    },
+  );
+
+  it.each(["caller presentation", "committed projection"])(
+    "resumes a consumed public settle input after restart changes %s",
+    async (variation) => {
+      const childSessionKey = "agent:main:subagent:synthetic-child";
+      const client = createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } });
+      client.internal!.senderAttribution = {
+        id: "synthetic-requester",
+        name: "Synthetic requester",
+      };
+      const settle = async () => {
+        const facade = await kernel.gatewayRequestContext.createAgentTurnFacade!({ client });
+        return facade.dispatch<Record<string, unknown>>(
+          {
+            ...request("The completed child found the synthetic result."),
+            sourceReplyDeliveryMode: "automatic",
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "subagent_settle",
+              sourceSessionKey: childSessionKey,
+            },
+          },
+          {
+            expectFinal: true,
+            subagentCompletions: [
+              expectDefined(
+                subagentCompletionForOutcome(
+                  { runId: "synthetic-child", sessionKey: childSessionKey, label: undefined },
+                  "ok",
+                ),
+                "child completion",
+              ),
+            ],
+            settleWakeReplay: { sourceSessionKeys: [childSessionKey], assertCurrent: () => {} },
+          },
+        );
+      };
+      const consumed = createDeferred();
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        const inputRecorder = expectDefined(command.userTurnTranscriptRecorder, "settle recorder");
+        await command.onExecutionStarted?.();
+        expect(await inputRecorder.persistApproved()).toMatchObject({ appended: true });
+        const stopped = createDeferred();
+        command.abortSignal!.addEventListener("abort", () => stopped.resolve(), { once: true });
+        consumed.resolve();
+        await stopped.promise;
+        command.abortSignal!.throwIfAborted();
+      });
+      const interrupted = observe(settle());
+      await consumed.promise;
+      const entry = expectDefined(source(), "accepted settle source");
+      chatAbort.abortChatRunById(kernel.gatewayRequestContext, {
+        runId,
+        sessionKey,
+        expectedEntry: entry,
+        stopReason: "restart",
+      });
+      await interrupted;
+      await expectDrained([{ runId, entry }]);
+      expect(completionOutcome()).toMatchObject({ reason: "cancelled", stopReason: "restart" });
+      const committed = transcript();
+      await restart();
+      if (variation === "caller presentation") {
+        client.internal!.senderAttribution = { id: "synthetic-requester" };
+      }
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        const inputRecorder = expectDefined(command.userTurnTranscriptRecorder, "resumed recorder");
+        await command.onExecutionStarted?.();
+        expect(await inputRecorder.persistApproved()).toMatchObject({ appended: false });
+        return {
+          payloads: [
+            { text: "The parent's answer includes the synthetic child result.", mediaUrl: null },
+          ],
+          meta: { durationMs: 1 },
+        } satisfies Awaited<ReturnType<typeof agentCommandMock>>;
+      });
+      expect(await settle()).toMatchObject({
+        status: "ok",
+        result: {
+          payloads: [{ text: "The parent's answer includes the synthetic child result." }],
+        },
+      });
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(completionOutcome()).toMatchObject({ reason: "completed" });
+      expect(transcript()).toEqual(committed);
     },
   );
 

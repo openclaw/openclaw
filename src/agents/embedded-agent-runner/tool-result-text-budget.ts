@@ -71,6 +71,67 @@ export function isToolResultTextBlock(
   );
 }
 
+export const MIN_KEEP_CHARS = 2_000;
+
+export function resolveEffectiveMinKeepChars(
+  maxChars: number,
+  options: StringCharBudgetOptions & { minKeepChars?: number },
+  suffixFactory: (truncatedChars: number) => string,
+): number {
+  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
+  const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
+  const suffixFloor = estimateToolResultTextChars(suffixFactory(1), budgetOptions);
+  return Math.max(0, Math.min(minKeepChars, maxChars - suffixFloor));
+}
+
+/** Keep a whole text prefix and a single notice when per-block notices cannot fit. */
+export function keepToolResultTextPrefix(
+  blocks: { block: unknown; textChars: number }[],
+  maxChars: number,
+  suffix: (omittedChars: number) => string,
+  options: StringCharBudgetOptions,
+): unknown[] {
+  const rawChars = blocks.reduce(
+    (sum, { block }) => sum + (isToolResultTextBlock(block) ? block.text.length : 0),
+    0,
+  );
+  const noticeBudget = estimateToolResultTextChars(suffix(rawChars), options);
+  let remaining = Math.max(0, maxChars - noticeBudget);
+  let omittedChars = 0;
+  let noticeIndex = -1;
+  const retained = blocks.flatMap(({ block, textChars }, index) => {
+    if (!isToolResultTextBlock(block)) {
+      return [block];
+    }
+    if (omittedChars === 0 && textChars <= remaining) {
+      remaining -= textChars;
+      return [block];
+    }
+    omittedChars += block.text.length;
+    if (noticeIndex === -1) {
+      // Keep the notice at the first omitted text position so text-only checkpoints
+      // can restore the prefix among the canonical non-text blocks.
+      noticeIndex = index;
+      return [block];
+    }
+    return [];
+  });
+  const notice = sliceToolResultTextToBudget(
+    suffix(omittedChars),
+    Math.min(maxChars, noticeBudget + remaining),
+    options,
+  );
+  const firstOmitted = retained[noticeIndex];
+  if (isToolResultTextBlock(firstOmitted)) {
+    retained[noticeIndex] = {
+      ...firstOmitted,
+      text: notice,
+      ...(typeof firstOmitted.content === "string" ? { content: notice } : {}),
+    };
+  }
+  return retained;
+}
+
 function sliceToolResultTextBudget(
   text: string,
   maxChars: number,

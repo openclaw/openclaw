@@ -1,0 +1,408 @@
+openclaw-modal-dialog.openclaw-id-setup-dialog {
+  --openclaw-modal-height-limit: calc(100dvh - min(128px, 16dvh) - 24px);
+}
+
+/* Keep the title in place as the name, kit, and progress bodies change height. */
+.openclaw-id-setup-dialog > .oc-modal-dialog {
+  margin-block: min(128px, 16dvh) auto;
+}
+
+.openclaw-id-setup > .oc-dialog__body {
+  padding-top: 14px;
+}
+
+.openclaw-id-setup openclaw-modal-actions {
+  margin-top: -4px;
+}
+
+.openclaw-id-setup p {
+  margin: 0;
+}
+
+.openclaw-id-setup__field {
+  display: grid;
+  gap: 6px;
+}
+
+.openclaw-id-setup__field > label {
+  color: var(--text-strong);
+  font-weight: 500;
+  font-size: var(--control-ui-text-sm);
+}
+
+.openclaw-id-setup__field + .openclaw-id-setup__field {
+  margin-top: 2px;
+}
+
+.openclaw-id-setup__inline {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.openclaw-id-setup__inline input {
+  flex: 1;
+  min-width: 0;
+}
+
+.openclaw-id-setup__inline a {
+  flex-shrink: 0;
+  height: auto;
+  min-height: 0;
+  padding-block: 0;
+}
+
+.openclaw-id-setup__status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 18px;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.openclaw-id-setup__address {
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+.openclaw-id-setup__status details {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.openclaw-id-setup__status summary {
+  width: max-content;
+  cursor: var(--cursor-action);
+}
+
+.openclaw-id-setup__status.is-error {
+  color: var(--danger);
+}
+
+.openclaw-id-kit__lead {
+  display: grid;
+  gap: 2px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.openclaw-id-kit__lead > :first-child {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  line-height: 20px;
+}
+
+.openclaw-id-kit__lead strong {
+  font-weight: 600;
+}
+
+.openclaw-id-setup #openclaw-recovery-kit {
+  display: grid;
+  gap: 12px;
+}
+
+.openclaw-id-kit {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  box-shadow: inset 0 0 0 1px var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+}
+
+.openclaw-id-kit .field {
+  gap: 6px;
+}
+
+.openclaw-id-kit .field > label {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+}
+
+.openclaw-id-kit__secret {
+  letter-spacing: 0.04em;
+}
+
+.openclaw-id-kit .row {
+  gap: 8px;
+  align-items: stretch;
+}
+
+.openclaw-id-kit .row > .btn {
+  padding-block: 0;
+}
+
+.openclaw-id-kit .muted {
+  font-size: var(--control-ui-text-xs);
+  line-height: 16px;
+}
+
+.openclaw-id-kit .oc-dialog__row {
+  min-height: 26px;
+}
+
+.openclaw-id-kit .oc-dialog__row > :last-child {
+  font-variant-numeric: tabular-nums;
+}
+
+.openclaw-id-kit .oc-dialog__rows {
+  gap: 0;
+}
+
+.openclaw-id-kit__account {
+  flex: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+}
+
+.openclaw-id-kit__warning {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.openclaw-id-kit__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.openclaw-id-kit__saved.field.checkbox {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: var(--control-ui-text-sm);
+  cursor: var(--cursor-action);
+}
+
+#openclaw-recovery-kit > .openclaw-id-setup__status {
+  margin-top: -4px;
+}
+
+#openclaw-recovery-kit > .openclaw-id-setup__status:empty {
+  display: none;
+}
+
+.openclaw-id-kit__exported {
+  color: var(--ok);
+}
+
+.openclaw-id-kit__exported svg {
+  width: 14px;
+  height: 14px;
+}
+
+.openclaw-id-kit__saved input.oc-checkbox {
+  margin: 0;
+  border-radius: var(--radius-sm);
+}
+
+.openclaw-id-linking__title {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.openclaw-id-linking__title.is-error {
+  color: var(--danger);
+}
+
+.openclaw-id-steps {
+  display: grid;
+  margin: 14px 0 0;
+  padding: 4px 0;
+  list-style: none;
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.openclaw-id-steps__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 38px;
+  padding: 0 8px 0 14px;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 18px;
+}
+
+.openclaw-id-steps__item[data-state="waiting"] {
+  color: var(--muted);
+}
+
+.openclaw-id-steps__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openclaw-id-steps__mark,
+.openclaw-id-steps__info {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.openclaw-id-steps__item[data-state="waiting"] .openclaw-id-steps__mark {
+  opacity: 0.55;
+}
+
+.openclaw-id-steps__mark svg,
+.openclaw-id-setup__spinner {
+  width: 15px;
+  height: 15px;
+}
+
+.openclaw-id-steps__item[data-state="done"] .openclaw-id-steps__mark {
+  color: var(--ok);
+}
+
+.openclaw-id-steps__item[data-state="running"] .openclaw-id-steps__mark {
+  color: var(--text);
+}
+
+.openclaw-id-setup .btn > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.openclaw-id-steps__item[data-state="warning"] .openclaw-id-steps__mark {
+  color: var(--warn);
+}
+
+.openclaw-id-steps__info {
+  color: inherit;
+  cursor: var(--cursor-action);
+  transition: background 140ms ease;
+}
+
+.openclaw-id-steps__info:hover,
+.openclaw-id-steps__info:focus-visible,
+.openclaw-id-steps__tooltip[open] .openclaw-id-steps__info {
+  background: color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.openclaw-id-steps__info:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 55%, transparent);
+  outline-offset: 1px;
+}
+
+.openclaw-id-steps__tooltip {
+  --openclaw-tooltip-max-width: min(292px, calc(100dvw - 16px));
+  --openclaw-tooltip-padding: 8px 10px;
+  --openclaw-tooltip-border-radius: 10px;
+  --openclaw-tooltip-background-color: var(--popover);
+  --openclaw-tooltip-shadow: 0 0 0 1px var(--border), 0 10px 28px rgba(0, 0, 0, 0.14);
+}
+
+.openclaw-id-steps__tip {
+  display: grid;
+  gap: 5px;
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+  line-height: 17px;
+  text-wrap: pretty;
+}
+
+.openclaw-id-steps__tip code {
+  display: block;
+  max-height: 112px;
+  padding: 0;
+  overflow: auto;
+  background: none;
+  color: var(--muted);
+  font: 11px/16px var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+}
+
+.openclaw-id-setup__spinner {
+  animation: openclaw-id-setup-spin 0.9s linear infinite;
+}
+
+@keyframes openclaw-id-setup-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .openclaw-id-setup__spinner {
+    animation-duration: 2.4s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+.openclaw-id-steps__item[data-state="failed"] .openclaw-id-steps__mark {
+  color: var(--danger);
+}
+
+.openclaw-id-setup .oc-dialog__close {
+  transition: opacity 140ms ease;
+}
+
+.openclaw-id-setup[data-noclose] .oc-dialog__close {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.openclaw-id-setup__enter {
+  animation: openclaw-id-setup-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.openclaw-id-setup__status.is-in > * {
+  animation: openclaw-id-setup-in 200ms ease both;
+}
+
+.openclaw-id-steps__mark.chg {
+  animation: openclaw-id-setup-pop 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes openclaw-id-setup-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+
+@keyframes openclaw-id-setup-pop {
+  from {
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .openclaw-id-setup .oc-dialog__close {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0.01ms !important;
+  }
+
+  .openclaw-id-setup__enter,
+  .openclaw-id-setup__status.is-in > *,
+  .openclaw-id-steps__mark.chg {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0.01ms !important;
+  }
+}

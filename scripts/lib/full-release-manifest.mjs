@@ -29,7 +29,7 @@ export function releaseManifestChildEvidence(child) {
   };
 }
 
-export function buildReleaseValidationManifest({ plan, drain, context }) {
+export function buildReleaseValidationManifest({ plan, drain, context, reusedManifest }) {
   const childEvidence = Object.fromEntries(
     Object.entries(drain?.children ?? {}).map(([key, child]) => [
       key,
@@ -47,6 +47,9 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     targetRef: context.targetRef,
     targetSha: plan.targetSha,
     candidateBinding: plan.candidate,
+    ...(plan.publicationArtifactSource === undefined
+      ? {}
+      : { publicationArtifactSource: plan.publicationArtifactSource }),
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
     advisoryJobs: drain?.advisoryJobs ?? [],
@@ -75,7 +78,10 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
       : {}),
   };
   const runs = Object.fromEntries(plan.children.map((child) => [child.key, child.runId]));
-  const root = plan.evidenceReuse.sourceManifest;
+  const root = reusedManifest ?? plan.evidenceReuse.sourceManifest;
+  if (plan.evidenceReuse.requested && !root) {
+    throw new Error("reused release evidence manifest is required at the manifest boundary");
+  }
   let rootPublication;
   if (plan.evidenceReuse.requested && root?.publicationAdmissionContract !== undefined) {
     rootPublication = {
@@ -94,7 +100,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
   }
   const manifest = plan.evidenceReuse.requested
     ? {
-        ...plan.evidenceReuse.sourceManifest,
+        ...root,
         ...current,
         evidenceReuse: {
           policy: plan.evidenceReuse.policy,
@@ -105,7 +111,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           ...(rootPublication ? { publication: rootPublication } : {}),
         },
         controls: {
-          ...plan.evidenceReuse.sourceManifest.controls,
+          ...root.controls,
           performanceReportPublication: "artifact-only",
         },
       }
@@ -131,8 +137,8 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           performanceReportPublication: "artifact-only",
         },
         childRuns: plan.qualificationCoverage
-          ? Object.fromEntries(
-              plan.children.map((child) => [
+          ? Object.fromEntries([
+              ...plan.children.map((child) => [
                 child.key,
                 child.key === "productPerformance"
                   ? {
@@ -142,7 +148,15 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
                     }
                   : child.runId,
               ]),
-            )
+              ...(plan.qualificationCoverage.exemptions ?? []).map((exemption) => [
+                exemption.childRole,
+                {
+                  disposition: exemption.disposition,
+                  runId: "",
+                  supportingEvidence: exemption.supportingEvidence,
+                },
+              ]),
+            ])
           : {
               normalCi: runs.normalCi ?? "",
               pluginPrereleaseIndependent: runs.pluginPrereleaseIndependent ?? "",
@@ -198,6 +212,10 @@ export function manifestContextFromEnvironment(source, env = process.env) {
     env.QUALIFICATION_BASELINES_JSON ?? coverage.qualification_baselines_json;
   if (qualificationBaselines) {
     inputs.qualificationBaselinesJson = qualificationBaselines;
+  }
+  // Source admission binds this pin; the manifest must echo it for validation.
+  if (coverage.publication_artifact_source_json) {
+    inputs.publicationArtifactSourceJson = coverage.publication_artifact_source_json;
   }
   inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
   inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";

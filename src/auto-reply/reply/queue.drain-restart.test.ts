@@ -2,6 +2,8 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
 import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
@@ -65,14 +67,28 @@ const queuedState = () => getExistingFollowupQueue(key);
 const waitForRoots = (count = 0) =>
   vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(count));
 
-it.each([
-  { callback: "same", stillClosed: false },
-  { callback: "fresh", stillClosed: false },
-  { callback: "same", stillClosed: true },
-  { callback: "fresh", stillClosed: true },
-] as const)(
-  "honors a $callback callback's drain request while an attempt unwinds (still closed: $stillClosed)",
-  async ({ callback, stillClosed }) => {
+it.each(
+  [
+    { callback: "same", stillClosed: false },
+    { callback: "fresh", stillClosed: false },
+    { callback: "same", stillClosed: true },
+    { callback: "fresh", stillClosed: true },
+  ].flatMap((entry) =>
+    (["database", "policy", "ingress"] as const).map((failure) => ({
+      callback: entry.callback,
+      stillClosed: entry.stillClosed,
+      failure,
+    })),
+  ),
+)(
+  "honors a $callback callback's drain request after $failure refusal (still closed: $stillClosed)",
+  async ({ callback, stillClosed, failure }) => {
+    const unavailable =
+      failure === "policy"
+        ? new GatewayOperatorAccessUnavailableError()
+        : failure === "ingress"
+          ? new GatewayDispatchUnavailableError("chat.send", true)
+          : new AgentDatabaseExecutionAdmissionClosedError("database is still closing");
     vi.useFakeTimers();
     const refused = createDeferred();
     const release = createDeferred();
@@ -85,10 +101,7 @@ it.each([
         return;
       }
       if (stillClosed) {
-        rejectQueuePreparation(
-          run,
-          new AgentDatabaseExecutionAdmissionClosedError("database is still closing"),
-        );
+        rejectQueuePreparation(run, unavailable);
       }
       delivered(run);
     };
@@ -98,10 +111,7 @@ it.each([
       }
       refused.resolve();
       await release.promise;
-      rejectQueuePreparation(
-        run,
-        new AgentDatabaseExecutionAdmissionClosedError("retired database owner"),
-      );
+      rejectQueuePreparation(run, unavailable);
     };
     const queued = createRun({ prompt: "resume after the explicit wake" });
     try {
@@ -118,7 +128,7 @@ it.each([
             },
       );
       release.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(500);
       expect(attempts).toBe(2);
       if (stillClosed) {
         expect(delivered).not.toHaveBeenCalled();
@@ -163,7 +173,7 @@ it("parks queued input when database admission closes until a fresh drain is req
     await withAgentDatabaseCloseFence(target, async () => {
       enqueueFollowupRun(key, queued, defaults);
       scheduleFollowupDrain(key, runFollowup);
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(250);
 
       expect(attempts).toBe(1);
       expect(queuedState()?.items).toEqual([queued]);
@@ -260,7 +270,7 @@ it("restarts an idle drain across distinct enqueue and drain module instances wh
 });
 
 it.each(["open", "draining", "pending restart"] as const)(
-  "does not replay a selected turn after a draining error with %s admission",
+  "does not retry a selected turn inside the mailbox after a draining error with %s admission",
   async (admission) => {
     const firstFailed = createDeferred();
     const abandoned = vi.fn();
@@ -290,7 +300,7 @@ it.each(["open", "draining", "pending restart"] as const)(
     await waitForRoots();
     expect(attempts).toBe(1);
     if (admission === "open") {
-      expect(abandoned).not.toHaveBeenCalled();
+      expect(abandoned).toHaveBeenCalledOnce();
     }
   },
 );
@@ -371,9 +381,9 @@ it.each(["old", "new"] as const)(
     expect(queue).toMatchObject({
       dropPolicy: "summarize",
       droppedCount: 1,
-      summaryLines: ["first overflowed message"],
+      summaryEntries: [{ source: first, line: "first overflowed message" }],
     });
-    expect(queue?.summarySources).toEqual([first]);
+    expect(queue?.summaryEntries.map(({ source }) => source)).toEqual([first]);
     expect(queue?.items).toEqual([second]);
 
     const admitted = enqueueFollowupRun(key, third, {
@@ -385,9 +395,9 @@ it.each(["old", "new"] as const)(
     expect(queue).toMatchObject({
       dropPolicy,
       droppedCount: 1,
-      summaryLines: ["first overflowed message"],
+      summaryEntries: [{ source: first, line: "first overflowed message" }],
     });
-    expect(queue?.summarySources).toEqual([first]);
+    expect(queue?.summaryEntries.map(({ source }) => source)).toEqual([first]);
     expect(queue?.items).toEqual([dropPolicy === "old" ? third : second]);
 
     const timer = new Promise<void>((resolve) => {

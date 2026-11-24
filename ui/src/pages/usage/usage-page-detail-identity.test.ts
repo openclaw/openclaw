@@ -170,45 +170,19 @@ it("keeps roster rows distinct when the selected detail changes to another sessi
   ]);
 });
 
-it("retains chart bars across conversation changes and updates chart modes", async () => {
+it("updates chart modes after loading the selected session", async () => {
   const { page } = await timelineFixture("stable-instance", "[Tool: read]\nRetained turn");
-  await vi.waitFor(() => expect(page.querySelectorAll(".session-log-tools")).toHaveLength(3));
+  await vi.waitFor(() => expect(page.read().detail.sessionLogs).toHaveLength(3));
   await Promise.all([page.read().detail.timeSeriesRead, page.read().detail.context.read]);
   await page.updateComplete;
   const bars = [...page.querySelectorAll(".ts-bar")];
   expect(bars).toHaveLength(3);
-  const expectRetainedBars = () => {
-    const current = [...page.querySelectorAll(".ts-bar")];
-    expect(current).toHaveLength(bars.length);
-    current.forEach((bar, index) => expect(bar).toBe(bars[index]));
-  };
-
-  usageButton(page, "Expand All", ".session-logs-header button").click();
-  await page.updateComplete;
-  expect(
-    [...page.querySelectorAll<HTMLDetailsElement>(".session-log-tools")].every(
-      (tools) => tools.open,
-    ),
-  ).toBe(true);
-  expectRetainedBars();
-
-  const search = page.querySelector<HTMLInputElement>(".session-log-filters input[type=text]")!;
-  for (const [query, rows] of [
-    ["absent", 0],
-    ["Retained", 3],
-  ] as const) {
-    search.value = query;
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await page.updateComplete;
-    expect(page.querySelectorAll(".session-log-entry")).toHaveLength(rows);
-    expectRetainedBars();
-  }
 
   usageButton(page, "Cumulative", ".timeseries-controls button").click();
   await page.updateComplete;
   expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("300 tokens");
   expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
-  usageButton(page, "Per Turn", ".timeseries-controls button").click();
+  usageButton(page, "Per reply", ".timeseries-controls button").click();
   await page.updateComplete;
   expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("100 tokens");
   expect(page.querySelectorAll(".ts-bar.usage-token-input")).toHaveLength(3);
@@ -225,11 +199,11 @@ it.each([
   async ({ refresh, points, activeDrag }) => {
     const fixture = await timelineFixture("original-instance");
     const { page, state } = fixture;
-    await vi.waitFor(() => expect(page.querySelectorAll(".session-log-entry")).toHaveLength(3));
+    await vi.waitFor(() => expect(page.read().detail.sessionLogs).toHaveLength(3));
     const drag = dragTimelineRange(page);
     try {
       await page.updateComplete;
-      expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
+      expect(textOf(page, ".session-detail-stats strong")).toBe("200");
       if (!activeDrag) {
         drag.end();
       }
@@ -245,10 +219,10 @@ it.each([
       await page.updateComplete;
       expect.soft(page.usageSelectedSessions).toEqual(["global"]);
       expect
-        .soft([...page.querySelectorAll(".session-log-content")].map((entry) => entry.textContent))
+        .soft(page.read().detail.sessionLogs?.map((entry) => entry.content))
         .toEqual(state.points.map((_, index) => `${state.row.sessionId} reply ${index + 1}`));
       expect.soft(page.querySelector(".timeseries-summary__range")).toBeNull();
-      expect.soft(textOf(page, ".session-logs-header-count")).not.toContain("timeline filtered");
+      expect.soft(page.read().detail.timeSeriesCursorStart).toBeNull();
     } finally {
       drag.end();
     }
@@ -288,7 +262,9 @@ it.each([
     });
     const fixture = await selectSession(request);
     const { context, page } = fixture;
-    await vi.waitFor(() => expect(page.textContent).toContain("Original turn"));
+    await vi.waitFor(() =>
+      expect(page.read().detail.sessionLogs?.[0]?.content).toContain("Original turn"),
+    );
     expect(page.read().detail.timeSeries?.sessionId).toBe("original-instance");
 
     holdOriginal = true;
@@ -349,10 +325,12 @@ it.each([
   async ({ sessionId, refresh }) => {
     const fixture = await timelineFixture(sessionId, "Retained turn");
     const { context, page, request, state, overview } = fixture;
-    await vi.waitFor(() => expect(page.textContent).toContain("Retained turn"));
+    await vi.waitFor(() =>
+      expect(page.read().detail.sessionLogs?.[0]?.content).toContain("Retained turn"),
+    );
     dragTimelineRange(page).end();
     await page.updateComplete;
-    expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
+    expect(textOf(page, ".session-detail-stats strong")).toBe("200");
     const range = textOf(page, ".timeseries-summary__range");
     const timeSeries = page.read().detail.timeSeries;
     const logs = page.read().detail.sessionLogs;
@@ -371,7 +349,7 @@ it.each([
     expect(page.usageSelectedSessions).toEqual(["global"]);
     expect(page.read().detail.timeSeries).toEqual(timeSeries);
     expect(page.read().detail.sessionLogs).toEqual(logs);
-    expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
+    expect(textOf(page, ".session-detail-stats strong")).toBe("200");
     expect(textOf(page, ".timeseries-summary__range")).toBe(range);
     const summaryReads = usageCalls(request).length;
     context.publishUsage({ usageUpdatedAt: 2 });

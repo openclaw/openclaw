@@ -15,7 +15,10 @@ import {
   createTerminalSessionBootOperations,
 } from "./terminal-panel-session-boot.ts";
 import { TerminalPanelSessionRecovery } from "./terminal-panel-session-recovery.ts";
-import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
+import {
+  focusTerminalSession,
+  repaintTerminalSession,
+} from "./terminal-panel-session-rendering.ts";
 import type {
   TerminalOperation,
   TerminalPanelError,
@@ -216,12 +219,21 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
   }
 
   function removeTab(tab: TerminalPanelSessionTab): void {
+    const wasActive = state.activeId === tab.id;
     disposeTab(tab);
     const tabs = state.tabs.filter((entry) => entry.id !== tab.id);
     updateState({
       tabs,
-      activeId: state.activeId === tab.id ? (tabs.at(-1)?.id ?? null) : state.activeId,
+      activeId: wasActive ? (tabs.at(-1)?.id ?? null) : state.activeId,
     });
+    const replacement = tabs.at(-1);
+    if (wasActive && replacement) {
+      void host.updateComplete.then(() => {
+        if (state.activeId === replacement.id) {
+          repaintTerminalSession(replacement);
+        }
+      });
+    }
   }
 
   const { openSessionNow, attachSession } = createTerminalSessionBootOperations({
@@ -449,6 +461,10 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
         void resumeTransport();
         return;
       }
+      if (action.kind === "restore") {
+        void api.restoreSessions();
+        return;
+      }
       void ownedIntentQueue.queue(action);
     },
     connectHost(): void {
@@ -569,10 +585,10 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
       recovery.persist();
       closeEmptyPanel();
     },
-    switchTo(tabId: string): void {
+    switchTo(tabId: string, focus = true): void {
       updateState({ activeId: tabId });
       const tab = state.tabs.find((entry) => entry.id === tabId);
-      void focusTerminalSession(tab, host.updateComplete);
+      void focusTerminalSession(tab, host.updateComplete, focus);
     },
   };
 
@@ -591,7 +607,7 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     discard: (tab) => discardCancelledTab(tab),
     exited: (tab) => handleExit(tab.id, { reason: "disconnected", exitCode: null }),
     setBooting: (booting) => updateState({ booting }),
-    setError: (text) => api.setError(text),
+    setError: (text, retryAction) => api.setError(text, retryAction),
   });
 
   let refreshError: TerminalPanelError | null = null;

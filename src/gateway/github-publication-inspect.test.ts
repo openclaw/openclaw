@@ -1,6 +1,6 @@
 // Keep external GitHub I/O synthetic while exercising registered admission and current profile state.
 // oxfmt-ignore
-import { commandResult, githubPublicationTestMocks, installGitHubPublicationTestHarness, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";
+import { commandResult, githubPublicationTestMocks, installGitHubPublicationTestHarness, overrideCommands, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";
 // Install the existing tool transport before loading the publication tool.
 // oxfmt-ignore
 import { withPublicationToolTransport } from "./github-publication-actions.test-support.js";
@@ -86,6 +86,9 @@ async function fixture(
   const requests: string[][] = [];
   mocks.runCommand.mockImplementation(async (argv: string[]) => {
     requests.push(argv);
+    if (argv.includes("graphql")) {
+      return commandResult("", 1);
+    }
     if (argv[0] !== "gh" || !argv.includes("GET")) {
       throw new Error("Inspection attempted a non-read command");
     }
@@ -198,16 +201,41 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     expect(f.externalWrites).toEqual([]);
   });
 
-  it("accepts another verified linked account without depending on the primary credit choice", async () => {
-    const f = await fixture();
-    await syncCanonicalGitHubIdentity({
-      identity: { accountId: 202, login: "secondary" },
-      authenticationAlias: { kind: "email", email: "secondary@example.test" },
-    });
-    await linkCanonicalUserProfileEmail("secondary@example.test", f.guestProfile);
-    f.pr.user = { id: 202, login: "secondary" };
-    expect(await f.invoke()).toMatchObject({ author: { accountId: 202, login: "secondary" } });
-  });
+  it.each(["public", "unavailable lookup", "malformed lookup"])(
+    "checks another verified linked account with %s",
+    async (scenario) => {
+      const f = await fixture();
+      await syncCanonicalGitHubIdentity({
+        identity: { accountId: 202, login: "secondary" },
+        authenticationAlias: { kind: "email", email: "secondary@example.test" },
+      });
+      await linkCanonicalUserProfileEmail("secondary@example.test", f.guestProfile);
+      f.pr.user = { id: 202, login: "secondary" };
+      if (scenario !== "public") {
+        f.baseRepo.private = true;
+        f.setAccess("read", 202);
+        overrideCommands((argv) => {
+          if (argv[0] === "gh" && argv.includes("GET") && argv.at(-1) === "user/101") {
+            return commandResult(
+              scenario === "malformed lookup" ? "{" : "",
+              scenario === "malformed lookup" ? 0 : 1,
+            );
+          }
+          return undefined;
+        });
+      }
+      if (scenario === "malformed lookup") {
+        await expect(f.invoke()).rejects.toThrow("The PR could not be verified as yours");
+        expect(f.endpoints()).not.toContain("repos/example/repository/pulls/7");
+      } else {
+        expect(await f.invoke()).toMatchObject({ author: { accountId: 202, login: "secondary" } });
+      }
+      if (scenario !== "public") {
+        expect(mocks.runCommand.mock.calls.some(([argv]) => argv.at(-1) === "user/101")).toBe(true);
+      }
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
 
   it.each(
     [false, true].flatMap((enabled) => ["before", "during"].map((timing) => ({ enabled, timing }))),
@@ -256,18 +284,131 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
   );
 
   it.each([false, true])(
-    "does not misdiagnose a publisher-authored PR as broken publisher credentials (raw=%s)",
+    "explains publisher PR eligibility and how to recover without changing credentials (raw=%s)",
     async (raw) => {
       const f = await fixture();
       f.pr.user = { id: 42, login: "publisher" };
       const before = session();
       await expect(f.invoke({}, raw)).rejects.toThrow(
-        "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For this session's published PR, use edit without title or body; for a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr.",
+        "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR. Continue in the original publication conversation or ask a full-write maintainer to assist.",
       );
       expect(session()).toEqual(before);
       expect(f.externalWrites).toEqual([]);
     },
   );
+
+  it.each([
+    "author",
+    "coauthor",
+    "committer",
+    "later commit",
+    "later author",
+    "private",
+    "unlinked",
+    "other publisher",
+    "changed head",
+    "API error",
+    "private base denied",
+    "private head denied",
+  ])("checks publisher PR contribution by account identity (%s)", async (kind) => {
+    const f = await fixture();
+    f.pr.user = { id: kind === "other publisher" ? 99 : 42, login: "publisher" };
+    f.baseRepo.private = kind.startsWith("private");
+    f.fork.private = kind.startsWith("private");
+    const linked = { user: { databaseId: 101 } };
+    const other = { user: { databaseId: 999 } };
+    const lastPage = { hasNextPage: false, endCursor: null };
+    let queries = 0;
+    overrideCommands((argv, input) => {
+      const endpoint = argv.at(-1)!;
+      if (endpoint === "user/101") {
+        return commandResult(JSON.stringify({ id: 101, login: "contributor" }));
+      }
+      if (endpoint.endsWith("/collaborators/contributor/permission")) {
+        const denied =
+          kind === "private base denied" ||
+          (kind === "private head denied" && endpoint.startsWith("repos/contributor/"));
+        return commandResult(
+          JSON.stringify({ permission: denied ? "none" : "read", user: { id: 101 } }),
+        );
+      }
+      if (!argv.includes("graphql")) {
+        return undefined;
+      }
+      queries++;
+      if (kind === "later author" && queries === 2) {
+        expect(JSON.parse(String(input)).variables).toEqual({
+          id: "commit-node",
+          authorCursor: "next-author",
+        });
+        return commandResult(
+          JSON.stringify({ data: { node: { authors: { nodes: [linked], pageInfo: lastPage } } } }),
+        );
+      }
+      const delayed = (kind === "later commit" || kind === "later author") && queries === 1;
+      if (kind === "later commit" && queries === 2) {
+        expect(JSON.parse(String(input)).variables.after).toBe("next-commit");
+      }
+      return commandResult(
+        JSON.stringify({
+          ...(kind === "API error" ? { errors: [{ message: "unavailable" }] } : {}),
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: kind === "changed head" ? BASE : HEAD,
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        id: "commit-node",
+                        authors: {
+                          nodes:
+                            delayed || kind === "committer" || kind === "unlinked"
+                              ? [other, { user: null }, { user: { databaseId: null } }]
+                              : kind === "author"
+                                ? [linked]
+                                : [other, linked],
+                          pageInfo:
+                            kind === "later author" && delayed
+                              ? { hasNextPage: true, endCursor: "next-author" }
+                              : lastPage,
+                        },
+                        committer: kind === "committer" ? linked : other,
+                      },
+                    },
+                  ],
+                  pageInfo:
+                    kind === "later commit" && delayed
+                      ? { hasNextPage: true, endCursor: "next-commit" }
+                      : lastPage,
+                },
+              },
+            },
+          },
+        }),
+      );
+    });
+    if (
+      ["author", "coauthor", "committer", "later commit", "later author", "private"].includes(kind)
+    ) {
+      expect(await f.invoke()).toMatchObject({ author: { accountId: 42 } });
+    } else if (kind === "private base denied" || kind === "private head denied") {
+      await expect(f.invoke()).rejects.toThrow("current repository access");
+    } else {
+      await expect(f.invoke()).rejects.toThrow("no linked account was verified");
+    }
+    if (kind === "private base denied") {
+      expect(f.endpoints()).not.toContain("repos/example/repository/pulls/7");
+      expect(queries).toBe(0);
+    }
+    if (kind === "other publisher") {
+      expect(queries).toBe(0);
+    }
+    if (kind === "later commit" || kind === "later author") {
+      expect(queries).toBe(2);
+    }
+    expect(f.externalWrites).toEqual([]);
+  });
 
   it("rejects an unlinked requester before reading PR data", async () => {
     const f = await fixture({ linked: false });
@@ -275,7 +416,17 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     expect(f.requests).toEqual([]);
   });
 
-  it.each(["role", "linked identity", "publisher", "session"])(
+  it("keeps reading across a config reload that leaves the API base unchanged", async () => {
+    const f = await fixture();
+    f.onRead(async (endpoint) => {
+      if (endpoint.endsWith("/pulls/7")) {
+        setRuntimeConfigSnapshot({ ...f.config });
+      }
+    });
+    expect(await f.invoke()).toMatchObject({ author: { accountId: 101 } });
+  });
+
+  it.each(["role", "linked identity", "publisher", "API base", "session"])(
     "rejects %s revocation during the PR read",
     async (change) => {
       const f = await fixture();
@@ -294,6 +445,11 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
           );
         } else if (change === "publisher") {
           mocks.matchesIdentity.mockReturnValue(false);
+        } else if (change === "API base") {
+          setRuntimeConfigSnapshot({
+            ...f.config,
+            gateway: { ...f.config.gateway, github: { apiBaseUrl: "https://other.example.test" } },
+          });
         } else {
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey: SESSION_KEY },

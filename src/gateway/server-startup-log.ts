@@ -2,16 +2,17 @@ import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection-shared.js";
 import {
-  buildConfiguredModelCatalog,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection-shared.js";
-import { resolveConfiguredThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
+  buildThinkingCatalog,
+  resolveConfiguredThinkingDefaultCore,
+} from "../agents/model-thinking-default-core.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatGatewayNodePrefixStartupWarning } from "../daemon/node-version-prefix.js";
 import {
   inspectGatewayServiceInstallationDrift,
   summarizeGatewayServiceLayout,
@@ -42,20 +43,21 @@ export async function logGatewayStartup(params: {
   isNixMode: boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
-  const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
+  const agentModel = resolveConfiguredModelRef({
     cfg: params.cfg,
     agentId: tryResolveAmbientOwnerAgentId(params.cfg),
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
   });
-  const agentModelLog = formatAgentModelStartupLogLine({
-    cfg: params.cfg,
-    provider: agentProvider,
-    model: agentModel,
-  });
-  params.log.info(agentModelLog.message, {
-    consoleMessage: agentModelLog.consoleMessage,
-  });
+  if (agentModel) {
+    const agentModelLog = formatAgentModelStartupLogLine({ cfg: params.cfg, ...agentModel });
+    params.log.info(agentModelLog.message, {
+      consoleMessage: agentModelLog.consoleMessage,
+    });
+  } else {
+    params.log.info(
+      "agent model: not configured (choose one in Settings → Models or run `openclaw models set <provider/model>`)",
+    );
+  }
   const startupDurationMs =
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
   const startupDurationLabel =
@@ -63,7 +65,7 @@ export async function logGatewayStartup(params: {
   params.log.info(
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
-  params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+  params.log.info(`log file: ${(await getResolvedLoggerSettings()).file}`);
   params.log.info(
     "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
   );
@@ -93,6 +95,17 @@ export async function logGatewayStartup(params: {
     }
   } catch {
     // Optional PATH/package inspection must never prevent Gateway startup.
+  }
+  try {
+    const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+    const nodePrefixSkew = packageRoot
+      ? formatGatewayNodePrefixStartupWarning({ nodePath: process.execPath, packageRoot })
+      : undefined;
+    if (nodePrefixSkew) {
+      params.log.warn(nodePrefixSkew);
+    }
+  } catch {
+    // Version-prefix detection must never prevent Gateway startup.
   }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   params.log.info(
@@ -210,7 +223,7 @@ function formatAgentModelStartupDetails(params: {
   const soleAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   let thinking = resolveConfiguredThinkingDefaultCore({ ...params, agentId: soleAgentId });
   if (thinking === undefined) {
-    const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+    const configuredCatalog = buildThinkingCatalog(params);
     // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
     // only to discard their default below.
     if (

@@ -31,7 +31,7 @@ for (const options of [
 ]) {
   const ctx = await createVitest({
     ...options,
-    project: [browser],
+    project: browser === "chromium" ? [browser, "chromium-mock-registry"] : [browser],
     watch: false,
     reporters: [],
     configLoader: "runner",
@@ -42,6 +42,7 @@ for (const options of [
     reports.push({
       projects: ctx.projects.map((project) => ({
         name: project.name,
+        isolate: project.config.isolate,
         root: project.config.root,
         viteRoot: project.vite.config.root,
         setupFiles: project.config.setupFiles,

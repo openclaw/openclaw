@@ -104,6 +104,11 @@ export function assertControlUiE2eOwnership(
   });
 
   expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
+  expect(uiE2eRealGatewayTestFiles).toEqual(
+    expect.arrayContaining(
+      trackedUiE2eFiles.filter((file) => file.endsWith(".real-gateway.e2e.test.ts")),
+    ),
+  );
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
 
@@ -153,7 +158,6 @@ export function assertControlUiE2eOwnership(
     });
   }
   expect(projects[0]?.test.exclude).toEqual(expect.arrayContaining(uiE2eSerialTestFiles));
-
   const realGateway = new Set(uiE2eRealGatewayTestFiles);
   const ordinary = trackedUiE2eFiles.filter((file) => !realGateway.has(file));
   const serial = new Set(uiE2eSerialTestFiles);
@@ -165,6 +169,8 @@ export function assertControlUiE2eOwnership(
     expect(selection.flat().toSorted()).toEqual(files);
   };
   const localSelected = select(config);
+  const readonlyHome = "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts";
+  expect(localSelected[2]).toContain(readonlyHome);
   expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
   assertPartition(localSelected, trackedUiE2eFiles);
   expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
@@ -173,10 +179,12 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
     "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
-    "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
+    "ui/src/e2e/template-chat-review.e2e.test.ts",
+    "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(
     uiE2ePrivateServerTestFiles.filter((file) => uiE2eSerialTestFiles.includes(file)),
@@ -187,13 +195,15 @@ export function assertControlUiE2eOwnership(
 
   const ordinaryConfig = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []);
   const ordinarySelected = select(ordinaryConfig);
+  expect(ordinarySelected.flat()).not.toContain(readonlyHome);
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
   assertPartition(ordinarySelected, ordinary);
 
   const productionArtifactFiles = [
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
-    "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
+    "ui/src/e2e/template-chat-review.e2e.test.ts",
   ];
   const delegated = createUiE2eVitestConfig(
     { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
@@ -223,6 +233,11 @@ export function assertControlUiE2eOwnership(
       .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
       .filter((file) => file === packagedWorkboard),
   ).toEqual([packagedWorkboard]);
+  expect(
+    createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [readonlyHome] }).e2e)
+      .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
+      .filter((file) => file === readonlyHome),
+  ).toEqual([readonlyHome]);
 
   const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
   const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");

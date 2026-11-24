@@ -58,6 +58,9 @@ describe("createWhatsAppLoginTool", () => {
 
   it("rejects credential persistence after the owning tool execution closes", async () => {
     const tool = createOwnerLoginTool();
+    const next = createOwnerLoginTool();
+    expect(next.parameters).toBe(tool.parameters);
+    expect(next.execute).not.toBe(tool.execute);
     const controller = new AbortController();
     let beforeCredentialPersistence: (() => Promise<void>) | undefined;
     startWebLoginWithQrMock.mockImplementationOnce(async (options) => {
@@ -71,9 +74,9 @@ describe("createWhatsAppLoginTool", () => {
 
     await expect(
       tool.execute("tool-call-retained", { action: "start" }, controller.signal),
-    ).rejects.toThrow("WhatsApp login authority is no longer active");
+    ).rejects.toThrow("WhatsApp login was stopped. Start a new login to retry.");
     await expect(beforeCredentialPersistence?.()).rejects.toThrow(
-      "WhatsApp login authority is no longer active",
+      "WhatsApp login was stopped. Start a new login to retry.",
     );
     expect(startWebLoginWithQrMock).toHaveBeenCalledOnce();
   });

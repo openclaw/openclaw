@@ -19,7 +19,6 @@ function installBoard(page: { execute(script: string): void }, cards: (typeof ca
   const seed = {
     boards: [{ id: "default" }],
     cards,
-    tasks: [],
     methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
   };
   page.execute(createControlUiMockGatewayInitScript());

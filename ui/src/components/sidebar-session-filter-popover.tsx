@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createUniqueId, onSettled, Show } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { bindSheetDismissGesture, slideSheetOut } from "../lib/motion/sheet-dismiss.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
@@ -16,7 +17,20 @@ export function SidebarSessionFilterPopover(props: {
 }) {
   let host!: HTMLElement;
   let handle: PopoverHandle | undefined;
+  let backdrop: HTMLElement | undefined;
+  let grabber: HTMLElement | undefined;
+  let closing = false;
+  const dismiss = () => handle?.overlay.request(false, "return");
+  // Tapping outside slides the sheet away before it closes, as swiping down does.
+  const slideOutAndDismiss = () => {
+    if (!handle || closing) {
+      return;
+    }
+    closing = true;
+    void slideSheetOut(handle.overlay.surface, backdrop).then(dismiss);
+  };
   let disconnectKeydown: (() => void) | undefined;
+  let disconnectGesture: (() => void) | undefined;
   let focused = false;
   const handleKeydown = (event: KeyboardEvent) => {
     if (event.key === "Tab" && !event.defaultPrevented && isMobileNavLayout() && handle) {
@@ -45,7 +59,10 @@ export function SidebarSessionFilterPopover(props: {
       }
     }
   };
-  onSettled(() => () => disconnectKeydown?.());
+  onSettled(() => () => {
+    disconnectKeydown?.();
+    disconnectGesture?.();
+  });
   const focusInitialControl = () => {
     if (focused) {
       return;
@@ -66,11 +83,12 @@ export function SidebarSessionFilterPopover(props: {
     >
       <Show when={isMobileNavLayout()}>
         <button
+          ref={(element) => (backdrop = element)}
           type="button"
           class="sidebar-session-filter-panel__backdrop"
           tabindex={-1}
           aria-label={t("common.close")}
-          onClick={() => handle?.overlay.request(false, "return")}
+          onClick={slideOutAndDismiss}
         />
       </Show>
       <Popover
@@ -86,6 +104,14 @@ export function SidebarSessionFilterPopover(props: {
           handle = value;
           if (isMobileNavLayout()) {
             value.overlay.surface.setAttribute("aria-modal", "true");
+            disconnectGesture = grabber
+              ? bindSheetDismissGesture({
+                  surface: value.overlay.surface,
+                  handle: grabber,
+                  backdrop: () => backdrop,
+                  dismiss,
+                })
+              : undefined;
           }
           disconnectKeydown = listen(value.overlay.surface, "keydown", handleKeydown);
         }}
@@ -98,7 +124,11 @@ export function SidebarSessionFilterPopover(props: {
           }
         }}
       >
-        <div class="sidebar-session-filter-panel__grabber" aria-hidden="true" />
+        <div
+          ref={(element) => (grabber = element)}
+          class="sidebar-session-filter-panel__grabber"
+          aria-hidden="true"
+        />
         {props.content}
       </Popover>
     </openclaw-sidebar-session-filter-popover>

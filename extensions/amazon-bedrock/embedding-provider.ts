@@ -184,13 +184,6 @@ function asNumberArray(value: unknown): number[] {
   return value;
 }
 
-function asNumberArrayBatch(value: unknown): number[][] {
-  if (!Array.isArray(value)) {
-    throw malformedBedrockEmbeddingResponse();
-  }
-  return value.map(asNumberArray);
-}
-
 function parseSingle(family: Family, raw: Uint8Array | undefined): number[] {
   const data = parseEmbeddingResponseJson(raw);
   switch (family) {
@@ -213,15 +206,14 @@ function parseSingle(family: Family, raw: Uint8Array | undefined): number[] {
 
 function parseCohereBatch(family: Family, raw: Uint8Array | undefined): number[][] {
   const data = parseEmbeddingResponseJson(raw);
-  const embeddings = data.embeddings;
-  if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    const embeddingRecord = asOptionalRecord(embeddings);
-    if (!embeddingRecord) {
-      throw malformedBedrockEmbeddingResponse();
-    }
-    return asNumberArrayBatch(embeddingRecord.float);
+  const embeddings =
+    family === "cohere-v4" && !Array.isArray(data.embeddings)
+      ? asOptionalRecord(data.embeddings)?.float
+      : data.embeddings;
+  if (!Array.isArray(embeddings)) {
+    throw malformedBedrockEmbeddingResponse();
   }
-  return asNumberArrayBatch(embeddings);
+  return embeddings.map((embedding) => sanitizeAndNormalizeEmbedding(asNumberArray(embedding)));
 }
 
 export async function createBedrockEmbeddingProvider(
@@ -298,7 +290,7 @@ export async function createBedrockEmbeddingProvider(
       }
     }
     const raw = await invoke(JSON.stringify(body), signal);
-    return parseCohereBatch(family, raw).map(sanitizeAndNormalizeEmbedding);
+    return parseCohereBatch(family, raw);
   };
 
   const embedQuery = async (text: string, signal?: AbortSignal): Promise<number[]> => {

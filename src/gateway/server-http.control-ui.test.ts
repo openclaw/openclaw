@@ -3,8 +3,15 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+  buildRateLimitIdentityKey,
+  createGatewayAuthRateLimiter,
+} from "./auth-rate-limit.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
@@ -92,6 +99,54 @@ it.each([
     { controlUiEnabled: enabled, controlUiBasePath: basePath },
     AUTH_TOKEN,
   ),
+);
+
+it.each(["token", "password", "trusted-proxy"] as const)(
+  "honors the browser lockout on media reads in %s mode",
+  async (mode) => {
+    const rateLimiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 1, pruneIntervalMs: 0 },
+      { scheduler: createTestGatewayScheduler() },
+    );
+    onTestFinished(() => rateLimiter.dispose());
+    const address = "127.0.0.1";
+    const browserKey = buildRateLimitIdentityKey("control-ui-url", address);
+    rateLimiter.recordFailure(browserKey, "control-ui-url-credential");
+    const secret = "media-test-credential";
+    await withUiServer(
+      async (check) => {
+        if (mode === "trusted-proxy") {
+          const cfg = { gateway: { trustedProxies: [address] } };
+          setRuntimeConfigSnapshot(cfg, cfg);
+        }
+        const file = await saveMediaBuffer(Buffer.from("preview"), "text/plain");
+        const path = `/__openclaw__/assistant-media?meta=1&source=media://inbound/${file.id}`;
+        await check(`${path}&token=${secret}`, 429, { remoteAddress: address });
+        const local = { remoteAddress: address };
+        const bearer = { ...local, authorization: `Bearer ${secret}` };
+        await check(`${path}&token=ignored`, 200, bearer);
+        const preview = { ...local, headers: { "sec-fetch-site": "same-origin" } };
+        await check(`${path}&token=${secret}`, 200, preview);
+        await check(`${path}&token=retired-test-credential`, 401, preview);
+        rateLimiter.updateConfig({ exemptLoopback: false, maxAttempts: 1 });
+        await check(path, 429, bearer);
+        expect(rateLimiter.check(address, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed).toBe(
+          mode === "trusted-proxy",
+        );
+        await check(`${path}&token=${secret}`, 429, local);
+        await check(`${path}&token=${secret}`, 429, preview);
+      },
+      { rateLimiter },
+      mode === "trusted-proxy"
+        ? {
+            mode,
+            trustedProxy: { userHeader: "x-test-user" },
+            password: secret,
+            allowTailscale: false,
+          }
+        : { mode, [mode]: secret, allowTailscale: false },
+    );
+  },
 );
 
 it("rejects UI POST before startup fallback", () =>
@@ -233,3 +288,83 @@ it("serves marketplace documents without claiming plugin HTTP routes", () =>
       isStartupPluginRuntimeReady: () => true,
     }),
   ));
+
+it("keeps plugin recovery reachable after core preparation while sidecars are starting", () =>
+  withUiRoot(
+    async (check) => {
+      await check("/settings/plugins", 200, { headers: { accept: "text/html" } });
+    },
+    () => ({
+      getStartup: () => ({
+        ok: false,
+        status: "starting",
+        uptimeMs: 1,
+        pendingReason: "startup-sidecars",
+      }),
+      isRequestRuntimeReady: () => true,
+      isStartupPluginRuntimeReady: () => false,
+    }),
+  ));
+
+it.each(["/api/unknown", "/v1/unknown", "/assets/absent.js"])(
+  "does not replace %s with a maintenance document",
+  (path) =>
+    withUiRoot(
+      async (check) => {
+        await check(path, 404, { headers: { accept: "text/html" } });
+      },
+      () => ({
+        getStartup: () => ({
+          ok: false,
+          status: "starting",
+          uptimeMs: 1,
+          pendingReason: "startup-sidecars",
+        }),
+      }),
+    ),
+);
+
+it("does not expose a maintenance document when Control UI is disabled", () =>
+  withUiServer(
+    async (check) => {
+      await check("/", 404, { headers: { accept: "text/html" } });
+    },
+    {
+      controlUiEnabled: false,
+      getStartup: () => ({
+        ok: false,
+        status: "starting",
+        uptimeMs: 1,
+        pendingReason: "startup-sidecars",
+      }),
+    },
+  ));
+
+it.each([false, true])("retains proxy attribution rejection with core ready=%s", (coreReady) =>
+  withUiRoot(
+    async (check) => {
+      const proxy = {
+        remoteAddress: "127.0.0.1",
+        headers: { accept: "text/html", "x-forwarded-for": "198.51.100.20" },
+      };
+      const denied = await check("/new", 403, proxy);
+      expect(denied.getBody()).toContain('"type":"proxy_attribution_required"');
+      const trusted = { gateway: { trustedProxies: ["127.0.0.1"] } };
+      setRuntimeConfigSnapshot(trusted, trusted);
+      await check("/new", 200, proxy);
+      const revoked = { gateway: { trustedProxies: [] } };
+      setRuntimeConfigSnapshot(revoked, revoked);
+      const revokedResponse = await check("/new", 403, proxy);
+      expect(revokedResponse.getBody()).toContain('"type":"proxy_attribution_required"');
+    },
+    () => ({
+      isRequestRuntimeReady: () => coreReady,
+      getStartup: () => ({
+        ok: false,
+        status: "starting",
+        uptimeMs: 1,
+        pendingReason: "startup-sidecars",
+      }),
+    }),
+  ),
+);

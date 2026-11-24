@@ -2,7 +2,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
 import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
-import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+import {
+  enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery,
+  withSessionDeliveryQueue,
+} from "./session-delivery-queue.test-helpers.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
@@ -15,7 +18,6 @@ import {
 } from "./session-delivery-queue-recovery.js";
 import {
   deferSessionDelivery as defer,
-  enqueueSessionDelivery,
   failSessionDelivery as fail,
   loadPendingSessionDeliveries as listPending,
   markSessionDeliveryAttemptStarted as markStarted,

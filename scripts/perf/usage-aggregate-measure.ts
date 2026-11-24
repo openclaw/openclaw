@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { createEmptyCostUsageTotals } from "../../src/infra/session-cost-usage-totals.js";
 import type { createUsageAggregateAccumulator } from "../../src/shared/usage-aggregates.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -77,12 +78,7 @@ run(200);
 global.gc();
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const cpu = process.cpuUsage();
 const started = performance.now();

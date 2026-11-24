@@ -1,5 +1,9 @@
 import { lazy } from "solid-js";
 
+export const HighlightedJson = lazy(() => import("../../components/solid/highlighted-json.tsx"), {
+  export: "HighlightedJson",
+});
+
 export const ConfigForm = lazy(() => import("../../components/config-form.render.tsx"), {
   export: "ConfigForm",
 });

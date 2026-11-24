@@ -11,9 +11,9 @@ function edit(raw: string, path: string, value: JsoncValue) {
 }
 
 describe("JSONL edits", () => {
-  const log = '{"event":"start"}\n{"event":"step","n":1}\n{"event":"end"}\n';
+  const log = '{"event":"start"}\n{"event":"step","n":1}\n{"event":0,"event":"end"}\n';
 
-  it("resolves $last and edits the most recent value line", () => {
+  it("resolves $last and edits the effective key on the most recent line", () => {
     const r = edit(log, "oc://log/$last/event", { kind: "string", value: "final" });
     expect(r.raw).toBe(log.replace('"end"', '"final"'));
   });
@@ -28,6 +28,12 @@ describe("JSONL edits", () => {
     });
     const r = setJsonlOcPath(ast, path, { kind: "string", value: "replaced" });
     expect(r.raw).toBe('\nbroken __OPENCLAW_REDACTED__\n{"event":"replaced"}\n{"event":"end"}\n');
+  });
+
+  it("keeps LF record offsets when a record contains standalone CR whitespace", () => {
+    const raw = '{"a":\r1}\n{"b":2}\n';
+    const result = edit(raw, "oc://x.jsonl/L2/b", { kind: "number", value: 3 });
+    expect(result.raw).toBe('{"a":\r1}\n{"b":3}\n');
   });
 
   it("reports unresolved for unknown line addresses", () => {

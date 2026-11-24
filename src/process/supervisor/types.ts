@@ -1,7 +1,13 @@
 import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 
-export type ProcessExtinctionResult = void | WindowsJobExtinction;
+export type ReleasedProcess = { pid: number; command?: string };
+
+/** Custody ended without signalling: these processes outlived their command. */
+export type ProcessRelease = { status: "released"; survivors: ReleasedProcess[] };
+
+export type ProcessExtinctionResult = void | WindowsJobExtinction | ProcessRelease;
 
 export type TerminationReason =
   | "manual-cancel"
@@ -42,6 +48,11 @@ export type ManagedRun = {
   /** Join cleanup; unavailable Windows Job certification resolves with an uncertain outcome. */
   waitForExtinction?: () => Promise<ProcessExtinctionResult>;
   cancel: (reason?: TerminationReason) => void;
+  /**
+   * The owner hands off descendants when the root exits normally. Callers must
+   * not cancel such a run after a normal exit; that would stop what was handed off.
+   */
+  releasesOnRootExit?: true;
   /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
 };
@@ -62,6 +73,9 @@ export type SpawnSecretInput = {
 };
 
 export type ProcessAdapterConstruction = {
+  executionIntent?: ProcessExecutionIntent;
+  /** Stable session budget identity, independent of command cancellation ownership. */
+  executionScopeKey?: string;
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
@@ -101,6 +115,8 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   ) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
   waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  /** Hand off a running root without signalling; undefined when cancellation already won. */
+  release?: () => Promise<ReleasedProcess[] | undefined>;
   readonly cleanupResult?: ProcessCleanupResult;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
@@ -113,6 +129,10 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  /** Admitted outer Sandbox limit, consumed only by the deployed worker. */
+  workerMemoryBoundary?: "sandbox";
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
@@ -129,8 +149,6 @@ type SpawnBaseInput = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
-  /** Internal host-exec policy; sandbox transports keep their backend's limits. */
-  memoryLimitBytes?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
@@ -160,8 +178,15 @@ export type SpawnInput =
       input?: string;
       /** Prepare input authority at the adapter's stdin delivery boundary. */
       prepareInput?: () => void | Promise<void>;
+      /** Prepare async policy after transport setup, before the target starts. */
+      prepareTargetSpawn?: () => void | Promise<void>;
       stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
       secretInput?: SpawnSecretInput;
+      /**
+       * Processes still running when the root exits normally keep running.
+       * A `required-all` scope owner keeps strict tree cleanup instead.
+       */
+      releaseOnRootExit?: true;
       onStdoutRaw?: (chunk: Buffer) => void;
       onStderrRaw?: (chunk: Buffer) => void;
     })
@@ -189,4 +214,30 @@ export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
+  /**
+   * Hand off a running command without signalling it. Resolves the processes
+   * left running, or undefined when the run cannot be handed off (cancel it instead).
+   */
+  release(runId: string): Promise<ReleasedProcess[] | undefined>;
 }
+
+export type OwnedRun = {
+  runId: string;
+  scopeKey?: string;
+  terminationReason?: TerminationReason;
+  cancel: (reason: TerminationReason) => void;
+  release?: () => Promise<ReleasedProcess[] | undefined>;
+  pending?: Promise<ManagedRun>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  cleanupOwners: ScopeCleanupOwner[];
+};
+
+export type ScopeCleanupOwner = {
+  processTree: ProcessScopeCleanupPolicy;
+  failure?: { error: unknown };
+};
+
+export type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};

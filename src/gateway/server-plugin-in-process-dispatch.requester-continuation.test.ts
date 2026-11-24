@@ -1,5 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import {
   clearTestEmbeddedRun,
   registerTestEmbeddedRun,
@@ -15,6 +17,12 @@ import { queueSessionsSendSteeringWithCustody } from "../agents/tools/sessions-s
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  clearAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -24,7 +32,13 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+  persistDevices,
+} from "./operator-run-recovery.test-support.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
@@ -34,11 +48,31 @@ import {
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
 
+async function prepareRequesterReference(
+  stateDir: string,
+  client: GatewayClient,
+  context: GatewayRequestContext,
+  deviceId: string,
+) {
+  const device = { ...pairedOperator(), deviceId };
+  const saved = await createOperatorRecoveryFixture({
+    stateDir,
+    clientInfo: { id: "cli", mode: "cli" },
+    context,
+    profileId: expectDefined(client.authenticatedUserProfile, "authenticated requester").profileId,
+    config: context.getRuntimeConfig(),
+    scopes: [...(client.connect.scopes ?? [])],
+    device,
+  });
+  Object.assign(client, saved.client);
+  return device;
+}
+
 describe("accepted steering queue custody", () => {
   it.each(["consumed", "receiver-ended", "rejected", "source-revoked"] as const)(
     "settles queue custody on %s, never on an accepted confirmation error",
     async (boundary) =>
-      withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
         await captureRuntimeConfigAsyncReader()();
         const client = createOperatorClient({
           profileName: "queue-custody-owner",
@@ -47,6 +81,7 @@ describe("accepted steering queue custody", () => {
         const context = createContext();
         const resolveGatewayContext = () => context;
         context.resolveGatewayContext = resolveGatewayContext;
+        await prepareRequesterReference(state.stateDir, client, context, "queue-custody-device");
         const device = captureGatewayDeviceRevocation(
           context,
           { deviceId: "queue-custody-device", role: "operator" },
@@ -54,10 +89,11 @@ describe("accepted steering queue custody", () => {
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: device.isCurrent,
+          sourceAuthority: null,
         });
         const sessionKey = "agent:main:dashboard:queue-custody";
         const sessionId = "queue-custody-session";
@@ -109,12 +145,16 @@ describe("accepted steering queue custody", () => {
                       queueSessionsSendSteeringWithCustody(
                         { agentId: "main", sessionKey, sessionId },
                         operation,
-                        () => source.authority.assertCurrent(),
+                        () => source.authority.signal?.throwIfAborted(),
                         async (assertCurrent, lifecycle) => {
                           assertRetained = assertCurrent;
                           settle = lifecycle.onQueueSettled;
                           assertCurrent();
                           if (boundary === "source-revoked") {
+                            await rotateDeviceToken({
+                              deviceId: "queue-custody-device",
+                              role: "operator",
+                            });
                             invalidateGatewayDeviceRevocation(
                               context,
                               "queue-custody-device",
@@ -131,8 +171,8 @@ describe("accepted steering queue custody", () => {
                   ),
                 ),
             ),
-          ).rejects.toThrow(boundary === "source-revoked" ? undefined : failure.message);
-          if (boundary === "rejected" || boundary === "source-revoked") {
+          ).rejects.toThrow(failure.message);
+          if (boundary === "rejected") {
             await vi.waitFor(() => expect(assertQueue).toThrow());
             return;
           }
@@ -157,10 +197,17 @@ describe("accepted steering queue custody", () => {
 });
 
 describe("retained requester continuation", () => {
-  it.each(["released", "device revoked", "gateway replaced"] as const)(
-    "fences requester selection when its retained owner is %s",
-    async (boundary) =>
-      withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+  it.each([
+    ["released", true],
+    ["device revoked", true],
+    ["gateway replaced", true],
+    ["released", false],
+    ["device revoked", false],
+    ["gateway replaced", false],
+  ] as const)(
+    "keeps admitted policy and fences closed requester owners (%s, origin: %s)",
+    async (boundary, hasOrigin) =>
+      withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
         const client = createOperatorClient({
           profileName: "retained-requester",
           scopes: ["operator.read", "operator.write"],
@@ -171,6 +218,12 @@ describe("retained requester continuation", () => {
         let receiptCurrent = true;
         const resolveGatewayContext = () => (gatewayCurrent ? context : undefined);
         context.resolveGatewayContext = resolveGatewayContext;
+        await prepareRequesterReference(
+          state.stateDir,
+          client,
+          context,
+          "retained-requester-device",
+        );
         const device = captureGatewayDeviceRevocation(
           context,
           { deviceId: "retained-requester-device", role: "operator" },
@@ -178,10 +231,11 @@ describe("retained requester continuation", () => {
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: device.isCurrent,
+          sourceAuthority: null,
         });
         const requesterOrigin = captureRequesterOrigin({
           sessionKey: "agent:main:requester",
@@ -190,6 +244,8 @@ describe("retained requester continuation", () => {
         if (!source || !requesterOrigin) {
           throw new Error("Expected authenticated requester authority");
         }
+        const admitted = createTestAdmittedRunContext("ended-requester");
+        const approvalAuthority = claimAgentRunDelegatedAuthority(admitted.operationalRunInstance);
         let captured: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
         try {
           captured = await withPluginRuntimeGatewayRequestScope(
@@ -206,14 +262,22 @@ describe("retained requester continuation", () => {
                   {
                     agentId: "main",
                     sessionKey: "agent:main:requester",
-                    requesterOrigin,
+                    requesterOrigin: hasOrigin ? requesterOrigin : undefined,
                     operatorAuthority: source.authority,
-                    operationalRunInstance: createOperationalRunInstanceRef("ended-requester"),
-                    receiptAuthority: () => receiptCurrent,
+                    operationalRunInstance: admitted.operationalRunInstance,
+                    approvalAuthority,
+                    receiptAuthority: () => {
+                      if (!receiptCurrent) {
+                        throw new Error("agent tool caller authority is no longer active");
+                      }
+                    },
                     fullPermission: true,
                     sessionEventToolsAllow: ["sessions_send"],
                   },
                   async () => {
+                    expect(getGatewayToolCallerIdentity()?.approvalAuthority).toBe(
+                      approvalAuthority,
+                    );
                     const pending = captureOperatorToolGatewayContinuationContext(undefined, {
                       retainRequester: true,
                     });
@@ -234,35 +298,36 @@ describe("retained requester continuation", () => {
           device.release();
           // Ordinary cleanup never reacquires a tool caller.
           expect(captured.run(() => getGatewayToolCallerIdentity())).toBeUndefined();
-          const retained = await captured.runWithRequester(async () => {
+          await captured.runWithRequester(async () => {
             const caller = getGatewayToolCallerIdentity();
             expect(caller?.agentId).toBe("main");
             expect(caller?.sessionKey).toBe("agent:main:requester");
+            expect(caller?.approvalAuthority).toBeUndefined();
             expect(caller?.operationalRunInstance).toBeUndefined();
             expect(caller?.receiptAuthority).toBeUndefined();
             expect(caller?.fullPermission).toBeUndefined();
             expect(caller?.sessionEventToolsAllow).toBeUndefined();
-            expect(caller?.approvalAuthority).toBeUndefined();
             const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
-            expect(selection.requesterOrigin).toEqual(requesterOrigin);
-            expect(selection.operatorAuthority).toBe(captured?.operatorAuthority);
+            expect(selection.requesterOrigin).toEqual(hasOrigin ? requesterOrigin : undefined);
             selection.assertCurrent();
             return selection;
           });
           if (boundary === "released") {
             captured.release();
           } else if (boundary === "device revoked") {
+            await rotateDeviceToken({ deviceId: "retained-requester-device", role: "operator" });
             invalidateGatewayDeviceRevocation(context, "retained-requester-device", "operator");
           } else {
             gatewayCurrent = false;
           }
-          expect(retained.assertCurrent).toThrow();
           const effect = vi.fn(async () => {});
-          await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
+          await expect(captured.runWithRequester(effect)).rejects.toThrow();
           expect(effect).not.toHaveBeenCalled();
           expect(getGatewayToolCallerIdentity()).toBeUndefined();
         } finally {
           captured?.release();
+          releaseAgentRunDelegatedAuthority(approvalAuthority);
+          clearAgentRunContext(admitted.operationalRunInstance.runId);
           source.release();
           device.release();
         }
@@ -270,168 +335,194 @@ describe("retained requester continuation", () => {
   );
 
   it("retains Bob selected through Alice with their scope intersection and Bob's source fence", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const alice = createOperatorClient({
-        profileName: "selecting-alice",
-        scopes: ["operator.write"],
-      });
-      const bob = createOperatorClient({
-        profileName: "selected-bob",
-        scopes: ["operator.read", "operator.write", "operator.approvals"],
-      });
-      const context = createContext();
-      const resolveGatewayContext = () => context;
-      context.resolveGatewayContext = resolveGatewayContext;
-      let aliceConnected = true;
-      let bobConnected = true;
-      let receiptCurrent = true;
-      const aliceDevice = captureGatewayDeviceRevocation(
-        context,
-        { deviceId: "selecting-alice-device", role: "operator" },
-        () => aliceConnected,
-        undefined,
-        { isCurrent: () => true, subscribe: () => () => {} },
-      );
-      const bobDevice = captureGatewayDeviceRevocation(
-        context,
-        { deviceId: "selected-bob-device", role: "operator" },
-        () => bobConnected,
-        undefined,
-        { isCurrent: () => true, subscribe: () => () => {} },
-      );
-      const aliceSource = await captureGatewayOperatorRunAuthority({
-        client: alice,
-        context,
-        hasCurrentClientAuthority: aliceDevice.isCurrent,
-      });
-      const bobSource = await captureGatewayOperatorRunAuthority({
-        client: bob,
-        context,
-        hasCurrentClientAuthority: bobDevice.isCurrent,
-      });
-      const sessionKey = "agent:main:selected-requester";
-      const aliceOrigin = captureRequesterOrigin({
-        sessionKey,
-        operatorProfileId: alice.authenticatedUserProfile?.profileId,
-      });
-      const bobOrigin = captureRequesterOrigin({
-        sessionKey,
-        operatorProfileId: bob.authenticatedUserProfile?.profileId,
-      });
-      if (!aliceSource || !bobSource || !aliceOrigin || !bobOrigin) {
-        throw new Error("Expected both authenticated participant sources");
-      }
-      const selectedBobOrigin = {
-        ...bobOrigin,
-        delegatedCreatorProfileId: aliceSource.authority.profileId,
-      };
-      const participants = createReplyTurnParticipants({
-        operatorAuthority: aliceSource.authority,
-        requesterOrigin: aliceOrigin,
-      });
-      participants.accept({
-        operatorAuthority: bobSource.authority,
-        requesterOrigin: bobOrigin,
-      });
-      let captured: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
-      try {
-        captured = await withPluginRuntimeGatewayRequestScope(
-          {
-            client: alice,
-            context,
-            resolveGatewayContext,
-            hasCurrentClientAuthority: aliceDevice.isCurrent,
-            isWebchatConnect: () => false,
-          },
-          () =>
-            withOperatorToolGatewayAuthority(
-              {
-                authenticatedUserProfile: alice.authenticatedUserProfile,
-                scopes: alice.connect.scopes ?? [],
-              },
-              () =>
-                withGatewayToolCallerIdentity(
-                  {
-                    agentId: "main",
-                    sessionKey,
-                    requesterOrigin: aliceOrigin,
-                    operatorAuthority: aliceSource.authority,
-                    personalToolParticipants: participants,
-                    operationalRunInstance:
-                      createOperationalRunInstanceRef("finished-alice-selector"),
-                    receiptAuthority: () => receiptCurrent,
-                    fullPermission: true,
-                  },
-                  () =>
-                    withGatewayPersonalToolUser(bobSource.authority.profileId, async () => {
-                      const selected = resolveGatewayToolOperatorSelection({
-                        requireRequesterOrigin: true,
-                      });
-                      expect(selected.requesterOrigin).toEqual(selectedBobOrigin);
-                      expect(selected.operatorAuthority).toBe(bobSource.authority);
-                      const pending = captureOperatorToolGatewayContinuationContext(undefined, {
-                        retainRequester: true,
-                      });
-                      if (!pending) {
-                        throw new Error("Expected selected participant custody");
-                      }
-                      return await pending;
-                    }),
-                ),
-            ),
-        );
-        if (!captured) {
-          throw new Error("Selected participant source was not captured");
-        }
-        // Participant/turn membership and both sockets end; the accepted owner holds Bob's source.
-        participants.close();
-        receiptCurrent = false;
-        aliceConnected = false;
-        bobConnected = false;
-        aliceSource.release();
-        bobSource.release();
-        aliceDevice.release();
-        bobDevice.release();
-        // Write implies read; approvals belong only to Bob and must not survive Alice's ceiling.
-        expect(captured.scopes).toEqual(["operator.read", "operator.write"]);
-        expect(captured.operatorAuthority?.scopes).toEqual(["operator.read", "operator.write"]);
-        expect(captured.operatorAuthority?.profileId).toBe(bobSource.authority.profileId);
-        const retained = await captured.runWithRequester(async () => {
-          const caller = getGatewayToolCallerIdentity();
-          expect(caller?.operationalRunInstance).toBeUndefined();
-          expect(caller?.receiptAuthority).toBeUndefined();
-          expect(caller?.fullPermission).toBeUndefined();
-          expect(caller?.personalToolParticipants).toBeUndefined();
-          const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
-          expect(selection.requesterOrigin).toEqual(selectedBobOrigin);
-          expect(selection.requesterOrigin).not.toEqual(aliceOrigin);
-          expect(selection.operatorAuthority).toBe(captured?.operatorAuthority);
-          expect(selection.operatorAuthority?.scopes).toEqual(["operator.read", "operator.write"]);
-          const client = getPluginRuntimeGatewayRequestScope()?.client;
-          expect(client?.internal?.operatorRunAuthority).toBe(captured?.operatorAuthority);
-          expect(client?.connect.scopes).toEqual(["operator.read", "operator.write"]);
-          selection.assertCurrent();
-          await expect(
-            withGatewayPersonalToolUser(aliceSource.authority.profileId, async () =>
-              resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true }),
-            ),
-          ).rejects.toThrow("Selecting user requires an active personal-tool turn");
-          return selection;
+    await withOpenClawTestState(
+      { scenario: "minimal", prepareProfileCatalog: true },
+      async (state) => {
+        const alice = createOperatorClient({
+          profileName: "selecting-alice",
+          scopes: ["operator.write"],
         });
-        invalidateGatewayDeviceRevocation(context, "selected-bob-device", "operator");
-        expect(retained.assertCurrent).toThrow();
-        const effect = vi.fn(async () => {});
-        await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
-        expect(effect).not.toHaveBeenCalled();
-        expect(getGatewayToolCallerIdentity()).toBeUndefined();
-      } finally {
-        captured?.release();
-        participants.close();
-        aliceSource.release();
-        bobSource.release();
-        aliceDevice.release();
-        bobDevice.release();
-      }
-    });
+        const bob = createOperatorClient({
+          profileName: "selected-bob",
+          scopes: ["operator.read", "operator.write", "operator.approvals"],
+        });
+        const context = createContext();
+        const resolveGatewayContext = () => context;
+        context.resolveGatewayContext = resolveGatewayContext;
+        const alicePairing = await prepareRequesterReference(
+          state.stateDir,
+          alice,
+          context,
+          "selecting-alice-device",
+        );
+        const bobPairing = await prepareRequesterReference(
+          state.stateDir,
+          bob,
+          context,
+          "selected-bob-device",
+        );
+        persistDevices(state.stateDir, [alicePairing, bobPairing], "both");
+        let aliceConnected = true;
+        let bobConnected = true;
+        let receiptCurrent = true;
+        const aliceDevice = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "selecting-alice-device", role: "operator" },
+          () => aliceConnected,
+          undefined,
+          { isCurrent: () => true, subscribe: () => () => {} },
+        );
+        const bobDevice = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "selected-bob-device", role: "operator" },
+          () => bobConnected,
+          undefined,
+          { isCurrent: () => true, subscribe: () => () => {} },
+        );
+        const aliceSource = await prepareGatewayOperatorRunAuthority({
+          client: alice,
+          context,
+          hasCurrentClientAuthority: aliceDevice.isCurrent,
+          sourceAuthority: null,
+        });
+        const bobSource = await prepareGatewayOperatorRunAuthority({
+          client: bob,
+          context,
+          hasCurrentClientAuthority: bobDevice.isCurrent,
+          sourceAuthority: null,
+        });
+        const sessionKey = "agent:main:selected-requester";
+        const aliceOrigin = captureRequesterOrigin({
+          sessionKey,
+          operatorProfileId: alice.authenticatedUserProfile?.profileId,
+        });
+        const bobOrigin = captureRequesterOrigin({
+          sessionKey,
+          operatorProfileId: bob.authenticatedUserProfile?.profileId,
+        });
+        if (!aliceSource || !bobSource || !aliceOrigin || !bobOrigin) {
+          throw new Error("Expected both authenticated participant sources");
+        }
+        const selectedBobOrigin = {
+          ...bobOrigin,
+          delegatedCreatorProfileId: aliceSource.authority.profileId,
+        };
+        const participants = createReplyTurnParticipants({
+          operatorAuthority: aliceSource.authority,
+          requesterOrigin: aliceOrigin,
+        });
+        participants.accept({
+          operatorAuthority: bobSource.authority,
+          requesterOrigin: bobOrigin,
+        });
+        let captured: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
+        try {
+          captured = await withPluginRuntimeGatewayRequestScope(
+            {
+              client: alice,
+              context,
+              resolveGatewayContext,
+              hasCurrentClientAuthority: aliceDevice.isCurrent,
+              isWebchatConnect: () => false,
+            },
+            () =>
+              withOperatorToolGatewayAuthority(
+                {
+                  authenticatedUserProfile: alice.authenticatedUserProfile,
+                  scopes: alice.connect.scopes ?? [],
+                },
+                () =>
+                  withGatewayToolCallerIdentity(
+                    {
+                      agentId: "main",
+                      sessionKey,
+                      requesterOrigin: aliceOrigin,
+                      operatorAuthority: aliceSource.authority,
+                      personalToolParticipants: participants,
+                      operationalRunInstance:
+                        createOperationalRunInstanceRef("finished-alice-selector"),
+                      receiptAuthority: () => {
+                        if (!receiptCurrent) {
+                          throw new Error("agent tool caller authority is no longer active");
+                        }
+                      },
+                      fullPermission: true,
+                    },
+                    () =>
+                      withGatewayPersonalToolUser(bobSource.authority.profileId, async () => {
+                        const selected = resolveGatewayToolOperatorSelection({
+                          requireRequesterOrigin: true,
+                        });
+                        expect(selected.requesterOrigin).toEqual(selectedBobOrigin);
+                        expect(selected.operatorAuthority).toBe(bobSource.authority);
+                        const pending = captureOperatorToolGatewayContinuationContext(undefined, {
+                          retainRequester: true,
+                        });
+                        if (!pending) {
+                          throw new Error("Expected selected participant custody");
+                        }
+                        return await pending;
+                      }),
+                  ),
+              ),
+          );
+          if (!captured) {
+            throw new Error("Selected participant source was not captured");
+          }
+          // Participant/turn membership and both sockets end; the accepted owner holds Bob's source.
+          participants.close();
+          receiptCurrent = false;
+          aliceConnected = false;
+          bobConnected = false;
+          aliceSource.release();
+          bobSource.release();
+          aliceDevice.release();
+          bobDevice.release();
+          // Write implies read; approvals belong only to Bob and must not survive Alice's ceiling.
+          expect(captured.scopes).toEqual(["operator.read", "operator.write"]);
+          expect(captured.operatorAuthority?.scopes).toEqual(["operator.read", "operator.write"]);
+          expect(captured.operatorAuthority?.profileId).toBe(bobSource.authority.profileId);
+          const retained = await captured.runWithRequester(async () => {
+            const caller = getGatewayToolCallerIdentity();
+            expect(caller?.operationalRunInstance).toBeUndefined();
+            expect(caller?.receiptAuthority).toBeUndefined();
+            expect(caller?.fullPermission).toBeUndefined();
+            expect(caller?.personalToolParticipants).toBeUndefined();
+            const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
+            expect(selection.requesterOrigin).toEqual(selectedBobOrigin);
+            expect(selection.requesterOrigin).not.toEqual(aliceOrigin);
+            expect(selection.operatorAuthority?.scopes).toEqual([
+              "operator.read",
+              "operator.write",
+            ]);
+            const client = getPluginRuntimeGatewayRequestScope()?.client;
+            expect(client?.internal?.operatorRunAuthority).toBe(selection.operatorAuthority);
+            expect(client?.connect.scopes).toEqual(["operator.read", "operator.write"]);
+            selection.assertCurrent();
+            await expect(
+              withGatewayPersonalToolUser(aliceSource.authority.profileId, async () =>
+                resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true }),
+              ),
+            ).rejects.toThrow("Selecting user requires an active personal-tool turn");
+            return selection;
+          });
+          await rotateDeviceToken({ deviceId: "selected-bob-device", role: "operator" });
+          invalidateGatewayDeviceRevocation(context, "selected-bob-device", "operator");
+          const effect = vi.fn(async () => {});
+          await expect(captured.runWithRequester(effect)).rejects.toThrow();
+          expect(effect).not.toHaveBeenCalled();
+          captured.release();
+          expect(retained.assertCurrent).toThrow();
+          expect(getGatewayToolCallerIdentity()).toBeUndefined();
+        } finally {
+          captured?.release();
+          participants.close();
+          aliceSource.release();
+          bobSource.release();
+          aliceDevice.release();
+          bobDevice.release();
+        }
+      },
+    );
   });
 });

@@ -1,9 +1,25 @@
 import fs from "node:fs";
+import path from "node:path";
 import {
   matchRootFileOpenFailure,
   openRootFileSync,
   readFileWindowFullySync,
 } from "@openclaw/fs-safe/advanced";
+
+const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
+  ".css",
+  ".html",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function isControlUiCompressibleAsset(filePath: string): boolean {
+  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
 
 export type ControlUiFileRead = {
   rootPath: string;

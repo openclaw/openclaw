@@ -47,7 +47,7 @@ scenario:
       prompt: |-
         Complete this restart-resilience task from this one user request. A Gateway replacement is expected halfway through. Do not ask me to send another message.
 
-        In the initial lifecycle, make one ordinary Code Mode exec, using this exact JavaScript (yield_control is already a built-in function; never search for or shadow it):
+        In the initial lifecycle, make one ordinary Code Mode exec with awaitResults: false. This is an intentional suspension checkpoint, not a required result to collect before the replacement. Use this exact JavaScript (yield_control is already built in; never search for or shadow it):
         const shell = (await catalog.search("exec")).find(tool => tool.toolName === "exec");
         await shell({command: "echo original-effect >> restart-original.txt"});
         const target = (await catalog.search("qa_restart_wait")).find(tool => tool.toolName === "qa_restart_wait");

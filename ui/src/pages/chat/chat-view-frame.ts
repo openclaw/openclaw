@@ -7,6 +7,7 @@ import type {
   SessionSuggestionResolution,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { openCommandPaletteWithAttachments } from "../../components/command-palette-contract.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type {
   ChatAttachment,
@@ -17,14 +18,13 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   buildPendingInputQueueItems,
-  dismissChatPendingInputs,
   getChatPendingInputs,
   isPendingInputDismissHidden,
+  mutateChatPendingInput,
 } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
@@ -36,7 +36,6 @@ import {
   createChatAttachmentDropHandlers,
   stagedAttachmentBytes,
 } from "./components/chat-attachments.ts";
-import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
@@ -45,6 +44,7 @@ import type { SidebarContent, SidebarOpenResult } from "./components/chat-sideba
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
+import type { WidgetCommentEditorScope } from "./components/widget-comment-intent.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -64,13 +64,13 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onDismissPendingInput"
+  | "onSteerNow"
   | "onFocusComposer"
   | "commentAttachments"
   | "commentsDisabled"
   | "onAddToChat"
   | "onCompanionSelection"
-  | "onOpenSession"
-  | "onSend"
+  | "onNewSessionSelection"
   | "onOpenSidebar"
 > &
   Omit<
@@ -90,6 +90,8 @@ export type ChatProps = Omit<
     onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
     onFooterElementRef?: (element: HTMLElement) => void | (() => void);
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
+    /** Presentation custody, not send authority. */
+    ownsComposer?: boolean;
     transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
@@ -103,11 +105,13 @@ export type ChatProps = Omit<
     historyState?: ChatState;
     /** Session access presentation for dismissing retired inputs; independent of model availability. */
     canDismissPendingInputs?: boolean;
+    canSteerNow?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
     readProviderReview?: () => ChatProviderReviewOwner | undefined;
     error: string | null;
+    errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
     inlineApproval?: ExecApprovalRequest | null;
@@ -123,6 +127,7 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
+    onDismissRunError?: () => void;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
@@ -146,6 +151,7 @@ export type ChatProps = Omit<
       resolution: SessionSuggestionResolution,
     ) => void;
     detailsEnabled?: boolean;
+    hideComposerSessionCards?: boolean;
   };
 
 // The view frame refreshes on each pane render and the chat-item cache keys the queue by
@@ -176,38 +182,39 @@ export function createChatViewFrame(
         ...pendingInputs.queuedInputs,
       ]
     : undefined;
-  const resolveCommentSource = (selection: ChatSelectionSource) =>
-    resolveChatCommentAnchor(props.transcript.messageElements?.elements.values() ?? [], selection)
-      ?.range;
+  const commentSourceBubbles = () => props.transcript.messageElements?.elements.values();
   const openSelectionComment = async (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
     stage: (attachment: ChatAttachment) => boolean,
     onCancel?: () => void,
     selectionContextOnly = false,
+    widget?: WidgetCommentEditorScope,
   ) => {
     const readSignal = props.readSignal;
     const sessionKey = props.sessionKey;
     const paneId = props.paneId;
-    const sourceRange = resolveCommentSource(selection);
+    const editorSignal =
+      widget && readSignal
+        ? AbortSignal.any([readSignal, widget.signal])
+        : (widget?.signal ?? readSignal);
     const current = () =>
-      !readSignal?.aborted && props.readSignal === readSignal && props.sessionKey === sessionKey;
+      !editorSignal?.aborted &&
+      props.readSignal === readSignal &&
+      props.sessionKey === sessionKey &&
+      (!widget || (props.canSend && !props.suggestionComposer && widget.current()));
     try {
       await showChatAnnotationEditor(
         {
           paneId,
           anchorRect,
-          sourceRange,
+          selectionAnchor: widget ? undefined : { selection, bubbles: commentSourceBubbles() },
           comment: "",
-          readSignal,
+          readSignal: editorSignal,
           onCancel,
           onSave: (comment): boolean => {
-            if (props.readSignal?.aborted) {
+            if (!current()) {
               return true;
-            }
-            if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-              showToast({ message: uploadsDisabledMessage() });
-              return false;
             }
             const attachment = createChatSelectionAttachment(
               { ...selection, comment, sessionKey: props.sessionKey },
@@ -228,7 +235,7 @@ export function createChatViewFrame(
       );
     } catch (error) {
       if (current()) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   };
@@ -236,7 +243,7 @@ export function createChatViewFrame(
   const historyState = props.historyState;
   const dismissPendingInput =
     props.connected && props.canDismissPendingInputs && historyState
-      ? (inputId: string) => void dismissChatPendingInputs(historyState, [inputId])
+      ? (inputId: string) => void mutateChatPendingInput(historyState, { kind: "dismiss", inputId })
       : undefined;
   const questionState = getTranscriptState(props.paneId);
   const openImage = props.onOpenImage
@@ -294,6 +301,10 @@ export function createChatViewFrame(
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
     onDiscardQueuedMessage: props.onQueueRemove,
     onDismissPendingInput: dismissPendingInput,
+    onSteerNow:
+      props.connected && props.canSteerNow && historyState
+        ? (runId: string) => void mutateChatPendingInput(historyState, { kind: "steer", runId })
+        : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>
@@ -306,11 +317,21 @@ export function createChatViewFrame(
               true,
             )
         : undefined,
+    onNewSessionSelection: (selection) => {
+      const attachment = createChatSelectionAttachment(
+        { ...selection, comment: "", sessionKey: props.sessionKey },
+        { attachmentLimits: props.attachmentLimits },
+        0,
+      );
+      if (attachment) {
+        openCommandPaletteWithAttachments([attachment]);
+      }
+    },
     commentAttachments: props.suggestionComposer ? undefined : props.attachments,
     commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
     onAddToChat:
-      props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
-        ? (selection, anchorRect) =>
+      props.canSend && !props.suggestionComposer
+        ? (selection, anchorRect, widget) =>
             void openSelectionComment(
               selection,
               anchorRect,
@@ -318,17 +339,22 @@ export function createChatViewFrame(
                 if (!props.onAttachmentsChange) {
                   return false;
                 }
-                props.onAttachmentsChange([
-                  ...(props.getAttachments?.() ?? props.attachments ?? []),
-                  attachment,
-                ]);
+                if (
+                  props.onAttachmentsChange([
+                    ...(props.getAttachments?.() ?? props.attachments ?? []),
+                    attachment,
+                  ]) === false
+                ) {
+                  return false;
+                }
                 focusComposer();
                 return true;
               },
-              focusComposer,
+              widget?.onCancel ?? focusComposer,
+              false,
+              widget,
             )
         : undefined,
-    onOpenSession: props.onSessionSelect,
     // Portaled menus can outlive a render; resolve focus from the current session owner.
     onFocusComposer: () => focusComposer(true),
   } satisfies Partial<ChatThreadProps>);
@@ -363,7 +389,7 @@ export function createChatViewFrame(
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,
-    resolveCommentSource,
+    commentSourceBubbles,
     threadProps,
     displayQueue,
     historyLoadState,

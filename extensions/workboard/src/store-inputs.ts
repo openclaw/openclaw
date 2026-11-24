@@ -4,9 +4,11 @@ import type {
   WorkboardDiagnostic,
   WorkboardEvent,
   WorkboardLaunchState,
+  WorkboardVerification,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
 } from "@openclaw/workboard-contract";
+import type { WorkboardOwnerSlot } from "./persistence-types.js";
 
 type WorkboardCardInput = {
   title?: unknown;
@@ -45,12 +47,14 @@ export type WorkboardOwnedCardPatch = WorkboardCardPatch & {
 };
 export type WorkboardUpdateCardOptions = {
   automationLaunch?: WorkboardLaunchState;
+  /** Replaces automation.verifications; built only by workboard_verify. */
+  automationVerifications?: WorkboardVerification[];
   allowMetadataDependencyLinks?: boolean;
   enforceStatusHolds?: boolean;
   event?: Omit<WorkboardEvent, "id" | "at">;
   eventAt?: number;
   expectedUpdatedAt?: number;
-  ownerSlot?: { ownerId: string; now: number };
+  ownerSlot?: WorkboardOwnerSlot;
   preserveProofId?: string;
   preserveNotificationId?: string;
 };
@@ -118,6 +122,15 @@ export type WorkboardCompleteInput = WorkboardMutationScope & {
   proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
+};
+export type WorkboardVerifyInput = {
+  scope?: unknown;
+  outcome?: unknown;
+  proofId?: unknown;
+  artifactId?: unknown;
+  runId?: unknown;
+  note?: unknown;
+  url?: unknown;
 };
 export type WorkboardBlockInput = WorkboardMutationScope & {
   reason?: unknown;
@@ -189,6 +202,8 @@ export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions 
 export type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
+  /** Host run id of the calling agent turn; refuses writes from a superseded attempt. */
+  runId?: unknown;
 };
 
 export type WorkboardDiagnosticsResult = {

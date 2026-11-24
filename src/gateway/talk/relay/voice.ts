@@ -2,11 +2,11 @@ import { releaseSessionSourceAuthorities } from "../../../config/sessions/sessio
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { withClientVoiceSessionSettlement } from "../../../talk/client-voice-session-lifecycle.js";
-import { captureClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
 import {
+  captureClientVoiceSessionSource,
   captureClientVoiceSessionWriter,
   type ClientVoiceSessionWriter,
-} from "../../../talk/client-voice-session-write.js";
+} from "../../../talk/client-voice-session-source.js";
 import {
   appendRelayVoiceTranscript,
   closeRelayVoiceSessionRecord,
@@ -17,6 +17,7 @@ import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../talk/voice-transcript.js";
 import { sleep } from "../../../utils/sleep.js";
+import { appendTalkClientTranscript } from "../client-transcript.js";
 import { drainingRelaySessions, type RelaySession } from "./state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
@@ -64,8 +65,7 @@ export function ensureRelayVoiceSession(session: RelaySession): Promise<boolean>
   try {
     const source = captureRelayVoiceSessionSource(session);
     if (session.voiceSessionCreated) {
-      source.assertCurrent();
-      return Promise.resolve(true);
+      return source.prepareCurrent().then(() => true, fail);
     }
     const { agentId, sessionKey } = session.sessionTarget;
     session.voiceSessionCreation ??= withClientVoiceSessionSettlement(
@@ -147,7 +147,7 @@ export function enqueueRelayVoiceTranscript(
           });
           try {
             await withRelayTranscriptRetries(() =>
-              appendRelayVoiceTranscript(
+              appendTalkClientTranscript(
                 {
                   agentId,
                   sessionKey,
@@ -157,9 +157,11 @@ export function enqueueRelayVoiceTranscript(
                   role,
                   text: normalizedText,
                   ...(session.capabilities?.handlesAgentConsult ? { providerOwned: true } : {}),
-                  ...(session.voiceConfig ? { config: session.voiceConfig } : {}),
+                  config: session.voiceConfig ?? session.context.getRuntimeConfig(),
                 },
+                session.context,
                 writer,
+                appendRelayVoiceTranscript,
               ),
             );
           } finally {

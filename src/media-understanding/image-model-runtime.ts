@@ -1,35 +1,17 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
-import {
-  applySecretRefHeaderSentinels,
-  getApiKeyForModelCore,
-  requireApiKey,
-} from "../agents/model-auth.js";
+import { requireApiKey } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "../agents/prepared-model-runtime.js";
-import { retainPreparedModelRuntimeSnapshotResources } from "../agents/prepared-model-runtime.resources.js";
-import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
-import { applyPreparedRuntimeAuthToModel } from "../agents/provider-request-config.js";
-import { protectPreparedProviderRuntimeAuth } from "../agents/provider-runtime-auth-protection.js";
-import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-plan/credential-scoped-model.js";
-import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runtime.js";
-import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
+import { acquirePreparedModelRuntimeSnapshotInvocation } from "../agents/prepared-model-runtime.resources.js";
+import { prepareModelWithCredentials } from "../agents/simple-completion-runtime.js";
 import type { Model } from "../llm/types.js";
-import {
-  attachProviderAuthAuthority,
-  getProviderAuthAuthority,
-} from "../plugins/provider-auth-authority.js";
-import {
-  attachModelProviderRuntimePluginHandle,
-  resolveProviderRuntimePluginHandle,
-} from "../plugins/provider-hook-runtime.js";
-import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import type { ImageDescriptionRequest } from "./types.js";
+import type { ImageDescriptionRequest } from "./provider-types.js";
 
 type ImageRuntimeParams = Omit<
   ImageDescriptionRequest,
@@ -37,11 +19,18 @@ type ImageRuntimeParams = Omit<
 >;
 
 type ImageRuntimeResources = AsyncDisposable & {
+  run: <T>(run: () => T) => T;
   assertResourcesOpen?: () => void;
 };
 
-function bindResolvedImageRuntime(params: ImageRuntimeParams, apiKey: string, model: Model) {
+function bindResolvedImageRuntime(
+  params: ImageRuntimeParams,
+  apiKey: string,
+  model: Model,
+  run: ImageRuntimeResources["run"],
+) {
   return {
+    run,
     runtimeValue: apiKey,
     model,
     cfg: params.cfg,
@@ -95,12 +84,17 @@ export async function resolveImageRuntime(
         manifestPlugins: suppliedSnapshot.metadataSnapshot,
       })
     : { provider: params.provider, model: params.model };
-  const suppliedClaim = suppliedSnapshot
-    ? retainPreparedModelRuntimeSnapshotResources(suppliedSnapshot)
-    : undefined;
-  const preparedRuntimeLease = suppliedSnapshot
+  const supplied = suppliedSnapshot
     ? {
         snapshot: suppliedSnapshot,
+        claim: acquirePreparedModelRuntimeSnapshotInvocation(suppliedSnapshot),
+      }
+    : undefined;
+  const suppliedClaim = supplied?.claim;
+  const preparedRuntimeLease = supplied
+    ? {
+        snapshot: supplied.snapshot,
+        run: <T>(run: () => T): T => supplied.claim.run(run),
         async [Symbol.asyncDispose]() {
           await suppliedClaim?.release();
         },
@@ -133,7 +127,12 @@ export async function resolveImageRuntime(
         },
       );
   // The operation owns release before setup can leave asynchronous cleanup behind.
+  const runPrepared = <T>(run: () => T): T =>
+    preparedRuntimeLease.run(() =>
+      withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, run),
+    );
   onAcquired({
+    run: runPrepared,
     [Symbol.asyncDispose]: () => preparedRuntimeLease[Symbol.asyncDispose](),
     ...(suppliedClaim ? { assertResourcesOpen: suppliedClaim.assertOpen } : {}),
   });
@@ -162,7 +161,7 @@ export async function resolveImageRuntime(
     ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
     ...authProfileOptions,
   };
-  return await withPluginRuntimeGenerationScope(preparedRuntime, async () => {
+  return await runPrepared(async () => {
     const resolved = await resolveModelAsync(
       resolvedRef.provider,
       resolvedRef.model,
@@ -179,110 +178,44 @@ export async function resolveImageRuntime(
       requestedProvider: params.provider,
       requestedModel: params.model,
     });
-    const { authStorage, modelRegistry } = resolved;
-    const modelRuntime = getModelRegistryRuntime(modelRegistry);
-    const bindPreparedModel = (candidate: Model): Model => {
-      const requestModel = applySecretRefHeaderSentinels(candidate, preparedParams.cfg);
-      const providerRuntimeHandle = resolveProviderRuntimePluginHandle({
-        provider: requestModel.provider,
-        modelId: requestModel.id,
-        config: preparedParams.cfg,
-        workspaceDir: preparedParams.workspaceDir,
-        env: process.env,
-        pluginMetadataSnapshot: preparedRuntime.metadataSnapshot,
-      });
-      return bindModelLlmRuntime(
-        attachModelProviderRuntimePluginHandle(requestModel, providerRuntimeHandle),
-        modelRuntime.llmRuntime,
-      );
-    };
-    const apiKeyInfo = await getApiKeyForModelCore({
-      model,
+    // A model can have several credential routes, such as the OpenAI Platform API and ChatGPT.
+    // Share credential selection without importing sessionless-completion admission policy.
+    const prepared = await prepareModelWithCredentials({
       cfg: preparedParams.cfg,
+      ...(preparedParams.agentId ? { agentId: preparedParams.agentId } : {}),
+      provider: model.provider,
+      modelId: model.id,
+      modelIdSource: "selected",
       agentDir: preparedParams.agentDir,
-      ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
       profileId: preparedParams.profile,
       preferredProfile: preparedParams.preferredProfile,
-      store: preparedParams.authStore,
-      secretSentinels: true,
+      authStore: preparedParams.authStore,
+      // Account-scoped limits must come from the account the selected credential belongs to.
+      credentialScopedModelMetadata: true,
+      // Bedrock's runtime client owns AWS credential-chain resolution.
+      allowMissingApiKeyModes: ["aws-sdk"],
+      allowBundledStaticCatalogFallback: true,
+      skipAgentDiscovery: true,
+      transport: "provider-stream",
+      preparedModelRuntime: preparedRuntime,
+      ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
+      signal: preparedParams.signal,
     });
     preparedParams.signal?.throwIfAborted();
-    if (
-      providerUsesCredentialScopedModelMetadata({
-        provider: model.provider,
-        modelId: model.id,
-        config: preparedParams.cfg,
-        agentDir: preparedParams.agentDir,
-        workspaceDir: preparedParams.workspaceDir,
-      })
-    ) {
-      const authProfileMode = resolveProviderModelMaterializationAuthMode(apiKeyInfo.mode);
-      const authoritative = await resolveModelAsync(
-        model.provider,
-        model.id,
-        preparedParams.agentDir,
-        preparedParams.cfg,
-        {
-          abortSignal: preparedParams.signal,
-          modelIdSource: "selected",
-          authStorage,
-          modelRegistry,
-          skipAgentDiscovery: true,
-          allowBundledStaticCatalogFallback: true,
-          preparedModelRuntime: preparedParams.preparedModelRuntime as PreparedModelRuntimeSnapshot,
-          ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
-          ...(apiKeyInfo.profileId
-            ? { authProfileId: apiKeyInfo.profileId }
-            : authProfileMode
-              ? { authProfileMode }
-              : {}),
-        },
-      );
-      preparedParams.signal?.throwIfAborted();
-      model = requireImageCapableModel({
-        model: authoritative.model,
-        resolvedProvider: model.provider,
-        resolvedModel: model.id,
-        requestedProvider: preparedParams.provider,
-        requestedModel: preparedParams.model,
-      });
+    if (!("model" in prepared)) {
+      throw new Error(prepared.error);
     }
-    // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
-    // empty sentinel out of auth storage and pass it through to the stream.
-    if (
-      !apiKeyInfo.apiKey?.trim() &&
-      apiKeyInfo.mode === "aws-sdk" &&
-      model.api === "bedrock-converse-stream"
-    ) {
-      return bindResolvedImageRuntime(preparedParams, "", bindPreparedModel(model));
-    }
-    model = attachProviderAuthAuthority(model, getProviderAuthAuthority(apiKeyInfo));
-    let apiKey = requireApiKey(apiKeyInfo, model.provider);
-    const runtimeAuth = await prepareProviderRuntimeAuth({
-      provider: model.provider,
-      config: preparedParams.cfg,
-      workspaceDir: preparedParams.workspaceDir,
-      env: process.env,
-      context: {
-        config: preparedParams.cfg,
-        workspaceDir: preparedParams.workspaceDir,
-        env: process.env,
-        provider: model.provider,
-        modelId: model.id,
-        model,
-        apiKey,
-        authMode: apiKeyInfo.mode,
-        profileId: apiKeyInfo.profileId,
-      },
+    model = requireImageCapableModel({
+      model: prepared.model,
+      resolvedProvider: model.provider,
+      resolvedModel: model.id,
+      requestedProvider: preparedParams.provider,
+      requestedModel: preparedParams.model,
     });
-    preparedParams.signal?.throwIfAborted();
-    const preparedAuth = protectPreparedProviderRuntimeAuth({
-      provider: model.provider,
-      preparedAuth: runtimeAuth,
-    });
-    apiKey = preparedAuth?.apiKey?.trim() || apiKey;
-    model = applyPreparedRuntimeAuthToModel(model, preparedAuth);
-    authStorage.setRuntimeApiKey(model.provider, apiKey);
-    return bindResolvedImageRuntime(preparedParams, apiKey, bindPreparedModel(model));
+    const apiKey =
+      prepared.auth.mode === "aws-sdk" && model.api === "bedrock-converse-stream"
+        ? (prepared.auth.apiKey ?? "")
+        : requireApiKey(prepared.auth, model.provider);
+    return bindResolvedImageRuntime(preparedParams, apiKey, model, runPrepared);
   });
 }
