@@ -540,21 +540,30 @@ export function registerSessionsSendRequesterRetirementTests({
         "The first accepted result must retain its completion owner",
       ).toBeDefined();
       await drainRootWork();
-      expect(
+      const readRequesterCalls = () =>
         calls.filter(
           (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-        ),
-      ).toHaveLength(0);
+        );
+      const firstRunId = children[firstIndex]!.runId;
+      const secondRunId = children[1 - firstIndex]!.runId;
+      expect(readRequesterCalls()).toHaveLength(1);
+      expect(readRequesterCalls()[0]?.params?.message).toContain(
+        `Watched child result ${firstRunId}`,
+      );
+      expect(readRequesterCalls()[0]?.params?.message).not.toContain(
+        `Watched child result ${secondRunId}`,
+      );
       childrenPending[1 - firstIndex]!.resolve();
       // The wait receipt must publish completion before its newly admitted roots can be drained.
       await withinTest(resultsDelivered.promise, signal);
       await settleSessionWork();
-      const requesterCalls = calls.filter(
-        (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
+      const requesterCalls = readRequesterCalls();
+      expect(requesterCalls).toHaveLength(2);
+      expect(requesterCalls[1]?.params?.message).toContain(`Watched child result ${secondRunId}`);
+      expect(requesterCalls[1]?.params?.message).not.toContain(
+        `Watched child result ${firstRunId}`,
       );
-      expect(requesterCalls).toHaveLength(1);
       for (const { runId } of children) {
-        expect(requesterCalls[0]?.params?.message).toContain(`Watched child result ${runId}`);
         expect(getSubagentRunByRunId(runId)?.delivery?.status).toBe("delivered");
         expect(getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
         emitAgentEvent({
@@ -564,11 +573,7 @@ export function registerSessionsSendRequesterRetirementTests({
         });
       }
       await settleSessionWork();
-      expect(
-        calls.filter(
-          (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-        ),
-      ).toHaveLength(1);
+      expect(readRequesterCalls()).toHaveLength(2);
     } finally {
       stopRetiringTool();
       admission.close();

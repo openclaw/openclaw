@@ -791,9 +791,11 @@ describe("sessions_send child coordination", () => {
           (call.params?.inputProvenance as { sourceTool?: string })?.sourceTool ===
             "subagent_settle",
       );
-      expect(batches).toHaveLength(1);
-      expect(batches[0]?.params?.message).toEqual(expect.stringContaining("FOLLOWUP-1"));
-      expect(batches[0]?.params?.message).toEqual(expect.stringContaining("FOLLOWUP-2"));
+      expect(batches).toHaveLength(2);
+      expect(batches[0]?.params?.message).toContain("FOLLOWUP-1");
+      expect(batches[0]?.params?.message).not.toContain("FOLLOWUP-2");
+      expect(batches[1]?.params?.message).toContain("FOLLOWUP-2");
+      expect(batches[1]?.params?.message).not.toContain("FOLLOWUP-1");
     } finally {
       releasePreparation.resolve();
       replies.forEach((reply) => reply.resolve());
