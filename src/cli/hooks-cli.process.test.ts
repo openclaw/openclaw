@@ -455,8 +455,9 @@ describe("hooks CLI process lifecycle", () => {
           relay.generation,
           "--event",
           "post_tool_use",
+          // Includes cold TypeScript process startup.
           "--timeout",
-          "5000",
+          "30000",
         ],
         completion: "exit",
         label: "hooks relay explicit state database",

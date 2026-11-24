@@ -233,13 +233,15 @@ function formatRelayCliError(prefix: string, error: unknown): string {
 
 function createNativeHookRelayDeadline(timeoutMs: number) {
   const controller = new AbortController();
+  // Codex's hook timer already counts process startup; use Node's process-relative clock.
+  const expiresAtMs = timeoutMs;
   const timer = setSafeTimeout(
     () => controller.abort(new NativeHookRelayDeadlineError(timeoutMs)),
-    timeoutMs,
+    expiresAtMs - performance.now(),
   );
   timer.unref?.();
   return {
-    expiresAtMs: performance.now() + timeoutMs,
+    expiresAtMs,
     signal: controller.signal,
     timeoutMs,
     dispose: () => clearTimeout(timer),

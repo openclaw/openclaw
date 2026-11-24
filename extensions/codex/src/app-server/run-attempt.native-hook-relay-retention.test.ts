@@ -673,6 +673,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         }
         const startRequest = harness.requests.find((request) => request.method === "thread/start");
         relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+        const credentialRemovalsAfterDelivery = () => {
+          const methods = harness.requests.map(({ method }) => method);
+          return methods
+            .slice(methods.lastIndexOf("fs/writeFile") + 1)
+            .filter((method) => method === "fs/remove");
+        };
         if (remote) {
           expect(JSON.stringify(startRequest?.params)).toContain("--remote-credential");
           expect(JSON.stringify(startRequest?.params)).not.toContain("--state-db");
@@ -774,7 +780,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
         ).toBeDefined();
         if (remote) {
-          expect(harness.requests.some(({ method }) => method === "fs/remove")).toBe(false);
+          expect(credentialRemovalsAfterDelivery()).toHaveLength(0);
         }
         fixture.closeHost();
         fixture.closeAdmission();
@@ -806,7 +812,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         await harness.notify(childTerminal);
         await nativeHookRelayUnregisterQueue.flush();
         if (remote) {
-          expect(harness.requests.filter(({ method }) => method === "fs/remove")).toHaveLength(1);
+          expect(credentialRemovalsAfterDelivery()).toHaveLength(1);
         }
         expect(
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),

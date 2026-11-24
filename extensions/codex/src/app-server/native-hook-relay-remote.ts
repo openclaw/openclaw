@@ -58,23 +58,34 @@ export function createCodexNativeHookRemoteCredential(params: {
           url: `${params.config.url.replace(/\/$/, "")}/${encodeURIComponent(params.relay.relayId)}`,
           token,
         };
+        const requestOptions = {
+          timeoutMs: params.timeoutMs,
+          signal: params.signal,
+          assertCurrent: params.assertCurrent,
+          withCurrent: async (write: () => void) => {
+            await params.assertCurrentAsync?.();
+            params.assertCurrent();
+            if (disposed) {
+              throw new Error("Native hook relay credential is closed");
+            }
+            write();
+          },
+        };
         try {
+          // The stable filename is reused by warm turns. Clear an existing entry before
+          // writing: the app-server write follows links and does not offer exclusive create.
+          await params.client.request(
+            "fs/remove",
+            { path: credentialPath, force: true, recursive: false },
+            requestOptions,
+          );
           await params.client.request(
             "fs/writeFile",
             {
               path: credentialPath,
               dataBase64: Buffer.from(JSON.stringify(credential)).toString("base64"),
             },
-            {
-              timeoutMs: params.timeoutMs,
-              signal: params.signal,
-              assertCurrent: params.assertCurrent,
-              withCurrent: async (write) => {
-                await params.assertCurrentAsync?.();
-                params.assertCurrent();
-                write();
-              },
-            },
+            requestOptions,
           );
         } catch {
           // Remote errors may echo request parameters. Never surface the capability.

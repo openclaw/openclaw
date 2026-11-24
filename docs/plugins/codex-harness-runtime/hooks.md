@@ -109,11 +109,19 @@ appends the relay ID. OCE generates this configuration for dedicated Codex Agent
 The deployment must supply a private directory outside the model workspace and
 file-transfer roots, and trusted CA certificates for hook processes. Before
 starting a turn, the adapter writes a credential through the authenticated Codex
-app-server filesystem API. Hook commands contain only that file's path. The
+app-server filesystem API after clearing any existing entry at that filename.
+Hook commands contain only that file's path. The
 callback accepts the current relay token and exact generation, then applies the
 same event policy and live-owner checks as the local bridge. It grants no Gateway
 operator access. Invalid explicit remote configuration or delivery failure stops
-the turn; callbacks never fall back to operator RPC or local SQLite.
+the turn; callbacks never fall back to operator RPC or local SQLite. For remote
+pre- and post-tool-use callbacks the Gateway requires a tool use ID, accepts one
+callback per event and ID, and records the HTTP outcome without logging the
+credential or callback payload.
+
+Hook commands count their relay deadline from process start, leaving time to
+return the unavailable-relay response before Codex's own timeout. If the
+process never reaches OpenClaw code, it cannot return that response.
 
 The credential path stays stable for a relay generation so warm and incognito
 threads can reuse their hook commands. Each registration writes a new token;

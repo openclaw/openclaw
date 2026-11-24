@@ -271,6 +271,8 @@ export type NativeHookRelayBridgeRegistration = {
   cancelStartup: () => void;
   closing?: Promise<void>;
   remoteEnabled?: boolean;
+  /** Tool events admitted through the remote capability for this bridge generation. */
+  remoteToolUses?: Set<string>;
 };
 
 export type NativeHookRelaySharedState = {

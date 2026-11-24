@@ -31,6 +31,7 @@ import {
   isJsonObject,
   normalizePositiveInteger,
   readNonEmptyString,
+  readOptionalNonEmptyString,
 } from "./native-hook-relay-utils.js";
 
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
@@ -318,6 +319,19 @@ export async function handleNativeHookRelayBridgeRequest(
       fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       return;
     }
+    if (auth.remote && (payload.event === "pre_tool_use" || payload.event === "post_tool_use")) {
+      // Accept each remote Codex tool event once, before starting asynchronous policy work.
+      const toolUseId = isJsonObject(payload.rawPayload)
+        ? readOptionalNonEmptyString(payload.rawPayload.tool_use_id)
+        : undefined;
+      const accepted = (auth.bridge.remoteToolUses ??= new Set());
+      const key = `${payload.event}:${toolUseId}`;
+      if (!toolUseId || accepted.has(key)) {
+        fail(409, "Native hook callback missing a tool use ID or already received");
+        return;
+      }
+      accepted.add(key);
+    }
     const result = await auth.invokeRelay(
       { ...payload, requireGeneration: true },
       requestAbort.signal,
@@ -337,6 +351,17 @@ export async function handleNativeHookRelayBridgeRequest(
     );
   } finally {
     requestAbort.cleanup();
+    if (auth.remote) {
+      const fields = {
+        relayId: auth.relayId,
+        status: requestAbort.signal.aborted ? "aborted" : res.statusCode,
+      };
+      if (fields.status === 200) {
+        log.info("native hook remote callback", { consoleMessage: false, ...fields });
+      } else {
+        log.warn("native hook remote callback refused", fields);
+      }
+    }
   }
 }
 

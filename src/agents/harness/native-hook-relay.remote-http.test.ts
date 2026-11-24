@@ -55,7 +55,12 @@ describe("dedicated native hook callback", () => {
         relayId: relay.relayId,
         generation: relay.generation,
         event: "pre_tool_use",
-        rawPayload: { hook_event_name: "PreToolUse", tool_name: "synthetic_probe", tool_input: {} },
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "synthetic_probe",
+          tool_use_id: "synthetic-tool-use",
+          tool_input: {},
+        },
       };
       const post = (token: string, patch = {}, suffix = relay.relayId, method = "POST") =>
         fetch(`http://127.0.0.1:${claim.port}/__openclaw__/native-hook/${suffix}`, {
@@ -70,6 +75,9 @@ describe("dedicated native hook callback", () => {
       const accepted = await post(token);
       expect(accepted.status).toBe(200);
       expect(await accepted.json()).toMatchObject({ ok: true, result: { exitCode: 0 } });
+      expect((await post(token)).status).toBe(409);
+      const { tool_use_id: _toolUseId, ...withoutToolUseId } = payload.rawPayload;
+      expect((await post(token, { rawPayload: withoutToolUseId })).status).toBe(409);
       // Transport authentication grants access to policy evaluation, not permission to execute.
       const beforeToolCall = vi.fn(async () => ({
         block: true,

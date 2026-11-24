@@ -12,6 +12,8 @@ type NativeHookRelayCliTestDeps = {
   stderr?: NodeJS.WritableStream;
   invokeBridge?: typeof bridge.invokeNativeHookRelayBridge;
   callGateway?: typeof import("../gateway/call.js").callGateway;
+  /** How long the simulated hook process has been running when the relay starts. */
+  processAgeMs?: number;
 };
 
 async function withRelayTestDeps(
@@ -42,6 +44,20 @@ async function withRelayTestDeps(
         restore.push(() => Object.defineProperty(process, key, descriptor));
       }
     }
+    // The relay deadline counts from process start (the performance.now() origin),
+    // and the test runner is not a fresh hook process: move the origin to the call.
+    // Start after test-only dependency setup, preserving fake timers and clock spies.
+    const clock = Object.getOwnPropertyDescriptor(performance, "now");
+    const now = performance.now.bind(performance);
+    const origin = now() - (deps.processAgeMs ?? 0);
+    Object.defineProperty(performance, "now", { configurable: true, value: () => now() - origin });
+    restore.push(() => {
+      if (clock) {
+        Object.defineProperty(performance, "now", clock);
+      } else {
+        Reflect.deleteProperty(performance, "now");
+      }
+    });
     return await run();
   } finally {
     for (const cleanup of restore.toReversed()) {

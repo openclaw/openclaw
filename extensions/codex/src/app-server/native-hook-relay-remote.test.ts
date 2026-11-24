@@ -30,7 +30,11 @@ describe("remote native hook credential projection", () => {
     const f = fixture();
     await Promise.all([f.credential.prepare(), f.credential.prepare()]);
     expect(f.enableRemoteCallback).toHaveBeenCalledOnce();
-    const write = f.request.mock.calls[0];
+    expect(f.request.mock.calls[0]?.slice(0, 2)).toEqual([
+      "fs/remove",
+      { path: f.credential.path, force: true, recursive: false },
+    ]);
+    const write = f.request.mock.calls[1];
     expect(write?.[0]).toBe("fs/writeFile");
     expect(write?.[1]).toMatchObject({ path: f.credential.path });
     const payload = write?.[1] as { dataBase64: string };
@@ -40,7 +44,7 @@ describe("remote native hook credential projection", () => {
     });
     expect(f.credential.path).not.toContain("synthetic-relay-capability");
     await Promise.all([f.credential.dispose(), f.credential.dispose()]);
-    expect(f.request).toHaveBeenCalledTimes(2);
+    expect(f.request).toHaveBeenCalledTimes(3);
     expect(f.request).toHaveBeenLastCalledWith(
       "fs/remove",
       {
@@ -64,7 +68,9 @@ describe("remote native hook credential projection", () => {
     await replacement.prepare();
     await f.credential.dispose();
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "fs/remove",
       "fs/writeFile",
+      "fs/remove",
       "fs/writeFile",
     ]);
     const replacementWrite = f.request.mock.calls.at(-1)?.[1] as { dataBase64: string };
@@ -79,7 +85,7 @@ describe("remote native hook credential projection", () => {
     const f = fixture();
     const entered = Promise.withResolvers<void>();
     const writing = Promise.withResolvers<JsonObject>();
-    f.request.mockImplementationOnce(() => {
+    f.request.mockResolvedValueOnce({}).mockImplementationOnce(() => {
       entered.resolve();
       return writing.promise;
     });
@@ -87,11 +93,15 @@ describe("remote native hook credential projection", () => {
     const failed = expect(preparation).rejects.toThrow("closed during delivery");
     await entered.promise;
     const removal = f.credential.dispose();
-    expect(f.request).toHaveBeenCalledTimes(1);
+    expect(f.request).toHaveBeenCalledTimes(2);
     writing.resolve({});
     await failed;
     await removal;
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual(["fs/writeFile", "fs/remove"]);
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "fs/remove",
+      "fs/writeFile",
+      "fs/remove",
+    ]);
   });
 
   it("finishes an old removal before publishing its replacement at the stable path", async () => {
@@ -107,11 +117,17 @@ describe("remote native hook credential projection", () => {
     await entered.promise;
     const replacement = createCodexNativeHookRemoteCredential(f);
     const replacementWrite = replacement.prepare();
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual(["fs/writeFile", "fs/remove"]);
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "fs/remove",
+      "fs/writeFile",
+      "fs/remove",
+    ]);
     removing.resolve({});
     await Promise.all([oldRemoval, replacementWrite]);
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "fs/remove",
       "fs/writeFile",
+      "fs/remove",
       "fs/remove",
       "fs/writeFile",
     ]);
@@ -126,7 +142,9 @@ describe("remote native hook credential projection", () => {
     const replacement = createCodexNativeHookRemoteCredential(f);
     await expect(replacement.prepare()).resolves.toBeUndefined();
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "fs/remove",
       "fs/writeFile",
+      "fs/remove",
       "fs/remove",
       "fs/writeFile",
     ]);
@@ -135,12 +153,26 @@ describe("remote native hook credential projection", () => {
 
   it("redacts a remote write error and removes a possibly delivered credential", async () => {
     const f = fixture();
-    f.request.mockRejectedValueOnce(new Error("synthetic-relay-capability echoed by server"));
+    f.request
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error("synthetic-relay-capability echoed by server"));
     await expect(f.credential.prepare()).rejects.toThrow(
       /^Could not deliver the native hook relay credential to Codex$/,
     );
     await f.credential.dispose();
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual(["fs/writeFile", "fs/remove"]);
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "fs/remove",
+      "fs/writeFile",
+      "fs/remove",
+    ]);
+  });
+
+  it("does not publish the credential if clearing the remote entry fails", async () => {
+    const f = fixture();
+    f.request.mockRejectedValueOnce(new Error("cannot clear credential path"));
+    await expect(f.credential.prepare()).rejects.toThrow("Could not deliver");
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual(["fs/remove"]);
+    await f.credential.dispose();
   });
 
   it("does not deliver after authority is revoked", async () => {
