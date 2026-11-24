@@ -1,4 +1,13 @@
-import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
+import {
+  Loading,
+  Show,
+  lazy,
+  createDeferred,
+  createMemo,
+  createSignal,
+  onSettled,
+  useContext,
+} from "solid-js";
 import { routeIdFromPath } from "../../../app-route-paths.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -60,7 +69,7 @@ import {
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { resolveTranscriptAvatarPlacement } from "./chat-transcript-identity.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
-import type { TranscriptHeader } from "./chat-transcript-session.ts";
+import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { WIDGET_COMMENT_INTENT, type WidgetCommentIntent } from "./widget-comment-intent.ts";
 import "../../../styles/chat/selection-annotations.css";
@@ -314,8 +323,12 @@ function ChatThreadContent(
   );
   const splitColdRows =
     !input.props.restoring && !input.props.initialSubmission && splitChatConstruction;
-  const started = splitColdRows ? performance.now() : 0;
-  const current = createMemo(() => {
+  const current = createMemo<{
+    session: ChatTranscriptSession;
+    projection: ReturnType<typeof projectChatTranscript>;
+    rowAdmission: true | Promise<true> | undefined;
+  }>((previous) => {
+    const started = splitColdRows && !previous?.rowAdmission ? performance.now() : 0;
     const searchState = search().read();
     const { session } = presentation();
     const projection = projectChatTranscript(
@@ -332,19 +345,22 @@ function ChatThreadContent(
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
       );
     }
-    return { session, projection };
+    // Empty startup projections must not consume the first-row split. Retain
+    // its receipt across updates so a pending yield mounts the latest rows once.
+    const rowAdmission =
+      previous?.rowAdmission ??
+      (!splitColdRows
+        ? true
+        : !projection.hasRows
+          ? undefined
+          : performance.now() - started <= 15
+            ? true
+            : yieldChatTask().then(() => true as const));
+    return { session, projection, rowAdmission };
   });
-  // Sample once before choosing the first row frame; cheap preparations need no placeholder.
-  if (splitColdRows) {
-    current();
-  }
-  const [renderReady, setRenderReady] = createSignal(
-    !splitColdRows || performance.now() - started <= 15,
-  );
-  onSettled(() => {
-    if (!renderReady()) {
-      void yieldChatTask().then(() => setRenderReady(true));
-    }
+  // Only row admission may lag; history and pane chrome remain live while it yields.
+  const renderReady = createDeferred(() => current().rowAdmission ?? false, {
+    loadingValue: false,
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isLoading = createMemo(() => current().projection.isLoading);
@@ -381,13 +397,6 @@ function ChatThreadContent(
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
-    if (!renderReady()) {
-      return (
-        <div class="chat-thread-inner">
-          {input.props.selectedSession?.hasMessages === true && <ChatConversationLoading route />}
-        </div>
-      );
-    }
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
     if (routeLoading() && mobile()) {
@@ -417,6 +426,13 @@ function ChatThreadContent(
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
           ) : undefined}
+        </div>
+      );
+    }
+    if (current().projection.hasRows && !renderReady()) {
+      return (
+        <div class="chat-thread-inner">
+          {input.props.selectedSession?.hasMessages === true && <ChatConversationLoading route />}
         </div>
       );
     }

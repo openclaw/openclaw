@@ -48,7 +48,7 @@ type SourceCandidates = {
 };
 type PreviewCache = {
   text: string;
-  links: string[];
+  links: string[] | undefined;
   inputs: unknown[];
   previews: ChatSourcePreview[];
 };
@@ -143,7 +143,7 @@ function sourceExcerpt(value: unknown, name: WebToolName): string | undefined {
 function readSourceCandidates(
   card: ToolCard,
   name: WebToolName,
-  cited: ReadonlySet<string>,
+  readCited: () => ReadonlySet<string>,
 ): Array<{ candidate: SourceCandidate; keys: string[] }> {
   const payload =
     card.details !== undefined
@@ -166,7 +166,7 @@ function readSourceCandidates(
     excerptField?: string,
     keys = [sourceKey(url)],
   ) => {
-    if (!keys.some((key) => cited.has(key))) {
+    if (!keys.some((key) => readCited().has(key))) {
       return [];
     }
     return [
@@ -227,21 +227,6 @@ export function extractChatSourcePreviews(params: {
     return [];
   }
   const cached = previewsByAnswer.get(answer);
-  const links =
-    cached?.text === answerText
-      ? cached.links
-      : markdownTokens(answerText).flatMap((token) =>
-          (token.children ?? []).flatMap((child) => {
-            const url = child.type === "link_open" ? sourceUrl(child.attrGet("href")) : null;
-            return url ? [sourceKey(url)] : [];
-          }),
-        );
-  if (cached?.text !== answerText) {
-    previewsByAnswer.set(answer, { text: answerText, links, inputs: [], previews: [] });
-  }
-  if (links.length === 0) {
-    return [];
-  }
   // Message and tool-card owners publish immutable snapshots; identity is enough.
   const basePath = params.basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0];
   const inputs: unknown[] = [
@@ -280,7 +265,19 @@ export function extractChatSourcePreviews(params: {
   ) {
     return cached.previews;
   }
-  const cited = new Set(links);
+  let links = cached?.text === answerText ? cached.links : undefined;
+  let cited: Set<string> | undefined;
+  // Most answers have no web source. Parse their citations only after a valid
+  // source candidate exists, retaining the same Markdown and provenance rules.
+  const readCited = () => {
+    links ??= markdownTokens(answerText).flatMap((token) =>
+      (token.children ?? []).flatMap((child) => {
+        const url = child.type === "link_open" ? sourceUrl(child.attrGet("href")) : null;
+        return url ? [sourceKey(url)] : [];
+      }),
+    );
+    return (cited ??= new Set(links));
+  };
   const sources = new Map<string, SourceCandidates>();
   const redirects = new Map<string, string>();
   const callNames = new Map<string, string>();
@@ -329,7 +326,7 @@ export function extractChatSourcePreviews(params: {
       if (!name || card.name !== name || (envelopeName && envelopeName !== name)) {
         continue;
       }
-      for (const { candidate, keys } of readSourceCandidates(card, name, cited)) {
+      for (const { candidate, keys } of readSourceCandidates(card, name, readCited)) {
         const canonicalKey = sourceKey(candidate.url);
         const candidates: SourceCandidates = sources.get(canonicalKey) ?? { source: candidate };
         if (name === "web_fetch") {
@@ -340,7 +337,7 @@ export function extractChatSourcePreviews(params: {
             .find((search) => search !== undefined);
           // Track observed destinations so later refreshes apply even when only
           // the original URL was cited. A successful final URL ends its old redirect.
-          cited.add(canonicalKey);
+          readCited().add(canonicalKey);
           for (const key of keys) {
             if (key !== canonicalKey) {
               redirects.set(key, canonicalKey);
@@ -362,7 +359,7 @@ export function extractChatSourcePreviews(params: {
     parseGitHubLinkTarget(href) !== null ||
     parseLocalMarkdownSessionUrl(href, { basePath, publicOrigin: params.sessionPublicOrigin }) !==
       null;
-  for (const link of links) {
+  for (const link of links ?? []) {
     if (hasDedicatedCard(link)) {
       continue;
     }

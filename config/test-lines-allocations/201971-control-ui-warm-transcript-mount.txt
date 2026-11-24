@@ -4,4 +4,6 @@
 # across desktop/mobile warm reloads through the existing browser fixture.
 # Verify asset checks use the actual checkout base while merge-aware checks
 # retain the planning base when main advances beyond the candidate's fork.
-250
+# Cover delayed first rows, empty pagination, disposal/session replacement,
+# retained chrome, and source-preview parsing/cache invalidation at their owners.
+409

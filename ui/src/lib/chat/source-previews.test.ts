@@ -269,6 +269,31 @@ it("reuses Markdown work across recreated frame wrappers", () => {
   none([message], answer("A completed answer without source links."));
 });
 
+it("parses citations only for validated web sources and invalidates an empty result", () => {
+  const parse = vi.spyOn(MarkdownIt.prototype, "parse");
+  const final = answer(`${"Ordinary **answer** text. ".repeat(500)} [Article](${pageUrl})`);
+  const read = tool({ content: "Read result" }, "read", "read-call");
+  const first = previews([read], final);
+  expect(first).toEqual([]);
+  expect(previews([read], final)).toBe(first);
+  none([{ ...searchTool(), isError: true }], final);
+  none([tool(search(), "exec")], final);
+  none([fetchTool(fetched(undefined, 404))], final);
+  none([searchTool([result("javascript:alert(1)")])], final);
+  expect(parse).not.toHaveBeenCalled();
+
+  const source = searchTool();
+  const found = previews([read, source], final);
+  expect(found).toEqual([expectedSource(pageUrl)]);
+  expect(parse.mock.calls.filter(([text]) => text === final.content)).toHaveLength(1);
+  const parsed = parse.mock.calls.length;
+  expect(previews([read, source], final)).toBe(found);
+  expect(parse).toHaveBeenCalledTimes(parsed);
+  none([read], final);
+  expect(previews([read, source], final)).toEqual(found);
+  expect(parse.mock.calls.filter(([text]) => text === final.content)).toHaveLength(1);
+});
+
 it("caches answers without citations and updates when live result ownership is replaced", () => {
   const parse = vi.spyOn(MarkdownIt.prototype, "parse");
   const uncited = answer("No citations in this answer.");
