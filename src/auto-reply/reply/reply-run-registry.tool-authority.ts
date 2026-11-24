@@ -142,7 +142,11 @@ type OperationToolAuthority = Pick<
   | "bindToolAuthorityRouteAsync"
   | "setAutomaticFallbackRoute"
   | "personalToolParticipants"
-> & { bindBackendFingerprint(fingerprint: string | undefined): void; close(): void };
+> & {
+  originalSenderId(): string | undefined;
+  bindBackendFingerprint(fingerprint: string | undefined): void;
+  close(): void;
+};
 
 function normalizeToolAuthorityRoute(value: NonNullable<ReplyOperation["toolAuthorityRoute"]>) {
   const provider = normalizeOptionalString(value.provider);
@@ -185,6 +189,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
   }
 
   const result: OperationToolAuthority = {
+    originalSenderId: () => normalizeOptionalString(snapshot?.personalToolOwner?.senderId),
     get personalToolParticipants() {
       return participants;
     },

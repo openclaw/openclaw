@@ -12,6 +12,11 @@ When a normal prompt arrives while a session run is active and the queue mode is
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
+In Discord guild channels and threads, ordinary messages from another sender stay
+queued as separate followup turns, even if collaborative steering is enabled.
+Same-sender guidance can still steer. Explicit command authorization is unchanged;
+use `/followup` to keep an independent request from the same sender separate.
+
 An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. Messages that the runtime declines remain queued in their original order; accepted steering goes to the active turn.
 
 ## Runtime boundary

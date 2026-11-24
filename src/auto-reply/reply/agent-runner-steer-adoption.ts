@@ -10,6 +10,7 @@ import {
 } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
+import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -33,6 +34,7 @@ import {
   type ReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { getOriginalReplyOperationSenderId } from "./reply-run-registry.operation.js";
 import { waitForReplyOperationBackend } from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
@@ -44,7 +46,8 @@ type ActiveReplySteerFallbackReason =
   | ReplyMessageInjectionRejectionReason
   | "admission-changed"
   | "reply-owner-ended"
-  | "model-fallback-changed";
+  | "model-fallback-changed"
+  | "independent-request";
 
 type ActiveReplySteerParams = {
   assertSourceCurrent?: () => void;
@@ -194,6 +197,23 @@ export async function runActiveReplySteer(
     if (!injectionTarget) {
       return await fallback("injection_unavailable");
     }
+    const isInboundUserMessage =
+      followupRun.currentInboundEventKind !== "room_event" &&
+      (followupRun.run.inputProvenance?.kind === undefined ||
+        followupRun.run.inputProvenance.kind === "external_user");
+    if (
+      isInboundUserMessage &&
+      (followupRun.originatingChannel ?? followupRun.run.messageProvider) === "discord" &&
+      params.sessionCtx.ChatType === "channel" &&
+      resolveCommandTurnContext(params.sessionCtx).kind === "normal" &&
+      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== false
+    ) {
+      const senderId = normalizeOptionalString(followupRun.run.senderId);
+      // Keep independent guild messages parked before native steering can consume them.
+      if (!senderId || senderId !== getOriginalReplyOperationSenderId(activeReplyOperation)) {
+        return await fallback("independent-request", injectionTarget.runId);
+      }
+    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
@@ -204,10 +224,6 @@ export async function runActiveReplySteer(
       assertCurrent: assertReadCurrent,
     });
     const steeringDelivery = delivery;
-    const isInboundUserMessage =
-      followupRun.currentInboundEventKind !== "room_event" &&
-      (followupRun.run.inputProvenance?.kind === undefined ||
-        followupRun.run.inputProvenance.kind === "external_user");
     const caller = resolveInboundReplyToolAuthorityOverlay({
       ctx: params.sessionCtx,
       sessionEntry: params.sessionEntry,

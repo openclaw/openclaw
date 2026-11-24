@@ -38,95 +38,143 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("adopts active steering through prepared policy without caller-thread SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const key = "agent:main:active-worker-steering";
-    const policyKey = "agent:main:active-worker-policy";
-    const config: OpenClawConfig = {
-      agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
-      tools: { sandbox: { tools: { deny: ["exec"] } } },
-    };
-    setRuntimeConfigSnapshot(config);
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: policyKey },
-      { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
-    );
-    const run = createQueueTestRun({
-      prompt: "use the new requirements",
-      messageId: "incoming-steer",
-      originatingChannel: "webchat",
-    });
-    Object.assign(run.run, {
-      agentId: "main",
-      sessionKey: key,
-      runtimePolicySessionKey: policyKey,
-      senderIsOwner: true,
-      config,
-    });
-    const operation = createTestReplyOperation({ sessionKey: key, sessionId: run.run.sessionId });
-    await operation.bindToolAuthoritySnapshotAsync(
-      replyToolAuthority.prepareReplyToolAuthority(run),
-    );
-    const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-    const delivered: string[] = [];
-    operation.attachBackend({
-      kind: "embedded",
-      cancel() {},
-      toolAuthorityFingerprint: fingerprint,
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => true,
-        async queueMessage() {
-          throw new Error("Expected awaited steering preparation");
-        },
-        async queueMessageAsync(text, options, preparation) {
-          await preparation.prepareCurrent();
-          preparation.assertCurrent();
-          delivered.push(text);
-          options?.onQueueAccepted?.(true);
-        },
-      },
-    });
-    operation.setPhase("running");
-    const typing = createMockTypingController();
-    const resultState: ReplyOperationRunState = {};
-    const followup = vi.fn(async () => {});
-    const releaseAdmissionTicket = vi.fn();
-    const calls = observeMainThreadSql();
-    try {
-      await expect(
-        runActiveReplySteer({
-          followupRun: run,
-          opts: { runId: "incoming-steer" },
-          providedReplyOperation: operation,
-          queueKey: key,
-          releaseAdmissionTicket,
-          replyOperationRunState: resultState,
-          resolvedQueue: { mode: "steer", debounceMs: 0 },
-          restartRecoverySourceTurnId: undefined,
-          runFollowup: followup,
-          sessionCtx: {},
-          sessionKey: key,
-          // The optional restart-recovery store read is separate from moved tool-policy work.
-          touchActiveSessionEntry: async () => {},
-          typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+it.for([
+  { channel: "webchat" as const, sender: "alice", command: false, fallback: false },
+  { channel: "discord" as const, sender: "alice", command: false, fallback: false },
+  { channel: "discord" as const, sender: "bob", command: false, fallback: true },
+  { channel: "discord" as const, sender: "bob", command: true, fallback: false },
+])(
+  "preserves steering custody for $channel sender=$sender command=$command without caller-thread SQL",
+  async ({ channel, sender, command, fallback }, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const key =
+        channel === "discord"
+          ? `agent:main:discord:channel:room-${sender}-${command}`
+          : "agent:main:active-worker-steering";
+      const policyKey = "agent:main:active-worker-policy";
+      const config: OpenClawConfig = {
+        agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+        tools: { sandbox: { tools: { deny: ["exec"] } } },
+        messages: { queue: { allowCollaborativeSteering: true } },
+      };
+      setRuntimeConfigSnapshot(config);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: policyKey },
+        { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
+      );
+      const run = createQueueTestRun({
+        prompt: "use the new requirements",
+        messageId: `incoming-steer-${channel}-${sender}-${command}`,
+        originatingChannel: channel,
+      });
+      Object.assign(run.run, {
+        agentId: "main",
+        sessionKey: key,
+        runtimePolicySessionKey: policyKey,
+        senderIsOwner: false,
+        senderId: sender,
+        messageProvider: channel,
+        chatType: "channel",
+        conversationId: "room",
+        config,
+      });
+      const operation = createTestReplyOperation({ sessionKey: key, sessionId: run.run.sessionId });
+      await operation.bindToolAuthoritySnapshotAsync(
+        replyToolAuthority.prepareReplyToolAuthority({
+          ...run,
+          run: { ...run.run, senderId: "alice" },
         }),
-      ).resolves.toBe("handled");
-      expect(delivered).toEqual([run.prompt]);
-      expect(resultState.admission).toEqual({ status: "accepted", mode: "steer" });
-      expect(followup).not.toHaveBeenCalled();
-      expect(releaseAdmissionTicket).toHaveBeenCalledOnce();
-      calls.expectIdle();
-    } finally {
-      calls.restore();
-      clearFollowupQueue(key);
-      clearFollowupDrainCallback(key);
-      operation.complete();
-    }
-  });
-});
+      );
+      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+      const delivered: string[] = [];
+      operation.attachBackend({
+        kind: "embedded",
+        cancel() {},
+        toolAuthorityFingerprint: fingerprint,
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          async queueMessage() {
+            throw new Error("Expected awaited steering preparation");
+          },
+          async queueMessageAsync(text, options, preparation) {
+            await preparation.prepareCurrent();
+            preparation.assertCurrent();
+            delivered.push(text);
+            options?.onQueueAccepted?.(true);
+          },
+        },
+      });
+      operation.setPhase("running");
+      const typing = createMockTypingController();
+      const resultState: ReplyOperationRunState = {};
+      const drained = createDeferred<FollowupRun>();
+      const followup = vi.fn((queued: FollowupRun) => {
+        drained.resolve(queued);
+      });
+      const releaseAdmissionTicket = vi.fn();
+      const calls = observeMainThreadSql();
+      try {
+        await expect(
+          runActiveReplySteer({
+            followupRun: run,
+            opts: { runId: "incoming-steer" },
+            providedReplyOperation: operation,
+            queueKey: key,
+            releaseAdmissionTicket,
+            replyOperationRunState: resultState,
+            resolvedQueue: { mode: "steer", debounceMs: 0 },
+            restartRecoverySourceTurnId: undefined,
+            runFollowup: async (queued) => {
+              // A drain can wake early; the owning followup runner waits for the active slot.
+              expect(await replyRunRegistry.waitForIdle(key, null, { signal })).toBe(true);
+              followup(queued);
+            },
+            sessionCtx: {
+              Provider: channel,
+              OriginatingChannel: channel,
+              ChatType: "channel",
+              SessionKey: key,
+              ChatId: "room",
+              SenderId: sender,
+              ...(command
+                ? {
+                    CommandSource: "text",
+                    CommandAuthorized: true,
+                    CommandBody: "/steer use the new requirements",
+                  }
+                : {}),
+            },
+            sessionKey: key,
+            // The optional restart-recovery store read is separate from moved tool-policy work.
+            touchActiveSessionEntry: async () => {},
+            typing,
+            typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          }),
+        ).resolves.toBe("handled");
+        expect(delivered).toEqual(fallback ? [] : [run.prompt]);
+        expect(resultState.admission).toEqual({
+          status: "accepted",
+          mode: fallback ? "followup" : "steer",
+        });
+        expect(followup).not.toHaveBeenCalled();
+        expect(releaseAdmissionTicket).toHaveBeenCalledOnce();
+        calls.expectIdle();
+        if (fallback) {
+          operation.complete();
+          expect(await withinTest(drained.promise, signal)).toBe(run);
+          expect(followup).toHaveBeenCalledOnce();
+        }
+      } finally {
+        calls.restore();
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
+        operation.complete();
+      }
+    });
+  },
+);
 
 it.for(
   (["initial-injection", "native-backend"] as const).flatMap((phase) =>

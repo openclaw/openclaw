@@ -54,6 +54,13 @@ import {
 import { createReplyOperationToolAuthority } from "./reply-run-registry.tool-authority.js";
 
 type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
+const originalSenderByOperation = new WeakMap<ReplyOperation, () => string | undefined>();
+
+/** Read the original channel sender, not any participant accepted during the run. */
+export function getOriginalReplyOperationSenderId(operation: ReplyOperation): string | undefined {
+  return originalSenderByOperation.get(operation)?.();
+}
+
 const REPLY_OPERATION_ABORT_CODES = {
   user_abort: "aborted_by_user",
   restart: "aborted_for_restart",
@@ -558,6 +565,7 @@ export function createReplyOperation(params: {
   };
 
   clearReplyOperationByOperation.set(operation, clearState);
+  originalSenderByOperation.set(operation, toolAuthority.originalSenderId);
   producerCompletionByOperation.set(operation, producerCompletion.promise);
   backendReadyByOperation.set(operation, backendReady.promise);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
