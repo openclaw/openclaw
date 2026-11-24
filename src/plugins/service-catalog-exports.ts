@@ -192,13 +192,14 @@ export function createPluginServiceCatalogExports(params: {
               // Only the producer's currently admitted local hosts may receive a continuation.
               let cursors: Record<string, string> | undefined;
               if (request.cursors) {
-                cursors = Object.create(null) as Record<string, string>;
+                const allowed: Record<string, string> = Object.create(null);
                 for (const hostId of hosts) {
                   const cursor = request.cursors[hostId];
                   if (Object.hasOwn(request.cursors, hostId) && typeof cursor === "string") {
-                    cursors[hostId] = cursor;
+                    allowed[hostId] = cursor;
                   }
                 }
+                cursors = allowed;
               }
               // Free-text search has no native-ID contract. The producer owns
               // visibility, the home boundary and its cheapest authoritative lookup.
