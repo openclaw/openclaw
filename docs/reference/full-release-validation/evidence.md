@@ -156,15 +156,13 @@ without that framing remain incomplete; never synthesize receipts or infer missi
 signatures from a later replay. Blank lines between a native failure header and
 its error are accepted, but unrelated errors and inconsistent counts still block.
 
-A Q change limited to the grant ledger does not change workload identity. With
+Child receipts record execution at their producer Q, not at the current Q. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be
-reused after authentication and reevaluation under the new Q grants. Preserve
-original producer Q, run/attempt, candidate, inputs, artifact digests, and raw
-conclusions; a prior accepted verdict is not a substitute for reevaluation.
-Removing or narrowing a grant can make retained failures blocking again. Broad
-Q changes to executable scripts, workflows, actions, dependencies, or other
-workload inputs still invalidate affected workload evidence; the ledger exception
-is not a general control-only exemption.
+reused across Q after authenticating the producer and reevaluating the raw results
+under current Q grants. Preserve original producer Q, run/attempt, candidate,
+inputs, artifact digests, and raw conclusions. A prior accepted verdict is not a
+substitute for reevaluation: removing or narrowing a grant can make retained
+failures blocking again.
 
 Accepted receipts return before another child is dispatched; the required initial
 run cannot be skipped. Failed parents without final manifests can supply eligible
