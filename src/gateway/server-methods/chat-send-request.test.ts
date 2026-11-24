@@ -368,12 +368,14 @@ it.each([
   "applies configured run preferences only to split Talk sends (%s, %j)",
   async (useTalkSettings, talkSettings, thinking, fastMode) => {
     const result = await normalizeChatSendRequest({
-      params: requestParams({ ...(useTalkSettings ? { useTalkSettings: true } : {}) }),
+      params: requestParams(useTalkSettings ? { useTalkSettings: true } : {}),
       client: humanClient(),
       talkSettings,
     });
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
     expect(result.value.p.thinking).toBe(thinking);
     expect(result.value.p.fastMode).toBe(fastMode);
     expect(result.value.normalizeThinkingLevelOverride).toBe(thinking !== undefined);
