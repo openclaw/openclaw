@@ -10,7 +10,7 @@ import {
   resolveFeishuAccount,
 } from "./accounts.js";
 import { resolveFeishuStickerSet } from "./sticker-catalog.js";
-import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 export function isFeishuActionEnabled(
   account: ResolvedFeishuAccount,
@@ -37,13 +37,7 @@ export function describeFeishuMessageTool({
     enabledAccounts.length > 0 ||
     (!accountId &&
       cfg.channels?.feishu?.enabled !== false &&
-      Boolean(
-        inspectFeishuCredentials(
-          // SAFETY: Config validation checks channels.feishu against FeishuChannelConfigSchema.
-          cfg.channels?.feishu as FeishuConfig | undefined,
-          cfg,
-        ),
-      ));
+      Boolean(inspectFeishuCredentials(cfg.channels?.feishu, cfg)));
   if (enabledAccounts.length === 0) {
     return {
       actions: [],
