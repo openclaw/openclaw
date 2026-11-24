@@ -21,7 +21,7 @@ export function needsSchemaDowngrade(before, after, changedPaths) {
       /\.(?:[cm]?[jt]s|sql)$/u.test(file),
   );
 }
-export function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
+function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
   const receiptFile = path.join(directory, "downgrade-source.json");
   if (!base) {
     fs.writeFileSync(
