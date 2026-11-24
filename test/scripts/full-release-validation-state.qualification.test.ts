@@ -7,6 +7,7 @@ import {
   validateReleaseExecutionPlanArtifact,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { buildReleaseValidationManifest } from "../../scripts/lib/full-release-manifest.mjs";
 import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
 import {
   resolveQualificationCoverage,
@@ -30,7 +31,7 @@ describe("candidate-owned frozen qualification coverage", () => {
   );
 
   it.each(["exact", "changelog", "beta promotion"])(
-    "revalidates whole-parent reuse with the admitted P verifier before passing the decision (%s)",
+    "revalidates admitted whole-parent reuse through decision, drain, and manifest upload validation (%s)",
     async (mode) => {
       const descendant = mode !== "exact";
       const promotion = mode === "beta promotion";
@@ -127,7 +128,7 @@ console.log(response);
 `,
       );
       chmodSync(gh, 0o755);
-      const result = runCollector("decision", {
+      const env = {
         GITHUB_RUN_ID: current.runId,
         GITHUB_RUN_ATTEMPT: "1",
         GITHUB_REF_NAME: current.branch,
@@ -162,7 +163,8 @@ console.log(response);
         FRV_VERIFIED_EVIDENCE_PATH: evidencePath,
         FRV_GITHUB_RESPONSES: JSON.stringify(responses),
         PATH: `${bin}:${process.env.PATH}`,
-      });
+      };
+      const result = runCollector("decision", env);
       const decisionJson = existsSync(statePath)
         ? readFileSync(statePath, "utf8")
         : "<missing decision>";
@@ -171,6 +173,35 @@ console.log(response);
         [result.error, result.signal, result.stderr, result.stdout, decisionJson].join("\n"),
       ).toBe(0);
       expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ state: "passed" });
+      const drainPath = join(directory, "drain.json");
+      const drained = runCollector("drain", { ...env, FULL_RELEASE_STATE_PATH: drainPath });
+      expect(drained.status, drained.stderr).toBe(0);
+      const drain = JSON.parse(readFileSync(drainPath, "utf8"));
+      const manifestPath = join(directory, "manifest.json");
+      const manifest = buildReleaseValidationManifest({
+        plan: sealed,
+        drain,
+        context: current.manifest,
+        reusedManifest: root.manifest,
+      });
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      const manifestEnv = {
+        ...env,
+        RELEASE_EXECUTION_PLAN_PATH: planPath,
+        RELEASE_DECISION_PATH: statePath,
+        DIAGNOSTIC_DRAIN_PATH: drainPath,
+        RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
+      };
+      const validated = runCollector("validate-manifest", manifestEnv);
+      expect(validated.status, validated.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).evidenceReuse.publication).toEqual(
+        manifest.evidenceReuse.publication,
+      );
+      delete manifest.evidenceReuse.publication;
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      const missingRoot = runCollector("validate-manifest", manifestEnv);
+      expect(missingRoot.status).not.toBe(0);
+      expect(missingRoot.stderr).toContain("differs from the immutable execution plan");
     },
   );
 

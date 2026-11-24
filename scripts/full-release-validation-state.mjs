@@ -54,6 +54,7 @@ import {
   buildReleaseValidationManifest,
   manifestContextFromEnvironment,
   releaseManifestChildEvidence,
+  releaseManifestRootPublication,
 } from "./lib/full-release-manifest.mjs";
 import {
   BETA_FINAL_EVIDENCE_REUSE_POLICY,
@@ -1717,6 +1718,10 @@ async function validateManifestMode() {
       child.selected ? stringValue(child.runId) : "",
     ]),
   );
+  const rootPublication = releaseManifestRootPublication(
+    executionPlan.evidenceReuse.sourceManifest,
+    executionPlan.evidenceReuse,
+  );
   const expectedEvidenceReuse = executionPlan.evidenceReuse.requested
     ? {
         changedPaths: executionPlan.evidenceReuse.changedPaths,
@@ -1724,6 +1729,7 @@ async function validateManifestMode() {
         policy: executionPlan.evidenceReuse.policy,
         runId: executionPlan.evidenceReuse.rootRunId,
         selectedRunId: executionPlan.evidenceReuse.selectedRunId,
+        ...(rootPublication ? { publication: rootPublication } : {}),
       }
     : undefined;
   const expectedChildEvidence = drain
