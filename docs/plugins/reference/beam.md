@@ -20,6 +20,7 @@ Receive coding-session snapshots for viewing and Team handoff.
 ## Surface
 
 - CLI commands: `openclaw beam`
+- Contracts: `gatewayMethodDispatch`
 
 ## Related docs
 

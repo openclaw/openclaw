@@ -65,6 +65,7 @@ export default definePluginEntry({
         limits,
         readPublication: store.readPublication,
         putSnapshot: store.putSnapshot,
+        releasePublication: store.releasePublication,
         currentAuthority: getGatewayRequestAuthorityV1,
         controlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),

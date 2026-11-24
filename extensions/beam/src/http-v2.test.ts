@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import http from "node:http";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { sampleUpload, staffReceipt } from "./beam-store.test-support.js";
 import { beamTestAuthority, persistentBeamTestStore } from "./beam.test-support.js";
+import { readBeamDestination } from "./destination-v2.js";
 import { createBeamV2Handler } from "./http-v2.js";
 import { createBeamIngressLimits, createBeamRequestHandler } from "./http.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
@@ -51,6 +52,7 @@ it("reads one publication generation and protects a visitor's snapshot across re
       return row;
     },
     putSnapshot: store.putSnapshot,
+    releasePublication: store.releasePublication,
     currentAuthority: visitor,
     controlUiBasePath: () => "/console",
   });
@@ -74,7 +76,7 @@ it("reads one publication generation and protects a visitor's snapshot across re
     await publish();
     const headUrl = `${origin}/team/api/v2/beam/snapshots/${upload.beamId}/head`;
     const head = await (await fetch(headUrl)).json();
-    expect(head).toMatchObject({ beamId: upload.beamId, canRelease: false, state: "writable" });
+    expect(head).toMatchObject({ beamId: upload.beamId, canRelease: true, state: "writable" });
     const url = new URL(`${head.apiUrl}/snapshot`, headUrl);
     expect(url.pathname).toBe(`/team/api/v2/beam/publications/${head.publicationId}/snapshot`);
     expect(new URL(head.url, headUrl).pathname).toMatch(/^\/team\/console\/beam\//);
@@ -210,7 +212,7 @@ it("conditionally publishes exact bytes, replays the original receipt and fences
     expect((await put(raw, fresh, absent)).status).toBe(412);
     await store.upload(v1, staffReceipt(Date.now()));
     expect((await put(raw, fresh, { "if-match": first.revision })).status).toBe(412);
-    expect(await (await put(raw, key, absent)).json()).toEqual(first);
+    expect(await (await put(raw, key, absent)).json()).toEqual({ ...first, canRelease: false });
     const current = await (await fetch(target + "/head")).json();
     const replacement = await put(raw, fresh, { "if-match": current.revision });
     expect(replacement.status).toBe(200);
@@ -226,6 +228,43 @@ it("conditionally publishes exact bytes, replays the original receipt and fences
     });
     const duplicate = raw.replace('"version": 2', '"version": 2, "version": 2');
     expect((await put(duplicate, fresh, { "if-match": next.revision })).status).toBe(400);
+  } finally {
+    await close();
+  }
+});
+
+it("records and replays a publication by a shared credential without assigning a person", async () => {
+  const { store, close } = await persistentBeamTestStore();
+  const handler = createBeamV2Handler({
+    ...store,
+    currentAuthority: () => ({
+      attributionProfileId: "gateway-owner",
+      scopes: ["operator.write"],
+      assertCurrent() {},
+      async revalidate() {},
+    }),
+    controlUiBasePath: () => undefined,
+  });
+  await using server = http.createServer((req, res) => void handler(req, res));
+  try {
+    const packet = { ...sampleUpload(), version: 2 };
+    const target = `http://127.0.0.1:${await listenOnLoopback(server)}/api/v2/beam/snapshots/${packet.beamId}`;
+    const publish = () =>
+      fetch(target, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "if-none-match": "*",
+          "idempotency-key": "12345678-1234-4123-abcd-000000000008",
+        },
+        body: JSON.stringify(packet),
+      });
+    const first = await publish();
+    expect(first.status).toBe(200);
+    const receipt = await first.json();
+    expect(receipt).toMatchObject({ disposition: "applied", canRelease: false });
+    expect(await (await publish()).json()).toEqual(receipt);
+    expect(await store.get(packet.beamId)).not.toHaveProperty("publisherProfileId");
   } finally {
     await close();
   }
@@ -351,4 +390,142 @@ it("shares the publishing budget between both protocol versions", async () => {
   } finally {
     await close();
   }
+});
+
+it("releases only the selected bytes for the original verified publisher and retains the receipt after archive", async () => {
+  const { store, handoffStore, close } = await persistentBeamTestStore();
+  let personProfileId: string | undefined = "owner";
+  let scopes = ["operator.write"];
+  const auth = () => ({ scopes, personProfileId, assertCurrent() {}, async revalidate() {} });
+  const handler = createBeamV2Handler({
+    ...store,
+    currentAuthority: auth,
+    controlUiBasePath: () => undefined,
+  });
+  await using server = http.createServer((req, res) => void handler(req, res));
+  try {
+    const origin = `http://127.0.0.1:${await listenOnLoopback(server)}`;
+    const upload = sampleUpload();
+    const publish = () =>
+      store.upload(upload, {
+        ...staffReceipt(Date.now()),
+        publisher: { kind: "staff", profileId: "owner" },
+      });
+    await publish();
+    const headUrl = origin + "/api/v2/beam/snapshots/" + upload.beamId + "/head";
+    const initial = await (await fetch(headUrl)).json();
+    expect(initial.canRelease).toBe(true);
+    const path = new URL(initial.apiUrl, headUrl).href;
+    const key = "12345678-1234-4123-abcd-000000000001";
+    const release = (revision: string, digest: string, requestId = key) =>
+      fetch(path + "/release", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "if-match": revision,
+          "idempotency-key": requestId,
+        },
+        body: JSON.stringify({ digest }),
+      });
+    personProfileId = "other";
+    expect((await release(initial.revision, initial.digest)).status).toBe(404);
+    personProfileId = undefined;
+    expect((await release(initial.revision, initial.digest)).status).toBe(404);
+    personProfileId = "owner";
+    scopes = ["operator.read"];
+    expect((await release(initial.revision, initial.digest)).status).toBe(404);
+    scopes = ["operator.write"];
+    await publish();
+    expect((await release(initial.revision, initial.digest)).status).toBe(412);
+    const current = await (await fetch(headUrl)).json();
+    const success = await release(current.revision, current.digest);
+    expect(success.status).toBe(200);
+    const receipt = await success.json();
+    expect(receipt).toMatchObject({
+      publicationId: current.publicationId,
+      revision: current.revision,
+      state: "released",
+      canRelease: false,
+    });
+    expect((await release(initial.revision, initial.digest)).status).toBe(409);
+    expect(await (await fetch(path + "/destination")).json()).toEqual({
+      state: "released_unbound",
+    });
+    expect(await publish()).toMatchObject({ kind: "handoff", accepted: false });
+    const snapshot = await store.get(upload.beamId);
+    expect(snapshot).toBeDefined();
+    const reserved = await store.reserveContinuation(snapshot!, "main", () => {});
+    reserved.release();
+    expect(await (await fetch(path + "/destination")).json()).toEqual({ state: "creating" });
+    expect(await store.delete(upload.beamId)).toBe(true);
+    const retained = await handoffStore.lookup(upload.beamId);
+    expect(retained).not.toHaveProperty("packetText");
+    expect(retained).not.toHaveProperty("items");
+    expect(await (await release(current.revision, current.digest)).json()).toEqual(receipt);
+    expect((await fetch(path + "/snapshot")).status).toBe(410);
+    expect(await (await fetch(path + "/destination")).json()).toEqual({
+      state: "needs_reconciliation",
+    });
+    personProfileId = "other";
+    expect((await release(current.revision, current.digest)).status).toBe(404);
+  } finally {
+    await close();
+  }
+});
+
+it("exposes a bound destination only through a provenance-checked caller-authorized session incarnation", async () => {
+  const auth = {
+    scopes: ["operator.sessions.write"],
+    requiredGrantPluginId: "visitor-access",
+    personProfileId: "publisher",
+    assertCurrent() {},
+    async revalidate() {},
+  };
+  const binding = {
+    id: "opaque-reference",
+    sessionKey: "agent:main:dashboard:opaque-reference",
+    agentId: "main",
+    ready: true as const,
+  };
+  const row = {
+    ...sampleUpload(),
+    createdAt: 1,
+    receivedAt: 1,
+    handoffId: "generation",
+    publisherProfileId: "publisher",
+    continuation: binding,
+  };
+  const dispatch =
+    vi.fn<typeof import("openclaw/plugin-sdk/gateway-method-runtime").dispatchGatewayMethod>();
+  dispatch.mockResolvedValueOnce({
+    ok: true,
+    payload: { sessionKey: binding.sessionKey, sessionId: "original" },
+  });
+  expect(await readBeamDestination(row, true, auth, dispatch)).toEqual({
+    state: "ready",
+    reference: binding.id,
+    sessionKey: binding.sessionKey,
+    sessionId: "original",
+  });
+  expect(dispatch).toHaveBeenCalledExactlyOnceWith("beam.owned.resolve", {
+    catalogId: "beam",
+    threadId: row.beamId,
+    hostId: "gateway",
+    agentId: "main",
+  });
+  expect(
+    await readBeamDestination(row, true, { ...auth, personProfileId: "other" }, dispatch),
+  ).toBe("unavailable");
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  for (const payload of [
+    { sessionKey: binding.sessionKey },
+    { sessionKey: "other", sessionId: "original" },
+  ]) {
+    dispatch.mockResolvedValueOnce({ ok: true, payload });
+    expect(
+      await readBeamDestination(row, true, { ...auth, scopes: ["operator.read"] }, dispatch),
+    ).toEqual({ state: "needs_reconciliation" });
+  }
+  dispatch.mockResolvedValueOnce({ ok: false, error: { code: "FORBIDDEN", message: "denied" } });
+  expect(await readBeamDestination(row, true, auth, dispatch)).toBe("unavailable");
 });
