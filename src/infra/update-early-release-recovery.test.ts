@@ -339,7 +339,6 @@ const runs: Run[] = [
   ["changes nothing when the service cannot move", f("release gateway install"), "original"],
   ["puts the previous build back when unmigrated", f("release ready"), "original"],
   ["never puts it back once migrated", f("release ready", migrates), "release", "start-failed"],
-  // A release that commits one store while it takes most of its stop timeout to exit.
   ["never puts it back when one store moved", f(READY, { stopMs: 3e5 }), "release", SF],
   ["keeps the release if not stopped", f(READY, { stopMs: Infinity }), "release", SF, "confirm"],
   ["keeps it while the old one fails", f(READY, { fail: { [OLD]: 1 } }), "original", "", "stays"],
