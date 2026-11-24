@@ -12,7 +12,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { inspectPostgresUpgrade, preflightPostgresUpgrade } from "../snapshot/database-backup.js";
 import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
-import { readOpenClawAgentDatabaseRegistryRows } from "./openclaw-agent-db-registry.read.js";
+import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { readStateSchemaContentVersionRow } from "./openclaw-state-db-schema-version.js";
@@ -102,10 +102,7 @@ export async function discoverDatabases(
       try {
         if (kind === "state") {
           retainedAgentIds = new Set(readRetainedAgentDeletionIds(db));
-          registeredAgents = readOpenClawAgentDatabaseRegistryRows(db, pathname).map((row) => ({
-            agentId: row.agent_id,
-            path: resolveOpenClawRegisteredAgentDatabasePath(pathname, row.path),
-          }));
+          registeredAgents = readAgentDatabasePreflightTargets(db, pathname);
         }
         return readVersion(db, kind);
       } finally {
