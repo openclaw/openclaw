@@ -1464,7 +1464,7 @@ describe("release decision policy", () => {
     expect(() =>
       validateReleaseManifestAdvisoryJobs({
         ...manifest,
-        advisoryJobs: advisoryJobs.map((job) => ({ ...job, conclusion: "success" })),
+        advisoryJobs: [{ ...advisoryJobs[0], conclusion: "success" }],
       }),
     ).toThrow("advisory jobs differ");
     expect(() => validateReleaseManifestAdvisoryJobs({ ...manifest, advisoryJobs: [] })).toThrow(
