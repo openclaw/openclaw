@@ -115,6 +115,15 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     label: "Beam",
     audience: "gateway-operators",
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
+    ownedRoute: {
+      requiredGrantPluginId: "visitor-access",
+      methods: {
+        list: "beam.owned.list",
+        read: "beam.owned.read",
+        resolve: "beam.owned.resolve",
+        continue: "beam.owned.continue",
+      },
+    },
     supportsProcessHomeIsolation: true,
     async list(params) {
       // Normalize comparison text only; uploaded titles and stored identities stay original.
