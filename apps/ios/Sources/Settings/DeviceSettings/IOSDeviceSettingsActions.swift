@@ -22,6 +22,7 @@ enum IOSDeviceSettingsActions {
         guard !Task.isCancelled, isCurrent(),
               IOSDeviceSettingsConsent.required(for: key, value: value, locationMode: self.locationMode) == required
         else { return false }
+        if self.setTalkChimePreference(key, value: value) { return true }
         switch (key, value) {
         case let (.appearance, .string(raw)):
             if let preference = AppAppearancePreference(rawValue: raw) { appearanceModel.select(preference) }
@@ -58,6 +59,21 @@ enum IOSDeviceSettingsActions {
             break
         }
         return false
+    }
+
+    private static func setTalkChimePreference(_ key: DeviceSettingKey, value: DeviceSettingValue) -> Bool {
+        switch (key, value) {
+        case let (.talkStartChimeEnabled, .boolean(enabled)):
+            UserDefaults.standard.set(enabled, forKey: TalkChimePlayer.startPreferenceKey)
+            return true
+        case let (.talkEndChimeEnabled, .boolean(enabled)):
+            UserDefaults.standard.set(enabled, forKey: TalkChimePlayer.endPreferenceKey)
+            return true
+        case let (.talkReplyChimeEnabled, .boolean(enabled)):
+            UserDefaults.standard.set(enabled, forKey: TalkChimePlayer.replyPreferenceKey)
+            return true
+        default: return false
+        }
     }
 
     static func requestPermission(

@@ -299,6 +299,7 @@ public final class RealtimeTalkRelaySession {
     private var isInputAudioBehind = false
     private var isInputPaused = false
     private var isMicrophoneMuted = false
+    private var isChimeInputGated = false
     private var microphoneChangedAtMs: Double?
     private var audioCaptureGeneration: UInt64 = 0
     private var isClosed = false
@@ -548,6 +549,16 @@ public final class RealtimeTalkRelaySession {
     public func setMicrophoneMuted(_ muted: Bool) {
         guard self.isMicrophoneMuted != muted else { return }
         self.isMicrophoneMuted = muted
+        self.invalidateBufferedMicrophoneAudio()
+    }
+
+    public func setChimeInputGated(_ gated: Bool) {
+        guard self.isChimeInputGated != gated else { return }
+        self.isChimeInputGated = gated
+        self.invalidateBufferedMicrophoneAudio()
+    }
+
+    private func invalidateBufferedMicrophoneAudio() {
         self.microphoneChangedAtMs = ProcessInfo.processInfo.systemUptime * 1000
         // Cancel appends still queued for the sender/socket; already-sent audio belongs to the call.
         for task in self.audioSendTasks.values {
@@ -1299,7 +1310,7 @@ extension RealtimeTalkRelaySession {
         // spanning a toggle, so unmute never replays samples recorded while muted. Capture stamps
         // the end of each PCM16 buffer with monotonic system uptime on iOS and macOS.
         let frameStartMs = timestampMs - Double(data.count) / (self.inputSampleRateHz * 2) * 1000
-        let silence = self.isMicrophoneMuted ||
+        let silence = self.isMicrophoneMuted || self.isChimeInputGated ||
             self.microphoneChangedAtMs.map { frameStartMs <= $0 } == true
         let encoded = silence ? Data(count: data.count) : data
         let inputRms: Float = silence ? 0 : rms

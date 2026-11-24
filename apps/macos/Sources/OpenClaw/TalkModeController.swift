@@ -31,8 +31,30 @@ final class TalkModeController {
         self.publishTalk = publishTalk
     }
 
+    @ObservationIgnored private let chimePlayer = TalkChimePlayer()
+
+    func playChime(_ cue: TalkChimeLifecycle.Cue) async {
+        await self.chimePlayer.play(cue)
+    }
+
+    func stopChime() {
+        self.chimePlayer.stop()
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.controller")
     private static let transcriptLimit = 20
+
+    private var activeRouteIsRealtime: Bool?
+
+    var talkReplyChimeAvailable: Bool {
+        !(self.activeRouteIsRealtime ?? self.state()?.talkRealtimeRelayEnabled ?? false)
+    }
+
+    func updateActiveRoute(isRealtime: Bool?) {
+        guard self.activeRouteIsRealtime != isRealtime else { return }
+        self.activeRouteIsRealtime = isRealtime
+        NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
+    }
 
     private(set) var phase: TalkModePhase = .idle
     private(set) var isPaused: Bool = false

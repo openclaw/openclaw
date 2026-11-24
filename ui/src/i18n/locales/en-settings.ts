@@ -1729,6 +1729,11 @@ const enSettings = {
       wakeTriggersTalkMode: "Wake triggers Talk mode",
       pushToTalkEnabled: "Hold Right Option to talk",
       talkShiftToStopEnabled: "Shift to stop",
+      statusChimes: "Status chimes",
+      talkStartChimeEnabled: "Listening",
+      talkEndChimeEnabled: "Call end",
+      talkReplyChimeEnabled: "Ready for reply",
+      talkReplyChimeLiveHint: "Live is always listening",
       talkPhaseSoundsEnabled: "Phase sounds",
       realtimeRelayEnabled: "Use realtime Gateway relay",
       realtimeRelayHint:

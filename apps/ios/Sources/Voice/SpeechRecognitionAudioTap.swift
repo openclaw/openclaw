@@ -5,10 +5,12 @@ enum SpeechRecognitionAudioTap {
     /// Core Audio invokes this off MainActor. Append synchronously while its buffer is valid.
     nonisolated static func make(
         request: SFSpeechAudioBufferRecognitionRequest,
+        acceptsInput: (@Sendable () -> Bool)? = nil,
         onBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil)
         -> AVAudioNodeTapBlock
     {
         { buffer, _ in
+            guard acceptsInput?() ?? true else { return }
             request.append(buffer)
             onBuffer?(buffer)
         }

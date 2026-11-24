@@ -1061,13 +1061,18 @@ struct TalkModeRuntimeSpeechTests {
             lifecycleGeneration: lifecycleGeneration))
         let relayGeneration = await runtime.realtimeRelayGeneration
 
+        let controller = TalkModeController.shared
+        controller.updateActiveRoute(isRealtime: true)
+        #expect(!controller.talkReplyChimeAvailable)
+
         #expect(await runtime.commitNativeFallback(
             recognitionStarted: true,
             lifecycleGeneration: lifecycleGeneration,
             recognitionGeneration: recognitionGeneration,
             relayGeneration: relayGeneration,
             status: "native"))
-        #expect(TalkModeController.shared.partialTranscript == "native")
+        #expect(controller.partialTranscript == "native")
+        #expect(controller.talkReplyChimeAvailable)
 
         await runtime.setEnabled(false)
     }

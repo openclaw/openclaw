@@ -41,6 +41,9 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case wakeEnabled = "voice.wakeEnabled"
     case wakeTriggersTalkMode = "voice.wakeTriggersTalkMode"
     case pushToTalkEnabled = "voice.pushToTalkEnabled"
+    case talkStartChimeEnabled = "voice.talkStartChimeEnabled"
+    case talkEndChimeEnabled = "voice.talkEndChimeEnabled"
+    case talkReplyChimeEnabled = "voice.talkReplyChimeEnabled"
     case talkPhaseSoundsEnabled = "voice.talkPhaseSoundsEnabled"
     case talkShiftToStopEnabled = "voice.talkShiftToStopEnabled"
     case realtimeRelayEnabled = "voice.realtimeRelayEnabled"
@@ -486,6 +489,10 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let wakeEnabled: Bool
         public let wakeTriggersTalkMode: Bool?
         public let pushToTalkEnabled: Bool?
+        public let talkStartChimeEnabled: Bool?
+        public let talkEndChimeEnabled: Bool?
+        public let talkReplyChimeEnabled: Bool?
+        public let talkReplyChimeAvailable: Bool?
         public let talkPhaseSoundsEnabled: Bool?
         public let talkShiftToStopEnabled: Bool?
         public let realtimeRelayEnabled: Bool?
@@ -503,6 +510,10 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             wakeEnabled: Bool,
             wakeTriggersTalkMode: Bool? = nil,
             pushToTalkEnabled: Bool? = nil,
+            talkStartChimeEnabled: Bool? = nil,
+            talkEndChimeEnabled: Bool? = nil,
+            talkReplyChimeEnabled: Bool? = nil,
+            talkReplyChimeAvailable: Bool? = nil,
             talkPhaseSoundsEnabled: Bool? = nil,
             talkShiftToStopEnabled: Bool? = nil,
             realtimeRelayEnabled: Bool? = nil,
@@ -519,6 +530,10 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.wakeEnabled = wakeEnabled
             self.wakeTriggersTalkMode = wakeTriggersTalkMode
             self.pushToTalkEnabled = pushToTalkEnabled
+            self.talkStartChimeEnabled = talkStartChimeEnabled
+            self.talkEndChimeEnabled = talkEndChimeEnabled
+            self.talkReplyChimeEnabled = talkReplyChimeEnabled
+            self.talkReplyChimeAvailable = talkReplyChimeAvailable
             self.talkPhaseSoundsEnabled = talkPhaseSoundsEnabled
             self.talkShiftToStopEnabled = talkShiftToStopEnabled
             self.realtimeRelayEnabled = realtimeRelayEnabled

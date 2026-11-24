@@ -4,6 +4,7 @@ import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
+import os
 import OSLog
 import Speech
 
@@ -32,6 +33,25 @@ actor TalkModeRuntime {
             stopBuffered: { TalkBufferedAudioPlayer.shared.stop() },
             stopSystem: { await TalkSystemSpeechSynthesizer.shared.stop() },
             stopMLX: { await TalkMLXSpeechSynthesizer.shared.cancelCurrent() })
+    }
+
+    var chimeLifecycle = TalkChimeLifecycle()
+
+    func chimeEnabled(_ cue: TalkChimeLifecycle.Cue) async -> Bool {
+        if cue == .follow, self.realtimeSession != nil || self.realtimeRelayStartGeneration != nil { return false }
+        return await MainActor.run {
+            guard let state = self.state() else { return false }
+            guard !state.isPreview else { return false }
+            switch cue {
+            case .wake: return state.talkStartChimeEnabled
+            case .bye: return state.talkEndChimeEnabled
+            case .follow: return state.talkReplyChimeEnabled
+            }
+        }
+    }
+
+    func playChime(_ cue: TalkChimeLifecycle.Cue) async {
+        await self.controller()?.playChime(cue)
     }
 
     let state: AppVoiceRuntime.State
@@ -136,10 +156,19 @@ actor TalkModeRuntime {
         self.isEnabled = enabled
         self.lifecycleGeneration &+= 1
         resetRealtimeRecoveryState()
+        let generation = self.lifecycleGeneration
         if enabled {
+            await MainActor.run { self.controller()?.stopChime() }
+            guard self.isCurrent(generation) else { return }
             await start()
         } else {
-            await self.stop(lifecycleGeneration: nil)
+            let wasReady = self.chimeLifecycle.end(clean: self.phase != .idle || self.isPaused, enabled: true)
+            await self.stop(lifecycleGeneration: generation)
+            if let cue = wasReady, await self.chimeEnabled(.bye),
+               self.lifecycleGeneration == generation, !self.isEnabled
+            {
+                await self.playChime(cue)
+            }
         }
     }
 
@@ -289,7 +318,10 @@ actor TalkModeRuntime {
         let generation: Int
     }
 
-    func startRecognition(lifecycleGeneration: Int) async -> Bool {
+    func startRecognition(
+        lifecycleGeneration: Int,
+        chimeGate: OSAllocatedUnfairLock<Bool>? = nil) async -> Bool
+    {
         guard let recognitionAttempt = beginRecognitionAttempt(
             lifecycleGeneration: lifecycleGeneration)
         else { return false }
@@ -339,7 +371,8 @@ actor TalkModeRuntime {
             prepare: { enableVoiceProcessing in
                 try self.prepareStartedRecognitionCapture(
                     selection: selection,
-                    enableVoiceProcessing: enableVoiceProcessing)
+                    enableVoiceProcessing: enableVoiceProcessing,
+                    chimeGate: chimeGate)
             },
             discard: { $0.discard() },
             publish: { preparedCapture in
@@ -509,8 +542,8 @@ actor TalkModeRuntime {
 
     private func prepareStartedRecognitionCapture(
         selection: AudioInputDeviceResolution,
-        enableVoiceProcessing: Bool)
-        throws -> PreparedRecognitionCapture
+        enableVoiceProcessing: Bool,
+        chimeGate: OSAllocatedUnfairLock<Bool>?) throws -> PreparedRecognitionCapture
     {
         let request = SFSpeechAudioBufferRecognitionRequest()
         SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
@@ -538,7 +571,8 @@ actor TalkModeRuntime {
                 onBus: 0,
                 bufferSize: 2048,
                 format: format)
-            { [weak request, meter] buffer, _ in
+            { [weak request, meter, chimeGate] buffer, _ in
+                guard !(chimeGate?.withLock { $0 } ?? false) else { return }
                 request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
                 let rms = TalkAudioLevel.rms(buffer: buffer)
                 meter.withValue { $0 = rms }
@@ -625,8 +659,8 @@ extension TalkModeRuntime {
             guard !self.isPaused else { return }
 
             await self.playAssistant(text: assistantText)
-            guard self.isCurrent(gen) else { return }
-            await self.resumeListeningIfNeeded()
+            guard self.isCurrent(gen), !Task.isCancelled else { return }
+            await self.resumeListeningIfNeeded(afterNativeReply: true)
             return
         } catch {
             self.logger.error("talk chat.send failed: \(error.localizedDescription, privacy: .public)")
@@ -636,7 +670,7 @@ extension TalkModeRuntime {
         }
     }
 
-    private func resumeListeningIfNeeded() async {
+    private func resumeListeningIfNeeded(afterNativeReply: Bool = false) async {
         if self.isPaused {
             self.lastTranscript = ""
             self.lastHeard = nil
@@ -647,8 +681,22 @@ extension TalkModeRuntime {
             return
         }
         let lifecycleGeneration = self.lifecycleGeneration
-        guard await self.startRecognition(lifecycleGeneration: lifecycleGeneration),
+        let replyEnabled = afterNativeReply ? await self.chimeEnabled(.follow) : false
+        guard self.isCurrent(lifecycleGeneration), !self.isPaused,
+              self.realtimeSession == nil, self.realtimeRelayStartGeneration == nil
+        else { return }
+        if afterNativeReply {
+            self.chimeLifecycle.replyFinished(isRealtime: false)
+        }
+        let cue = self.chimeLifecycle.resumedListening(isRealtime: false, enabled: replyEnabled)
+        let gate = cue != nil ? OSAllocatedUnfairLock(initialState: true) : nil
+        defer { gate?.withLock { $0 = false } }
+        guard await self.startRecognition(lifecycleGeneration: lifecycleGeneration, chimeGate: gate),
               self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
+        if let cue {
+            await self.playChime(cue)
+            guard self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
+        }
         await self.startListening()
     }
 

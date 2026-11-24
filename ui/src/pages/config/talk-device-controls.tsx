@@ -15,7 +15,7 @@ import type {
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
+import { SettingsSection, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
@@ -35,7 +35,13 @@ const voiceToggles = [
   "speakerphoneEnabled",
 ] as const;
 
-type VoiceToggle = (typeof voiceToggles)[number];
+const chimeToggles = [
+  "talkStartChimeEnabled",
+  "talkEndChimeEnabled",
+  "talkReplyChimeEnabled",
+] as const;
+type ChimeToggle = (typeof chimeToggles)[number];
+type VoiceToggle = (typeof voiceToggles)[number] | ChimeToggle;
 type VoiceControlProps = {
   scope: { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
   snapshot: NativeDeviceSettingsSnapshot;
@@ -199,6 +205,32 @@ function VoiceToggleRow(props: VoiceControlProps & { setting: VoiceToggle }) {
   );
 }
 
+function ChimeToggleRow(props: VoiceControlProps & { setting: ChimeToggle }) {
+  const disabled = () =>
+    props.setting === "talkReplyChimeEnabled" && !props.snapshot.voice.talkReplyChimeAvailable;
+  const edit = createVoiceEdit(
+    props,
+    () => `voice.${props.setting}`,
+    () => props.snapshot.voice[props.setting] ?? false,
+  );
+  return (
+    <>
+      <SettingsToggleRow
+        title={t(`configPage.deviceTalk.${props.setting}`)}
+        description={disabled() ? t("configPage.deviceTalk.talkReplyChimeLiveHint") : undefined}
+        checked={!disabled() && edit.value()}
+        disabled={disabled()}
+        onChange={(value) => {
+          if (!disabled()) {
+            edit.submit(value);
+          }
+        }}
+      />
+      <VoiceWriteStatus edit={edit} />
+    </>
+  );
+}
+
 function VoiceMicrophoneRow(props: VoiceControlProps) {
   const microphone = () => props.snapshot.voice.microphone;
   const edit = createVoiceEdit(
@@ -267,6 +299,21 @@ export function NativeVoiceControls(props: {
                 </Show>
               )}
             </For>
+            <Show when={props.snapshot.voice.talkStartChimeEnabled !== undefined}>
+              <SettingsSection title={t("configPage.deviceTalk.statusChimes")}>
+                <For each={chimeToggles} keyed={(key) => key}>
+                  {(key) => (
+                    <ChimeToggleRow
+                      scope={capturedScope}
+                      snapshot={props.snapshot}
+                      isCurrent={isCurrent}
+                      presentationRetired={props.presentationRetired}
+                      setting={key()}
+                    />
+                  )}
+                </For>
+              </SettingsSection>
+            </Show>
             <Show when={props.snapshot.voice.microphone}>
               <VoiceMicrophoneRow
                 scope={capturedScope}

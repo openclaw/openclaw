@@ -49,9 +49,12 @@ private final class SuspendedGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesi
 @MainActor
 final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
     private(set) var payloads: [Data] = []
+    private(set) var finishedPlayback = false
 
     func play(data: Data) async -> StreamingPlaybackResult {
         self.payloads.append(data)
+        await Task.yield()
+        self.finishedPlayback = true
         return StreamingPlaybackResult(finished: true, interruptedAt: nil)
     }
 

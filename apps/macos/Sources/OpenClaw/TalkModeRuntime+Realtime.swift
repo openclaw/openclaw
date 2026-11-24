@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import os
 import OSLog
 
 private enum RealtimeRelayConfigurationError: LocalizedError {
@@ -43,6 +44,7 @@ extension TalkModeRuntime {
             self.realtimeRelayDeliveryGate.deliver(ifActive: projectionGeneration) {
                 self.controller()?.updateLevel(0)
                 self.controller()?.updatePartialTranscript("")
+                self.controller()?.updateActiveRoute(isRealtime: nil)
                 self.controller()?.updatePhase(.idle)
             }
         }
@@ -121,7 +123,10 @@ extension TalkModeRuntime {
 
     private func startNativeFallback(generation: Int, status: String? = nil) async {
         let relayGeneration = realtimeRelayGeneration
-        let recognitionStarted = await startRecognition(lifecycleGeneration: generation)
+        let optedIn = await self.chimeEnabled(.wake)
+        let gate = optedIn ? OSAllocatedUnfairLock(initialState: true) : nil
+        defer { gate?.withLock { $0 = false } }
+        let recognitionStarted = await startRecognition(lifecycleGeneration: generation, chimeGate: gate)
         guard await self.commitNativeFallback(
             recognitionStarted: recognitionStarted,
             lifecycleGeneration: generation,
@@ -129,7 +134,11 @@ extension TalkModeRuntime {
             relayGeneration: relayGeneration,
             status: status)
         else { return }
-        guard recognitionStarted else { return }
+        guard recognitionStarted, self.isCurrent(generation), !self.isPaused else { return }
+        if let cue = self.chimeLifecycle.ready(enabled: optedIn) {
+            await self.playChime(cue)
+        }
+        guard self.isCurrent(generation), !self.isPaused else { return }
         startAudioInputObserver()
         startSilenceMonitor()
     }
@@ -155,6 +164,7 @@ extension TalkModeRuntime {
                 self.controller()?.updatePartialTranscript(
                     String(localized: "Realtime unavailable — native speech could not start"))
             }
+            self.controller()?.updateActiveRoute(isRealtime: recognitionStarted ? false : nil)
             self.controller()?.updatePhase(recognitionStarted ? .listening : .idle)
         }
     }
@@ -225,13 +235,23 @@ extension TalkModeRuntime {
             bootstrap: bootstrap,
             lifecycleGeneration: generation,
             relayGeneration: relayGeneration)
-        try await ownAndStartRealtimeSession(
+        let optedIn = await self.chimeEnabled(.wake)
+        try await self.ownAndStartRealtimeSession(
             session,
             lifecycleGeneration: generation,
-            relayGeneration: relayGeneration)
+            relayGeneration: relayGeneration,
+            gateChimeInput: optedIn)
+        if let cue = self.chimeLifecycle.ready(enabled: optedIn) {
+            await self.playChime(cue)
+        }
+        await MainActor.run { session.setChimeInputGated(false) }
+        guard self.isCurrent(generation), self.ownsRealtimeRelay(relayGeneration, session) else {
+            throw CancellationError()
+        }
         realtimeSessionReadyAt = Date()
         phase = .listening
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
+            self.controller()?.updateActiveRoute(isRealtime: true)
             self.controller()?.updatePartialTranscript("")
             self.controller()?.updatePhase(.listening)
         }
@@ -320,7 +340,8 @@ extension TalkModeRuntime {
     private func ownAndStartRealtimeSession(
         _ session: RealtimeTalkRelaySession,
         lifecycleGeneration: Int,
-        relayGeneration: UInt64) async throws
+        relayGeneration: UInt64,
+        gateChimeInput: Bool) async throws
     {
         // Construction crosses executors. Claim ownership only after every lifecycle and
         // attempt fact is revalidated, then publish before start can suspend.
@@ -334,6 +355,10 @@ extension TalkModeRuntime {
         }
         realtimeSession = session
         do {
+            await MainActor.run { session.setChimeInputGated(gateChimeInput) }
+            guard self.isCurrent(lifecycleGeneration), self.ownsRealtimeRelay(relayGeneration, session) else {
+                throw CancellationError()
+            }
             try await session.start()
             // A cancelled startup can return normally without a ready relay.
             guard await MainActor.run(body: { session.isReady }) else {
@@ -448,6 +473,7 @@ extension TalkModeRuntime {
             activeDuration: activeDuration)
         let delay = RealtimeTalkRecovery.restartDelayNanoseconds(attempt: attempt)
         guard await self.projectRealtimeRelay(terminalGeneration, nil, {
+            self.controller()?.updateActiveRoute(isRealtime: nil)
             self.controller()?.updateLevel(0)
             self.controller()?.updateSpeakingLevel(nil)
             self.controller()?.updatePhase(.idle)

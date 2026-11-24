@@ -921,16 +921,26 @@ struct TalkModeManagerTests {
         #expect(request.timeoutMs == 30000)
     }
 
-    @Test func `native Talk speaks a correlated reply without overriding the run deadline`() async throws {
+    @Test(.testWaitLimit)
+    func `native Talk speaks a correlated reply without overriding the run deadline`() async throws {
         let audio = Data([4, 5, 6])
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
             data: audio,
             provider: "xiaomi",
             outputFormat: "mp3"))
         let player = RecordingBufferedAudioPlayer()
+        let chimes = AsyncStream<TalkChimeLifecycle.Cue>.makeStream()
+        defer { chimes.continuation.finish() }
         let manager = TalkModeManager(
             allowSimulatorCapture: true,
-            gatewaySpeechSynthesizer: synthesizer)
+            gatewaySpeechSynthesizer: synthesizer,
+            chimePlaybackOverride: { cue in
+                if cue == .follow {
+                    #expect(player.finishedPlayback)
+                    #expect(player.payloads == [audio])
+                }
+                chimes.continuation.yield(cue)
+            })
         manager.bufferedPlayer = player
         let gateway = GatewayNodeSession()
         let fixture = TalkTurnGateway()
@@ -955,6 +965,9 @@ struct TalkModeManagerTests {
             #expect(runTimeoutMs == nil)
             #expect(synthesizer.requests.map(\.text) == ["Spoken reply"])
             #expect(player.payloads == [audio])
+            var cues = chimes.stream.makeAsyncIterator()
+            #expect(await cues.next() == .wake)
+            #expect(await cues.next() == .follow)
         } catch {
             manager.stop()
             await gateway.disconnect()
