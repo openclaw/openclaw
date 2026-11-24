@@ -15288,7 +15288,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
     );
     expect(npmCheckout.with?.["fetch-depth"]).toBe(
-      "${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}",
+      "${{ (inputs.fast_track_approval != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || (inputs.preflight_run_id != '' && '1' || '0') }}",
     );
 
     const publishSteps = publishJob.steps ?? [];

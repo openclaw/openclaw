@@ -155,8 +155,13 @@ node scripts/run-vitest.mjs run --config test/manual-release-approval.config.ts
 
 The suite stays outside normal CI discovery and refuses execution with `CI` set.
 
+## Public approval packets
+
 Approval packets are public release evidence. Include only public-safe risk descriptions
 and decision references. Never copy private release-managers messages, incident details,
 credentials or access-bearing URLs into the request. Keep the private discussion in its
 original group; disclose a conversation permalink only when the human authorizes making
 that reference public. The packet does not copy or authenticate that conversation.
+
+Context: [publisher integration #204520](https://github.com/openclaw/openclaw/pull/204520)
+retains these packets in public Actions artifacts and publication receipts.

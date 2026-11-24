@@ -2459,7 +2459,7 @@ describe("receipt recovery checklist consumption", () => {
     ],
   ] as const)(
     "binds workflow %s to its exact path %s",
-    async (workflowName, workflowPath, accepted, headBranch: string = "main") => {
+    async (workflowName, workflowPath, accepted, headBranch?: string) => {
       const result = runInNewContext(
         stripNodeTypeScriptTypes(
           checklistFunctions("waitForSuccessfulRun") +
@@ -2470,7 +2470,7 @@ describe("receipt recovery checklist consumption", () => {
           runInfo: async () => ({
             workflowName,
             workflowPath,
-            headBranch,
+            headBranch: headBranch ?? "main",
             headSha: "b".repeat(40),
             status: "completed",
             conclusion: "success",
