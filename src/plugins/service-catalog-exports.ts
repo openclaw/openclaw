@@ -40,6 +40,7 @@ export type PluginServiceExportCatalog = {
   list(params: {
     agentId?: string;
     limitPerHost?: number;
+    cursors?: Record<string, string>;
     source?: Pick<SessionCatalogLocator, "hostId" | "threadId" | "sourceHomeId">;
   }): Promise<CatalogExportHost[]>;
   read(
@@ -166,6 +167,9 @@ export function createPluginServiceCatalogExports(params: {
               const selected = new Set<string>();
               latest = selected;
               const source = request.source;
+              if (source && request.cursors !== undefined) {
+                throw new Error("Select an exact catalog source or request a page of hosts");
+              }
               if (source && (!source.hostId || !source.threadId || source.threadId.length > 500)) {
                 throw new Error("Invalid catalog source locator");
               }
@@ -185,12 +189,24 @@ export function createPluginServiceCatalogExports(params: {
                 return [];
               }
 
+              // Only the producer's currently admitted local hosts may receive a continuation.
+              let cursors: Record<string, string> | undefined;
+              if (request.cursors) {
+                cursors = Object.create(null) as Record<string, string>;
+                for (const hostId of hosts) {
+                  const cursor = request.cursors[hostId];
+                  if (Object.hasOwn(request.cursors, hostId) && typeof cursor === "string") {
+                    cursors[hostId] = cursor;
+                  }
+                }
+              }
               // Free-text search has no native-ID contract. The producer owns
               // visibility, the home boundary and its cheapest authoritative lookup.
               const listed = await provider.list({
                 agentId,
                 allowProcessHomeFallback,
                 hostIds: [...hosts],
+                ...(cursors ? { cursors } : {}),
                 ...(source ? { exportSource: source } : {}),
                 listNodes: async () => ({ nodes: [] }),
                 limitPerHost: Math.min(Math.max(1, request.limitPerHost ?? 50), 100),
