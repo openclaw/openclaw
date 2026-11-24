@@ -593,6 +593,15 @@ const schema = {
 };
 
 describe("OpenAI completions sampling and response format", () => {
+  it.each(["gpt-6.2-astra", "gpt-6.2-sol", "openai/gpt-6.2-sol"])(
+    "omits rejected sampling controls for %s",
+    (id) => {
+      const params = request({ id }, { temperature: 0.7, topP: 0.8 });
+      expect(params).not.toHaveProperty("temperature");
+      expect(params).not.toHaveProperty("top_p");
+    },
+  );
+
   it("forwards temperature and top_p", () => {
     const params = buildOpenAICompletionsParams(nonReasoningNative, emptyContext(), {
       temperature: 0.4,
