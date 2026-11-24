@@ -314,10 +314,12 @@ export function ToolCardRow(props: ToolCardProps) {
       </span>
       <Show
         when={
-          inline() &&
-          outcome() !== "failed" &&
-          outcome() !== "skipped" &&
-          !(view().command && outcome() === "running")
+          (inline() &&
+            outcome() !== "failed" &&
+            outcome() !== "skipped" &&
+            !(view().command && outcome() === "running")) ||
+          // A blocked image inspection is not grouped, so its own row shows the block.
+          (outcome() === "blocked" && unwrapToolCallForDisplay(card()).name === "view_image")
         }
       >
         <span class="chat-command-trail__status" role="status">

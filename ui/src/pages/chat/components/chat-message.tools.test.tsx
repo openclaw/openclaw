@@ -432,6 +432,26 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("keeps an image inspection waiting for approval outside command activity", async () => {
+    const messages = [
+      createAssistantMessage([createToolCall("command", "exec", { command: "ls preview.png" })]),
+      createToolResultMessage("command", "exec", "preview.png", { details: { exitCode: 0 } }),
+      createAssistantMessage([createToolCall("inspect", "view_image", { path: "preview.png" })]),
+      createToolResultMessage("inspect", "view_image", "Inspection awaits approval.", {
+        isError: true,
+        details: { status: "approval-pending", approvalId: "inspect-approval" },
+      }),
+    ];
+    const history = attachHistoryActivity(prepareChatHistoryFixture(messages));
+    renderActivityGroup(groupsOf(buildItems({ messages: history.messages })), {
+      showReasoning: false,
+    });
+    await settleToolBridges(harness.view);
+    const row = harness.view.querySelector(".chat-tool-msg-summary");
+    expect(row?.querySelector(".chat-tool-row__title")?.textContent).toBe("View image");
+    expect(row?.querySelector('[role="status"]')?.textContent).toBe("Blocked");
+  });
+
   it("opens the matching result from a group of image inspections", async () => {
     let timestamp = 0;
     const inspect = (id: string) => [
