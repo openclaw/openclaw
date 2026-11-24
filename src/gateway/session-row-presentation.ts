@@ -627,11 +627,14 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      select: (
+        retained?: Map<object, SessionListFilteredEntries>,
+        invited?: boolean,
+      ) => SessionEntrySelection,
     ) {
-      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      // Clocks and transient runs are not owned by metadata or membership publications.
       const live = opts.activeOnly || opts.activityPulseBoundaries;
-      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
+      if (opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);
@@ -644,8 +647,10 @@ export function prepareProjectedSessionPresentation(
         view.partitions = undefined;
       }
       if (!view.selection) {
+        view.invited = entryFilter !== undefined && sharing.sessionCap === "invited";
         const { entries, ownerSessionProfiles, ...facets } = select(
           publicationState?.lists.partitions(view),
+          view.invited,
         );
         Object.freeze(entries);
         view.selection = Object.freeze({

@@ -7,6 +7,13 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  beamMirrorTestFixture,
+  beamTestMirrorConfig,
+  beamTestNow,
+  createBeamTestRuntime,
+} from "./beam.test-support.js";
+import * as cleaner from "./cleaner.js";
+import {
   openBeamMirrorEnrollment,
   type MirrorPublicationStoreValue,
 } from "./mirror-publication.js";
@@ -61,6 +68,60 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   await state.cleanup();
+});
+
+it("reuses only the settled receiver receipt after freshly reading an enrolled source", async () => {
+  const endpoint = "https://team.example/api/v2/beam";
+  const catalog = {
+    id: source.catalogId,
+    hostId: source.hostId,
+    sessions: [{ ...source, recencyAt: beamTestNow }],
+  };
+  const fixture = beamMirrorTestFixture();
+  const getStore = (authority: { assertCurrent(): void }) =>
+    createPluginStateKeyedStoreV2ForTests<MirrorPublicationStoreValue>(
+      "beam",
+      { namespace: "mirror-publications", retention: "retained", env: state.env },
+      authority,
+    );
+  const runtime = createBeamTestRuntime(
+    beamTestMirrorConfig({ endpoint, catalogs: [source.catalogId], token: "publisher-test" }),
+  );
+  const read = vi.fn();
+  const runner = fixture.runner(
+    { ...catalog, onRead: read },
+    { runtime, getPublicationStore: getStore },
+  );
+  vi.mocked(transport.enrollBeamMirrorV2).mockImplementationOnce(async (request) => ({
+    state: "published",
+    head: { ...head, sha256: digest(Buffer.from(request.raw)) },
+  }));
+  const authority = { async revalidate() {}, assertCurrent() {} };
+  const enrolled = await runner.enroll(source, authority);
+  expect(enrolled.state).toBe("published");
+  await runner.tick();
+  await runner.tick();
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(2);
+  expect(transport.publishBeamMirrorV2).not.toHaveBeenCalled();
+
+  // The durable receipt can change in another writer while this poll's read is outstanding.
+  const other = (await open())!;
+  vi.mocked(transport.publishBeamMirrorV2)
+    .mockRejectedValueOnce(new Error("lost acknowledgement"))
+    .mockResolvedValueOnce({ state: "released" });
+  read.mockImplementationOnce(async () => {
+    await expect(other.publish(id, Buffer.from("pending edit"))).rejects.toThrow(
+      "lost acknowledgement",
+    );
+  });
+  await runner.tick();
+  expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(3);
+  const [first, replay] = vi.mocked(transport.publishBeamMirrorV2).mock.calls;
+  expect(replay?.[0].intent).toEqual(first?.[0].intent);
+  expect((await open())?.fenced).toBe("released");
+  await runner.tick();
+  expect(cleaner.cleanBeamCandidate).toHaveBeenCalledTimes(3);
 });
 
 it("requires a positive operator enrollment and keeps a released generation fenced on reopen", async () => {

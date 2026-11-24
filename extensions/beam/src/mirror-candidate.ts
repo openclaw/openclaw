@@ -19,6 +19,7 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
 export function buildBeamMirrorItems(items: readonly CatalogExportItem[]) {
   const out: BeamCleanCandidate["items"] = [];
   const dropped = new Map<string, number>();
+  const speakers = new Map<string, string>();
   const truncated = items.some((item) => item.truncated);
   const flush = () => {
     if (dropped.size > 0) {
@@ -36,7 +37,14 @@ export function buildBeamMirrorItems(items: readonly CatalogExportItem[]) {
     const text = item.text?.trim();
     if ((item.type === "userMessage" || item.type === "agentMessage") && text) {
       flush();
-      out.push({ type: item.type, text, ...(item.speakerId ? { speakerId: item.speakerId } : {}) });
+      // Grants rotate private speaker tokens. The cleaner needs only their equality
+      // within this selection, including when it trims an older part of the history.
+      let speakerId: string | undefined;
+      if (item.speakerId) {
+        speakerId = speakers.get(item.speakerId) ?? String(speakers.size + 1);
+        speakers.set(item.speakerId, speakerId);
+      }
+      out.push({ type: item.type, text, ...(speakerId ? { speakerId } : {}) });
       continue;
     }
     const label = labels[item.type] ?? "other entries";

@@ -1126,6 +1126,7 @@ src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-service-installation-context.ts
+src/infra/gateway-state-owner-cold-admission.ts
 src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
