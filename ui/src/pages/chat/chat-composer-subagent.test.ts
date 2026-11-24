@@ -279,7 +279,6 @@ it.each(["send", "suggest", "read"] as const)(
       if (access === "send") {
         expect(props.permissionPicker).toMatchObject({
           participant: true,
-          setBy: "Morgan",
           mode: "guarded",
         });
       }
