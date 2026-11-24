@@ -10,40 +10,52 @@ import {
   prepareModelPromptProjection,
   readModelPromptProjection,
 } from "./user-turn-transcript.message.js";
-import {
-  normalizePersistedSteerTargetRunId,
-  rewritePersistedSteerTargetRunId,
-} from "./user-turn-transcript.metadata.js";
+import { normalizePersistedSteerTargetRunId } from "./user-turn-transcript.metadata.js";
 import type {
+  NativeSteerInputIdentity,
   PreparedModelPromptProjection,
   UserTurnTranscriptAdmissionReceipt,
 } from "./user-turn-transcript.types.js";
 
-export async function confirmPersistedSteerTargetRunId(params: {
-  admission: UserTurnTranscriptAdmissionReceipt;
-  targetRunId: string;
-}): Promise<
+export async function confirmPersistedSteerTargetRunId(
+  receipt: UserTurnTranscriptAdmissionReceipt,
+  targetRunId: string,
+  nativeInputIdentity?: NativeSteerInputIdentity,
+): Promise<
   | {
       admission: UserTurnTranscriptAdmissionReceipt;
       message: PersistedUserTurnMessage;
     }
   | undefined
 > {
-  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(params.admission, (message) => {
+  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(receipt, (message) => {
     if (!isUserMessage(message)) {
       return undefined;
     }
-    const currentTarget = normalizePersistedSteerTargetRunId(
-      message["__openclaw"]?.steerTargetRunId,
-    );
-    return currentTarget === params.targetRunId
-      ? undefined
-      : rewritePersistedSteerTargetRunId(message, params.targetRunId);
+    const existing = message["__openclaw"];
+    let changed = normalizePersistedSteerTargetRunId(existing?.steerTargetRunId) !== targetRunId;
+    for (const [key, value] of Object.entries(nativeInputIdentity ?? {})) {
+      if (existing?.[key] === value) {
+        continue;
+      }
+      if (existing?.[key] !== undefined) {
+        throw new Error(
+          "Accepted native input identity conflicts with the committed transcript row.",
+        );
+      }
+      changed = true;
+    }
+    return changed
+      ? {
+          ...message,
+          __openclaw: { ...existing, steerTargetRunId: targetRunId, ...nativeInputIdentity },
+        }
+      : undefined;
   });
   if (!rewritten) {
     return undefined;
   }
-  const admission = { ...params.admission, generation: rewritten.generation };
+  const admission = { ...receipt, generation: rewritten.generation };
   await publishTranscriptUpdate(admission, {
     message: rewritten.message,
     messageId: admission.entryId,

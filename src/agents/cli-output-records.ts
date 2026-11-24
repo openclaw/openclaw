@@ -384,6 +384,17 @@ export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStart
   return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
 }
 
+/** A snapshot may introduce text after the call. Its wire offset then belongs to that later text. */
+export function claudeSnapshotEndsAtTool(content: unknown, callId: string): boolean {
+  return (
+    Array.isArray(content) &&
+    content.findLast(
+      (block: unknown) =>
+        isRecord(block) && (block.id === callId || (block.type === "text" && block.text)),
+    )?.id === callId
+  );
+}
+
 export function isClaudeToolResultBlockType(type: unknown): boolean {
   return typeof type === "string" && (type === "tool_result" || type.endsWith("_tool_result"));
 }

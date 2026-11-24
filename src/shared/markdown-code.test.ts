@@ -17,4 +17,5 @@ it.each([
 
 it("formatFencedCodeBlock keeps a fence longer than inner runs", () => {
   expect(formatFencedCodeBlock("a ``b`` c")).toBe("```\na ``b`` c\n```");
+  expect(formatFencedCodeBlock("a ````b```` c")).toBe("`````\na ````b```` c\n`````");
 });
