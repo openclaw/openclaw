@@ -163,6 +163,9 @@ const mockState = vi.hoisted(() => {
     lastDispatchCtx: undefined as MsgContext | undefined,
     lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
     lastDispatchImageOrder: undefined as string[] | undefined,
+    lastDispatchFastModeOverride: undefined as NonNullable<
+      TestDispatchParams["replyOptions"]
+    >["fastModeOverride"],
     lastDispatchThinkingLevelOverride: undefined as string | undefined,
     lastDispatchNormalizeThinking: undefined as boolean | undefined,
     lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
@@ -334,6 +337,7 @@ dispatchInboundMessageMock.mockImplementation(
     mockState.lastDispatchCtx = params.ctx;
     mockState.lastDispatchImages = params.replyOptions?.images;
     mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
+    mockState.lastDispatchFastModeOverride = params.replyOptions?.fastModeOverride;
     mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
     mockState.lastDispatchNormalizeThinking = params.replyOptions?.normalizeThinkingLevelOverride;
     mockState.lastDispatchOriginatingLeafEntryId =
@@ -3940,6 +3944,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(nodeSend?.[1]).toBe("chat");
         expect(nodeSend?.[2].sessionKey).toBe(canonicalKey);
       }
+    },
+  );
+
+  it.each([true, false])(
+    "dispatches Talk run settings only for marked chat.send turns (%s)",
+    async (marked) => {
+      await createReadyChatTranscript("openclaw-chat-send-split-talk-");
+      mockState.config.talk = { consultThinkingLevel: "low", consultFastMode: false };
+      await createChatRequestFixture().send({
+        idempotencyKey: "idem-split-talk-settings",
+        message: "hello from phone",
+        requestParams: marked ? { useTalkSettings: true } : {},
+        expectBroadcast: false,
+      });
+      expect(mockState.lastDispatchThinkingLevelOverride).toBe(marked ? "low" : undefined);
+      expect(mockState.lastDispatchFastModeOverride).toBe(marked ? false : undefined);
+      expect(mockState.lastDispatchNormalizeThinking).toBe(marked);
     },
   );
 

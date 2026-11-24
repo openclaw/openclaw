@@ -315,6 +315,7 @@ export function createPageState(
       requestChatSend(state, {
         message,
         runId,
+        useTalkSettings: true,
         expectedLeafEntryId: resolveDisplayedLeafEntryId(state),
       }),
     async () => {

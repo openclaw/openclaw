@@ -435,6 +435,8 @@ export const ChatSendParamsSchema = closedObject({
   ),
   workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
+  // Resolve the server-configured run preferences for a split Talk turn.
+  useTalkSettings: Type.Optional(Type.Literal(true)),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),

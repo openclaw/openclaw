@@ -52,6 +52,7 @@ export async function prepareAndAdmitChatSend(
   const normalization = normalizeChatSendRequest({
     params,
     client,
+    ...(params.useTalkSettings === true ? { talkSettings: context.getRuntimeConfig().talk } : {}),
     ...(options?.activeSteer ? { activeSteer: options.activeSteer } : {}),
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),

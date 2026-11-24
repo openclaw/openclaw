@@ -879,7 +879,7 @@ var External = [
     /(^sessionKey$|^agentId$|^sessionId$|^inputIds$)/u,
     /(^sessionKey$|^agentId$|^sessionId$|^runId$)/u,
     /(^sessionKey$|^runId$)/u,
-    /(^sessionKey$|^agentId$|^sessionId$|^expectedSessionId$|^message$|^mentions$|^appContext$|^workContext$|^intent$|^thinking$|^fastMode$|^fastAutoOnSeconds$|^queueMode$|^deliver$|^originatingChannel$|^originatingTo$|^originatingAccountId$|^originatingThreadId$|^replyToId$|^attachments$|^toolBindings$|^timeoutMs$|^systemInputProvenance$|^systemProvenanceReceipt$|^suppressCommandInterpretation$|^expectedLeafEntryId$|^expectedSessionRoutingContract$|^expectedPermissionMode$|^expectedToolOverrides$|^idempotencyKey$)/u,
+    /(^sessionKey$|^agentId$|^sessionId$|^expectedSessionId$|^message$|^mentions$|^appContext$|^workContext$|^intent$|^useTalkSettings$|^thinking$|^fastMode$|^fastAutoOnSeconds$|^queueMode$|^deliver$|^originatingChannel$|^originatingTo$|^originatingAccountId$|^originatingThreadId$|^replyToId$|^attachments$|^toolBindings$|^timeoutMs$|^systemInputProvenance$|^systemProvenanceReceipt$|^suppressCommandInterpretation$|^expectedLeafEntryId$|^expectedSessionRoutingContract$|^expectedPermissionMode$|^expectedToolOverrides$|^idempotencyKey$)/u,
     /(^profileId$|^start$|^end$)/u,
     /(^title$|^uri$|^icon$|^description$)/u,
     /(^page$|^title$|^sessionKey$|^sessionId$|^agentId$|^workspace$|^file$|^selection$|^detail$)/u,
@@ -6306,6 +6306,9 @@ var External = [
     (value.appContext === void 0 || !("appContext" in value) || check_858(value.appContext)) &&
     (value.workContext === void 0 || !("workContext" in value) || check_863(value.workContext)) &&
     (value.intent === void 0 || !("intent" in value) || check_872(value.intent)) &&
+    (value.useTalkSettings === void 0 ||
+      !("useTalkSettings" in value) ||
+      check_330(value.useTalkSettings)) &&
     (value.thinking === void 0 || !("thinking" in value) || check_276(value.thinking)) &&
     (value.fastMode === void 0 || !("fastMode" in value) || check_874(value.fastMode)) &&
     (value.fastAutoOnSeconds === void 0 ||

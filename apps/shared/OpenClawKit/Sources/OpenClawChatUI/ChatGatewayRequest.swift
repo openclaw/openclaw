@@ -711,6 +711,7 @@ public enum OpenClawChatGatewayRequests {
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
+        useTalkSettings: Bool = false,
         runTimeoutMs: Int? = nil,
         requestTimeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
@@ -725,6 +726,7 @@ public enum OpenClawChatGatewayRequests {
             to: &params,
             key: "expectedSessionRoutingContract")
         self.add(thinking, to: &params, key: "thinking")
+        if useTalkSettings { params["useTalkSettings"] = AnyCodable(true) }
         self.add(queueMode?.rawValue, to: &params, key: "queueMode")
         if supportsSessionSettingsCAS, let expectedSessionSettings {
             params["expectedPermissionMode"] = expectedSessionSettings.permissionMode

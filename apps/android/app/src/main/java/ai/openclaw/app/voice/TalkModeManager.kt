@@ -2592,17 +2592,18 @@ class TalkModeManager internal constructor(
     val sessionKey = synchronized(realtimeCapturePauseLock) { mainSessionKey }
     val runId = UUID.randomUUID().toString()
     armPendingRun(runId)
-    val params =
-      buildJsonObject {
-        put("sessionKey", JsonPrimitive(sessionKey))
-        put("message", JsonPrimitive(message))
-        // Omit the run deadline so the Gateway's configured agent timeout applies.
-        put("idempotencyKey", JsonPrimitive(runId))
-      }
     try {
       val lease =
         session.captureRequestLease(gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() })
           ?: throw GatewayRequestNotEnqueued("not connected")
+      val params =
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(sessionKey))
+          put("message", JsonPrimitive(message))
+          // Omit the run deadline so the Gateway's configured agent timeout applies.
+          put("idempotencyKey", JsonPrimitive(runId))
+          if (lease.supportsCapability("talk-chat-settings")) put("useTalkSettings", JsonPrimitive(true))
+        }
       val res =
         lease.requestAwaitingStartup("chat.send", params.toString()) { enqueue ->
           synchronized(realtimeCapturePauseLock) {

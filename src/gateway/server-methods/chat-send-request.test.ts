@@ -358,3 +358,25 @@ it.each([
     }
   },
 );
+
+it.each([
+  [true, { consultThinkingLevel: "low", consultFastMode: false }, "low", false],
+  [true, { consultThinkingLevel: "off", consultFastMode: true }, "off", true],
+  [true, {}, undefined, undefined],
+  [false, { consultThinkingLevel: "low", consultFastMode: false }, undefined, undefined],
+] as const)(
+  "applies configured run preferences only to split Talk sends (%s, %j)",
+  async (useTalkSettings, talkSettings, thinking, fastMode) => {
+    const result = await normalizeChatSendRequest({
+      params: requestParams({ ...(useTalkSettings ? { useTalkSettings: true } : {}) }),
+      client: humanClient(),
+      talkSettings,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.p.thinking).toBe(thinking);
+    expect(result.value.p.fastMode).toBe(fastMode);
+    expect(result.value.normalizeThinkingLevelOverride).toBe(thinking !== undefined);
+    expect(result.value.systemInputProvenance).toBeUndefined();
+  },
+);

@@ -588,6 +588,7 @@ extension TalkModeRuntime {
                     thinking: nil,
                     idempotencyKey: runId,
                     attachments: [],
+                    useTalkSettings: true,
                     ifCurrentRoute: route)
             }
             guard self.isCurrent(gen) else { return }

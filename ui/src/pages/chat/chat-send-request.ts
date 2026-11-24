@@ -37,6 +37,7 @@ export async function requestChatSend(
     agentId?: string;
     queueMode?: QueueMode;
     intent?: ChatSendIntent;
+    useTalkSettings?: true;
     sessionId?: string;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
@@ -109,6 +110,7 @@ export async function requestChatSend(
         ...(params.workContext ? { workContext: params.workContext } : {}),
         ...(params.appContext ? { appContext: params.appContext } : {}),
         ...(params.mentions?.length ? { mentions: params.mentions } : {}),
+        ...(params.useTalkSettings ? { useTalkSettings: true } : {}),
         ...(params.intent ? { intent: params.intent } : {}),
         deliver: false,
         ...(params.replyToId ? { replyToId: params.replyToId } : {}),
