@@ -95,6 +95,7 @@ async function providerFixture(signal: AbortSignal) {
   const calls: Array<{
     cycle: number;
     name: Case | "child";
+    input: string;
     current: string;
     resumeInput: boolean;
     ordinal: number;
@@ -182,6 +183,7 @@ async function providerFixture(signal: AbortSignal) {
           calls.push({
             cycle,
             name,
+            input,
             current,
             resumeInput: hasNewResumeInput(body),
             ordinal: requestOrdinal,
@@ -978,6 +980,116 @@ it.skipIf(process.platform === "win32")(
         expect(instance.logs()).not.toContain("no current run authority");
       },
       () => client?.close(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+// An input the Gateway acknowledged is owed a turn when a graceful restart follows its ack. A
+// follow-up either queues behind the running turn, or, when the previous turn has just ended,
+// becomes its own turn and is still being admitted at SIGTERM.
+it.skipIf(process.platform === "win32").for([
+  { state: "queued behind a running turn", delayMs: 60, predecessorEnded: false },
+  { state: "admitted as its own turn", delayMs: 0, predecessorEnded: true },
+])(
+  "keeps an acknowledged follow-up $state across a graceful restart",
+  { timeout: 180_000 },
+  async ({ delayMs, predecessorEnded }, { signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-acked-followup-restart",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(model),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    const sessionKey = key(3, "stream");
+    const followupKey = randomUUID();
+    let client: GatewayClient | undefined;
+    const history = () =>
+      client!.request<{ messages: unknown[]; sessionInfo: { hasActiveRun: boolean } }>(
+        "chat.history",
+        { sessionKey, limit: 100 },
+      );
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        const first = await client.request<{ runId: string }>(
+          "chat.send",
+          { sessionKey, message: marker(3, "stream"), idempotencyKey: randomUUID() },
+          { expectFinal: false },
+        );
+        await provider.wait("ready:3:stream");
+        if (predecessorEnded) {
+          await client.request("chat.abort", { sessionKey, runId: first.runId });
+          await vi.waitFor(
+            async () => expect((await history()).sessionInfo.hasActiveRun).toBe(false),
+            { timeout: 15_000 },
+          );
+        }
+        await client.request(
+          "chat.send",
+          {
+            sessionKey,
+            message: queued(3, 1),
+            idempotencyKey: followupKey,
+            ...(predecessorEnded ? {} : { queueMode: "followup" }),
+          },
+          { expectFinal: false },
+        );
+        await delay(delayMs);
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        // Accepted rows key the request's idempotency key with a ':user' suffix.
+        const cancelled = () => {
+          using database = new DatabaseSync(
+            resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+            { readOnly: true },
+          );
+          return database
+            .prepare(
+              "SELECT idempotency_key, consumed_event_id FROM session_pending_inputs WHERE idempotency_key LIKE ? AND state = 'cancelled' AND end_cause = 'restart-unrecoverable'",
+            )
+            .all(`${followupKey}%`);
+        };
+        const callsBeforeRestart = provider.calls.length;
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        // An interrupted turn resumes; its held resume request is released when it arrives.
+        void provider
+          .wait("resume:3:stream")
+          .then(() => provider.release(3))
+          .catch(() => {});
+        await vi.waitFor(
+          async () => {
+            expect(
+              provider.calls
+                .slice(callsBeforeRestart)
+                .some((call) => call.input.includes(queued(3, 1))),
+              JSON.stringify(cancelled()),
+            ).toBe(true);
+            expect((await history()).sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 30_000 },
+        );
+        expect(cancelled()).toEqual([]);
+      },
+      () => client?.stopAndWait(),
       () => instance.cleanup(),
       provider.close,
     );
