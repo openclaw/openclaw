@@ -202,13 +202,43 @@ function flush(key: string, held: HeldOccurrence[]) {
   );
   const [head, ...others] = owed;
   if (head && others.length > 0) {
-    // A failed fold leaves the rows; their settlement ends the ones the shared turn answered.
-    void fold(head, others)
-      .catch(() => {})
-      .finally(() => startSharedTurn(key, held, group, target, occurrences, text));
+    // The fold makes the first row carry every result in one write. If it fails, no member is
+    // double-carried: the shared turn is refused and each member retries its own stored row.
+    void fold(head, others).then(
+      () => startSharedTurn(key, held, group, target, occurrences, text),
+      (error: unknown) => {
+        for (const member of group) {
+          member.ownership.release();
+        }
+        refuseSharedTurn(key, held, group, occurrences, error);
+      },
+    );
     return;
   }
   startSharedTurn(key, held, group, target, occurrences, text);
+}
+
+function refuseSharedTurn(
+  key: string,
+  held: HeldOccurrence[],
+  group: HeldOccurrence[],
+  occurrences: HeldOccurrence["occurrence"][],
+  error: unknown,
+) {
+  // A rejected occurrence carries no producer contract; consume it.
+  consumeSelectedSystemEventEntries(group[0]!.queueKey, occurrences);
+  for (const member of group) {
+    member.retired = true;
+    member.releaseAuthority?.();
+    member.accepted.resolve({ ok: false, error: String(error) });
+    member.settled.resolve({
+      status: "failed",
+      executionStarted: false,
+      delivered: false,
+      error: String(error),
+    });
+  }
+  flush(key, held);
 }
 
 function startSharedTurn(
@@ -232,20 +262,7 @@ function startSharedTurn(
       occurrences,
     });
   } catch (error) {
-    // A rejected occurrence carries no producer contract; consume it.
-    consumeSelectedSystemEventEntries(first.queueKey, occurrences);
-    for (const member of group) {
-      member.retired = true;
-      member.releaseAuthority?.();
-      member.accepted.resolve({ ok: false, error: String(error) });
-      member.settled.resolve({
-        status: "failed",
-        executionStarted: false,
-        delivered: false,
-        error: String(error),
-      });
-    }
-    flush(key, held);
+    refuseSharedTurn(key, held, group, occurrences, error);
     return;
   }
   const batch = { receipt, size: group.length, cancelled: new Set<HeldOccurrence>() };
