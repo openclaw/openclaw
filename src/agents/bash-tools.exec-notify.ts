@@ -5,6 +5,11 @@ import type {
   SessionEventOutcome,
 } from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
+import {
+  readSessionEventTargetCommandOwner,
+  readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetRequesterOwner,
+} from "../auto-reply/reply/session-event-target.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -34,26 +39,6 @@ import {
   renderExecOutputFile,
 } from "./bash-tools.exec-output.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
-
-function enqueueExecExitNotification(
-  text: string,
-  target: NonNullable<ProcessSession["notifySessionTarget"]>,
-  id: string,
-  options: Omit<
-    Parameters<typeof enqueueSessionEvent>[1],
-    "agentId" | "sessionKey" | "source"
-  > = {},
-) {
-  return enqueueSessionEvent(text, {
-    ...options,
-    agentId: target.agentId!,
-    sessionKey: target.sessionKey!,
-    source: "exec",
-    contextKey: options.contextKey ?? `exec:${id}`,
-    sourceTurnId: `exec:${id}`,
-    expectedTarget: target,
-  });
-}
 
 /** Capture the original session before spawning work that may outlive its turn. */
 export function prepareExecExitNotification(
@@ -262,32 +247,46 @@ function prepareExecExitWake(
 }
 
 /**
- * Wakes a chat from its stored exec result, with the producer's captured target when it still
- * holds one; otherwise admission captures the chat's current target (restart recovery).
- * Its settlement ends the row if this stored wake also fails.
+ * The one exec wake: it delivers a stored exec result through session-event admission. A live
+ * wake passes the producer's captured target; restart recovery passes none, so admission
+ * captures the chat's current target. Its settlement reads the stored row; `retries` stored
+ * wakes follow a failed one.
  */
 export function wakeOwedExec(
   owed: Owed,
   options: Omit<SessionEventOptions, "agentId" | "sessionKey" | "source"> = {},
-) {
-  const receipt = enqueueSessionEvent(owed.text, {
-    ...options,
-    agentId: owed.to.agentId,
-    sessionKey: owed.to.sessionKey,
-    source: "exec",
-    contextKey: owed.id,
-    sourceTurnId: owed.id,
-  });
-  void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome));
-  return receipt;
+  onWake?: (cancel: () => boolean) => void,
+  retries = 0,
+): void {
+  const wakeAgain =
+    retries > 0 ? (stored: Owed) => wakeOwedExec(stored, options, onWake, retries - 1) : undefined;
+  let receipt: ReturnType<typeof enqueueSessionEvent>;
+  try {
+    receipt = enqueueSessionEvent(owed.text, {
+      ...options,
+      agentId: owed.to.agentId,
+      sessionKey: owed.to.sessionKey,
+      source: "exec",
+      contextKey: owed.id,
+      sourceTurnId: owed.id,
+    });
+  } catch (error) {
+    // A refused enqueue (for example a full wake pool) settles like a wake that never started.
+    const failed = { status: "failed", executionStarted: false, delivered: false } as const;
+    void settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
+    return;
+  }
+  onWake?.(receipt.cancel);
+  void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
 }
 
 /**
  * Settles a wake by the stored row, not by its outcome; a row its turn appended needs nothing.
  * A completed wake that left the row pending answered it inside a shared turn's input, which
- * carries every result it answers; the row is hidden. A live wake that failed wakes the chat
- * once more from stored state. A stop, or a stored wake that also fails, withholds the result
- * with that cause. Restart drains leave the row owed for restart recovery.
+ * carries every result it answers; the row is hidden. A failed wake with a retry left wakes the
+ * chat again from the stored row (a shared wake's row carries its folded text). A stop, or a
+ * failure with no retry left, withholds the result with that cause. Restart drains leave the
+ * row owed for restart recovery.
  */
 async function settleOwedExecWake(
   owed: Owed,
@@ -304,18 +303,11 @@ async function settleOwedExecWake(
     }
     if (outcome.status === "completed") {
       await withhold(owed, "failed", "interrupted");
-      return;
+    } else if (outcome.status === "failed" && wakeAgain) {
+      wakeAgain(stored);
+    } else {
+      await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }
-    if (outcome.status === "failed" && wakeAgain) {
-      try {
-        // A shared wake's row carries the folded text of every result it answers.
-        wakeAgain(stored);
-        return;
-      } catch (error) {
-        logWarn(`exec: completion ${owed.id} retry was refused (${formatErrorMessage(error)}).`);
-      }
-    }
-    await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
   } catch (error) {
     logWarn(`exec: completion ${owed.id} stays owed (${formatErrorMessage(error)}).`);
   }
@@ -353,35 +345,29 @@ async function notifyOnExit(
       return;
     }
     try {
-      const instanceId = processSessionInstanceId(session);
+      const commandOwner = readSessionEventTargetCommandOwner(target)?.requester;
+      const operatorProfileId = readSessionEventTargetOperatorAuthority(target)?.profileId;
       // The result is stored before any delivery: a Goal check or restart sees it from here on.
       const owed: Owed = {
-        id: `exec:${instanceId}`,
+        id: `exec:${processSessionInstanceId(session)}`,
         to: chatRef({ agentId, storePath: target.storePath, sessionKey: eventSessionKey }),
         kind: "exec",
         text: eventText,
+        originFacts: {
+          requester: readSessionEventTargetRequesterOwner(target)?.requester,
+          ...(commandOwner ? { commandOwner } : {}),
+          ...(operatorProfileId ? { operatorProfileId } : {}),
+        },
       };
       await owe(owed);
-      // Admission resolves the chat by key: a deleted chat refuses the wake.
-      const wakeOptions = { ...eventOptions, sourceRunId: session.startedByRunId };
-      // The retry keeps the captured target, so admission revalidates the requester's authority
-      // and store, and the request owners; it takes over the removal handle.
-      const wakeAgain = (stored: Owed) =>
-        recordNotifyOnExitRemoval(
-          session,
-          wakeOwedExec(stored, { ...wakeOptions, expectedTarget: target }).cancel,
-        );
-      let receipt: ReturnType<typeof enqueueExecExitNotification>;
-      try {
-        receipt = enqueueExecExitNotification(eventText, target, instanceId, wakeOptions);
-      } catch (error) {
-        // A refused enqueue (for example a full wake pool) settles like a wake that never started.
-        const failed = { status: "failed", executionStarted: false, delivered: false } as const;
-        void settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
-        return;
-      }
-      recordNotifyOnExitRemoval(session, receipt.cancel);
-      void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
+      // Admission resolves the chat by key: a deleted chat refuses the wake. The captured target
+      // and request owners carry the requester's authority into the one retry as well.
+      wakeOwedExec(
+        owed,
+        { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
+        (cancel) => recordNotifyOnExitRemoval(session, cancel),
+        1,
+      );
     } catch (error) {
       logWarn(
         `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,

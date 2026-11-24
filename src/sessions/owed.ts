@@ -4,6 +4,10 @@
  * its id, or when it is withheld with a cause.
  */
 import { randomUUID } from "node:crypto";
+import type {
+  CommandOwnerRequester,
+  SessionEventRequesterOwner,
+} from "../auto-reply/reply/session-event-target.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
@@ -12,7 +16,23 @@ import { readOwedKind, type OwedKind } from "../config/sessions/session-pending-
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { ChatRef } from "./chat-ref.js";
 
-export type Owed = { id: string; to: ChatRef; kind: OwedKind; text: string };
+/**
+ * Who produced the result, saved as data. Consumption does not read it yet; a later slice
+ * intersects it with current policy without a migration.
+ */
+export type OwedOriginFacts = Readonly<{
+  requester?: SessionEventRequesterOwner["requester"];
+  commandOwner?: CommandOwnerRequester;
+  operatorProfileId?: string;
+}>;
+
+export type Owed = {
+  id: string;
+  to: ChatRef;
+  kind: OwedKind;
+  text: string;
+  originFacts?: OwedOriginFacts;
+};
 
 /** Opens the owed row's store at the chat's current transcript and reads the row by its id. */
 async function openOwed(item: Owed) {
@@ -51,6 +71,7 @@ const owedMessageJson = (item: Owed) =>
     idempotencyKey: item.id,
     provenance: { kind: "internal_system", sourceTool: item.kind },
     kind: item.kind,
+    ...(item.originFacts ? { originFacts: item.originFacts } : {}),
   });
 
 /** The only writer of new owed rows. A second write of the same id keeps the first row. */
