@@ -5,15 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import {
-  markPluginRegistryActive,
-  markPluginRegistryRetired,
-  revokePluginRecord,
-} from "../plugins/registry-lifecycle.js";
-import { createOwnershipRecord } from "../plugins/registry-ownership.test-support.js";
-import { createRuntimeTestRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionWebSocketSessionOptions as WebSocketOptions,
@@ -561,60 +552,3 @@ it.each(["malformed", "oversized"] as const)("rejects %s frames before dispatch"
     expect(session.isConnected()).toBe(true);
   }
 });
-
-// The facade supplies real record authority; neither the transport nor the test mints a boolean grant.
-it.each(["connect", "send"] as const)(
-  "rejects a revoked plugin at the final websocket %s effect",
-  async (boundary) => {
-    const fixture = await setup();
-    const paused = createDeferred();
-    const release = createDeferred();
-    const runtime = createPluginRuntime();
-    runtime.mediaUnderstanding.transcribeAudioStream = async () => {
-      const session = createSession({
-        url: fixture.url,
-        readyOnOpen: true,
-        lifecycle: "utterance",
-        headers: async () => {
-          if (boundary === "connect") {
-            paused.resolve();
-            await release.promise;
-          }
-          return {};
-        },
-      });
-      await session.connect();
-      if (boundary === "send") {
-        paused.resolve();
-        await release.promise;
-      }
-      session.sendAudio(Buffer.from("synthetic"));
-      return { supported: true, text: "", no_speech: true, mode: "realtime", provider: "fixture" };
-    };
-    const builder = createRuntimeTestRegistry(runtime);
-    const record = createOwnershipRecord("transport-owner");
-    const api = builder.createApi(record, { config: {} });
-    const instance = expectDefined(getPluginInstance(record), "plugin instance");
-    markPluginRegistryActive(builder.registry);
-    try {
-      const stream = expectDefined(api.runtime.mediaUnderstanding.transcribeAudioStream, "stream");
-      const pending = stream({
-        cfg: {},
-        agentId: "main",
-        audio: (async function* () {})(),
-        format: { encoding: "pcm_s16le", sampleRate: 16000, channels: 1 },
-        signal: new AbortController().signal,
-      });
-      await paused.promise;
-      revokePluginRecord(builder.registry, record);
-      release.resolve();
-      await expect(pending).rejects.toThrow("runtime is no longer active");
-      expect(fixture.connections).toHaveLength(boundary === "connect" ? 0 : 1);
-      expect(fixture.frames).toEqual([]);
-    } finally {
-      release.resolve();
-      await instance.dispose();
-      markPluginRegistryRetired(builder.registry);
-    }
-  },
-);

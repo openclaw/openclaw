@@ -35,7 +35,6 @@ import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   ExpiredPluginRegistryScopeError,
   getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
@@ -203,26 +202,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         scopedRegistry,
       );
     };
-    const invokeSelectedRuntime = <T>(run: () => T, method?: PropertyKey): T => {
+    const invokeSelectedRuntime = <T>(run: () => T): T => {
       assertRuntimeCurrent();
-      return runWithPluginScope(
-        () =>
-          method === "transcribeAudioStream"
-            ? withPluginRuntimeGatewayRequestScope(
-                {
-                  ...getPluginRuntimeGatewayRequestScope(),
-                  isWebchatConnect: () => false,
-                  transcriptionOwner: {
-                    assertCurrent: assertRuntimeCurrent,
-                    signal: getPluginInstance(record)?.lifecycle.signal,
-                  },
-                },
-                run,
-              )
-            : run(),
-        false,
-        currentInvocationRegistry(),
-      );
+      return runWithPluginScope(run, false, currentInvocationRegistry());
     };
     const runWithCurrentPluginScope = <T>(run: () => Promise<T>): Promise<T> =>
       runWithPluginScope(async () => {

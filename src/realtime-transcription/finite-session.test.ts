@@ -4,7 +4,6 @@ import type { RealtimeTranscriptionSessionCallbacks } from "./provider-types.js"
 
 function fixture(
   options: {
-    assertCurrent?: () => void;
     autoAck?: boolean;
     transcript?: string;
     maxQueuedBytes?: number;
@@ -18,7 +17,7 @@ function fixture(
   const close = vi.fn();
   let callbacks: RealtimeTranscriptionSessionCallbacks = {};
   const session = createFiniteRealtimeTranscriptionSession({
-    callbacks: { onError, assertCurrent: options.assertCurrent },
+    callbacks: { onError },
     signal: controller.signal,
     frameBytes: 2,
     segmentBytes: 8,
@@ -68,20 +67,6 @@ describe("finite realtime transcription", () => {
     await expect(f.session.writeAudio(Buffer.from("later"))).rejects.toThrow("complete");
     f.session.close();
     expect(f.onError).not.toHaveBeenCalled();
-  });
-
-  it("honors caller authority before finalizing accepted audio", async () => {
-    const assertCurrent = vi.fn();
-    const f = fixture({ assertCurrent });
-    await f.session.connect();
-    await f.session.writeAudio(Buffer.from("ab"));
-    assertCurrent.mockImplementation(() => {
-      throw new Error("Caller revoked");
-    });
-    await expect(f.session.finishInput()).rejects.toThrow("Caller revoked");
-    expect(f.boundaries).toEqual([]);
-    expect(Buffer.concat(f.frames).toString()).toBe("ab");
-    expect(f.close).toHaveBeenCalledOnce();
   });
 
   it("settles empty committed text and never commits zero-byte input", async () => {
