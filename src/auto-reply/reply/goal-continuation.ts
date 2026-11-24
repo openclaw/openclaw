@@ -158,6 +158,15 @@ type GoalContinuationParams = {
   runFollowup: (run: FollowupRun) => Promise<void>;
 };
 
+function hasIndependentGoalSource(base: FollowupRun): boolean {
+  // A named automation can use the conversation and its Goal for one occurrence.
+  // A completion event can still carry that grant without the automation metadata.
+  // Neither becomes an independent Goal start; the job can rearm through Cron.
+  return (
+    !base.run.scheduledAutomation && base.operatorAuthority?.originStartGrant !== "operator.cron"
+  );
+}
+
 export async function enqueueGoalContinuation(params: GoalContinuationParams): Promise<boolean> {
   const eligible = () =>
     params.isCurrent?.() !== false &&
@@ -172,7 +181,11 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
       [params.sessionKey, params.expectedSession.sessionId],
       params.base.run.agentId,
     );
-  if (!isGoalContinuationOutcome(params.result) || !eligible()) {
+  if (
+    !hasIndependentGoalSource(params.base) ||
+    !isGoalContinuationOutcome(params.result) ||
+    !eligible()
+  ) {
     return false;
   }
   const { listUnsettledRequesterChildren } =
@@ -303,7 +316,7 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
-  if (!params) {
+  if (!params || !hasIndependentGoalSource(params.base)) {
     return (run) => run();
   }
   return createGoalContinuationReturnScope({

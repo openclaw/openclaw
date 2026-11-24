@@ -125,7 +125,6 @@ function activeGoalReturnForTool(params: GoalToolContinuation): GoalReturn | und
     !owner ||
     owner.closed ||
     owner.signal.aborted ||
-    owner.params.base.run.scheduledAutomation ||
     owner.params.operation.result !== null ||
     owner.generation !== getAgentRunLifecycleGeneration() ||
     !params.runId ||

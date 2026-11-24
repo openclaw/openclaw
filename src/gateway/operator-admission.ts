@@ -94,7 +94,7 @@ type Facts = (
       > & { assignedRole: string | null; githubLogin?: string | null };
     }
   | { kind: "live"; authority: AdmittedRunOperatorAuthority }
-) & { agentId?: string };
+) & { agentId?: string; originStartGrant?: AdmittedRunOperatorAuthority["originStartGrant"] };
 type PreparedOperatorAdmission = {
   config: OpenClawConfig;
   context: OperatorAdmissionContext;
@@ -526,6 +526,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           ? { reference: facts.snapshot.reference, modelPolicy: originalModels }
           : undefined,
       requesterOwner,
+      originStartGrant: facts.originStartGrant ?? live?.originStartGrant,
       modelPolicy,
       rolePolicy: role
         ? {

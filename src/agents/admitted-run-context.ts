@@ -99,6 +99,7 @@ export function createAdmittedRunOperatorAuthority(
       : undefined,
     scopes: Object.freeze([...source.scopes]),
     requesterOwner: source.requesterOwner,
+    originStartGrant: source.originStartGrant,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,

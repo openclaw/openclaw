@@ -347,6 +347,27 @@ describe("Goal continuation eligibility", () => {
 });
 
 describe("Goal queue custody", () => {
+  it.each(["direct", "completion"] as const)(
+    "leaves the next turn of a scheduled occurrence to the scheduler (%s)",
+    async (source) => {
+      const f = fixture();
+      if (source === "direct") {
+        f.params.base.run.scheduledAutomation = { ...TEST_SCHEDULED_TURN, job: makeCronJob({}) };
+      } else {
+        f.params.base.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+        f.params.base.operatorAuthority = createTestOperatorAuthority({
+          profileId: "operator",
+          scopes: ["operator.write"],
+          originStartGrant: "operator.cron",
+          assertCurrent() {},
+        });
+      }
+
+      expect(await enqueueGoalContinuation(f.params)).toBe(false);
+      expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    },
+  );
+
   it("queues hidden individual work without cloning the source turn's identity or lifecycle", async () => {
     const f = fixture();
     f.params.base.sourceTurnId = "accepted-source";

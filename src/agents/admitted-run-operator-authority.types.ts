@@ -42,6 +42,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   scopes: readonly string[];
   /** Command-owner decision fixed at this run's start. */
   requesterOwner?: boolean;
+  /** Scheduler admission belongs to its occurrence, even when an event retains the requester. */
+  originStartGrant?: "operator.cron";
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   signal?: AbortSignal;

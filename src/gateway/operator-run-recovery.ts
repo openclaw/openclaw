@@ -84,7 +84,7 @@ async function admitStart(
   grant: "operator.sessions.write" | "operator.talk" | "operator.cron",
   action: string,
 ): Promise<RestoredGatewayOperatorAuthority> {
-  const admitted = await admitQueuedSource(params);
+  const admitted = await admitQueuedSource(params, grant === "operator.cron" ? grant : undefined);
   const { channelRecoverySource, scopes } = admitted.authority;
   if (!channelRecoverySource && !operatorScopeSatisfied(grant, scopes)) {
     admitted.release();
@@ -97,6 +97,7 @@ async function admitStart(
 
 async function admitQueuedSource(
   params: QueuedRecoveryParams,
+  originStartGrant = params.liveAuthority?.originStartGrant,
 ): Promise<RestoredGatewayOperatorAuthority> {
   params.assertCurrent();
   const captured = decodeQueuedOperatorRecoverySource(params.source);
@@ -109,7 +110,7 @@ async function admitQueuedSource(
   if (capturedFacts.kind === "unavailable") {
     throw new Error("Queued operator authority cannot be recovered; submit a new request.");
   }
-  const facts = { ...capturedFacts, agentId: params.agentId };
+  const facts = { ...capturedFacts, agentId: params.agentId, originStartGrant };
   const prepared = await prepareOperatorAdmission(facts, params.context);
   try {
     // This producer's custody fence checks the claim/occurrence, not requester policy.

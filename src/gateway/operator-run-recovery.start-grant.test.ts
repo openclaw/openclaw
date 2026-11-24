@@ -167,6 +167,28 @@ describe("saved requester start grant", () => {
     }),
   );
 
+  it("keeps the occurrence origin when a queued completion re-admits its requester", () =>
+    withRequester("completion@example.test", "writer", async (fixture) => {
+      const scheduled = await restoreScheduledAutomationOperator({
+        ...queued(fixture),
+        operatorSource: cronSource(fixture),
+      });
+      try {
+        const completion = await restoreGatewayQueuedOperatorRecovery({
+          ...queued(fixture),
+          source: captureQueuedOperatorRecoverySource(scheduled.authority),
+          liveAuthority: scheduled.authority,
+        });
+        try {
+          expect(completion.authority.originStartGrant).toBe("operator.cron");
+        } finally {
+          completion.release();
+        }
+      } finally {
+        scheduled.release();
+      }
+    }));
+
   it("keeps an in-run continuation of a requester made read-only", () =>
     withRequester("continuation@example.test", "writer", async (fixture, setRole) => {
       setRole("reader");
