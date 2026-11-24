@@ -140,8 +140,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Go 1.25.0 runtime and standard library
-https://github.com/golang/go/blob/go1.25.0/LICENSE
+Go 1.26.11 runtime and standard library
+https://github.com/golang/go/blob/go1.26.11/LICENSE
 
 Copyright 2009 The Go Authors.
 
@@ -172,7 +172,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Inferno memory routines used by the Go runtime
-https://github.com/golang/go/blob/go1.25.0/src/runtime/memmove_amd64.s
+https://github.com/golang/go/blob/go1.26.11/src/runtime/memmove_amd64.s
 
 Copyright © 1994-1999 Lucent Technologies Inc. All rights reserved.
 Revisions Copyright © 2000-2007 Vita Nuova Holdings Limited (www.vitanuova.com).  All rights reserved.
@@ -197,7 +197,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 SunPro mathematical routines
-https://github.com/golang/go/blob/go1.25.0/src/math/sqrt.go
+https://github.com/golang/go/blob/go1.26.11/src/math/sqrt.go
 
 Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
 
@@ -207,7 +207,7 @@ software is freely granted, provided that this notice
 is preserved.
 
 Sun mathematical routines
-https://github.com/golang/go/blob/go1.25.0/src/math/exp.go
+https://github.com/golang/go/blob/go1.26.11/src/math/exp.go
 
 Copyright (C) 2004 by Sun Microsystems, Inc. All rights reserved.
 
@@ -216,7 +216,7 @@ software is freely granted, provided that this notice
 is preserved.
 
 Cephes mathematical routines
-https://github.com/golang/go/blob/go1.25.0/src/math/atan.go
+https://github.com/golang/go/blob/go1.26.11/src/math/atan.go
 
 Cephes Math Library Release 2.8:  June, 2000
 Copyright 1984, 1987, 1989, 1992, 2000 by Stephen L. Moshier
