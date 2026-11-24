@@ -1,5 +1,5 @@
 import { packNodeTestGroups, type NodeTestShard } from "./ci-node-test-plan.mts";
-import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
+import { isCiProofTestFile } from "./ci-test-tier-policy.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import {
   canOverlapTelegramSingletonProcesses,
