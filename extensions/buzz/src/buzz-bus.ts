@@ -117,13 +117,16 @@ function buildBuzzTextEvent(params: {
   threadId?: string;
   replyToId?: string;
   mentionedPubkeys?: string[];
+  authTag?: string[];
 }): Event {
+  const tags = buildBuzzMessageTags(params);
   return finalizeEvent(
     {
       kind: BUZZ_NORMAL_MESSAGE_KIND,
       content: params.text,
       created_at: Math.floor(Date.now() / 1000),
-      tags: buildBuzzMessageTags(params),
+      // Buzz agents that act only for their owner check this NIP-OA tag on each message.
+      tags: params.authTag ? [...tags, params.authTag] : tags,
     },
     params.secretKey,
   );
@@ -183,7 +186,12 @@ export async function sendBuzzTextOneShot(params: {
         senderPublicKey: publicKey,
       });
     }
-    const event = buildBuzzTextEvent({ ...params, secretKey, mentionedPubkeys });
+    const event = buildBuzzTextEvent({
+      ...params,
+      secretKey,
+      mentionedPubkeys,
+      authTag: connection.authTag,
+    });
     await effect.initiate(() => {
       signal?.throwIfAborted();
       return relay.publish(event);
@@ -443,6 +451,7 @@ export async function startBuzzBus(options: {
         threadId,
         replyToId,
         mentionedPubkeys,
+        authTag,
       });
       await effect.initiate(() => {
         signal.throwIfAborted();
