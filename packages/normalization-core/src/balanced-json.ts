@@ -18,8 +18,9 @@ type BalancedJsonOptions = {
 type BalancedJsonFragmentOptions = BalancedJsonOptions & {
   /** A line-start record can supersede an unmatched opener in preceding prose. */
   recoverAtLineStart?: boolean;
-  /** Discovery chooses starts; original text owns syntax, quotes and completion.
-   * Only accepted opaque framing suppresses an original endpoint. */
+  /** Outside spans, discovery chooses starts; source owns syntax, quotes and completion.
+   * Accepted spans are framing; rejected spans restore source bytes for their full interval.
+   * Only accepted framing suppresses an original endpoint. */
   strictJson?:
     | true
     | {
@@ -311,7 +312,7 @@ function extractStrictJsonFragments(
       (opts.recoverAtLineStart === true && char === "\r") ||
       (lineStart && (opaque || char === " " || char === "\t" || char === "\r"));
 
-    // Discovery masks choose starts only. Accepted opaque framing suppresses
+    // Outside spans, discovery masks choose starts only. Accepted framing suppresses
     // emission at an endpoint, but still retires its original source owner.
     const candidate = candidateClosures.get(index);
     if (candidate) {
@@ -388,6 +389,8 @@ function extractStrictJsonFragments(
       warningDepth--;
       warnings.delete(closingWarning.start);
     }
+    // Rejected spans restore source bytes atomically, including masked starts
+    // after the source quote closes.
     const discovery = inSpan ? char : raw[index];
     if (
       !hidesCandidates &&
