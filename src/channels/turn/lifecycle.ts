@@ -38,6 +38,7 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { pluginInvocationContext } from "../../plugins/plugin-instance-scope.js";
 import { copyChannelParticipantAdmissionEvidence } from "../message-access/admission-evidence.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
@@ -661,10 +662,13 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       result: createSuppressedChannelDeliveryResult({ reason: info.reason }),
                     });
                   },
+                  // Delivery outlives producer leases; callbacks re-enter their channel owner.
                   deliver: (payload: ReplyPayload, info: ChannelDeliveryInfo) =>
-                    deliverReply(payload, info, rawOperation),
-                  deliverPrepared,
-                  onError: delivery.onError,
+                    pluginInvocationContext.exit(() => deliverReply(payload, info, rawOperation)),
+                  deliverPrepared: (plan, info) =>
+                    pluginInvocationContext.exit(() => deliverPrepared(plan, info)),
+                  onError: (error, info) =>
+                    pluginInvocationContext.exit(() => delivery.onError?.(error, info)),
                 },
                 dispatchReplyFromConfig: params.dispatchReplyFromConfig,
                 toolsAllow: params.toolsAllow,

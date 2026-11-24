@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import {
@@ -17,6 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import { projectAgentEndEvent, withAgentRunId } from "./hook-agent-observations.js";
 import { mergeBeforeAgentFinalize } from "./hook-before-agent-finalize.js";
+import { createChannelAttachmentLoadHookRunner } from "./hook-channel-attachment-load.js";
 import { createChannelIngressHookRunner } from "./hook-channel-ingress.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import { isHookContextEligible } from "./hook-context-eligibility.js";
@@ -48,7 +48,7 @@ import type {
   VoidHookContextProjection,
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
-import { withHookTimeout } from "./hook-timeout.js";
+import { awaitHook } from "./hook-timeout.js";
 import { projectHookTurnTaint } from "./hook-turn-taint.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
@@ -136,6 +136,7 @@ export function createHookRunner(
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
   const failurePolicyByHook = {
+    before_channel_attachment_load: "fail-closed",
     before_agent_run: "fail-closed",
     before_channel_ingress: "fail-closed",
     before_model_request: "fail-closed",
@@ -319,17 +320,6 @@ export function createHookRunner(
     const raw = formatErrorMessage(error);
     const firstLine = raw.split("\n")[0]?.trim();
     return firstLine || "unknown error";
-  };
-
-  const awaitHook = <T>(
-    hook: PluginHookRegistration,
-    promise: Promise<T>,
-    defaultTimeoutMs?: number,
-    timeoutOptions?: { unref?: boolean },
-  ): Promise<T> => {
-    const timeoutMs =
-      clampPositiveTimerTimeoutMs(hook.timeoutMs) ?? clampPositiveTimerTimeoutMs(defaultTimeoutMs);
-    return timeoutMs ? withHookTimeout(promise, timeoutMs, timeoutOptions) : promise;
   };
 
   const runSyncMessageHookStep = <K extends SyncHookName>(
@@ -1011,6 +1001,10 @@ export function createHookRunner(
     runInboundClaimForPluginOutcome,
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
+    runBeforeChannelAttachmentLoad: createChannelAttachmentLoadHookRunner(
+      () => getHooksForName(registry, "before_channel_attachment_load"),
+      handleHookError,
+    ),
     runBeforeDispatch,
     runReplyDispatch: bindClaimingHook("reply_dispatch", (ctx) => ctx.dispatchKind === "acp"),
     runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {
