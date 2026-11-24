@@ -35,6 +35,20 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
+export function resolveLegacyCompactionMatch(
+  history: readonly unknown[],
+  status: CompactionStatus | null | undefined,
+) {
+  const candidates =
+    status?.runId && !status.itemId
+      ? history.filter((message) => matchesCompactionOperation(message, status))
+      : [];
+  return {
+    manualMarker: status?.manualOperation && candidates.length === 1 ? candidates[0] : undefined,
+    hasSameRunMarker: candidates.length > 0,
+  };
+}
+
 // Retain presentation timing only within the transcript cache's session window.
 // Evicted sessions reconstruct timing from available activity and observe idle anew.
 const workingProgressBySession = new Map<string, WorkingProgress>();
@@ -97,6 +111,12 @@ export function buildGuardianNoticeItem(
   };
 }
 
+function compactionOperationKey(runId: unknown, itemId: unknown): string | undefined {
+  return typeof runId === "string" && runId && typeof itemId === "string" && itemId
+    ? `compaction:operation:${JSON.stringify([runId, itemId])}`
+    : undefined;
+}
+
 export function buildCompactionActivityItem(
   marker: Record<string, unknown>,
   timestamp: number,
@@ -120,9 +140,10 @@ export function buildCompactionActivityItem(
   return {
     kind: "compaction",
     key:
-      typeof marker.id === "string"
+      compactionOperationKey(marker.runId, marker.itemId) ??
+      (typeof marker.id === "string"
         ? `compaction:${marker.id}`
-        : `compaction:${timestamp}:${index}`,
+        : `compaction:${timestamp}:${index}`),
     label: t(phase === "active" ? "chat.compaction.running" : "chat.compaction.completed"),
     phase,
     ...(metric === null ? {} : { metric }),
@@ -140,7 +161,9 @@ export function buildLiveCompactionActivity(
       0,
       status.phase === "complete" ? "complete" : "active",
     ),
-    key: `compaction:live:${status.runId}:${status.itemId ?? "manual"}`,
+    key:
+      compactionOperationKey(status.runId, status.itemId) ??
+      `compaction:live:${status.runId}:manual`,
     ...(status.completedAt != null && status.startedAt != null
       ? { durationMs: status.completedAt - status.startedAt }
       : {}),

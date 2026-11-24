@@ -245,7 +245,10 @@ it("renders a completed compaction once when its persisted entry carries the liv
       },
     }),
   );
-  expect(items.filter((item) => item.kind === "divider")).toEqual([
-    expect.objectContaining({ label: "Context compacted", metric: "saved 675.5k tokens (89.3%)" }),
+  expect(items.some((item) => item.kind === "divider")).toBe(false);
+  expect(
+    items.flatMap((item) => (item.kind === "group" && item.compaction ? [item.compaction] : [])),
+  ).toEqual([
+    expect.objectContaining({ label: "Compacted context", metric: "saved 675.5k tokens (89.3%)" }),
   ]);
 });

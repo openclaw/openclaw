@@ -269,7 +269,7 @@ function stabilizeChatItems(
   const reconciled = next.map((item) => {
     if (item.kind === "group" && item.compaction?.compactionId) {
       const key = previousCompactions.get(item.compaction.compactionId);
-      return key ? { ...item, key } : item;
+      return key && !nextNaturalGroupKeys.has(key) ? { ...item, key } : item;
     }
     if (item.kind !== "group") {
       return item;

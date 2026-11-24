@@ -60,6 +60,7 @@ suite.define(() => {
               __openclaw: {
                 ...metadata("compaction-" + index, 6 + index),
                 kind: "compaction",
+                itemId: "same-run-item-" + index,
                 tokensBefore: 80000,
                 tokensAfter: 20000,
               },
@@ -138,7 +139,7 @@ suite.define(() => {
             expect(boxes[4]!.top - boxes[3]!.bottom).toBeCloseTo(normalGap, 0);
           }
           expect(await thread.locator(".chat-divider").count()).toBe(0);
-          await rows.first().locator("summary").click();
+          await rows.first().locator("summary").press("Enter");
           const metrics = rows.first().getByText("saved 60k tokens (75%)", { exact: true });
           await metrics.waitFor();
           await writeFile(

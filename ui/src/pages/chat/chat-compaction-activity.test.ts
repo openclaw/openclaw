@@ -37,6 +37,7 @@ it("keeps an idle manual operation outside agent frames and deduplicates its dur
   const status = {
     phase: "complete" as const,
     runId: "manual-operation",
+    manualOperation: true as const,
     startedAt: 2000,
     completedAt: 3000,
   };
@@ -79,25 +80,110 @@ it("keeps live and persisted compaction with its proven tool run", () => {
     timestamp: 3000,
     __openclaw: { runId, itemId: operation.itemId, id: "persisted", kind: "compaction" },
   };
-  const live = buildItems(
-    createProps({
-      messages,
-      runId,
-      compactionStatus: { ...operation, phase: "active", completedAt: null },
-    }),
-  );
-  const settled = buildItems(
-    createProps({
-      messages: [...messages, marker],
-      runId,
-      compactionStatus: { ...operation, phase: "complete", completedAt: 4000 },
-    }),
-  );
-  const reload = buildItems(createProps({ messages: [...messages, marker] }));
-  for (const items of [live, settled, reload]) {
+  const prior = {
+    ...marker,
+    timestamp: 2500,
+    __openclaw: { ...marker["__openclaw"], id: "prior", itemId: "prior-item" },
+  };
+  const liveMessages = [...messages, prior];
+  const live = buildItems({
+    messages: liveMessages,
+    runId,
+    compactionStatus: { ...operation, phase: "active", completedAt: null },
+  });
+  const settled = buildItems({
+    messages: [...liveMessages, marker],
+    runId,
+    compactionStatus: { ...operation, phase: "complete", completedAt: 4000 },
+  });
+  const reload = buildItems({ messages: [...liveMessages, marker] });
+  const rows = (items: typeof live) => {
     const activity = coalesceActivityRuns(items).find((item) => item.kind === "activity-run");
-    expect(activity).toMatchObject({ groups: [{ runId }, { runId, compaction: { runId } }] });
-  }
+    if (activity?.kind !== "activity-run") {
+      throw new Error("Expected an activity run");
+    }
+    expect(activity.groups).toMatchObject([
+      { runId },
+      { runId, compaction: { runId } },
+      { runId, compaction: { runId } },
+    ]);
+    return activity.groups.slice(1).map(({ compaction }) => compaction);
+  };
+  const liveKeys = rows(live).map((row) => row?.key);
+  expect(new Set(liveKeys).size).toBe(2);
+  expect(rows(settled).map((row) => row?.key)).toEqual(liveKeys);
+  expect(rows(reload).map((row) => row?.key)).toEqual(liveKeys);
+  expect(rows(settled).map((row) => row?.durationMs)).toEqual([undefined, 1000]);
+});
+
+it("keeps distinct compactions when an older completion does not identify its item", () => {
+  const sharedItem = "same-item";
+  const messages = ["old-run", "active-run", "active-run"].map((runId, index) => ({
+    role: "system",
+    timestamp: 1000 + index,
+    __openclaw: {
+      id: "marker-" + index,
+      kind: "compaction",
+      runId,
+      itemId: index === 2 ? "another-item" : sharedItem,
+    },
+  }));
+  const rows = buildItems({
+    messages,
+    compactionStatus: {
+      phase: "complete",
+      runId: "active-run",
+      startedAt: 1001,
+      completedAt: 1002,
+    },
+  }).flatMap((item) => (item.kind === "group" && item.compaction ? [item.compaction] : []));
+  expect(rows).toHaveLength(3);
+  expect(new Set(rows.map((row) => row.key)).size).toBe(3);
+  expect(rows.every((row) => row.durationMs === undefined)).toBe(true);
+  const active = buildItems({
+    messages: messages.slice(0, 2),
+    runId: "active-run",
+    compactionStatus: {
+      phase: "active",
+      runId: "active-run",
+      startedAt: 1002,
+      completedAt: null,
+    },
+  }).flatMap((item) => (item.kind === "group" && item.compaction ? [item.compaction.phase] : []));
+  expect(active).toEqual(["complete", "complete", "active"]);
+});
+
+it("does not reuse a live group key for an ambiguous manual history prepend", () => {
+  const sessionKey = "agent:main:dashboard:compaction-prepend";
+  const runId = "manual-operation";
+  const marker = (id: string, timestamp: number) => ({
+    role: "system",
+    timestamp,
+    __openclaw: { kind: "compaction", runId, id },
+  });
+  const recent = marker("new", 2000);
+  const compactionStatus = {
+    phase: "active" as const,
+    runId,
+    manualOperation: true as const,
+    startedAt: 1000,
+    completedAt: null,
+  };
+  const visible = buildItems({ sessionKey, messages: [recent], compactionStatus });
+  expect(visible).toHaveLength(1);
+  const prepended = buildItems({
+    sessionKey,
+    messages: [marker("earlier", 1500), recent],
+    compactionStatus,
+  });
+  expect(prepended).toHaveLength(3);
+  expect(new Set(prepended.map((item) => item.key)).size).toBe(3);
+  expect(prepended).toContainEqual(
+    expect.objectContaining({
+      kind: "group",
+      compaction: expect.objectContaining({ phase: "active" }),
+    }),
+  );
 });
 
 it("describes repeated compaction without counters and preserves main's tool summary rules", () => {

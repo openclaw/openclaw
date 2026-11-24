@@ -29,6 +29,7 @@ import {
   clearWorkingProgress,
   isContextCompactionMessage,
   matchesCompactionOperation,
+  resolveLegacyCompactionMatch,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
@@ -183,7 +184,7 @@ export function buildChatItems(
   const canvasTurns = collectCanvasTurns(historyItems, normalizedHistory, matchesSearch);
   const compaction = props.compactionStatus;
   const liveCompaction = compaction ? buildLiveCompactionActivity(compaction) : undefined;
-  const compactionKey = liveCompaction?.key;
+  const { manualMarker, hasSameRunMarker } = resolveLegacyCompactionMatch(history, compaction);
   const compactionRunIdentity = createCompactionRunLookup(history, props.runId);
   let hasPersistedCompaction = false;
   let latestResetAt: number | undefined;
@@ -241,7 +242,9 @@ export function buildChatItems(
       continue;
     }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
-      const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
+      const matchesLive = compaction?.itemId
+        ? matchesCompactionOperation(msg, compaction)
+        : msg === manualMarker;
       const activity = buildCompactionActivityItem(
         marker ?? {},
         rawMessageTimestamp(msg) ?? Date.now(),
@@ -257,7 +260,7 @@ export function buildChatItems(
         ...(matchesLive && liveCompaction?.durationMs != null
           ? { durationMs: liveCompaction.durationMs }
           : {}),
-        ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
+        ...(msg === manualMarker && liveCompaction ? { key: liveCompaction.key } : {}),
       });
       hasPersistedCompaction ||= matchesLive;
       continue;
@@ -457,7 +460,13 @@ export function buildChatItems(
     });
   }
   const projections: ChatProjection[] = [];
-  if (liveCompaction && !hasPersistedCompaction) {
+  // An itemless agent completion cannot select a durable row by run alone.
+  // Keep its active progress separate, but don't add a redundant completed row.
+  if (
+    liveCompaction &&
+    !hasPersistedCompaction &&
+    (liveCompaction.phase === "active" || !hasSameRunMarker)
+  ) {
     projections.push({ item: { ...liveCompaction, ...compactionRunIdentity(compaction?.runId) } });
   }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
