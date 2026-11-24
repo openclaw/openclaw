@@ -48,7 +48,7 @@ export {
 
 function validateReleaseAdvisoryJobs(value, expected = []) {
   const recorded = value === undefined ? [] : value;
-  if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
+  if (!isDeepStrictEqual(recorded, expected)) {
     throw new Error("Release advisory jobs differ from the release policy evidence");
   }
   return expected;
