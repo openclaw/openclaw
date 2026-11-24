@@ -364,10 +364,10 @@ export function defineStateStartupCorpusTests(fileUrl: string) {
 
     // These released snapshots retain POSIX cron partition keys, not Windows-native paths.
     for (const [release, configName] of cases) {
-      // Hosted runs exceeded 120s on 2026.9.2 during the second Doctor repair/startup pass.
+      // 2026.9.2 Doctor repair/startup exceeded 120s hosted and took 170s on one loaded core.
       it.skipIf(process.platform === "win32")(
         `${release} × ${configName} preserves state through Doctor and Gateway startup`,
-        { timeout: release === "2026.9.2" ? 180_000 : 120_000 },
+        { timeout: release === "2026.9.2" ? 240_000 : 120_000 },
         ({ signal }) => fixture.runCase(release, configName, signal),
       );
     }
