@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import * as tar from "tar";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { templateProjectBuildEntrypoint } from "./project-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -38,9 +38,19 @@ it.runIf(process.platform !== "win32")(
     const manifestPath = join(project, "CLAW.md");
     await writeFile(manifestPath, manifest(16));
     const output = join(directory, "many.tgz");
-    const moduleUrl = resolveRuntimeWorkerUrl(templateProjectBuildEntrypoint);
+    await symlink(join(process.cwd(), "node_modules"), join(directory, "node_modules"), "dir");
+    const modulePath = join(directory, "project-build.mjs");
+    await build({
+      entryPoints: [fileURLToPath(new URL("./project-build.ts", import.meta.url))],
+      absWorkingDir: process.cwd(),
+      bundle: true,
+      format: "esm",
+      outfile: modulePath,
+      packages: "external",
+      platform: "node",
+    });
     const script = [
-      `const { buildTemplateProject } = await import(${JSON.stringify(moduleUrl.href)});`,
+      `const { buildTemplateProject } = await import(${JSON.stringify(modulePath)});`,
       'const { writeFile } = await import("node:fs/promises");',
       `await buildTemplateProject(${JSON.stringify(project)}, ${JSON.stringify(join(directory, "control.tgz"))});`,
       'console.log("control built");',
@@ -54,7 +64,6 @@ it.runIf(process.platform !== "win32")(
         'ulimit -n 128 || exit; exec "$@"',
         "template-reader",
         process.execPath,
-        ...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1),
         "--input-type=module",
         "--eval",
         script,
@@ -78,4 +87,5 @@ it.runIf(process.platform !== "win32")(
     await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
     expect(entries).toHaveLength(162);
   },
+  120_000,
 );
