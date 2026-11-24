@@ -2,7 +2,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   action,
   affects,
-  createEffect,
   createMemo,
   createOptimistic,
   createSignal,
@@ -50,6 +49,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/profile.css";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
@@ -211,23 +211,29 @@ export function ProfilePage(route: { routeData?: string | null }) {
   const initialIdentityPending = () =>
     view().ownProfile === null &&
     (view().identityLoading || (view().connected && !view().identityReady));
-  let pendingTarget: string | null | undefined;
-  createEffect(
-    () => ({ id: route.routeData, ready: hasPresentation() && !initialIdentityPending() }),
-    ({ id, ready }, previous) => {
-      if (id !== previous?.id) {
-        pendingTarget = id;
+  createScrollPosition(
+    () => {
+      const id = route.routeData;
+      if (!id) {
+        return {};
       }
-      if (!ready || !pendingTarget) {
-        return;
-      }
-      const target = host.ownerDocument.getElementById(pendingTarget);
-      if (target && host.contains(target)) {
-        target.scrollIntoView?.({ block: "start" });
-        // A refresh or reconnect must not undo the reader's subsequent scrolling.
-        pendingTarget = null;
-      }
+      return {
+        reveal: {
+          identity: [id],
+          block: "start",
+          target: () => {
+            if (!hasPresentation() || initialIdentityPending()) {
+              return null;
+            }
+            const section = host.ownerDocument.getElementById(id);
+            return section && host.contains(section) && !section.closest("[hidden]")
+              ? section
+              : null;
+          },
+        },
+      };
     },
+    { waitForRevealIn: () => host },
   );
   const agent = () => {
     const list = agents.read();

@@ -66,11 +66,22 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "settings/appearance");
         await page.locator(".settings-sidebar__search-input").fill("GitHub accounts");
         await page.locator('a[href$="#settings-profile-github-connections"]').click();
-        const section = page.locator("#settings-profile-github-connections");
-        await section.waitFor();
-        const heading = section.getByRole("heading").first();
+        await expect(page).toHaveURL(/\/settings\/profile#settings-profile-github-connections$/);
+        const heading = page
+          .locator("#settings-profile-github-connections")
+          .getByRole("heading")
+          .first();
         await expect(heading).toBeInViewport({ ratio: 1 });
-        await expect.poll(async () => (await heading.boundingBox())?.y).toBeGreaterThan(0);
+        await expect
+          .poll(() =>
+            heading.evaluate((node) =>
+              Math.round(
+                node.getBoundingClientRect().top -
+                  node.closest("main")!.getBoundingClientRect().top,
+              ),
+            ),
+          )
+          .toBe(16);
         const hero = page.locator(".profile-hero");
         await hero.scrollIntoViewIfNeeded();
         const identityReads = (await gateway.getRequests("users.self")).length;
