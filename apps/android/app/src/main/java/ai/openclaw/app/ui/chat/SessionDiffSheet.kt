@@ -405,8 +405,26 @@ private fun SessionDiffFiles(
   Box(
     modifier.pointerInput(files, collapsed) {
       awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
-        if (waitForUpOrCancellation(PointerEventPass.Final) != null) selection = null
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+        traceSelection("tap_final_down", down)
+        try {
+          val up = waitForUpOrCancellation(PointerEventPass.Final)
+          if (up != null) {
+            selection = null
+            traceSelection("tap_final_up", up)
+          } else {
+            onSelectionDiagnostic?.let {
+              traceSelection("tap_final_cancel", currentEvent.changes.firstOrNull { it.id == down.id })
+            }
+          }
+        } catch (cancelled: CancellationException) {
+          runCatching {
+            onSelectionDiagnostic?.let {
+              traceSelection("tap_final_cancel_exception", currentEvent.changes.firstOrNull { it.id == down.id })
+            }
+          }
+          throw cancelled
+        }
       }
     },
   ) {
