@@ -29,22 +29,30 @@ Only need the CLI and Gateway? Start with [Getting started](/start/getting-start
 
 ## Requirements
 
-**OpenClaw.app requires macOS 26.2 (Tahoe) or later.** This also applies to
-its native `openclaw-mac` helper and [Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements).
+**OpenClaw.app requires macOS 26.2 (Tahoe) or later starting with 2026.10.10**
+(including builds from `main`). This also applies to its native `openclaw-mac`
+helper. Releases **2026.10.3** through **2026.10.9** (including the pinned
+**2026.10.3** installers below) declare a minimum of macOS 15.0 for both.
+
+[Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements) have a
+separate requirement: macOS 26.2 or newer in **2026.10.10** and later releases
+(and builds from `main`), and macOS 26 or newer in **2026.10.3** through
+**2026.10.9**.
 
 The Node-based CLI and Gateway need a [supported Node version](/install/node)
 on an operating system supported by that runtime. Official Node 24 and Node 26
 macOS binaries are built for macOS 13.5 or later, the oldest release Node
 supports. Older macOS releases may still run them but are not supported. Running
 the CLI on an older Mac does not make the native app compatible with that macOS
-version.
+version. For Macs below the native app's macOS requirement, install the CLI and
+Gateway with the [installer script](/install#recommended-installer-script).
 
 Building from source also requires the toolchain listed in
 [macOS developer setup](/platforms/mac/dev-setup#prerequisites).
 
 ## Download
 
-Download a macOS installer from the published **2026.10.3** release:
+Download a macOS installer from the published **2026.10.3** release (declared minimum: macOS 15.0):
 
 | Your Mac                              | Installer                                                                                                           |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -52,8 +60,10 @@ Download a macOS installer from the published **2026.10.3** release:
 | Intel                                 | [Intel DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3-x86_64.dmg)        |
 | Either architecture, or you're unsure | [Universal DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3.dmg)           |
 
-These download links are pinned to **2026.10.3**. For newer builds or ZIP archives,
-see [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
+These download links are pinned to **2026.10.3**; **2026.10.9** is the last
+macOS app release that declares macOS 15.0. For newer builds (starting with
+**2026.10.10**, macOS 26.2 or later is required) or ZIP archives, see
+[OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
 Some releases only ship CLI, evidence, or Windows assets. If the newest release
 has no macOS app asset, use the newest one that does, or build from source with
 [macOS dev setup](/platforms/mac/dev-setup).
