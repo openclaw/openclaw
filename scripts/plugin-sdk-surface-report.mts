@@ -341,7 +341,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: provider auth failure class, reason, recovery, and OAuth failure converter (#203394).
       // +1: shipped reply session-init conflict classifier (#201363).
       // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
-      3921,
+      // +7: session-catalog adds three route types, the resolve result, and three service export types.
+      3928,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
