@@ -173,29 +173,33 @@ not in any published release. Retire `update-early-release-recovery*.ts` and its
 early-layout check at the first regular stable cut after `v2026.11.8`. Keep an
 already-started recovery's retained code until that recovery finishes.
 
-Startup prepares state and agent migration inputs privately, including mixed
-SQLite/PostgreSQL installations, when the PostgreSQL copy estimate is at most
-600 seconds. Preparation reads the total physical size of the namespaces that
-would be cloned while the previous Gateway is serving, counting table storage,
-indexes, and TOAST once, and estimates 90 seconds/GiB. The candidate migrates and
-validates protected copies before writing the durable file-swap plan or publishing
-their anchors. Original protected PostgreSQL schema and rows remain unchanged.
+`discoverDatabases` is the state transaction inventory. Before the old Gateway
+stops, `check-release` refuses a schema-changing update if any registered or
+configured database is outside the private copy and launcher recovery boundary.
+This includes external paths, symlinked or separately mounted stores, paths more
+than four directories deep, and stores below `git-install`, `npm`, `node_modules`,
+`tmp` or `logs`. The refusal names the database and where to move it. Updates
+without a pending schema migration do not add these restrictions.
+
+Release-trial startup migrates and validates private copies before publishing
+their durable file-swap plan or PostgreSQL anchors. Every inventoried SQLite store
+is a required copy, including a current-schema agent store that Doctor may access
+while another store upgrades. PostgreSQL uses a private server-side copy during
+a trial; ordinary starts retain its in-place migration-on-open owner without
+copy-only privileges. Original protected PostgreSQL schema and rows remain
+unchanged. Store size is not an update-admission rule.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
 
-An estimate above 600 seconds selects the existing in-place PostgreSQL migration
-path, not a size refusal. Copy-only `CREATE` and grant-copy prerequisites do not
-apply to this selection. Existing SQLite-state private-copy protection is retained
-when agent stores use PostgreSQL. Update output and the saved update report show:
+A failed private preparation uses the existing configuration refusal (exit 78).
+There is no portable-export or in-place trial fallback; restore missing copy
+privileges or namespace ownership before retrying.
 
-> This PostgreSQL store (X GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: <https://docs.openclaw.ai/install/updating#rollback>
-
-For stores selected for protection, a preparation failure uses the existing
-configuration refusal (exit 78), with the obstruction in its diagnostics. There is
-no portable-export fallback; missing copy privileges must be repaired.
-`--no-restart` delays copying and migration until the next actual Gateway start;
-a same-schema release does not need a PostgreSQL copy.
+A trial started by an older preparer repeats admission before migration. A refused
+trial exits 78 and the launcher restores the previous release. Ordinary non-trial
+starts, including manual package upgrades, keep their existing migration-on-open
+behavior: a store's size alone never prevents that Gateway from starting.
 
 Each protected PostgreSQL schema-changing update changes the affected store's
 namespace name and lengthens the restart. Plan for the original and private server
@@ -204,6 +208,15 @@ and anchor generations together. Pruning may drop only update-created or
 verified-owned namespaces; a failed drop retains the recovery pair and reports
 a warning without failing a serving release. These recovery copies are not an
 off-server backup.
+
+### Uncovered database paths
+
+An uncovered-path refusal leaves the old Gateway serving. Before moving a SQLite
+database, create and verify a full backup, stop the Gateway, then move its complete
+database family into the named recovery layout and update its registration and
+agent-directory configuration. Do not move an open database or separate its WAL
+from its main file. Restart the old Gateway and verify readiness before retrying
+the update.
 
 Before a startup migration replaces a SQLite database, the swap owner drains its
 readers and retires the retained admission descriptors for both the live database
