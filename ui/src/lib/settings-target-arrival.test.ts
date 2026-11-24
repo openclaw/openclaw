@@ -86,6 +86,24 @@ describe("createPendingSettingsTarget", () => {
     expect(row.hasAttribute(ARRIVAL)).toBe(false);
   });
 
+  it("moves the mark to a row the page redraws, until the reader acts", () => {
+    const { row } = settingRow();
+    const { frames, pending } = arrive(row.id);
+    frames.run(6);
+    row.remove();
+    const { row: redrawn } = settingRow();
+    pending.commit();
+    frames.run(7);
+    expect(redrawn.hasAttribute(ARRIVAL)).toBe(true);
+
+    document.dispatchEvent(new Event("pointerdown"));
+    redrawn.remove();
+    const { row: later } = settingRow();
+    pending.commit();
+    frames.run(7);
+    expect(later.hasAttribute(ARRIVAL)).toBe(false);
+  });
+
   it("marks a provider row like a settings row", () => {
     const { row } = settingRow("providers.openai");
     row.className = "provider-row";

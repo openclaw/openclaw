@@ -30,12 +30,15 @@ function findSettingsTarget(root: HTMLElement, targetId: string): HTMLElement | 
 
 /**
  * Holds the target a route named until its page has rendered it. `request` replaces the
- * target, `commit` looks for it after a render, and `dispose` drops it with its mark.
+ * target, `commit` looks for it after a render, and `dispose` drops it with its mark. A
+ * page that redraws the row after a late read gets the mark on the new row, until the
+ * reader acts.
  */
 export function createPendingSettingsTarget(host: () => HTMLElement) {
   let targetId: string | null = null;
   let frame: number | null = null;
   let leave: (() => void) | undefined;
+  let arrived: HTMLElement | undefined;
   const cancel = () => {
     if (frame !== null) {
       cancelAnimationFrame(frame);
@@ -43,6 +46,7 @@ export function createPendingSettingsTarget(host: () => HTMLElement) {
     }
     leave?.();
     leave = undefined;
+    arrived = undefined;
   };
   return {
     request(id: string | null) {
@@ -50,7 +54,7 @@ export function createPendingSettingsTarget(host: () => HTMLElement) {
       targetId = id;
     },
     commit() {
-      if (!targetId || frame !== null) {
+      if (!targetId || frame !== null || arrived?.isConnected) {
         return;
       }
       frame = requestAnimationFrame(() => {
@@ -60,8 +64,11 @@ export function createPendingSettingsTarget(host: () => HTMLElement) {
         if (!target) {
           return;
         }
-        leave = arriveAtSettingsTarget(target);
-        targetId = null;
+        leave?.();
+        arrived = target;
+        leave = arriveAtSettingsTarget(target, () => {
+          targetId = null;
+        });
       });
     },
     dispose: cancel,
@@ -73,7 +80,7 @@ export function createPendingSettingsTarget(host: () => HTMLElement) {
  * after the scroll stops, and focused; a larger block keeps its top-aligned scroll.
  * Nothing is edited. Returns the cleanup for a pending or visible mark.
  */
-function arriveAtSettingsTarget(target: HTMLElement): () => void {
+function arriveAtSettingsTarget(target: HTMLElement, onRead: () => void): () => void {
   // A row inside a closed disclosure has no place on screen to scroll to.
   for (let parent = target.parentElement; parent; parent = parent.parentElement) {
     if (parent instanceof HTMLDetailsElement && !parent.open) {
@@ -115,7 +122,15 @@ function arriveAtSettingsTarget(target: HTMLElement): () => void {
     target.focus({ preventScroll: true });
     // The mark has done its job once the reader acts.
     stopListening = (["pointerdown", "keydown"] as const).map((type) =>
-      listen(target.ownerDocument, type, clear, { capture: true, passive: true }),
+      listen(
+        target.ownerDocument,
+        type,
+        () => {
+          clear();
+          onRead();
+        },
+        { capture: true, passive: true },
+      ),
     );
   };
   // A fading mark is wasted while the row is still moving, so it waits for the scroll to end.
