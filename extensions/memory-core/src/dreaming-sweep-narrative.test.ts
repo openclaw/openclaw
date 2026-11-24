@@ -26,6 +26,8 @@ import type { DreamingCompletion } from "./dreaming-narrative.js";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 import { recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
+import { writeStore } from "./short-term-promotion-store.js";
+import { SHORT_TERM_RECALL_MAX_ENTRIES } from "./short-term-promotion-utils.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   createMemoryCoreTestHarness,
@@ -431,5 +433,46 @@ describe("dreaming sweep diary publication", () => {
     expect(sweep.narratives).toHaveLength(0);
     const dreams = await sweep.readDreams();
     expect(diaryEntryCount(dreams)).toBe(0);
+  });
+
+  it("writes the diary entry when a full recall store ingests older REM-lookback notes once per sweep", async () => {
+    const sweep = await createSweep();
+    await fs.writeFile(
+      path.join(sweep.workspaceDir, "memory", "2026-04-01.md"),
+      "# 2026-04-01\n\n- Older note within REM lookback.\n",
+    );
+    const entries: Record<string, Parameters<typeof writeStore>[1]["entries"][string]> = {};
+    for (let i = 0; i < SHORT_TERM_RECALL_MAX_ENTRIES; i += 1) {
+      const key = `memory:memory/2026-04-04.md:1:${i + 1}`;
+      const ts = new Date(NOW_MS - (SHORT_TERM_RECALL_MAX_ENTRIES - i) * 1000).toISOString();
+      entries[key] = {
+        key,
+        path: "memory/2026-04-04.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: `Seeded recall entry ${i}`,
+        recallCount: 1,
+        dailyCount: 1,
+        groundedCount: 0,
+        totalScore: 0.5,
+        maxScore: 0.5,
+        firstRecalledAt: ts,
+        lastRecalledAt: ts,
+        queryHashes: ["seed"],
+        recallDays: ["2026-04-04"],
+        conceptTags: [],
+      };
+    }
+    await writeStore(sweep.workspaceDir, {
+      version: 1,
+      updatedAt: new Date(NOW_MS).toISOString(),
+      entries,
+    });
+
+    expectHandled(await sweep.run());
+    const dreams = await sweep.readDreams();
+    expect(diaryEntryCount(dreams)).toBe(1);
+    expect(logText(sweep.logger.info)).not.toContain("narrative publication skipped");
   });
 });
