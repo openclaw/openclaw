@@ -12,6 +12,7 @@ import {
   DoctorMaintenanceRefusalError,
   UpdateDoctorError,
 } from "../../infra/update-doctor-result.js";
+import { formatRepairedUpdateRun } from "../../infra/update-failure-facts-format.js";
 import {
   createUpdateFailureFact,
   type UpdateFailureFact,
@@ -33,7 +34,6 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { isUpdateRepairRun, UPDATE_RUN_REPAIRED_STEP } from "../../infra/update-run-record.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
-import { formatRepairedUpdateRun } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   UPDATE_RUN_HEARTBEAT_MS,

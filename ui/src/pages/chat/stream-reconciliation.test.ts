@@ -2,12 +2,12 @@
 import { expect, it } from "vitest";
 import {
   appendTerminalAssistantMessage as appendTerminal,
+  historyReplacedVisibleStream,
   materializeVisibleStreamState,
   visibleAssistantStreamParts as visibleParts,
   visibleCurrentAssistantStreamTail as currentTail,
 } from "./stream-reconciliation.ts";
 import {
-  reconcileHistoryStreamParts,
   prunePersistedAssistantStreamSegments as prunePersistedAssistant,
   prunePersistedToolStreamMessages as prunePersistedTools,
 } from "./stream-segment-pruning.ts";
@@ -31,7 +31,7 @@ function reconcileHistory(
   state: StreamReconciliationState,
   options = visibleStreamOptions,
 ) {
-  return reconcileHistoryStreamParts(messages, state, visibleParts(state, options), options);
+  return historyReplacedVisibleStream(messages, visibleParts(state, options), options);
 }
 
 function user(content: string, timestamp?: number, key?: string, target?: string) {
@@ -226,17 +226,34 @@ it("does not prune keyed preambles by live tool index", () => {
   expect(state.toolStreamById.size).toBe(0);
 });
 
-it("retains the cumulative baseline after history replaces an earlier displayed prefix", () => {
+it("only retires a cumulative pre-tool occurrence when its own tool reaches history", () => {
+  const runId = "active-run";
+  const first = toolIdentity(runId, "call-first");
+  const second = toolIdentity(runId, "call-second");
   const state = idle({
+    chatRunId: runId,
     chatStreamSegments: [
-      streamSegment("Before steer.", 1, { runId: "active-run" }),
-      streamSegment("Before steer. After steer.", 2, { runId: "active-run" }),
+      streamSegment("Before steer.", 1, { runId, toolCallId: "call-first" }),
+      streamSegment("Before steer. After steer.", 2, { runId, toolCallId: "call-second" }),
     ],
+    toolStreamOrder: [first, second],
+    toolStreamById: new Map([
+      [first, createToolStreamEntry("call-first", runId)],
+      [second, createToolStreamEntry("call-second", runId)],
+    ]),
   });
-  expect(
-    reconcileHistory([{ role: "assistant", content: "Before steer.", timestamp: 1 }], state),
-  ).toBe(false);
-  expect(visibleParts(state, visibleStreamOptions)).toMatchObject([{ text: "After steer." }]);
+  const matchingProse = [assistant("Before steer.", 1)];
+  expect(reconcileHistory(matchingProse, state)).toBe(false);
+  prunePersistedTools(state, persistedToolIds(matchingProse, state));
+  expect(visibleParts(state, visibleStreamOptions).map((part) => part.text)).toEqual([
+    "Before steer.",
+    "After steer.",
+  ]);
+  const result = { role: "toolResult", runId, toolCallId: "call-first", content: "done" };
+  prunePersistedTools(state, persistedToolIds([result], state));
+  expect(visibleParts(state, visibleStreamOptions).map((part) => part.text)).toEqual([
+    "After steer.",
+  ]);
   expect(
     currentTail({ ...state, chatStream: "Before steer. After steer. Continued." }, () => false),
   ).toBe("Continued.");

@@ -157,6 +157,18 @@ test("accepts only explicit nonstandard Access grants independently of model pol
   });
 });
 
+test("accepts project grants as every project or trimmed unique project IDs", () => {
+  const project = (projects: unknown) =>
+    validated(rolesConfig({ definitions: { guest: { ...validRole, projects } } })).gateway?.roles
+      ?.definitions.guest?.projects;
+  expect(project("*")).toBe("*");
+  expect(project([" handbook ", "handbook", "site"])).toEqual(["handbook", "site"]);
+  expect(project([])).toEqual([]);
+  expect(
+    validated(rolesConfig({ definitions: { guest: validRole } })).gateway?.roles?.definitions.guest,
+  ).not.toHaveProperty("projects");
+});
+
 test.each([
   { sourceAgent: "missing", deny: ["fixture/restricted-*"] },
   { sourceAgent: "shared", deny: ["fixture/restricted-**"] },
@@ -184,6 +196,8 @@ test.each([
   ["blank operator scope", { scopes: [" \t"] }],
   ["wildcard in an agent allowlist", { agents: ["*"] }],
   ["blank access-policy plugin", { accessPolicyPlugin: " " }],
+  ["blank project grant", { projects: [" "] }],
+  ["non-wildcard project grant string", { projects: "handbook" }],
   ["missing session policy", { sessions: undefined, agents: "*", scopes: ["operator.read"] }],
   ["freeform capability", { capability: "sessions.delete" }],
 ] as const)("rejects %s", (_name, overrides) => {

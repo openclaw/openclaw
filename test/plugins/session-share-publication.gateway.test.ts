@@ -424,7 +424,7 @@ it.each([false, true])(
         });
       },
       false,
-      "gateway closed (4001): publication transport authority changed",
+      "gateway closed (4001): Publication transport credentials changed. Reconnect and try again.",
     );
     await expect(list()).rejects.toThrow("gateway not connected");
     if (!rotated.ok) {

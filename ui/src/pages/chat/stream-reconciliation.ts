@@ -45,7 +45,6 @@ type VisibleAssistantStreamPart = {
   replacementText: string;
   source: "segment" | "current";
   timestamp: number;
-  segmentIndex?: number;
   itemId?: string;
   runId?: string;
   toolCallId?: string;
@@ -116,7 +115,7 @@ export function visibleAssistantStreamParts(
   let previousText: string | null = null;
   const segments = state.chatStreamSegments;
   const readToolRef = createSegmentToolRefReader(liveToolRefs);
-  for (const [segmentIndex, segment] of segments.entries()) {
+  for (const segment of segments) {
     const { itemId, callId, runId, indexed } = readToolRef(segment);
     const visible = visibleAssistantStreamText(
       itemId ? segment.text : trimAccumulatedStreamPrefix(segment.text, previousText),
@@ -127,7 +126,6 @@ export function visibleAssistantStreamParts(
         text: visible,
         replacementText: segment.text,
         source: "segment",
-        segmentIndex,
         timestamp: asFiniteNumber(segment.ts) ?? Date.now(),
         itemId,
         runId: runId ?? indexed?.runId,
@@ -172,7 +170,7 @@ export function visibleCurrentAssistantStreamTail(
   );
 }
 
-export function hasAssistantStreamPartReplacement(
+function hasAssistantStreamPartReplacement(
   messages: unknown[],
   part: VisibleAssistantStreamPart,
   isHiddenAssistantMessage: AssistantMessageVisibility,
@@ -226,7 +224,7 @@ export function hasAssistantStreamPartReplacement(
   });
 }
 
-export function hasVisibleAssistantMessageAfterUser(
+function hasVisibleAssistantMessageAfterUser(
   messages: unknown[],
   isHiddenAssistantMessage: AssistantMessageVisibility,
 ): boolean {
@@ -238,6 +236,22 @@ export function hasVisibleAssistantMessageAfterUser(
     }
     return Boolean(extractText(message)?.trim());
   });
+}
+
+export function historyReplacedVisibleStream(
+  messages: unknown[],
+  parts: VisibleAssistantStreamPart[],
+  opts: Pick<MaterializeVisibleStreamOptions, "isHiddenAssistantMessage" | "persistCommentary">,
+): boolean {
+  const required = opts.persistCommentary ? parts : parts.filter((part) => !part.itemId);
+  return (
+    parts.length > 0 &&
+    (required.length > 0 ||
+      hasVisibleAssistantMessageAfterUser(messages, opts.isHiddenAssistantMessage)) &&
+    required.every((part) =>
+      hasAssistantStreamPartReplacement(messages, part, opts.isHiddenAssistantMessage),
+    )
+  );
 }
 
 export function terminalMessageReplacesVisibleStream(

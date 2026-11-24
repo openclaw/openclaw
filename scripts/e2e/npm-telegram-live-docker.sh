@@ -495,7 +495,7 @@ cleanup_recovery() {
 }
 trap cleanup_recovery EXIT
 
-dump_hotpath_logs() {
+dump_debug_logs() {
   local status="$1"
   echo "installed-package onboarding recovery hot path failed with exit code $status" >&2
   for file in \
@@ -511,7 +511,7 @@ dump_hotpath_logs() {
     fi
   done
 }
-trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 test -x "$sut_command"
 openclaw_e2e_run_command "$sut_command" --version

@@ -50,11 +50,11 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
 import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 import {
+  historyReplacedVisibleStream,
   visibleAssistantStreamParts,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
-  reconcileHistoryStreamParts,
   prunePersistedAssistantStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
@@ -399,9 +399,6 @@ export async function hydrateChatHistory(
           prunePersistedAssistantStreamSegments(state, message);
         }
       };
-      const reconcileParts = (parts: ReturnType<typeof visibleAssistantStreamParts>) =>
-        !res.inFlightRun &&
-        reconcileHistoryStreamParts(state.chatMessages, state, parts, streamReconciliation);
       const publishStream = (
         opts?: Parameters<typeof materializeVisibleAssistantStreamMessages>[2],
       ) =>
@@ -413,7 +410,9 @@ export async function hydrateChatHistory(
       const parts = visibleAssistantStreamParts(state, streamReconciliation);
       // The live snapshot already excludes durable bytes. Equal text can be a
       // distinct new occurrence, so only item identity can retire its live copy.
-      const historyReplacedStream = reconcileParts(parts);
+      const historyReplacedStream =
+        !res.inFlightRun &&
+        historyReplacedVisibleStream(state.chatMessages, parts, streamReconciliation);
       const liveToolIds = state.toolStreamOrder ?? [];
       if (
         state.chatRunId &&
@@ -449,11 +448,6 @@ export async function hydrateChatHistory(
           state.chatStreamStartedAt = null;
         }
         pruneKeyed();
-        if (!res.inFlightRun) {
-          reconcileParts(
-            visibleAssistantStreamParts(state, { ...streamReconciliation, includeCurrent: false }),
-          );
-        }
         reconcileToolStream();
       }
       if (!state.chatRunId) {

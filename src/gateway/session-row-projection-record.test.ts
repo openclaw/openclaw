@@ -285,8 +285,21 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
     parented.parents = parents;
     expect(acquire(parented, structuredClone(lineage))).toBe(parented);
     expect(parented.parents).toBe(parents);
-    const reparented = acquire(parented, { ...lineage, spawnedBy: undefined })!;
-    expect([...reparented.parents]).toEqual(["logical:main\0agent:main:parent"]);
+    const reparentedEntry = { ...lineage, spawnedBy: undefined };
+    const compareLineage = vi.spyOn(util, "isDeepStrictEqual");
+    syncBuiltinESMExports();
+    try {
+      const reparented = acquire(parented, reparentedEntry)!;
+      expect([...reparented.parents]).toEqual(["logical:main\0agent:main:parent"]);
+      expect(
+        compareLineage.mock.calls.some(
+          ([before, after]) => before === parented.entry && after === reparentedEntry,
+        ),
+      ).toBe(false);
+    } finally {
+      compareLineage.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 });
 

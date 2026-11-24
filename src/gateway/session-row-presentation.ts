@@ -458,12 +458,11 @@ export function prepareProjectedSessionPresentation(
       facts[15] = run?.active;
       facts[16] = run?.status;
       facts[17] = preparedFacts;
-      facts[18] =
-        sessionTitleRequests.get({
-          storePath: record.storeTarget.storePath,
-          sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-        }) !== undefined;
+      facts[18] = sessionTitleRequests.isPending({
+        storePath: record.storeTarget.storePath,
+        sessionKey: record.key,
+        sessionId: record.entry.sessionId,
+      });
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
       facts[20] =

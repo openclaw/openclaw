@@ -398,6 +398,8 @@ function recordDiagnosticEvent(
           operation: normalizeDiagnosticValue(
             evt.operation ?? (evt.family === "git" ? "unknown" : "none"),
           ),
+          transport: normalizeDiagnosticValue(evt.transport),
+          thread: normalizeDiagnosticValue(evt.thread),
         },
         numericValue(evt.count) ?? 0,
       );

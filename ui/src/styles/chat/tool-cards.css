@@ -852,8 +852,7 @@
 /* Keep outside actions reachable and avoid restoring stale row geometry when
    the active widget's top-layer menu closes. */
 .chat-virtual-row:has(
-  .chat-tool-card__preview:hover,
-  .chat-tool-card__preview:focus-within,
+  .chat-tool-card__preview:is(:hover, :focus-within, [data-widget-inspecting]),
   .chat-tool-card__preview[data-widget-actions-above],
   .chat-tool-card__widget-actions [aria-expanded="true"]
 ) {
@@ -884,7 +883,7 @@
   transition: opacity 120ms ease-out;
 }
 
-.chat-tool-card__preview:is(:hover, :focus-within) [data-widget-actions],
+.chat-tool-card__preview:is(:hover, :focus-within, [data-widget-inspecting]) [data-widget-actions],
 [data-widget-actions]:has(.chat-tool-card__widget-actions [aria-expanded="true"]) {
   opacity: 1;
   pointer-events: auto;

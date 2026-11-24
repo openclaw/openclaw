@@ -102,3 +102,16 @@ it("replays for a fork that runs tools only when the parent lists them", () => {
   // The parent never listed the fork's tool.
   expect(fork([{ type: "function", name: "other" }])).toEqual(own);
 });
+
+it("keeps the session's tool choice in a cache prewarm", () => {
+  const request = () => ({
+    model: "m",
+    tools: [{ type: "function", name: "lookup" }],
+    prompt_cache_options: { prewarm: true },
+    input: [user("Parent question"), user(".")],
+  });
+  const payload: Record<string, unknown> = request();
+  applySessionForkRequest(payload, { ownOutputLimit: false, cachePrewarm: true }, responses);
+  // A tool_choice change would change the cached prefix the prewarm exists to read.
+  expect(payload).toEqual(request());
+});

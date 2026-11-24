@@ -1097,7 +1097,7 @@ const enSettings = {
         "Sign in and enable this provider for this agent without changing the active model.",
       nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
-        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
+        "Choose how to connect. Setup can also verify and select a model for this agent.",
       done: "Provider credentials saved.",
       statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
       startChat: "Start a new chat with {model}",
@@ -1241,6 +1241,14 @@ const enSettings = {
       checkUnavailable:
         "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
+    },
+    voice: {
+      title: "Talk, speech, and transcription",
+      detail:
+        "Sign in with ChatGPT doesn’t include {provider} voice. API usage is billed separately from your ChatGPT plan.",
+      providerDetail:
+        "Signing in with {provider} doesn’t include voice. Voice API usage is billed separately.",
+      status: "API key needed",
     },
     probe: {
       test: "Test access",

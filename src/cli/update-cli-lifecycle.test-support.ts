@@ -43,7 +43,7 @@ import { getNodeRuntimeFixture } from "./update-cli/update-command-runtime-recov
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-export const candidateCheckStep = (cwd: string, valid = true) => ({
+const candidateCheckStep = (cwd: string, valid = true) => ({
   name: "candidate-recovery",
   command: "--check",
   cwd,

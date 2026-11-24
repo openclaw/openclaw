@@ -4,12 +4,7 @@ import {
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
-import {
-  hasAssistantStreamPartReplacement,
-  hasVisibleAssistantMessageAfterUser,
-  type visibleAssistantStreamParts,
-  type ToolStreamReconciliationState,
-} from "./stream-reconciliation.ts";
+import type { ToolStreamReconciliationState } from "./stream-reconciliation.ts";
 import type { ToolStreamState } from "./tool-stream-contract.ts";
 import {
   createSegmentToolRefReader,
@@ -17,8 +12,6 @@ import {
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-
-type AssistantMessageVisibility = (message: unknown) => boolean;
 
 function pruneAccumulatedStreamSegments(
   segments: readonly ChatStreamSegment[],
@@ -59,41 +52,6 @@ export function prunePersistedAssistantStreamSegments(
   if (segments.length !== state.chatStreamSegments.length) {
     state.chatStreamSegments = segments;
   }
-}
-
-/** Match each live part to the snapshot once. Matching segments retire even when the tail is still live. */
-export function reconcileHistoryStreamParts(
-  messages: unknown[],
-  state: ToolStreamReconciliationState,
-  parts: ReturnType<typeof visibleAssistantStreamParts>,
-  opts: { isHiddenAssistantMessage: AssistantMessageVisibility; persistCommentary: boolean },
-): boolean {
-  const replaced = new Set<number>();
-  let required = false;
-  let complete = true;
-  for (const part of parts) {
-    if (part.itemId && !opts.persistCommentary) {
-      continue;
-    }
-    required = true;
-    if (!hasAssistantStreamPartReplacement(messages, part, opts.isHiddenAssistantMessage)) {
-      complete = false;
-    } else if (!part.itemId && part.segmentIndex !== undefined) {
-      replaced.add(part.segmentIndex);
-    }
-  }
-  if (replaced.size) {
-    state.chatStreamSegments = pruneAccumulatedStreamSegments(
-      state.chatStreamSegments,
-      state.chatRunId,
-      (_, index) => replaced.has(index),
-    );
-  }
-  return (
-    parts.length > 0 &&
-    complete &&
-    (required || hasVisibleAssistantMessageAfterUser(messages, opts.isHiddenAssistantMessage))
-  );
 }
 
 export function prunePersistedToolStreamMessages(

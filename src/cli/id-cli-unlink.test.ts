@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-import { describePendingUnlinks, describeUnlinkWarning, runUnlink } from "./id-cli-unlink.js";
+import { describePendingUnlinks, runUnlink } from "./id-cli-unlink.js";
 import { promptYesNo } from "./prompt.js";
 
 vi.mock(import("./gateway-rpc.js"), async (importOriginal) => ({
@@ -55,8 +55,10 @@ const write = (json: unknown, text: string) => {
 };
 
 describe("openclaw id unlink", () => {
-  it("warns with the counts, the address and the retired name", () => {
-    expect(describeUnlinkWarning(preview)).toBe(
+  it("warns with the counts, the address and the retired name", async () => {
+    vi.mocked(promptYesNo).mockResolvedValue(false);
+    await runUnlink({}, write);
+    expect(output).toContain(
       [
         "Unlink studio-k7x2q.claws.example.test from OpenClaw ID?",
         "  - 2 people and 4 devices lose access now (1 owner device, 3 member devices). Members are removed; linking again starts with no one.",

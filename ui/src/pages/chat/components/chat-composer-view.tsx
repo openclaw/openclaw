@@ -26,9 +26,9 @@ import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx"
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
 import { renderChatPrimaryActionsSolid as ChatPrimaryActions } from "./chat-composer-controls.tsx";
-import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
 import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
+import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
@@ -62,6 +62,9 @@ const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
   export: "ComposerReplyPreview",
 });
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
+const VoiceApiKeyNotice = lazy(() => import("../voice-api-key-notice.tsx"), {
+  export: "VoiceApiKeyNotice",
+});
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",
 });
@@ -174,6 +177,19 @@ export function renderChatComposerView(
             props.realtimeTalkCameraError ? undefined : props.onDismissRealtimeTalkError
           }
         />
+        <Show when={context().runControlsProps.talkApiKeyNotice}>
+          {(notice) => (
+            <ChatLazyBoundary>
+              <VoiceApiKeyNotice
+                class="agent-chat__composer-alert"
+                kind="talk"
+                provider={notice().provider}
+                onConfigure={notice().onConfigure}
+                onDismiss={notice().onDismiss}
+              />
+            </ChatLazyBoundary>
+          )}
+        </Show>
         {props.realtimeTalkInputNotice ? (
           <ChatVoiceStatus
             status="error"

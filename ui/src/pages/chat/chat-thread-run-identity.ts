@@ -168,6 +168,7 @@ export function resolveRunInsertionBounds(
   runId: unknown,
   currentRunId: string | null | undefined,
   currentTurnBounds: TurnInsertionBounds | null,
+  firstHistoryItem: Extract<ChatItem, { kind: "message" }> | undefined,
 ): TurnInsertionBounds | null {
   if (typeof runId !== "string" || !runId.trim()) {
     return currentRunId != null ? currentTurnBounds : null;
@@ -178,6 +179,14 @@ export function resolveRunInsertionBounds(
   }
   if (runBounds || currentRunId == null) {
     return runBounds;
+  }
+  // A resumed run may not have a history row yet. No older turn can precede
+  // the native opening request, even when the continuation has a different ID.
+  if (firstHistoryItem && firstHistoryItem.key === currentTurnBounds?.afterKey) {
+    const first = readSessionMessageIdentity(firstHistoryItem.message);
+    if (first?.role === "user" && !first.isImported && first.sequence === 1) {
+      return currentTurnBounds;
+    }
   }
   // Legacy rows may lack the user-run identity needed for exact bounds. Keep
   // them ordered before the current prompt instead of attaching them to it.

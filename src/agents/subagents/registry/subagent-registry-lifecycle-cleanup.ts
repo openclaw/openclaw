@@ -8,21 +8,14 @@ import { defaultRuntime } from "../../../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
-import { getDeliveryLastError, isDeliverySuspended } from "./subagent-delivery-state.js";
+import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
-import {
-  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-  logAnnounceGiveUp,
-  resolveAnnounceRetryDelayMs,
-} from "./subagent-registry-helpers.js";
+import { resolveAnnounceRetryDelayMs } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleAnnounceCleanupContext,
   SubagentLifecycleCleanupContext,
-  SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
-import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -30,45 +23,6 @@ import {
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
-
-export async function suspendPendingFinalDelivery(
-  context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
-  args: {
-    runId: string;
-    entry: SubagentRunRecord;
-    reason: "expiry" | "permanent_failure";
-    error?: string;
-    enqueuedAt?: number;
-    lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
-  },
-): Promise<void> {
-  const params = context.options;
-  const currentEntry = getCurrentSubagentRunOwner(params.runs, args.entry);
-  if (
-    !currentEntry ||
-    !(await blockSubagentCompletionDelivery({
-      subagent: currentEntry,
-      reason: args.error ?? getDeliveryLastError(currentEntry) ?? args.reason,
-      suspendedReason: args.reason,
-      lastDropReason: args.lastDropReason ?? currentEntry.delivery?.lastDropReason,
-      enqueuedAt: args.enqueuedAt,
-    }))
-  ) {
-    throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);
-  }
-  const entry = getCurrentSubagentRunOwner(params.runs, args.entry);
-  if (!entry) {
-    return;
-  }
-  params.resumedRuns.delete(getSubagentRunRuntimeKey(args.entry));
-  if (entry.delivery?.discardReason === "task-missing") {
-    return;
-  }
-  logAnnounceGiveUp(entry, args.reason);
-  // Suspension settles this child for requester drain while cleanup stays incomplete.
-  context.resumeAncestorCleanup(entry);
-  scheduleRequesterSettleWake(context, entry.runId, entry);
-}
 
 export function isSubagentCompletionDeliveryAllowed(
   context: SubagentLifecycleAnnounceCleanupContext,
@@ -274,11 +228,7 @@ export function runDetachedCleanupAttempt(
         const requiredDeliveryPending =
           current.expectsCompletionMessage === true && current.delivery?.status === "pending";
         const remainingDeliveryMs = requiredDeliveryPending
-          ? resolveAnnounceDeliveryDeadline(
-              current,
-              Date.now(),
-              ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-            ) - Date.now()
+          ? resolveAnnounceDeliveryDeadline(current, Date.now()) - Date.now()
           : 0;
         // Expiry closes sending, not the pending obligation to record its disposition.
         if (requiredDeliveryPending || failureCount <= MAX_DETACHED_CLEANUP_RETRIES) {

@@ -12,7 +12,7 @@ import { SESSION_SEARCH_SCOPE } from "../lib/sessions/session-requests.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
 export const SESSION_ACTION_PREFIX = "session:";
-export const SESSION_SEARCH_LIMIT = 10;
+const SESSION_SEARCH_LIMIT = 10;
 /** Archived sessions match by title only and stay few, so they never crowd out live results. */
 const ARCHIVED_SESSION_RESULT_LIMIT = 3;
 export { SESSION_SEARCH_SCOPE };

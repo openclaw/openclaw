@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
@@ -111,7 +112,7 @@ it("reads the accepted base immediately after a real same-session reset", async 
   });
 });
 
-it("shows no changes for a new operator conversation before its first turn captures the baseline", async () => {
+it.each([false, true])("shows no changes before the first turn (managed: %s)", async (managed) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     const repo = state.workspaceDir;
@@ -135,7 +136,7 @@ it("shows no changes for a new operator conversation before its first turn captu
     // Pre-session work in the agent workspace is not this conversation's change.
     await fs.writeFile(path.join(repo, "before-session.txt"), "existing\n");
     const sessionKey = "agent:main:main";
-    await initSessionState({
+    const { sessionEntry } = await initSessionState({
       ctx: finalizeInboundContext({
         Body: "hello",
         ChatType: "direct",
@@ -145,8 +146,27 @@ it("shows no changes for a new operator conversation before its first turn captu
       cfg,
       commandAuthorized: true,
     });
+    const worktree = managed ? { id: randomUUID(), repoRoot: repo, branch: "task" } : undefined;
+    if (worktree) {
+      await upsertSessionEntryCore(
+        { sessionKey, agentId: "main" },
+        { ...sessionEntry, worktree, spawnedCwd: repo },
+      );
+      await seedManagedReview(
+        worktree,
+        { sessionKey, sessionId: sessionEntry.sessionId },
+        state.statePath("worktree-projections"),
+        git("rev-parse", "refs/remotes/origin/main"),
+      );
+    }
     expect(await loadSessionDiff({ sessionKey })).toMatchObject({ files: [], additions: 0 });
     const named = await loadSessionDiff({ sessionKey, scope: "commit", commit });
     expect(named.files.map((file) => file.path)).toEqual(["committed.txt"]);
+    if (worktree) {
+      await updateRegistryWorktree(process.env, worktree.id, { removedAt: 0 });
+      await expect(loadSessionDiff({ sessionKey })).rejects.toThrow(
+        /worktree was removed.*Use Restore in Settings > Worktrees/,
+      );
+    }
   });
 });

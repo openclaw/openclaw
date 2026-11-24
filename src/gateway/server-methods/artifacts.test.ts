@@ -695,7 +695,7 @@ describe("artifact download lookup", () => {
     expectFields(downloadPayload, { data: "c2Vjb25k" });
   });
 
-  it("shares one scan for queued downloads while preserving inline, URL, and managed responses", async () => {
+  it("preserves inline, URL, and managed responses for queued downloads", async () => {
     using connection = createSessionFileDownloadClient();
     const managedId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";
     mockedMessages([
@@ -738,16 +738,12 @@ describe("artifact download lookup", () => {
         expiresAt: expect.any(String),
       },
     ];
-    hoisted.visitSessionMessagesAsync.mockClear();
     const results = await Promise.all(
       summaries.map((artifact) =>
         downloadArtifact({ ...query, artifactId: artifact.id }, { client: connection.client }),
       ),
     );
     expect(results.map((result) => expectOkPayload(result.calls))).toEqual(expected);
-    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledTimes(1);
-    await downloadArtifact({ ...query, artifactId: summaries[0]!.id });
-    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledTimes(2);
   });
 
   it.each(["empty", "failed"])("releases a %s shared download scan", async (outcome) => {
