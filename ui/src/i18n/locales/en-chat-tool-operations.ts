@@ -21,9 +21,9 @@ const enChatToolOperations = {
         sent: "Sent to conversation",
         queued: "Message queued",
         suppressed: "Message not sent",
-        unknown: "Message delivery unconfirmed",
-        replied: "Sent message and received a reply",
-        timeout: "Sent message; reply timed out",
+        unknown: "Delivery unconfirmed",
+        replied: "Sent · reply received",
+        timeout: "Sent · reply timed out",
       },
       operationLabels: {
         decision_evaluate: {
@@ -87,8 +87,8 @@ const enChatToolOperations = {
         },
         conversations_turn: {
           default: {
-            action: "Send message and wait for a reply",
-            running: "Sending message and waiting for a reply",
+            action: "Send and wait for a reply",
+            running: "Sending and waiting for a reply",
           },
         },
         github_identity_status: {
