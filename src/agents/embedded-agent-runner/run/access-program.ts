@@ -10,7 +10,10 @@ import type { AuthProfileCredential } from "../../auth-profiles/types.js";
 import { FailoverError } from "../../failover-error.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../../harness/support.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
-import { resolveModelCatalogAccessPrograms } from "../../model-catalog-access-programs.js";
+import {
+  consumesCyberAccessPrograms,
+  resolveModelCatalogAccessPrograms,
+} from "../../model-catalog-access-programs.js";
 import { getPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
 import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
@@ -113,8 +116,8 @@ export async function prepareAttemptAccessPrograms(
 }
 
 /**
- * Programs for one dispatch's Access default. A saved session choice replaces the default,
- * and a superseded prepared runtime leaves the programs unknown.
+ * Programs for one dispatch's Access default, read only for routes that send a program. A saved
+ * session choice replaces the default, and a superseded prepared runtime leaves programs unknown.
  */
 export async function readDispatchAccessPrograms(
   input: Pick<PreparedEmbeddedAttemptDispatchInput, "runInput" | "preparedRuntime">,
@@ -122,17 +125,24 @@ export async function readDispatchAccessPrograms(
   program: CyberAccessProgram | undefined,
 ): Promise<CyberAccessProgram[] | undefined> {
   const { preparedModelRuntime } = input.runInput;
-  if (program !== undefined || preparedModelRuntime?.isCurrent() !== true) {
+  const { provider, modelId } = input.preparedRuntime;
+  const auth = runtime.activePreparedAuthPlan;
+  const runtimeId = runtime.agentHarness.id;
+  if (
+    program !== undefined ||
+    !consumesCyberAccessPrograms({ provider, runtimeId, route: auth.modelRoute }) ||
+    preparedModelRuntime?.isCurrent() !== true
+  ) {
     return undefined;
   }
   const read = await prepareAttemptAccessPrograms({
     preparedModelRuntime,
     authProfileId: runtime.lastProfileId,
     authProfileStore: input.preparedRuntime.resolveRunAttemptAuthProfileStore(),
-    provider: input.preparedRuntime.provider,
-    modelId: input.preparedRuntime.modelId,
-    auth: runtime.activePreparedAuthPlan,
-    runtimeId: runtime.agentHarness.id,
+    provider,
+    modelId,
+    auth,
+    runtimeId,
   });
   return read();
 }

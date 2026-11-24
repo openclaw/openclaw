@@ -70,23 +70,14 @@ export function resolveModelCatalogAccessPrograms(params: {
   return observation ? [...observation.cyber] : undefined;
 }
 
-/**
- * One default selection for catalog presentation and physical runtime requests. Configuration
- * wins; otherwise a model whose advertised programs exclude Standard (cyber models advertise
- * only Daybreak Red) uses its one program, and unknown or Standard-capable models use Standard.
- */
-export function resolveModelCyberAccessProgramDefault(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
+/** Only OpenAI's official Responses routes and the Codex runtime send an Access program. */
+export function consumesCyberAccessPrograms(params: {
   provider: string;
-  modelId: string;
   runtimeId: string;
   route?: ModelAuthAvailabilityEvaluation["selectedRoute"];
-  /** The selected account's programs for this model, route, and runtime; undefined when unknown. */
-  advertised?: readonly CyberAccessProgram[];
-}): CyberAccessProgram | undefined {
-  const { provider, modelId, runtimeId, route, advertised } = params;
-  const consumesAccessPrograms =
+}): boolean {
+  const { provider, runtimeId, route } = params;
+  return (
     normalizeProviderId(provider) === "openai" &&
     (runtimeId === "codex" ||
       (runtimeId === "openclaw" &&
@@ -103,14 +94,33 @@ export function resolveModelCyberAccessProgramDefault(params: {
                 ? "https://api.openai.com/v1"
                 : "https://chatgpt.com/backend-api/codex",
           },
-        })));
-  return consumesAccessPrograms
+        })))
+  );
+}
+
+/**
+ * One default selection for catalog presentation and physical runtime requests. Configuration
+ * wins; otherwise a model whose advertised programs exclude Standard (cyber models advertise
+ * only Daybreak Red) uses its one program, and unknown or Standard-capable models use Standard.
+ */
+export function resolveModelCyberAccessProgramDefault(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  provider: string;
+  modelId: string;
+  runtimeId: string;
+  route?: ModelAuthAvailabilityEvaluation["selectedRoute"];
+  /** The selected account's programs for this model, route, and runtime; undefined when unknown. */
+  advertised?: readonly CyberAccessProgram[];
+}): CyberAccessProgram | undefined {
+  const { advertised } = params;
+  return consumesCyberAccessPrograms(params)
     ? resolveConfiguredCyberAccessProgram(
         {
           config: params.config,
           agentId: params.agentId,
-          provider,
-          modelId,
+          provider: params.provider,
+          modelId: params.modelId,
         },
         advertised?.length === 1 ? advertised[0] : "standard",
       )
