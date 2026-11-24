@@ -578,6 +578,24 @@ export async function setupWizardCommand(
     );
   }
 
+  // Fail before setup writes or --reset moves profile state to Trash.
+  if (
+    normalizedOpts.nonInteractive &&
+    (normalizedOpts.mode ?? "local") === "local" &&
+    normalizedOpts.installDaemon === true &&
+    process.platform === "linux"
+  ) {
+    const { isSystemdUserServiceAvailable } = await import("../daemon/systemd.js");
+    if (!(await isSystemdUserServiceAvailable())) {
+      reject(
+        "Cannot install the Gateway service: systemd user services are unavailable. " +
+          "Rerun with --skip-daemon for setup without a background service, " +
+          "or retry from a working user-systemd session.",
+      );
+      return;
+    }
+  }
+
   const runSetup = normalizedOpts.nonInteractive
     ? (await import("./onboard-non-interactive.js")).runNonInteractiveSetup
     : wantsClassicInteractiveSetup(normalizedOpts)
