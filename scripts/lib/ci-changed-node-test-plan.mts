@@ -63,13 +63,13 @@ import {
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "./ci-proof-test-inventory.mts";
 import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
   listPrExemptRuntimeTestFiles,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-} from "./ci-proof-test-inventory.mts";
+} from "./ci-test-tier-policy.mts";
 import {
   readCompactGroupTimings,
   readRepoE2eFileTimings,

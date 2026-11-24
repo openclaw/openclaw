@@ -31,8 +31,8 @@ import {
 import {
   isCiProofTestFile,
   isReleaseOnlyRuntimeTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
-import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
+} from "../../scripts/lib/ci-test-tier-policy.mts";
+import * as testTierPolicy from "../../scripts/lib/ci-test-tier-policy.mts";
 import {
   createNativeSoloTimingKey,
   type CiTimingProfile,
@@ -1629,7 +1629,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       if (runnerBackend !== "github") {
         const fullFiles = groups.flatMap(optionalPatterns);
         const excluded = required(fullFiles[0]);
-        vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+        vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
           (file) => file === excluded,
         );
         vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
@@ -2275,8 +2275,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps reduced Gateway coverage under distinct complete timing parts", () => {
-    const isReleaseOnlyRuntime = proofTestInventory.isReleaseOnlyRuntimeTestFile;
-    vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+    const isReleaseOnlyRuntime = testTierPolicy.isReleaseOnlyRuntimeTestFile;
+    vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
       (file) => file === "src/gateway/server.chat-cli-auth.test.ts" || isReleaseOnlyRuntime(file),
     );
     const options = {
