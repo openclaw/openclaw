@@ -27,6 +27,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -41,7 +42,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowToast
-import java.util.concurrent.CopyOnWriteArrayList
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
@@ -263,8 +263,6 @@ class SessionDiffContentTest {
     val snapshot = snapshot()
     val files = prepareSessionDiffFiles(snapshot)
     val references = mutableListOf<String>()
-    // TEMPORARY: bounded metadata-only trace; remove before final qualification.
-    val selectionDiagnostics = CopyOnWriteArrayList<String>()
     composeRule.setContent {
       ClawDesignTheme(dark = dark.value) {
         SessionDiffContent(
@@ -276,9 +274,6 @@ class SessionDiffContentTest {
           {},
           Modifier.fillMaxSize(),
           onReference = { references += it },
-          onSelectionDiagnostic = { event ->
-            if (selectionDiagnostics.size < 128) selectionDiagnostics.add(event)
-          },
         )
       }
     }
@@ -397,12 +392,38 @@ class SessionDiffContentTest {
         composeRule.onNodeWithText("To chat").performClick()
       }
       composeRule.runOnIdle { assertEquals(List(2) { "src/retry.ts:8-9 (After | Uncommitted)\n```ts\nconst retries = 3;\nexport { retries };\n```" }, references) }
-    } catch (failure: Throwable) {
-      runCatching { System.err.println("TEMPORARY_SESSION_DIFF_SELECTION\n" + selectionDiagnostics.joinToString("\n")) }
-      throw failure
     } finally {
       if (previousClip == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previousClip)
     }
+  }
+
+  @Test
+  fun tapWithMoveDismissesSelectionAndActionTapStillDispatches() {
+    val snapshot = snapshot()
+    val files = prepareSessionDiffFiles(snapshot)
+    val references = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme {
+        SessionDiffContent(snapshot, files, false, null, {}, {}, Modifier.fillMaxSize(), { references += it })
+      }
+    }
+    val line = composeRule.onNodeWithText("+ const retries = 3;", substring = true)
+    line.performSemanticsAction(SemanticsActions.OnLongClick) { assertTrue(it()) }
+    composeRule.onNodeWithText("To chat").assertIsDisplayed()
+    composeRule.onNodeWithText("− const retries = 1;").performTouchInput {
+      down(center)
+      // A small unconsumed move must not make the tap observer miss the following release.
+      moveTo(center + Offset(1f, 0f))
+      up()
+    }
+    composeRule.onNodeWithText("To chat").assertDoesNotExist()
+    line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+    line.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+
+    line.performSemanticsAction(SemanticsActions.OnLongClick) { assertTrue(it()) }
+    composeRule.onNodeWithText("To chat").performTouchInput { click() }
+    composeRule.runOnIdle { assertEquals(1, references.size) }
+    composeRule.onNodeWithText("To chat").assertDoesNotExist()
   }
 
   @Test

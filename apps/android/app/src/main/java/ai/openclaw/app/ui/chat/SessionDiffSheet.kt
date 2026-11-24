@@ -82,7 +82,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
@@ -223,8 +222,6 @@ internal fun SessionDiffContent(
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
   onReference: (String) -> Unit,
-  // TEMPORARY: remove this test diagnostic callback before final qualification.
-  onSelectionDiagnostic: ((String) -> Unit)? = null,
 ) {
   var collapsed by remember { mutableStateOf(emptySet<String>()) }
   var showLineNumbers by remember { mutableStateOf(false) }
@@ -286,7 +283,6 @@ internal fun SessionDiffContent(
           { showLineNumbers = it },
           Modifier.weight(1f),
           { selection -> onReference(selection.chatReference()) },
-          onSelectionDiagnostic,
         )
       }
     }
@@ -303,7 +299,6 @@ private fun SessionDiffFiles(
   setLineNumbers: (Boolean) -> Unit,
   modifier: Modifier,
   onReference: (SessionDiffSelection) -> Unit,
-  onSelectionDiagnostic: ((String) -> Unit)?,
 ) {
   val context = LocalContext.current
   val density = LocalDensity.current
@@ -366,16 +361,6 @@ private fun SessionDiffFiles(
   val haptic = LocalHapticFeedback.current
   val pulse = remember { Animatable(0.16f) }
   var selectionPulse by remember { mutableIntStateOf(0) }
-  // TEMPORARY: metadata only, with no argument construction when diagnostics are absent.
-  fun traceSelection(
-    event: String,
-    change: PointerInputChange? = null,
-    dragging: Boolean? = null,
-  ) {
-    onSelectionDiagnostic?.invoke(
-      "event=$event selecting=$selecting selectionPresent=${selection != null} dragging=$dragging pointer=${change?.id?.value} pressed=${change?.pressed} consumed=${change?.isConsumed}",
-    )
-  }
   LaunchedEffect(selectionPulse) {
     if (selectionPulse > 0) {
       pulse.snapTo(0.38f)
@@ -400,31 +385,13 @@ private fun SessionDiffFiles(
     activeHandle = null
     selectionPulse++
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    traceSelection("begin_selection", dragging = dragging)
   }
   Box(
     modifier.pointerInput(files, collapsed) {
       awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
-        traceSelection("tap_final_down", down)
-        try {
-          val up = waitForUpOrCancellation(PointerEventPass.Final)
-          if (up != null) {
-            selection = null
-            traceSelection("tap_final_up", up)
-          } else {
-            onSelectionDiagnostic?.let {
-              traceSelection("tap_final_cancel", currentEvent.changes.firstOrNull { it.id == down.id })
-            }
-          }
-        } catch (cancelled: CancellationException) {
-          runCatching {
-            onSelectionDiagnostic?.let {
-              traceSelection("tap_final_cancel_exception", currentEvent.changes.firstOrNull { it.id == down.id })
-            }
-          }
-          throw cancelled
-        }
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+        // The helper checks Final internally; start in Main to inspect the same event.
+        if (waitForUpOrCancellation(PointerEventPass.Main) != null) selection = null
       }
     },
   ) {
@@ -470,10 +437,8 @@ private fun SessionDiffFiles(
         }.pointerInput(files, collapsed) {
           awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            traceSelection("pointer_down", down)
             val (view, index) = lineAt(down.position) ?: return@awaitEachGesture
-            val longPress = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
-            traceSelection("long_press", longPress)
+            awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
             beginSelection(view, index, true)
             if (!selecting) return@awaitEachGesture
             try {
@@ -481,7 +446,6 @@ private fun SessionDiffFiles(
                 // Selection owns the pointer before child tap and scroll handlers.
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                traceSelection("pointer_initial", change)
                 if (change.isConsumed) break
                 change.consume()
                 lineAt(change.position)?.let { (targetView, targetIndex) ->
@@ -489,7 +453,6 @@ private fun SessionDiffFiles(
                 }
                 if (!change.pressed) {
                   selecting = false
-                  traceSelection("pointer_up", change)
                   break
                 }
               }
@@ -497,7 +460,6 @@ private fun SessionDiffFiles(
               if (selecting) {
                 selecting = false
                 selection = null
-                traceSelection("pointer_cancel")
               }
             }
           }
@@ -583,7 +545,6 @@ private fun SessionDiffFiles(
               selection?.let { it.view === view && it.contains(index) } == true,
               pulse.value,
               {
-                traceSelection("semantic_select")
                 beginSelection(view, index, false)
               },
             )
@@ -618,7 +579,6 @@ private fun SessionDiffFiles(
                     activeHandle = start to left
                     selecting = true
                     handleDragPosition = position
-                    traceSelection("handle_begin")
                   },
                   onDrag = { delta ->
                     handleDragPosition += delta
@@ -629,7 +589,6 @@ private fun SessionDiffFiles(
                   onEnd = {
                     selecting = false
                     activeHandle = null
-                    traceSelection("handle_end")
                   },
                   onStep = { delta -> selection = selection?.stepEdge(start, delta) },
                 )
