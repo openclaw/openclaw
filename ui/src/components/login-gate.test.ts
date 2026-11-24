@@ -330,6 +330,7 @@ describe("login gate failure recovery", () => {
     try {
       element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.click();
       expect(reload).not.toHaveBeenCalled();
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expect(element.querySelector(".app-toast__message")?.textContent).toContain(
           "Unsaved starts will be lost.",
