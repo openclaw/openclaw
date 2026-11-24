@@ -22,7 +22,7 @@ import {
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
 import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -83,7 +83,7 @@ export function prepareExecExitNotification(
         session.notifyOnExit = false;
       }
       logWarn(
-        `exec: automatic completion has no destination (${formatErrorMessage(error)}); use process poll.`,
+        `exec: automatic completion has no destination (${sessionKind(session.sessionKey)} session; ${formatErrorMessage(error)}); use process poll.`,
       );
     },
   );
@@ -96,6 +96,9 @@ const execYieldResumes = new Map<string, ExecYieldResume>();
 /** A chat is its agent plus session key; a raw key such as `global` is shared across agents. */
 type ExecChat = { agentId: string; sessionKey: string };
 const execChatKey = (chat: ExecChat) => `${chat.agentId}\0${chat.sessionKey}`;
+/** Failure logs name the session kind, never the session key or id. */
+const sessionKind = (sessionKey: string | undefined) =>
+  isIncognitoSessionKey(sessionKey) ? "incognito" : "normal";
 const processChat = (session: ProcessSession) =>
   session.sessionKey && session.agentId
     ? execChatKey({ agentId: session.agentId, sessionKey: session.sessionKey })
@@ -296,7 +299,9 @@ async function settleOwedExecWake(
   wakeAgain?: (stored: Owed) => void,
 ) {
   if (outcome.status === "failed") {
-    logWarn(`exec: completion delivery failed (${outcome.error}); inspect the process result.`);
+    logWarn(
+      `exec: completion delivery failed (${sessionKind(owed.to.sessionKey)} session; ${outcome.error}); inspect the process result.`,
+    );
   }
   try {
     const stored = isGatewayRestartDraining() ? undefined : await readPendingOwed(owed);
@@ -311,7 +316,9 @@ async function settleOwedExecWake(
       await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }
   } catch (error) {
-    logWarn(`exec: completion ${owed.id} stays owed (${formatErrorMessage(error)}).`);
+    logWarn(
+      `exec: completion ${owed.id} stays owed (${sessionKind(owed.to.sessionKey)} session; ${formatErrorMessage(error)}).`,
+    );
   }
 }
 
@@ -342,7 +349,7 @@ async function notifyOnExit(
     const target = session.notifySessionTarget;
     if (!agentId || !target?.storePath) {
       logWarn(
-        `exec: completion ${session.id} has no admitted session destination; inspect its process result.`,
+        `exec: completion ${session.id} has no admitted session destination (${sessionKind(eventSessionKey)} session); inspect its process result.`,
       );
       return;
     }
@@ -371,7 +378,7 @@ async function notifyOnExit(
             () => true,
             (error: unknown) => {
               logWarn(
-                `exec: completion ${session.id} was not stored (${formatErrorMessage(error)}); delivering it without restart recovery.`,
+                `exec: completion ${session.id} was not stored (${sessionKind(eventSessionKey)} session; ${formatErrorMessage(error)}); delivering it without restart recovery.`,
               );
               return false;
             },
@@ -388,7 +395,7 @@ async function notifyOnExit(
       );
     } catch (error) {
       logWarn(
-        `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,
+        `exec: completion was not admitted (${sessionKind(eventSessionKey)} session; ${formatErrorMessage(error)}); inspect the result with process log.`,
       );
     }
     return;
@@ -407,6 +414,8 @@ async function notifyOnExit(
     if (!(error instanceof SystemEventQueueFullError)) {
       throw error;
     }
-    logWarn(`exec: completion ${session.id} was not queued (${error.message}); use process poll.`);
+    logWarn(
+      `exec: completion ${session.id} was not queued (${sessionKind(sessionKey)} session; ${error.message}); use process poll.`,
+    );
   }
 }
