@@ -77,7 +77,9 @@ it("keeps pending admissions through capacity pressure and recovers their origin
     await store.start(first.id);
     const refused = store.create("ctx", "alice", "next");
     await expect(store.start(refused.id)).rejects.toMatchObject({
-      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      name: "A2aProtocolError",
+      code: -32000,
+      message: expect.stringContaining("retry with the same message ID"),
     });
     expect(store.get(refused.id, "alice")).toBeUndefined();
     expect((await pending.entries()).map(({ key }) => key)).toEqual([first.id]);

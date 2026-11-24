@@ -455,6 +455,22 @@ it.each([false, true])(
   },
 );
 
+it("reports a refused admission before dispatch and allows retry with the same message ID", async () => {
+  const pendingStore = createPendingStoreFixture();
+  vi.spyOn(pendingStore, "register").mockRejectedValueOnce(
+    Object.assign(new Error("storage detail"), { code: "PLUGIN_STATE_LIMIT_EXCEEDED" }),
+  );
+  const harness = await startHttpHarness({ pendingStore, onDispatch: async () => {} });
+  const request = sendRequest({ messageId: "retry-admission", returnImmediately: true });
+  await expectReply(
+    harness.post(request),
+    rpcError(-32000, expect.stringContaining("No task was admitted")),
+  );
+  expect(harness.onDispatch).not.toHaveBeenCalled();
+  await expectReply(harness.post(request), { result: { task: { id: expect.any(String) } } });
+  await vi.waitFor(() => expect(harness.onDispatch).toHaveBeenCalledOnce());
+});
+
 describe("A2A message replay", () => {
   it("returns the existing task for a peer message ID before and after completion", async () => {
     const dispatch = vi.fn(async () => {});
