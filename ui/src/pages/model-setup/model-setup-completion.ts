@@ -6,15 +6,13 @@ import type {
 import { t } from "../../lib/reactive/i18n.ts";
 import type { FirstRunSetup } from "./first-run-setup.ts";
 import {
+  activationTargetId,
   candidateActivation,
   findPreparedModelCandidate,
-  preparedModelActivation,
-  type ModelSetupPrepareOption,
-} from "./prepare-options.ts";
-import {
-  activationTargetId,
   mapActivationResult,
+  preparedModelActivation,
   preparedModelPageState,
+  type ModelSetupPrepareOption,
   type ModelSetupState,
 } from "./state.ts";
 import type { ModelSetupWizardCompletion, ModelSetupWizardRunner } from "./wizard-runner.ts";

@@ -6,8 +6,12 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { candidateActivation, preparedModelActivation } from "../model-setup/prepare-options.ts";
-import { activationTargetId, initialWizardValue } from "../model-setup/state.ts";
+import {
+  activationTargetId,
+  candidateActivation,
+  initialWizardValue,
+  preparedModelActivation,
+} from "../model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,

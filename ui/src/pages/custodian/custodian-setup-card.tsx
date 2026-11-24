@@ -9,6 +9,7 @@ import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import "../../styles/custodian-setup-card.css";
 import type { CustodianSetupActions } from "./custodian-actions.ts";
 import type { SetupStep } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
@@ -85,7 +86,8 @@ export function CustodianSetupCard(props: {
       <Show when={setup().supported && !setup().dismissed}>
         <section class="custodian-setup" aria-label={t("custodian.autoSetup.title")}>
           <button
-            class="custodian__nudge-dismiss custodian-setup__dismiss"
+            class="custodian__nudge-dismiss"
+            style={{ position: "absolute", top: "12px", right: "12px" }}
             type="button"
             aria-label={t("common.dismiss")}
             onClick={() => setup().dismiss()}
@@ -198,7 +200,7 @@ export function CustodianSetupCard(props: {
                 />
               </Show>
             </div>
-            <footer class="custodian-setup__footer">
+            <footer style={{ display: "grid", "grid-template-columns": "1fr auto 1fr" }}>
               <div class="custodian-setup__row">
                 <Show when={stepIndex() > 0}>
                   <button

@@ -459,7 +459,8 @@ export function ConnectAi(props: {
           <span class="option-card__choice-copy">
             <strong>{heading(row)}</strong>
             <span
-              class={["option-card__description", { "custodian-setup__warn": failure() !== null }]}
+              class="option-card__description"
+              style={{ color: failure() ? "var(--warn)" : undefined }}
             >
               {failure()
                 ? t("custodian.autoSetup.notConnected")
@@ -607,7 +608,7 @@ export function ConnectAi(props: {
                   {t("custodian.autoSetup.detecting")}
                 </p>
               </Show>
-              <div class="callout custodian-setup__list">
+              <div class="callout custodian-setup__list" style={{ padding: 0 }}>
                 <Show
                   when={picker()}
                   fallback={
