@@ -38,6 +38,7 @@ import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-se
 import { registerChatSystemNoticeEnglish } from "../../ui/src/i18n/locales/en-chat-system-notice.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolOperationsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-operations.ts";
 import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
 import { registerChatVoiceApiKeyEnglish } from "../../ui/src/i18n/locales/en-chat-voice-api-key.ts";
 import { registerChatWorktreeEnglish } from "../../ui/src/i18n/locales/en-chat-worktree.ts";
@@ -497,6 +498,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(toolCards, widgetExports);
     }
   }
+  Object.assign(toolCards, registerChatToolOperationsEnglish.catalog.chat.toolCards);
   const boardWidget: TranslationMap = {};
   for (const [key, value] of Object.entries(registerBoardDocumentEnglish.catalog.board.widget)) {
     boardWidget[key] = value;
