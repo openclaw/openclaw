@@ -1403,6 +1403,44 @@ globalThis.fetch = async (input, init) => {
     },
   );
 
+  it.each([7, 8])(
+    "retries original approval-boundary artifact %i without changing its binding",
+    async (artifactId) => {
+      const f = originalPackedFixture("selected", true);
+      const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+      let transfers = 0;
+      f.original.respond("/actions/artifacts/" + artifactId + "/zip", () =>
+        ++transfers === 1 ? new Response(null, { status: 503 }) : undefined,
+      );
+      await checkOriginalPackedClawHubAbsent({ ...f.options, descriptor });
+      // Approval is also revalidated after authentication and the absence check.
+      expect(transfers).toBe(artifactId === 7 ? 4 : 2);
+      expect(f.recoveryWrites).toEqual([]);
+    },
+  );
+
+  it("retries the final original tarball transfer and exposes only the bound bytes", async () => {
+    const f = originalPackedFixture("selected", true);
+    const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+    const matrix = await resolvePreparedClawHubMatrix({ ...f.options, descriptor });
+    let transfers = 0;
+    f.original.respond("/actions/artifacts/3/zip", () => {
+      return ++transfers === 1 ? new Response(null, { status: 503 }) : undefined;
+    });
+    const outputDir = join(f.directory, "retried-original");
+    await restorePreparedClawHubPackage({
+      ...f.options,
+      descriptor,
+      entry: matrix[0]!.prepared,
+      token: "fixture-token",
+      outputDir,
+      artifactName: "fresh-parent-package",
+    });
+    expect(transfers).toBe(2);
+    expect(readFileSync(join(outputDir, "example.tgz"))).toEqual(f.tarball);
+    expect(f.recoveryWrites).toEqual([]);
+  });
+
   it.each(["bare", "qualified", "partial"])(
     "hands selected original bytes to a fresh transaction with a %s parent path",
     async (path) => {

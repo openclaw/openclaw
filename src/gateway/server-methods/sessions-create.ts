@@ -458,7 +458,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           target: lifecycleTarget,
           workspace: emptyWorkspace ? { kind: "empty" } : (projectRoot ?? requestedCwd),
           inheritParentKey: inheritParentWorktree ? spawnRequesterSessionKey : undefined,
-          projectRequester: projectRequesterForClient(client),
+          projectRequester: projectRequesterForClient(client, cfg),
           repositoryMutations: context.workerRepositoryWorkspaceMutationService,
           projectGitUrl: p.projectGitUrl,
           name: normalizeOptionalString(p.worktreeName),

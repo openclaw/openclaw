@@ -31,6 +31,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [input],
   })),
   {
+    // A Node-only suite must execute, not silently skip, when its runtime policy changes.
+    testFile: "src/infra/git-release.test.ts",
+    watchGlobs: ["scripts/lib/ci-test-runtime.mts"],
+  },
+  {
     // Scenario coverage and taxonomy are filesystem inventories, not imports.
     testFile: "extensions/qa-lab/src/coverage-report.test.ts",
     watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
@@ -858,6 +863,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-agent-execution.worker.ts",
     ],
+  },
+  {
+    // The test loads the packaged worker through its runtime entrypoint.
+    testFile: "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+    watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
   },
   ...[
     "src/config/sessions/session-accessor.sqlite-transcript-suffix.test.ts",

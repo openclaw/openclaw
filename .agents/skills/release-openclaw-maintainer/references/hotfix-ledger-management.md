@@ -59,6 +59,16 @@ Send `Accept: application/json` and an identifying User-Agent, e.g.
    scan/selection evidence, and unresolved decisions. Archive inactive releases
    rather than deleting history.
 
+## Parallel release lines
+
+Beta, stable, and extended-stable releases often run at the same time in
+separate sessions that do not talk to each other. Each release owner works only
+from two things: the shared hotfix records, which describe fixes on `main`, and
+its own release record and assessments, which say what this line did with each
+fix. Another release's assessment is useful evidence, never this release's
+decision. Anything a later owner of the same line needs, including deferred and
+unshipped fixes, goes into the ledger rather than a message.
+
 ## Enforced release-owner checkpoint
 
 The release owner records a checkpoint after every branch-head change and again
@@ -74,18 +84,27 @@ publication or handoff.
 2. List every assessment for the release, including stale records. Reassess each
    stale or newly relevant identity against the observed head using actual commit
    ancestry, destination lineage, diff/coverage evidence, and applicable release
-   proof. Updating only `assessedSha` is not reassessment.
+   proof. Updating only `assessedSha` is not reassessment. Also look for
+   eligible hotfixes with no assessment for this release yet; a fix nobody
+   assessed cannot surface anywhere else. When a review batch is capped, write
+   the rest as `unknown` instead of skipping them.
 3. Revision-check each assessment write and record one explicit disposition:
    proposed/queued (`needed` plus notes), included (`already_present` plus exact
    destination or ancestry evidence), deferred (`needed` or `not_affected` with
-   `applicabilityReason: deferred` and an owner), or blocked (`handling: blocked`
-   plus the blocker and owner). Preserve genuine release-only identities; never
+   `applicabilityReason: deferred`, an owner, and what would let it resume), or
+   blocked (`handling: blocked` only when a named decision is needed, such as a
+   schema, config, public-contract, permission, or policy change, plus who
+   decides). A missing test environment is a deferral, not a block. Count a
+   destination only if it is on the release branch, and mark a partial `-x`
+   pick `adaptation_required`. Preserve genuine release-only identities; never
    infer a canonical main commit from titles or PR-number similarity.
 4. Re-read the release and assessments. The receipt records the remote ref and
    SHA, release revision, assessment revisions/counts by disposition, remaining
    stale count, unresolved decisions, mutation request IDs, and rollback/export
    evidence. Completion requires the stored head to match the remote head and no
-   unexplained stale assessment or unsynchronized decision.
+   unexplained stale assessment or unsynchronized decision. Before freezing,
+   tell the release operator how many fixes are still unassessed and which
+   decisions are blocked.
 
 ## Final closeout integrity check
 
@@ -94,7 +113,9 @@ Release SHA—not just existing ledger rows. When access is available, reconcile
 all landed hotfixes, including late backports and release-first fixes, with complete
 release assessments: source/destination commits, disposition, adaptations,
 dependencies/exclusions, and proof. Account for reverts and partial or superseding
-fixes; don't count later branch commits as shipped.
+fixes; don't count later branch commits as shipped. Leave every unshipped
+`needed` fix with a `deferred` or `policy_excluded` reason, and add it to the
+next release record on the same line.
 
 Use the existing checkpoint flow for corrections. Note the checked range and any
 unresolved gaps in closeout evidence; if access is unavailable, use the

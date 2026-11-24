@@ -1,7 +1,6 @@
 // Tests compact-command authority and settlement through the real session controller.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
@@ -120,7 +119,6 @@ describe("handleCompactCommand lifecycle authority", () => {
   it.each([
     ["adoption", "caller"],
     ["adoption", "plugin owner"],
-    ["adoption", "operator"],
     ["adoption", "writer"],
     ["wait", "invocation"],
     ["wait", "caller"],
@@ -149,13 +147,7 @@ describe("handleCompactCommand lifecycle authority", () => {
         sessionEntry: entry,
         compactionSessionEntry: entry,
         commandInvocationSignal: authority === "invocation" ? controller.signal : undefined,
-        opts: {
-          abortSignal: authority === "caller" ? controller.signal : undefined,
-          operatorAuthority:
-            authority === "operator"
-              ? createTestOperatorAuthority({ profileId: "test", scopes: [], assertCurrent })
-              : undefined,
-        },
+        opts: { abortSignal: authority === "caller" ? controller.signal : undefined },
       },
       stage === "adoption" ? async () => revoke() : undefined,
     );

@@ -9,7 +9,9 @@ publishing stable also advanced `main`.
 
 Closeout requires the original successful stable/full FRV with soak and blocking
 performance, including any recorded [release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
-decisions. An original published receipt-recovery aggregate is also eligible: closeout
+decisions. Closeout reuses the successful publisher's waiver verdict for that
+manifest; it does not re-evaluate the grants under later tooling. An original
+published receipt-recovery aggregate is also eligible: closeout
 authenticates it through the shared release evidence owner, including the original
 qualification receipts, successful recovery seal, and current operator authority.
 The recovery run/attempt and published manifest remain unchanged; a matching

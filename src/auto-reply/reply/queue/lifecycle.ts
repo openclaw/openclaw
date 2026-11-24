@@ -128,7 +128,6 @@ export function markFollowupRunEnqueued(run: FollowupRun): boolean {
   const state = custody(run);
   const authority = run.operatorAuthority;
   authority?.signal?.throwIfAborted();
-  authority?.assertCurrent();
   if (!state.enqueued) {
     // Deferral publishes the source and can synchronously wake its RPC waiters.
     state.enqueued = true;
@@ -185,7 +184,7 @@ export async function prepareFollowupRunOperatorAuthority(
     const restored = await restore({
       context,
       agentId: run.run.agentId,
-      source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
+      source: captureQueuedOperatorRecoverySource(run.operatorAuthority) ?? { kind: "unavailable" },
       liveAuthority: run.operatorAuthority,
       operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),
       assertCurrent: () => {
@@ -227,7 +226,6 @@ export async function admitFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
 ): Promise<void> {
   const state = custody(run);
-  run.operatorAuthority?.assertCurrent();
   if (state.adopted) {
     return;
   }
@@ -239,11 +237,10 @@ export async function admitFollowupRunLifecycle(
   }
   const admission = Promise.resolve().then(async () => {
     await run.turnAdoptionLifecycle?.onAdopted();
-    // A successful custody callback commits before the post-await authority check.
+    // A successful custody callback commits adoption.
     state.adopted = true;
     state.failure = undefined;
     state.stopHeartbeat?.();
-    run.operatorAuthority?.assertCurrent();
   });
   state.adopting = admission;
   try {

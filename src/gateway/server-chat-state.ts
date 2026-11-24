@@ -320,6 +320,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
       display = record.display = {
         projector,
         current: projectTail(projector.replace(rawText)),
+        textScope: record.assistantScope,
+        toolTextAfterSeq: record.progressSnapshot?.lastSeq ?? 0,
         unsentDelta: null,
       };
     } else if (display.reset || display.pendingRawDelta !== undefined) {
@@ -350,6 +352,11 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         visible.startsWith(previous)
           ? next.delta
           : null;
+      // A tool offset belongs to this visible occurrence, not to a later buffer of equal length.
+      if (next.delta === null || display.textScope !== record.assistantScope) {
+        display.toolTextAfterSeq = record.progressSnapshot?.lastSeq ?? 0;
+        display.textScope = record.assistantScope;
+      }
       display.current = next;
       display.unsentDelta =
         display.unsentDelta !== null && display.current.delta !== null

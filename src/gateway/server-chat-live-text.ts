@@ -206,6 +206,17 @@ export function prepareAgentWirePayload(
       };
     }
   }
+  if (event.stream === "tool" && event.data.phase === "start" && event.data.followsAssistantText) {
+    const { followsAssistantText: _, ...data } = event.data;
+    const buffer = state.resolveBuffer(clientRunId);
+    payload = {
+      ...payload,
+      data:
+        !buffer.suppress && buffer.text
+          ? { ...data, textLengthBeforeTool: buffer.text.length }
+          : data,
+    };
+  }
   if (event.stream === "tool" && event.data.phase === "result") {
     const result = readRecord(payload.data.result);
     const inline = !event.data.isError && projectPluginInlineView(result?.details, event.data);

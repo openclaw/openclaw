@@ -125,6 +125,7 @@
   "gateway-config-runtime",
   "gateway-ingress",
   "gateway-method-runtime",
+  "gateway-request-authority",
   "gateway-runtime",
   "websocket-runtime",
   "cli-argv",

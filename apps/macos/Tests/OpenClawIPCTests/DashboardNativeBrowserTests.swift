@@ -315,6 +315,53 @@ struct DashboardNativeBrowserContractTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardNativeBrowserHostTests {
+    @Test(.testWaitLimit, arguments: [NSEvent.ModifierFlags.command, .control])
+    func `find stays in the focused Mac tab`(_ modifier: NSEvent.ModifierFlags) async throws {
+        _ = AppKitTestSupport.application
+        let fixture = self.fixture()
+        let window = NSWindow(
+            contentRect: fixture.container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = fixture.container
+        window.orderFront(nil)
+        defer {
+            fixture.host.dispose()
+            window.close()
+        }
+        let blank = try #require(URL(string: "about:blank"))
+        try fixture.host.open(tabId: "mac-source", url: blank, sessionKey: "")
+        try fixture.host.present(
+            scope: "panel", tabId: "mac-source", rect: .init(x: 0, y: 0, width: 600, height: 400), visible: true)
+        let page = try #require(fixture.host.webView(for: "mac-source"))
+        page.loadHTMLString("<title>Source</title><pre>First line</pre>", baseURL: nil)
+        try await TestWait.state("reading tab document") { page.title == "Source" && !page.isLoading }
+
+        @MainActor func key(_ code: UInt16, _ key: String, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: modifiers == .control ? "\u{6}" : key,
+                charactersIgnoringModifiers: key, isARepeat: false, keyCode: code))
+        }
+        let find = try key(3, "f", modifiers: modifier)
+        try #require(window.makeFirstResponder(fixture.dashboard))
+        _ = window.performKeyEquivalent(with: find)
+        #expect(window.firstResponder === fixture.dashboard)
+
+        let fullPage = fixture.container.convert(page.bounds, from: page)
+        try #require(window.makeFirstResponder(page))
+        _ = window.performKeyEquivalent(with: find)
+        let editor = try #require(window.firstResponder as? NSTextView)
+        let field = fixture.container.convert(editor.bounds, from: editor)
+        #expect(!field.isEmpty && fullPage.contains(field))
+        #expect(fixture.container.convert(page.bounds, from: page).maxY <= field.minY)
+
+        let escape = try key(53, "\u{1b}")
+        if !window.performKeyEquivalent(with: escape) { window.sendEvent(escape) }
+        #expect(window.firstResponder === page)
+        #expect(fixture.container.convert(page.bounds, from: page) == fullPage)
+    }
+
     @Test func `a committed document clears only its tab's favicon from state`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
@@ -346,16 +393,16 @@ struct DashboardNativeBrowserHostTests {
         #expect(first.configuration.websiteDataStore === second.configuration.websiteDataStore)
         #expect(!first.configuration.websiteDataStore.isPersistent)
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-first", "mac-second"])
-        #expect(first.isHidden)
+        #expect(first.isHiddenOrHasHiddenAncestor)
         try fixture.host.present(
             scope: "panel-one", tabId: "mac-first",
             rect: .init(x: 100, y: 40, width: 300, height: 200), visible: true)
-        #expect(!first.isHidden)
+        #expect(!first.isHiddenOrHasHiddenAncestor)
         #expect(fixture.container.convert(first.bounds, from: first) ==
             CGRect(x: 120, y: 390, width: 300, height: 200))
-        #expect(second.isHidden)
+        #expect(second.isHiddenOrHasHiddenAncestor)
         fixture.host.releaseScope("panel-one")
-        #expect(first.isHidden)
+        #expect(first.isHiddenOrHasHiddenAncestor)
         #expect(fixture.host.state.tabs.count == 2)
         try fixture.host.close(tabId: "mac-first")
         #expect(first.superview == nil)
@@ -416,15 +463,15 @@ struct DashboardNativeBrowserHostTests {
             CGRect(x: 320, y: 330, width: 300, height: 250))
         fixture.host.releaseScope("panel-two")
         #expect(fixture.host.presentationScope(for: tab) == "panel-one")
-        #expect(!tab.isHidden)
+        #expect(!tab.isHiddenOrHasHiddenAncestor)
         #expect(fixture.container.convert(tab.bounds, from: tab) ==
             CGRect(x: 30, y: 510, width: 200, height: 100))
         try fixture.host.present(scope: "panel-one", tabId: "mac-first", rect: firstRect, visible: false)
         #expect(fixture.host.presentationScope(for: tab) == nil)
-        #expect(tab.isHidden)
+        #expect(tab.isHiddenOrHasHiddenAncestor)
         try fixture.host.present(scope: "panel-one", tabId: "mac-first", rect: firstRect, visible: true)
         fixture.host.releaseAllScopes()
-        #expect(tab.isHidden)
+        #expect(tab.isHiddenOrHasHiddenAncestor)
         #expect(fixture.host.hasTabs)
     }
 

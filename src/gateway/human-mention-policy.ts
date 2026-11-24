@@ -463,33 +463,30 @@ export function createHumanMentionPolicy(params: {
       if (!agent.ok || isIncognitoSessionKey(input.sessionKey)) {
         return;
       }
-      const select = () => {
-        const cfg = params.getRuntimeConfig();
-        const current = facts.readCurrent(cfg);
-        const target = current.target && { ...current.target, membership: current.membership };
-        const profileIds = involvedProfiles(input, target, cfg);
-        const requester = client && identify(client, cfg);
-        if (
-          client &&
-          (!target ||
-            !requester?.ok ||
-            requester.value.profile.profileId !== readProfile(input.senderProfileId)?.profileId ||
-            !requester.value.canRead({
-              agentId: target.agentId,
-              sessionKey: target.canonicalKey,
-              entry: target.entry,
-              membership: current.membership,
-            }) ||
-            input.recipientProfileIds.some((id) => {
-              const profile = readProfile(id);
-              return !profile || !profileIds.includes(profile.profileId);
-            }))
-        ) {
-          throw new Error("Committed mention recipients or sender authority changed");
-        }
-        return { target, profileIds };
-      };
-      const { target, profileIds } = select();
+      const current = facts.readCurrent(initialCfg);
+      const target = current.target && { ...current.target, membership: current.membership };
+      const profileIds = involvedProfiles(input, target, initialCfg);
+      const requester = client && identify(client, initialCfg);
+      if (
+        client &&
+        (!target ||
+          !requester?.ok ||
+          requester.value.profile.profileId !== readProfile(input.senderProfileId)?.profileId ||
+          !requester.value.canRead({
+            agentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            entry: target.entry,
+            membership: current.membership,
+          }) ||
+          input.recipientProfileIds.some((id) => {
+            const profile = readProfile(id);
+            return !profile || !profileIds.includes(profile.profileId);
+          }))
+      ) {
+        throw new Error(
+          "Committed mention recipients or sender are unavailable. Retry the request.",
+        );
+      }
       if (!target || !profileIds.length) {
         return;
       }
@@ -501,9 +498,8 @@ export function createHumanMentionPolicy(params: {
           profileIds,
           change: { kind: "mention", source: input.committedSource },
           assertCurrent() {
-            const current = select();
-            if (!active || !isDeepStrictEqual(current.profileIds, profileIds)) {
-              throw new Error("Committed mention authority changed before involvement commit");
+            if (!active) {
+              throw new Error("Mention policy closed. Retry the request.");
             }
           },
         },

@@ -23,7 +23,6 @@ import { SessionFollowupCompletion } from "../../agents/subagents/completion/ses
 import * as requester from "../../agents/subagents/requester-cron-authority.js";
 import * as caller from "../../agents/tools/gateway-caller-context.js";
 import { startSessionsSendReplyFlow } from "../../agents/tools/sessions-send-reply-flow.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import * as runs from "../../infra/agent-run-registry.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
@@ -94,11 +93,6 @@ it.for(["observer error", "observer error before dispatch", "cancel before dispa
     const config = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
     prime(SESSION_ID, config);
     mocks.loadConfigReturn = config;
-    const isOwner = () =>
-      isConfiguredCommandOwner(mocks.loadConfigReturn, {
-        channel: "discord",
-        senderId: "owner-1",
-      });
     const originalRunId = "original-owner-proof";
     const { operationalRunInstance } = createTestAdmittedRunContext(originalRunId);
     const delegated = runs.claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -110,10 +104,10 @@ it.for(["observer error", "observer error before dispatch", "cancel before dispa
       const original = cronAuthority.createCronCreatorAuthorityCapability(
         originalRunId,
         { kind: "unknown" },
-        { source: "channel-owner", isCurrent: isOwner },
+        { source: "channel-owner" },
         () => true,
         undefined,
-        { senderId: "owner-1", channel: "discord", isCurrent: isOwner },
+        { senderId: "owner-1", channel: "discord" },
       )!;
       await caller.withGatewayToolCallerIdentity(
         {

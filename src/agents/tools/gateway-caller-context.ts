@@ -3,7 +3,7 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 import {
   inheritSessionEventToolPolicy,
   narrowSessionEventSettings,
-} from "../../auto-reply/reply/session-event-policy.js";
+} from "../../auto-reply/reply/session-event-policy-inheritance.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
@@ -274,10 +274,7 @@ export function resolveGatewayToolOperatorSelection(options?: {
         : selectedParticipant
           ? undefined
           : caller?.requesterOrigin,
-      assertCurrent: composeSessionSourceAssertion([
-        participant?.assertCurrent,
-        operatorAuthority?.assertCurrent,
-      ]),
+      assertCurrent: composeSessionSourceAssertion([participant?.assertCurrent]),
     });
     if (caller?.personalToolIdentityScoped) {
       caller.personalToolSelection = selection;
@@ -304,7 +301,6 @@ export function withGatewayToolOperatorContinuation<T>(
     return run();
   }
   const { operatorAuthority, requesterOrigin } = selection;
-  operatorAuthority?.assertCurrent();
   return runWithAsyncStore(
     gatewayToolCallerStorage,
     {
@@ -312,10 +308,11 @@ export function withGatewayToolOperatorContinuation<T>(
       personalToolParticipants: undefined,
       personalToolUser: undefined,
       personalToolIdentityScoped: true,
+      // The accepting collector holds this source; no participant is selected here.
       personalToolSelection: Object.freeze({
         operatorAuthority,
         requesterOrigin,
-        assertCurrent: composeSessionSourceAssertion([operatorAuthority?.assertCurrent]),
+        assertCurrent: composeSessionSourceAssertion([]),
       }),
     },
     run,

@@ -167,7 +167,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
   standard `google/*` model.
 
 OpenClaw does not create Gemini CLI OAuth or Antigravity OAuth profiles. Connect
-Google through an AI Studio API key or Vertex AI. If you explicitly choose the
+Google through a Gemini API key or Vertex AI. If you explicitly choose the
 Gemini CLI runtime, it can use the selected Google API-key profile. Existing
 valid Gemini CLI OAuth profiles remain runtime-compatible, but they are not a
 setup or recovery route.

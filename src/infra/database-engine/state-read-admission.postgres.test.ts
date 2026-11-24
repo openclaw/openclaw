@@ -4,15 +4,22 @@ import { getEnvironmentData } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { ensureUserBackgroundSchema } from "../../state/user-background.store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readGatewayLockProcessNamespace } from "../gateway-lock-payload.js";
+import { readGatewayLockProcessStartTime } from "../gateway-lock-process.js";
+import { acquireGatewayStateOwner } from "../gateway-state-owner.js";
 import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { getSqliteDatabaseSchemaRevision } from "../sqlite-database-admission.js";
+import { hasVerifiedLiveSqliteOwner } from "../sqlite-live-owner.js";
 import { createSqliteDatabaseAdmissionRelay } from "../sqlite-worker-operation-admission.js";
+import { getUpdateRunWithReconciliationAsync } from "../update-run-reconciliation.js";
+import { createUpdateRunAsync, finishUpdateRunAsync } from "../update-run-write.async.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { conformanceWorkerResult, spawnConformanceWorker } from "./conformance.test-support.js";
 import { getDatabaseEngineSelection, installDatabaseEngineSelection } from "./context.js";
@@ -160,6 +167,56 @@ it.skipIf(!connection).each([false, true])(
             callbackCalls: 1,
             transactions: 1,
           });
+        }
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      resetDatabaseEngineSelectionForTest();
+      await withPostgresConnection({ connection: connection!, schemaPrefix: prefix }, (client) =>
+        dropPostgresTestSchemas(client, prefix),
+      );
+    }
+  },
+);
+
+it.skipIf(!connection)(
+  "reads a terminal PostgreSQL update through reconciliation admission",
+  async () => {
+    const prefix = `update_read_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    try {
+      await withOpenClawTestState({ label: "pg-update-admission" }, async (state) => {
+        installDatabaseEngineSelection({
+          effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+          postgres: { connection: connection!, schemaPrefix: prefix },
+        });
+        const database = withEngineStoreAdmission(() =>
+          openOpenClawStateDatabase({ env: state.env }),
+        );
+        const run = await createUpdateRunAsync({ trigger: "cli" }, { env: state.env });
+        await finishUpdateRunAsync(run.runId, { status: "succeeded" }, { env: state.env });
+        await closeOpenClawStateDatabaseAsync();
+        const owner = acquireGatewayStateOwner({
+          databasePath: database.path,
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: state.configPath,
+            role: "gateway",
+            startTime:
+              readGatewayLockProcessStartTime(process.pid, process.platform, 1_000) ?? undefined,
+            processNamespace: readGatewayLockProcessNamespace(),
+          },
+        });
+        try {
+          expect(hasVerifiedLiveSqliteOwner(database.path)).toBe(true);
+          const result = await getUpdateRunWithReconciliationAsync(run.runId, { env: state.env });
+          expect(result.run).toMatchObject({
+            runId: run.runId,
+            status: "succeeded",
+            phase: "finished",
+          });
+        } finally {
+          owner.release();
         }
       });
     } finally {

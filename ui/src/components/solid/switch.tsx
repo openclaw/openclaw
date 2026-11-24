@@ -9,6 +9,7 @@ export type SwitchSize = "sm" | "md";
 export type SwitchProps = SettingsToggleControl & {
   size?: SwitchSize;
   ariaLabel?: string;
+  ariaDescription?: string;
   /** Id of visible text that names the switch. */
   ariaLabelledBy?: string;
   /** Screen-reader-only name, rendered beside the input when neither label prop is set. */
@@ -42,6 +43,7 @@ export function Switch(props: SwitchProps) {
         aria-hidden={props.pending ? "true" : undefined}
         aria-disabled={props.saving ? "true" : undefined}
         aria-label={props.ariaLabel}
+        aria-description={props.ariaDescription}
         aria-labelledby={
           props.ariaLabel === undefined ? (props.ariaLabelledBy ?? labelId) : undefined
         }

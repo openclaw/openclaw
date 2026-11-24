@@ -132,11 +132,9 @@ it("admits a recorded person's current role and refuses revoked, demoted, archiv
     const accepted = await admit();
     expect(accepted.authority.profileId).toBe(profile.id);
     expect(accepted.authority.scopes).toEqual(["operator.read", "operator.write"]);
-    expect(accepted.authority.assertCurrent).not.toThrow();
     accepted.release();
 
     const logical = await admit(resolveSessionStorePathCore(undefined, { agentId: scope.agentId }));
-    expect(logical.authority.assertCurrent).not.toThrow();
     logical.release();
     await expect(
       admit(resolveOpenClawAgentSqlitePath({ agentId: "foreign-principal-store" })),
@@ -180,10 +178,8 @@ it("retains admitted session access across row progress and later role edits", (
       await patchSessionEntryCore(scope, () => ({ sessionId: "compacted-transcript" }), {
         skipMaintenance: true,
       });
-      expect(accepted.authority.assertCurrent).not.toThrow();
       setUserProfileRole(profile.id, "reader");
-      expect(accepted.authority.assertCurrent).not.toThrow();
-      expect(accepted.authority.signal?.aborted).toBe(false);
+      expect(accepted.authority.signal?.aborted).not.toBe(true);
     } finally {
       releaseRun?.();
       accepted.release();
@@ -198,22 +194,19 @@ it.each([
     allowed: true,
   },
   { change: "archive", patch: { archivedAt: 1 }, allowed: false },
-])(
-  "commits $change under the admitted principal and checks fresh starts",
-  ({ change, patch, allowed }) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { admit } = fixture();
-      using accepted = await admit();
-      const committed = await patchSessionEntryCore(scope, () => patch, {
-        skipMaintenance: true,
-        workerGuard:
-          change === "own sharing" ? { source: accepted.authority.assertCurrent } : undefined,
-      });
-      expect(committed).toMatchObject(patch);
-      if (!allowed) {
-        await expect(admit()).rejects.toThrow("Session is unavailable");
-      }
-    }),
+])("commits $change under the admitted principal and checks fresh starts", ({ patch, allowed }) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { admit } = fixture();
+    using accepted = await admit();
+    expect(accepted.authority.profileId).toBeDefined();
+    const committed = await patchSessionEntryCore(scope, () => patch, {
+      skipMaintenance: true,
+    });
+    expect(committed).toMatchObject(patch);
+    if (!allowed) {
+      await expect(admit()).rejects.toThrow("Session is unavailable");
+    }
+  }),
 );
 
 it("admits the recorded Gateway owner without roles and never substitutes it for another person", () =>
@@ -234,7 +227,6 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
     using accepted = await admitPrincipal({ ...params, profileId: owner.id });
     expect(accepted.authority.profileId).toBe(owner.id);
     expect(accepted.authority.scopes).toEqual(["operator.admin"]);
-    expect(accepted.authority.assertCurrent).not.toThrow();
     expect(accepted.authority.recoverySnapshot).toBeUndefined();
     // Existing sessions may predate lifecycle revisions; reset still creates a new revision.
     const target = captureSessionTarget({
@@ -246,7 +238,6 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
     const effect = await beginSessionEffect({ target });
     try {
       await effect.run(async () => {
-        accepted.authority.assertCurrent();
         const compacted = await acceptCompactionSuccessor({
           currentTarget: params,
           expectedEntry: {
@@ -254,7 +245,7 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
             lifecycleRevision: undefined,
             activeWriterRunId: undefined,
           },
-          assertActive: accepted.authority.assertCurrent,
+          assertActive: () => accepted.authority.signal?.throwIfAborted(),
           result: {
             ok: true,
             compacted: true,
@@ -267,13 +258,11 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
           },
         });
         expect(compacted.entry.sessionId).toBe("legacy-compacted-transcript");
-        accepted.authority.assertCurrent();
         // Ordinary initialization also acknowledges unchanged identity. Its nested
         // preparation must not take custody away from the retained outer turn.
         const preparation = await beginSessionEffect({ target });
         try {
           await preparation.run(() => {
-            accepted.authority.assertCurrent();
             acknowledgeSessionEffectTransition(target, {
               previous: compacted.entry,
               current: compacted.entry,
@@ -284,7 +273,6 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
           preparation.release();
           await preparation.released;
         }
-        accepted.authority.assertCurrent();
       });
     } finally {
       effect.release();

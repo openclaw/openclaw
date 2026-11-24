@@ -384,16 +384,12 @@ describe("worker GitHub launch binding", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {
-        throw new Error("Original operator revoked");
-      },
       retain,
     });
     const fact = await prepareGitHubPublicationFact(session);
     const grant = await bindPreparedGrant(fact, () => undefined, operatorAuthority);
     try {
       expect(retain).toHaveBeenCalledOnce();
-      // Admission already decided; a later revocation does not stop this turn's credential.
       grant.assertCurrent();
       expect(grant.signal.aborted).toBe(false);
     } finally {

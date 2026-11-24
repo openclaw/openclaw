@@ -58,23 +58,24 @@ describe("detectZaiEndpoint", () => {
     }
     await check(undefined, ["global", "glm-5.2"], ["global", "glm-5.2", 200]);
     await check(undefined, ["cn", "glm-5.2"], ["global", "glm-5.2", 404], ["cn", "glm-5.2", 200]);
+    await check("coding-global", ["coding-global", "glm-5.4"], ["coding-global", "glm-5.4", 200]);
     await check(
       "coding-global",
       ["coding-global", "glm-4.7"],
-      ["coding-global", "glm-5.3", 400, { code: 1311 }],
+      ["coding-global", "glm-5.4", 400, { code: 1311 }],
       ["coding-global", "glm-5.1", 400, { code: 1211, msg: "model does not exist" }],
       ["coding-global", "glm-4.7", 200],
     );
     await check("coding-global", null, [
       "coding-global",
-      "glm-5.3",
+      "glm-5.4",
       429,
       { error: { message: "rate limited" } },
     ]);
     await check(
       "coding-cn",
       ["coding-cn", "glm-5.1"],
-      ["coding-cn", "glm-5.3", 404],
+      ["coding-cn", "glm-5.4", 404],
       ["coding-cn", "glm-5.1", 200],
     );
     await check(
@@ -82,8 +83,8 @@ describe("detectZaiEndpoint", () => {
       null,
       ["global", "glm-5.2", 401],
       ["cn", "glm-5.2", 401],
-      ["coding-global", "glm-5.3", 401],
-      ["coding-cn", "glm-5.3", 401],
+      ["coding-global", "glm-5.4", 401],
+      ["coding-cn", "glm-5.4", 401],
     );
   });
 
@@ -94,10 +95,10 @@ describe("detectZaiEndpoint", () => {
     const calls: string[] = [];
     const detected = await detect({
       endpoint: "coding-global",
-      fetchFn: makeFetch([["coding-global", "glm-5.3", 400, corrupt]], calls),
+      fetchFn: makeFetch([["coding-global", "glm-5.4", 400, corrupt]], calls),
     });
 
-    expect(calls).toEqual(["glm-5.3"]);
+    expect(calls).toEqual(["glm-5.4"]);
     expect(detected).toBeNull();
   });
 

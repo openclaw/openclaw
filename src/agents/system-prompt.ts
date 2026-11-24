@@ -314,6 +314,8 @@ export function buildAgentSystemPrompt(params: {
   runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
+  /** Session tools are the worker-placed variants, whose `sessions_spawn` takes only `task`, `label`, `agentId`, `model` and `runTimeoutSeconds`. */
+  workerPlacement?: boolean;
   /** Deferred directory tools can be invoked by name in the embedded harness. */
   deferredToolsDirectlyCallable?: boolean;
   /** Guidance published by the MCP servers backing this prompt's visible tools. */
@@ -355,7 +357,7 @@ export function buildAgentSystemPrompt(params: {
   const acpEnabled = params.acpEnabled === true;
   const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
-  const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime && !params.workerPlacement;
   // Preserve first caller casing; sparse tool arrays skip absent entries.
   const visibleTools = new Map<string, string>();
   (params.toolNames ?? []).forEach((tool) => {
@@ -440,7 +442,7 @@ export function buildAgentSystemPrompt(params: {
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
-  const { inTurnCollectionGuidance, delegationSection: subagentDelegationPreferenceSection } =
+  const { inTurnCollectionGuidance, delegationSection, sessionsSpawnHint } =
     buildSubagentPromptGuidance({
       mode: proactiveSubagentOrchestration
         ? "suggest"
@@ -449,8 +451,8 @@ export function buildAgentSystemPrompt(params: {
       availableTools,
       sessionKey: runtimeInfo?.sessionKey,
       resolveToolName,
+      workerPlacement: params.workerPlacement,
     });
-  const delegationRenders = subagentDelegationPreferenceSection.includes("## Delegation");
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -609,9 +611,7 @@ export function buildAgentSystemPrompt(params: {
     !hasSeparateRuntimeCwd && workspaceGuidance,
     renderOpenClawToolWorkflowHints && [
       waitHints.length > 0 && `Wait: end turn if exit wakes you, else ${waitHints.join(" or ")}.`,
-      // `## Delegation` owns the child brief, waiting and synthesis when it renders.
-      hasSessionsSpawn &&
-        `Execute work directly by default; delegate bounded independent work via \`sessions_spawn\` (${delegationRenders ? "" : "objective/output/write-scope/verification; "}\`context:"isolated"\` for clean context, \`context:"fork"\` for transcript; \`taskName\` for stable handle, \`label\` for UI; hidden by default unless user needs to steer). Keep dependent steps with one owner${delegationRenders ? "." : " and synthesize child outputs."}`,
+      sessionsSpawnHint,
       availableTools.has("screen") &&
         "`screen` present: web/app turn may drive UI; messaging turn: don't.",
       // The repeat is noticed during ordinary work, not while reading the
@@ -723,7 +723,7 @@ export function buildAgentSystemPrompt(params: {
       enabled: proactiveSubagentOrchestration,
       hasSessionsSpawn,
     }),
-    ...subagentDelegationPreferenceSection,
+    ...delegationSection,
     params.sandboxInfo?.enabled && elevated
       ? elevated.allowed && elevated.fullAccessAvailable
         ? `Current elevated level: ${elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`

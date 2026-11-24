@@ -86,7 +86,6 @@ export type DurableDraftModelSelection = {
   agentRuntime?: string;
   thinkingLevel: string;
   cyberAccessProgram?: CyberAccessProgram;
-  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export type DurableComposerDraft = {

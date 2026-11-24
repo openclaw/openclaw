@@ -217,7 +217,6 @@ it.each([
           ? createTestOperatorAuthority({
               profileId: "candidate-reader",
               scopes: ["operator.write"],
-              assertCurrent: () => {},
               modelPolicy: prepareOperatorModelPolicy({
                 cfg,
                 policy: {
