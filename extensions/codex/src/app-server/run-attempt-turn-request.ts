@@ -65,7 +65,13 @@ export async function prepareCodexAttemptTurnRequest(
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
   const { context, turnState, buildRenderedCodexInstructions, nativeHistoryProvenancePrefix } =
     prompt;
-  const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
+  const {
+    runtime,
+    attemptTools,
+    hookContextWindowFields,
+    workspaceBootstrapContext,
+    watchedSessionsContext,
+  } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
   const { tools, toolBridge } = attemptTools;
@@ -126,8 +132,12 @@ export async function prepareCodexAttemptTurnRequest(
       resourceState.client,
       resourceState.thread.threadId,
       workspaceBootstrapContext.promptContext,
+      watchedSessionsContext,
     );
-    prompt.refreshWorkspaceReferences(references.include);
+    prompt.refreshWorkspaceReferences({
+      includeWorkspace: references.includeWorkspace,
+      includeWatchedSessions: references.includeWatchedSessions,
+    });
     return references;
   };
   const startCodexTurn = async (): Promise<CodexStartedTurn> => {
@@ -411,14 +421,25 @@ export async function prepareCodexAttemptTurnRequest(
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      // Native turn/start already accepted this input. Record the complete context
+      // before ownership checks/cleanup, which may fail after Codex persisted it.
+      // Matching the whole rendered block avoids mistaking user-text echoes of an
+      // individual reference for successful context delivery after prompt fitting.
+      const submittedContext = context.buildOpenClawPromptContext({
+        includeWorkspace: references.includeWorkspace,
+        includeWatchedSessions: references.includeWatchedSessions,
+      });
+      const completeContextAccepted = Boolean(
+        submittedContext && upstreamUserText.includes(submittedContext),
+      );
+      references.accepted({
+        workspaceAccepted: completeContextAccepted && references.includeWorkspace,
+        watchedSessionsAccepted: completeContextAccepted && references.includeWatchedSessions,
+      });
       recordCodexTurnForkSettings(turnClient, turnStartParams);
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
-      // Fitting may drop or truncate references; only acknowledge the complete block.
-      if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
-        references.accepted();
-      }
       if (runAbortController.signal.aborted) {
         const reason = runAbortController.signal.reason;
         if (reason instanceof Error) {

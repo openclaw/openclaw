@@ -22,10 +22,11 @@ vi.mock("./attempt-diagnostics.js", () => ({
 }));
 vi.mock("./client-runtime.js", () => ({
   prepareCodexWorkspaceReferences: () => ({
-    include: !references.delivered,
-    accepted: () => {
-      references.delivered = true;
-      references.accepted();
+    includeWorkspace: !references.delivered,
+    includeWatchedSessions: !references.delivered,
+    accepted: (result: { workspaceAccepted: boolean; watchedSessionsAccepted: boolean }) => {
+      references.delivered = result.workspaceAccepted && result.watchedSessionsAccepted;
+      references.accepted(result);
     },
   }),
 }));
@@ -161,11 +162,29 @@ async function prepare(native = createNativeThread(), usesSupervisionConnection 
       turnState,
       contextImageGroups: [],
       buildRenderedCodexInstructions: () => "developer instructions",
-      refreshWorkspaceReferences: (include: boolean) => {
-        turnState.codexTurnPromptText = include ? "workspace reference\nuser input" : "user input";
+      refreshWorkspaceReferences: (include: {
+        includeWorkspace: boolean;
+        includeWatchedSessions: boolean;
+      }) => {
+        turnState.codexTurnPromptText = [
+          include.includeWorkspace ? "workspace reference" : "",
+          include.includeWatchedSessions ? "watched reference" : "",
+          "user input",
+        ].filter(Boolean).join("\n");
       },
       context: {
         workspaceBootstrapContext: { promptContext: "workspace reference" },
+        watchedSessionsContext: "watched reference",
+        buildOpenClawPromptContext: (include: {
+          includeWorkspace: boolean;
+          includeWatchedSessions: boolean;
+        }) =>
+          [
+            include.includeWorkspace ? "workspace reference" : "",
+            include.includeWatchedSessions ? "watched reference" : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
         attemptTools: { tools: [], toolBridge: { availableTools: [], availableSpecs: [] } },
         runtime: {
           nativeExecutionPolicy: {},
@@ -266,6 +285,34 @@ function expectOnlyReviewRead(attempt: Attempt) {
 }
 
 describe("native acknowledged turn requests", () => {
+  it("submits both reference sections and acknowledges only accepted native input", async () => {
+    const attempt = await prepare();
+    await attempt.start();
+    const submitted = attempt.request.mock.calls.find(([method]) => method === "turn/start");
+    const nativeInput = submitted?.[1]?.input?.[0];
+    expect(nativeInput?.type).toBe("text");
+    const text = nativeInput?.type === "text" ? nativeInput.text : "";
+    expect(text).toContain("workspace reference");
+    expect(text).toContain("watched reference");
+    expect(references.accepted).toHaveBeenCalledWith({
+      workspaceAccepted: true,
+      watchedSessionsAccepted: true,
+    });
+  });
+
+  it("does not acknowledge partial context even if its reference text appears in user input", async () => {
+    const attempt = await prepare();
+    // Simulate prompt fitting stripping part of the emitted block while keeping
+    // the same reference strings elsewhere in the native turn input.
+    attempt.resources.prompt.context.buildOpenClawPromptContext = () =>
+      "workspace reference\nwatched reference\nmissing header";
+    await attempt.start();
+    expect(references.accepted).toHaveBeenCalledExactlyOnceWith({
+      workspaceAccepted: false,
+      watchedSessionsAccepted: false,
+    });
+  });
+
   it.each<SelectionChange>(["thread", "thread ID", "owner", "released owner", "model", "provider"])(
     "rejects a changed %s after reading the native provider review",
     async (kind) => {
@@ -301,7 +348,13 @@ describe("native acknowledged turn requests", () => {
         "new-turn",
       );
       expectInterrupted(attempt);
-      expectNotAccepted(attempt);
+      // The native turn was accepted before ownership changed, so suppressing
+      // acknowledgment would replay the same references on a retry.
+      expect(references.accepted).toHaveBeenCalledExactlyOnceWith({
+        workspaceAccepted: true,
+        watchedSessionsAccepted: true,
+      });
+      expect(attempt.host.acceptNativeTurn).not.toHaveBeenCalled();
     },
   );
 
