@@ -1111,16 +1111,15 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
     async ({ workflowSha, reason }) => {
       const data = await fixture();
       const selection = await discoverReusableReleaseChild(data.request, data.deps);
-      data.request.workflowSha = workflowSha;
-      data.request.policyTargetVersion = "2099.1.1";
-      await expect(
-        validateReusableReleaseChild(selection, data.request, data.deps),
-      ).rejects.toThrow(reason);
+      const request = { ...data.request, workflowSha, policyTargetVersion: "2099.1.1" };
+      await expect(validateReusableReleaseChild(selection, request, data.deps)).rejects.toThrow(
+        reason,
+      );
       if (!workflowSha) {
-        await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(reason);
+        await expect(discoverReusableReleaseChild(request, data.deps)).rejects.toThrow(reason);
         return;
       }
-      expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+      expect(await discoverReusableReleaseChild(request, data.deps)).toBeNull();
       expect(data.deps.report).toHaveBeenCalledWith(
         expect.stringContaining(
           `run 101 ${data.run.display_title}: rejected: Full release child evidence API GET`,
