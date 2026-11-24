@@ -1,7 +1,10 @@
 import type { ControlUiSettingsPlacement } from "../../packages/gateway-protocol/src/plugin-control-ui-settings.js";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { err, ok, type Result } from "../../packages/normalization-core/src/result.js";
-import type { PluginManifestControlUi } from "./manifest-types.js";
+import type {
+  PluginManifestControlUi,
+  PluginManifestControlUiSettingsView,
+} from "./manifest-types.js";
 
 /** Package authoring metadata names source; the runtime manifest names only built assets. */
 export function controlUiSource(packageManifest: Record<string, unknown>): string | undefined {
@@ -17,9 +20,74 @@ export function controlUiSource(packageManifest: Record<string, unknown>): strin
   return source;
 }
 
+/** Dot-separated segments after the namespace; a final ".*" names one row per item. */
+const SETTING_ID_PATH = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:\.\*)?$/u;
+/** Plain ASCII, no outer spaces, at most 80 characters. */
+const SETTING_LABEL = /^[\x21-\x7E](?:[\x20-\x7E]{0,78}[\x21-\x7E])?$/u;
+const MAX_VIEW_SETTINGS = 200;
+
+/**
+ * The settings one view draws, keyed by setting ID. IDs stay in namespaces the plugin owns,
+ * so a plugin cannot claim a core setting or another plugin's.
+ */
+function normalizeViewSettings(
+  value: unknown,
+  pluginId: unknown,
+  ownedChannels: ReadonlySet<unknown>,
+  claimed: Set<string>,
+): Result<PluginManifestControlUiSettingsView["settings"], string> {
+  if (!isRecord(value) || Object.keys(value).length > MAX_VIEW_SETTINGS) {
+    return err(
+      "controlUi.settingsViews[].settings must map each setting ID the view draws to { label }; declare {} when the view draws no setting",
+    );
+  }
+  const namespaces = [
+    ...[...ownedChannels].map((channel) => "channels." + String(channel) + "."),
+    ...(typeof pluginId === "string" && pluginId
+      ? ["plugins.entries." + pluginId + ".", "plugin." + pluginId + "."]
+      : []),
+  ];
+  const settings: Record<string, { label: string }> = {};
+  for (const [id, entry] of Object.entries(value)) {
+    const namespace = namespaces.find((candidate) => id.startsWith(candidate));
+    if (!namespace || id.length > 200 || !SETTING_ID_PATH.test(id.slice(namespace.length))) {
+      return err(
+        "controlUi.settingsViews[].settings: setting ID " +
+          JSON.stringify(id) +
+          " must continue one of " +
+          (namespaces.map((candidate) => JSON.stringify(candidate)).join(", ") || "no namespace") +
+          " (an owned channel's config, the plugin's config, or a UI-only \"plugin.<plugin id>.\" name)",
+      );
+    }
+    if (claimed.has(id)) {
+      return err(
+        "controlUi.settingsViews[].settings: setting ID " +
+          JSON.stringify(id) +
+          " is declared by more than one view",
+      );
+    }
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).length !== 1 ||
+      typeof entry.label !== "string" ||
+      !SETTING_LABEL.test(entry.label)
+    ) {
+      return err(
+        "controlUi.settingsViews[].settings[" +
+          JSON.stringify(id) +
+          "] must be { label } with the row's English title in plain ASCII, at most 80 characters",
+      );
+    }
+    claimed.add(id);
+    settings[id] = { label: entry.label };
+  }
+  return ok(settings);
+}
+
 export function normalizeManifestControlUi(
   value: unknown,
-  channels: unknown = [],
+  channels: unknown,
+  pluginId: unknown,
 ): Result<PluginManifestControlUi | undefined, string> {
   if (value === undefined) {
     return ok(undefined);
@@ -36,8 +104,9 @@ export function normalizeManifestControlUi(
     return err("controlUi.activation must be settings-only when specified");
   }
   const ownedChannels = new Set(Array.isArray(channels) ? channels : []);
-  const settingsViews: ControlUiSettingsPlacement[] = [];
+  const settingsViews: PluginManifestControlUiSettingsView[] = [];
   const placements = new Set<string>();
+  const claimed = new Set<string>();
   if (value.settingsViews !== undefined) {
     if (
       !Array.isArray(value.settingsViews) ||
@@ -51,14 +120,20 @@ export function normalizeManifestControlUi(
         return err("invalid Control UI Settings placement");
       }
       let normalized: ControlUiSettingsPlacement;
+      // Every view lists the settings it draws, even when that list is empty.
+      if (!("settings" in placement)) {
+        return err(
+          "controlUi.settingsViews[].settings is required: list the setting IDs the view draws, or {} for none",
+        );
+      }
       if (
-        Object.keys(placement).length === 2 &&
+        Object.keys(placement).length === 3 &&
         placement.section === "memory" &&
         (placement.panel === "overview" || placement.panel === "memories")
       ) {
         normalized = { section: "memory", panel: placement.panel };
       } else if (
-        Object.keys(placement).length === 3 &&
+        Object.keys(placement).length === 4 &&
         placement.section === "channels" &&
         placement.panel === "detail" &&
         typeof placement.channelId === "string" &&
@@ -74,7 +149,11 @@ export function normalizeManifestControlUi(
         return err("controlUi.settingsViews must declare unique Settings placements");
       }
       placements.add(key);
-      settingsViews.push(normalized);
+      const settings = normalizeViewSettings(placement.settings, pluginId, ownedChannels, claimed);
+      if (!settings.ok) {
+        return settings;
+      }
+      settingsViews.push({ ...normalized, settings: settings.value });
     }
   }
   if (value.activation === "settings-only" && !value.settingsViews) {

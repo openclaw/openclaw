@@ -219,7 +219,7 @@ export function createChannelSettingsPresentation(
         const context: ControlUiChannelSettingsContext = {
           signal: loaded.signal,
           props: snapshot(channelId),
-          components: createControlUiSettingsComponents(loaded.signal),
+          components: createControlUiSettingsComponents(loaded.signal, loaded.settings),
           async request(request) {
             current();
             if (request.method !== "PUT" && request.method !== "POST") {

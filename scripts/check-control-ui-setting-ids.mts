@@ -1,14 +1,21 @@
 // Every row on a Settings page names the setting it edits, or says it is not a setting, and
 // every hand-built setting ID is listed once in src/shared/control-ui-settings and drawn once.
+// Bundled plugin Settings views follow the same rule; their IDs come from the plugin manifest's
+// controlUi.settingsViews[].settings.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as ts from "typescript/ast";
+import { normalizeManifestControlUi } from "../src/plugins/manifest-control-ui.ts";
 import {
   CONTROL_UI_SETTING_ID_ALIASES,
   CONTROL_UI_SETTINGS_PAGES,
 } from "../src/shared/control-ui-settings/index.ts";
-import { isTest, readInventorySources } from "./control-ui-solid-inventory.mts";
+import {
+  isTest,
+  PLUGIN_UI_SOURCE_ROOTS,
+  readInventorySources,
+} from "./control-ui-solid-inventory.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 
 /** Sources that draw Settings pages. */
@@ -53,8 +60,9 @@ const ROW_COMPONENTS = new Set([
 const ROW_CLASSES = new Set(["settings-row", "provider-row"]);
 const BASELINE = "config/control-ui-setting-ids-baseline.txt";
 const SNAPSHOT = "config/control-ui-setting-ids.txt";
-const GUIDANCE =
-  'Give the row `setting="<id>"` (raw rows: `id="<id>"`) with an ID listed in src/shared/control-ui-settings, or mark a status, fact or action row `info` (raw rows: `data-settings-info`).';
+const guidance = (source: string) =>
+  `Give the row \`setting="<id>"\` (raw rows: \`id="<id>"\`) with an ID listed in ${source}, or mark a status, fact or action row \`info\` (raw rows: \`data-settings-info\`).`;
+const CORE_LIST = "src/shared/control-ui-settings";
 
 export function isSettingsSource(file: string) {
   return (
@@ -83,6 +91,36 @@ function registryIds(pages: SettingsList["pages"]) {
     }
   }
   return ids;
+}
+
+type PluginSettings = { manifest: string; roots: string[]; ids: Set<string> };
+
+/** Bundled plugins that draw Settings views, with the setting IDs their manifests declare. */
+function pluginSettings(root: string) {
+  const plugins = new Map<string, PluginSettings>();
+  for (const source of PLUGIN_UI_SOURCE_ROOTS) {
+    const manifest = `${source.split("/").slice(0, 2).join("/")}/openclaw.plugin.json`;
+    const file = path.join(root, manifest);
+    if (!fs.existsSync(file)) {
+      continue;
+    }
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const controlUi = normalizeManifestControlUi(raw.controlUi, raw.channels, raw.id);
+    if (!controlUi.ok) {
+      throw new Error(`${manifest}: ${controlUi.error}`);
+    }
+    if (!controlUi.value?.settingsViews) {
+      continue;
+    }
+    const plugin = plugins.get(manifest) ?? {
+      manifest,
+      roots: [],
+      ids: new Set(controlUi.value.settingsViews.flatMap((view) => Object.keys(view.settings))),
+    };
+    plugin.roots.push(source);
+    plugins.set(manifest, plugin);
+  }
+  return [...plugins.values()];
 }
 
 /**
@@ -140,9 +178,19 @@ export function checkSettingIds(
       : [],
   );
   const aliases = new Set(Object.keys(list.aliases));
-  const references = new Map<string, Array<{ file: string; at: string }>>();
+  const references = new Map<
+    string,
+    Array<{ file: string; at: string; plugin: PluginSettings | undefined }>
+  >();
   const unnamed = new Map<string, string[]>();
-  const sources = readInventorySources(root, { roots: ["ui/src"] });
+  const plugins = pluginSettings(root);
+  const pluginOf = (file: string) =>
+    plugins.find((plugin) =>
+      plugin.roots.some((source) => file === source || file.startsWith(`${source}/`)),
+    );
+  const sources = readInventorySources(root, {
+    roots: ["ui/src", ...plugins.flatMap((plugin) => plugin.roots)],
+  });
   const files = [...sources]
     .filter(
       ([file, text]) =>
@@ -154,12 +202,13 @@ export function checkSettingIds(
   using parser = createNativeTypeScriptParser({ cwd: root });
   for (const tree of parser.parseSourceFiles(files)) {
     const file = path.relative(root, tree.fileName).split(path.sep).join("/");
-    const scoped = isSettingsSource(file);
+    const plugin = pluginOf(file);
+    const scoped = plugin !== undefined || isSettingsSource(file);
     const where = (node: ts.Node) =>
       `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
     const refer = (id: string, node: ts.Node) => {
       const places = references.get(id) ?? [];
-      places.push({ file, at: where(node) });
+      places.push({ file, at: where(node), plugin });
       references.set(id, places);
     };
     // A row component imported under another name is still that row.
@@ -202,7 +251,9 @@ export function checkSettingIds(
             : attributes.has("setting") || attributes.has("info");
         if (scoped && (raw || ROW_COMPONENTS.has(tag)) && !identified) {
           const problems = unnamed.get(file) ?? [];
-          problems.push(`${where(node)}: <${tag}> has no setting ID`);
+          problems.push(
+            `${where(node)}: <${tag}> has no setting ID. ${guidance(plugin ? `${plugin.manifest} controlUi.settingsViews[].settings` : CORE_LIST)}`,
+          );
           unnamed.set(file, problems);
         }
       }
@@ -213,14 +264,14 @@ export function checkSettingIds(
 
   for (const [id, all] of references) {
     // Files still waiting for their IDs may use `setting` for something else.
-    const places = all.filter((place) => !baseline.has(place.file)).map((place) => place.at);
+    const places = all
+      .filter((place) => !place.plugin && !baseline.has(place.file))
+      .map((place) => place.at);
     if (places.length === 0) {
       continue;
     }
     if (!ids.has(id)) {
-      failures.push(
-        `${places.join(", ")}: setting ID ${id} is not listed in src/shared/control-ui-settings`,
-      );
+      failures.push(`${places.join(", ")}: setting ID ${id} is not listed in ${CORE_LIST}`);
     } else if (places.length > 1) {
       failures.push(`Setting ID ${id} is drawn more than once: ${places.join(", ")}`);
     }
@@ -233,9 +284,30 @@ export function checkSettingIds(
     }
   }
 
+  // A plugin draws only the IDs its manifest declares for its views, each exactly once.
+  for (const plugin of plugins) {
+    const key = `${plugin.manifest} controlUi.settingsViews[].settings`;
+    for (const [id, all] of references) {
+      const places = all.filter((place) => place.plugin === plugin).map((place) => place.at);
+      if (places.length > 0 && !plugin.ids.has(id)) {
+        failures.push(`${places.join(", ")}: setting ID ${id} is not declared in ${key}`);
+      } else if (places.length > 1) {
+        failures.push(`Setting ID ${id} is drawn more than once: ${places.join(", ")}`);
+      }
+    }
+    for (const id of plugin.ids) {
+      if (!references.get(id)?.some((place) => place.plugin === plugin)) {
+        failures.push(`Setting ID ${id} is declared in ${key} but no row draws it`);
+      }
+      if (ids.has(id)) {
+        failures.push(`Setting ID ${id} is declared in ${key} and listed in ${CORE_LIST}`);
+      }
+    }
+  }
+
   for (const [file, problems] of unnamed) {
     if (!baseline.has(file)) {
-      failures.push(...problems.map((problem) => `${problem}. ${GUIDANCE}`));
+      failures.push(...problems);
     }
   }
   if (writeBaseline) {
@@ -254,14 +326,18 @@ export function checkSettingIds(
   const published = fs.existsSync(snapshotPath)
     ? fs.readFileSync(snapshotPath, "utf8").split("\n").filter(Boolean)
     : [];
+  const current = new Set(ids.keys());
+  for (const plugin of plugins) {
+    plugin.ids.forEach((id) => current.add(id));
+  }
   for (const id of published) {
-    if (!ids.has(id) && !aliases.has(id)) {
+    if (!current.has(id) && !aliases.has(id)) {
       failures.push(
         `Setting ID ${id} was removed. Links to it would stop landing: add it to CONTROL_UI_SETTING_ID_ALIASES, or delete it from ${SNAPSHOT} on purpose.`,
       );
     }
   }
-  const expected = [...new Set([...published, ...ids.keys()])].toSorted();
+  const expected = [...new Set([...published, ...current])].toSorted();
   if (expected.join("\n") !== published.join("\n")) {
     if (write) {
       fs.writeFileSync(snapshotPath, `${expected.join("\n")}\n`);

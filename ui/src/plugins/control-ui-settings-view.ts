@@ -28,6 +28,10 @@ export async function loadPackagedSettingsView(
     throw new Error("Settings presentation requires one packaged owner.");
   }
   const distribution = matches[0]!;
+  // The IDs this placement's view may draw, for the host rows to admit.
+  const settings = distribution.settingsViews!.find((item) =>
+    sameSettingsPlacement(item, placement),
+  )!.settings;
   const abort = new AbortController();
   const lifetime = AbortSignal.any([signal, abort.signal]);
   const disposers = new Set<() => void>();
@@ -85,7 +89,7 @@ export async function loadPackagedSettingsView(
     for (const style of styles) {
       style.media = "all";
     }
-    return { view, signal: lifetime, dispose };
+    return { view, settings, signal: lifetime, dispose };
   } catch (error) {
     dispose();
     throw error;

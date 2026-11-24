@@ -35,6 +35,14 @@ export type ControlUiContributions = {
   replacements: ControlUiReplacement;
 };
 
+/** A loaded Settings view with the setting IDs its manifest declares for it. */
+export type LoadedSettingsView<View> = {
+  view: View;
+  settings: import("../../../src/plugins/manifest-types.js").PluginManifestControlUiSettingsView["settings"];
+  signal: AbortSignal;
+  dispose: () => void;
+};
+
 // Application consumers use the registry contract; construction and activation
 // ownership stay in the runtime without a dependency back through app context.
 export type ControlUiPluginCapability = {
@@ -42,19 +50,19 @@ export type ControlUiPluginCapability = {
     (
       placement: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsView["placement"],
       signal: AbortSignal,
-    ): Promise<{
-      view: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsView;
-      signal: AbortSignal;
-      dispose: () => void;
-    }>;
+    ): Promise<
+      LoadedSettingsView<
+        import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsView
+      >
+    >;
     (
       placement: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiChannelSettingsView["placement"],
       signal: AbortSignal,
-    ): Promise<{
-      view: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiChannelSettingsView;
-      signal: AbortSignal;
-      dispose: () => void;
-    }>;
+    ): Promise<
+      LoadedSettingsView<
+        import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiChannelSettingsView
+      >
+    >;
   };
   readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;

@@ -261,6 +261,7 @@ function MemoryMemories(props: MemoryMemoriesProps) {
           <button
             type="button"
             class="settings-row settings-row--nav"
+            data-settings-info
             aria-expanded={openResultKey() === key() ? "true" : "false"}
             aria-controls={panelId()}
             onClick={() => toggleResult(rowProps.result, rowProps.index)}
@@ -268,7 +269,7 @@ function MemoryMemories(props: MemoryMemoriesProps) {
             <Summary />
           </button>
         ) : (
-          <div class="settings-row">
+          <div class="settings-row" data-settings-info>
             <Summary />
           </div>
         )}
@@ -326,7 +327,7 @@ function MemoryMemories(props: MemoryMemoriesProps) {
         <Errored
           fallback={(error, reset) => (
             <div class="settings-group">
-              <div class="settings-row memory-memories__error" role="alert">
+              <div class="settings-row memory-memories__error" role="alert" data-settings-info>
                 <p>
                   {t("memoryPage.memories.error", {
                     message: props.context.formatError(error()),

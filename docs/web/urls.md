@@ -656,6 +656,12 @@ Models and Agents rows take the same form:
 fallback model, and `/settings/agents/<agent-id>#agent.model.fallbacks` opens one
 agent's fallbacks.
 
+Settings that plugins draw use the IDs their manifests declare.
+`/settings/channels?channel=<channel-id>` opens that channel's detail, so
+`/settings/channels?channel=whatsapp#plugin.whatsapp.linkedPhone` opens WhatsApp and
+marks the linked phone, and `/settings/memory#plugin.memory-core.dreamingPhase.deep`
+marks the deep dreaming phase.
+
 Links to Settings sections that moved to another page replace the old URL with
 the current destination while keeping the setting anchor. Back returns to the
 page before the link, and Forward returns to the current destination.

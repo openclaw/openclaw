@@ -5,6 +5,7 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { ConfigSettingPath } from "../../lib/config-form-utils.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { PluginSettingId } from "../../plugins/control-ui-setting-places.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import { Switch, type SwitchSize } from "./switch.tsx";
@@ -44,8 +45,11 @@ export function RetryAction(props: {
   );
 }
 
-/** A hand-built row's ID from the shared list, or a config path from the generic form. */
-export type SettingIdentifier = ControlUiSettingId | ConfigSettingPath;
+/**
+ * A hand-built row's ID from the shared list, a config path from the generic form, or an ID a
+ * plugin's manifest declares for its Settings view.
+ */
+export type SettingIdentifier = ControlUiSettingId | ConfigSettingPath | PluginSettingId;
 
 /**
  * Every row on a Settings page says what it is; `scripts/check-control-ui-setting-ids.mts`

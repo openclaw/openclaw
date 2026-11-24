@@ -31,13 +31,15 @@ const channelView = (channelId = "custom"): ControlUiChannelSettingsView => ({
   placement: { section: "channels", panel: "detail", channelId },
   mount: vi.fn(),
 });
+const settings = { "plugin.fixture.status.*": { label: "Status" } };
 function fixture(views: SettingsView[] = [memoryView()]) {
   packaged.push({
     pluginId: "fixture",
+    name: "Fixture",
     revision: "built-revision",
     bundledDistribution: { packageName: "fixture", packageVersion: "1.0.0" },
     activation: "settings-only",
-    settingsViews: views.map((view) => view.placement),
+    settingsViews: views.map((view) => ({ ...view.placement, settings })),
     entry: "/packaged/index.js",
     styles: ["/packaged/index.css"],
     imports: [],
@@ -76,6 +78,7 @@ it.each(["memories", "channel"] as const)(
     const f = fixture(kind === "memories" ? [memoryView(), selected] : [selected]);
     const loaded = await f.load(selected);
     expect(loaded.view).toBe(selected);
+    expect(loaded.settings).toBe(settings);
     expect(f.style.media).toBe("all");
     expect(f.activate).not.toHaveBeenCalled();
     expect(f.runtime.hasPlugins).toBe(false);

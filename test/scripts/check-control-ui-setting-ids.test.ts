@@ -40,6 +40,40 @@ const NAMED = `export const Page = () => (
 );
 `;
 
+const PLUGIN_VIEW = "extensions/whatsapp/browser/settings.tsx";
+const PLUGIN_MANIFEST = JSON.stringify({
+  id: "whatsapp",
+  channels: ["whatsapp"],
+  controlUi: {
+    entry: "dist/control-ui/index.js",
+    activation: "settings-only",
+    settingsViews: [
+      {
+        section: "channels",
+        panel: "detail",
+        channelId: "whatsapp",
+        settings: { "plugin.whatsapp.linkedPhone": { label: "Linked phone" } },
+      },
+    ],
+  },
+});
+const PLUGIN_ROWS = `export const View = () => (
+  <>
+    <div class="settings-row" id="plugin.whatsapp.linkedPhone" />
+    <div class="settings-row" data-settings-info />
+  </>
+);
+`;
+
+function pluginFixture(view: string) {
+  return fixture(NAMED, {
+    [PLUGIN_VIEW]: view,
+    "extensions/whatsapp/openclaw.plugin.json": PLUGIN_MANIFEST,
+    "config/control-ui-setting-ids.txt":
+      "plugin.whatsapp.linkedPhone\nproviders.*\ntools.web.search.provider\n",
+  });
+}
+
 describe("check-control-ui-setting-ids", () => {
   it("accepts rows that name a listed setting or say they are not one", () => {
     expect(checkSettingIds(fixture(NAMED), { list })).toEqual([]);
@@ -135,5 +169,30 @@ describe("check-control-ui-setting-ids", () => {
         { list },
       ),
     ).toEqual([expect.stringContaining(`${PAGE} names all its settings now`)]);
+  });
+  it("holds plugin Settings views to the IDs their manifest declares", () => {
+    expect(checkSettingIds(pluginFixture(PLUGIN_ROWS), { list })).toEqual([]);
+    const undeclared = checkSettingIds(
+      pluginFixture(PLUGIN_ROWS.replace(`data-settings-info`, `id="plugin.whatsapp.undeclared"`)),
+      { list },
+    );
+    expect(undeclared).toEqual([
+      expect.stringContaining(
+        "setting ID plugin.whatsapp.undeclared is not declared in extensions/whatsapp/openclaw.plugin.json",
+      ),
+    ]);
+    const undrawn = checkSettingIds(
+      pluginFixture(PLUGIN_ROWS.replace(`id="plugin.whatsapp.linkedPhone"`, `data-settings-info`)),
+      { list },
+    );
+    expect(undrawn).toEqual([
+      expect.stringContaining(
+        "Setting ID plugin.whatsapp.linkedPhone is declared in extensions/whatsapp/openclaw.plugin.json controlUi.settingsViews[].settings but no row draws it",
+      ),
+    ]);
+    const bare = checkSettingIds(pluginFixture(PLUGIN_ROWS.replace(` data-settings-info`, "")), {
+      list,
+    });
+    expect(bare).toEqual([expect.stringContaining(`${PLUGIN_VIEW}:4: <div> has no setting ID`)]);
   });
 });

@@ -167,6 +167,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
         rootDir,
         controlUi: authored?.controlUi,
         channels: authored?.channels,
+        pluginId: authored?.id,
         rejectHardlinks: false,
       }),
     );

@@ -233,7 +233,7 @@ it("omits settings-only presentations from activation while keeping ordinary plu
   fixture.record.controlUi = {
     ...fixture.record.controlUi!,
     activation: "settings-only",
-    settingsViews: [{ section: "memory", panel: "overview" }],
+    settingsViews: [{ section: "memory", panel: "overview", settings: {} }],
   };
   expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
   expect(listControlUiPluginActivations({})).toEqual([]);

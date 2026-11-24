@@ -58,11 +58,20 @@ export function createSettingsComponents(components: ControlUiSettingsComponents
       </>
     );
   }
-  function SettingsRow(props: { title: string; description?: JSX.Element; control?: JSX.Element }) {
+  /** `setting` must be declared for this view in openclaw.plugin.json; the host refuses others. */
+  function SettingsRow(props: {
+    setting?: string;
+    info?: true;
+    title: string;
+    description?: JSX.Element;
+    control?: JSX.Element;
+  }) {
     const description = contentNode();
     const control = contentNode();
     const mount = bridge<Row>(
       () => ({
+        setting: props.setting,
+        info: props.info,
         title: props.title,
         description: props.description == null ? undefined : description,
         control,

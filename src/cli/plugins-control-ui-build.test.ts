@@ -111,11 +111,22 @@ describe("native plugin browser builds", () => {
       const manifestPath = path.join(project.rootDir, "openclaw.plugin.json");
       const settingsViews =
         authoredUi === "channel-settings"
-          ? [{ section: "channels", panel: "detail", channelId: "custom" }]
+          ? [
+              {
+                section: "channels",
+                panel: "detail",
+                channelId: "custom",
+                settings: { "channels.custom.token": { label: "Token" } },
+              },
+            ]
           : authoredUi === "settings-only"
             ? [
-                { section: "memory", panel: "overview" },
-                { section: "memory", panel: "memories" },
+                {
+                  section: "memory",
+                  panel: "overview",
+                  settings: { "plugin.fixture.status.*": { label: "Status" } },
+                },
+                { section: "memory", panel: "memories", settings: {} },
               ]
             : undefined;
       const authored = {

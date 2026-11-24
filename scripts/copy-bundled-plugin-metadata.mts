@@ -377,6 +377,7 @@ function copyMetadata(params: CopyMetadataParams): void {
         rootDir: pluginDir,
         controlUi: manifest.controlUi,
         channels: manifest.channels,
+        pluginId,
         rejectHardlinks: false,
       });
       if (!controlUi.ok) {

@@ -248,7 +248,7 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
       controlUi: {
         activation: "settings-only",
         entry: "dist/control-ui/source/index.js",
-        settingsViews: [placement],
+        settingsViews: [{ ...placement, settings: {} }],
       },
     },
   }));

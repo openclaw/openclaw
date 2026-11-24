@@ -61,7 +61,10 @@
       {
         "section": "channels",
         "panel": "detail",
-        "channelId": "whatsapp"
+        "channelId": "whatsapp",
+        "settings": {
+          "plugin.whatsapp.linkedPhone": { "label": "Linked phone" }
+        }
       }
     ]
   },

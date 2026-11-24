@@ -170,6 +170,11 @@ notifications.device.quietHoursWindow
 notifications.device.timeZone
 notifications.permission
 notifications.pushSubscription
+plugin.memory-core.dreamingPhase.*
+plugin.memory-core.dreamingSchedule
+plugin.nostr.profile
+plugin.nostr.profile.*
+plugin.whatsapp.linkedPhone
 pluginSettings.connectProvider
 plugins.entries.*
 plugins.slots.memory

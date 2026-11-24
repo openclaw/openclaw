@@ -76,7 +76,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
                   "utf8",
                 ),
               );
-              const declaration = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
+              const declaration = normalizeManifestControlUi(
+                manifest.controlUi,
+                manifest.channels,
+                manifest.id,
+              );
               if (!declaration.ok) {
                 throw new Error(
                   `Invalid Control UI declaration for ${entry.id}: ${declaration.error}`,
@@ -109,7 +113,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (!isRecord(manifest) || !pluginId) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: missing plugin id`);
         }
-        const result = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
+        const result = normalizeManifestControlUi(manifest.controlUi, manifest.channels, pluginId);
         if (!result.ok) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: ${result.error}`);
         }
@@ -170,9 +174,10 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         }
         const metadata: Pick<
           ControlUiPluginDistribution,
-          "pluginId" | "revision" | "bundledDistribution"
+          "pluginId" | "name" | "revision" | "bundledDistribution"
         > = {
           pluginId,
+          name: normalizeOptionalString(manifest.name) ?? pluginId,
           revision,
           bundledDistribution: { packageName: pkg.name, packageVersion: pkg.version },
         };

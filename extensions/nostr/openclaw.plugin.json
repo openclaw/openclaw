@@ -33,7 +33,11 @@
       {
         "section": "channels",
         "panel": "detail",
-        "channelId": "nostr"
+        "channelId": "nostr",
+        "settings": {
+          "plugin.nostr.profile": { "label": "Profile" },
+          "plugin.nostr.profile.*": { "label": "Profile field" }
+        }
       }
     ]
   }

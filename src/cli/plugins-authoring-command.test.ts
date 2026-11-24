@@ -283,7 +283,9 @@ describe("plugin authoring commands", () => {
       controlUi: {
         entry: "dist/control-ui/authored/index.js",
         activation: "settings-only",
-        settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
+        settingsViews: [
+          { section: "channels", panel: "detail", channelId: "custom", settings: {} },
+        ],
       },
     });
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath });

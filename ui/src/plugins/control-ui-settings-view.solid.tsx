@@ -118,7 +118,7 @@ export function ControlUiSettingsPresentation(props: {
         const context: ControlUiSettingsContext = {
           props: loadedSnapshot,
           signal: lifetime,
-          components: createControlUiSettingsComponents(lifetime),
+          components: createControlUiSettingsComponents(lifetime, loaded.settings),
           async request<T>(method: string, params?: unknown) {
             const requestSnapshot = current();
             const gateway = props.application.gateway.snapshot;

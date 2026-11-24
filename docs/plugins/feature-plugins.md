@@ -732,12 +732,50 @@ Declare the placement alongside the built entry:
     "entry": "dist/control-ui/<content-hash>/index.js",
     "activation": "settings-only",
     "settingsViews": [
-      { "section": "memory", "panel": "overview" },
-      { "section": "memory", "panel": "memories" }
+      {
+        "section": "memory",
+        "panel": "overview",
+        "settings": {
+          "plugin.memory-core.dreamingSchedule": { "label": "Dreaming schedule" },
+          "plugin.memory-core.dreamingPhase.*": { "label": "Dreaming phase" }
+        }
+      },
+      { "section": "memory", "panel": "memories", "settings": {} }
     ]
   }
 }
 ```
+
+#### Setting IDs
+
+Each Settings view lists, in `settings`, every setting it draws: the setting ID and the
+row's English title. A view that draws no setting declares `"settings": {}`. A link to
+`/settings/<page>#<setting-id>` then opens the page, scrolls to the row, and marks it, as it
+does for core settings. Memory views live on `/settings/memory` and
+`/settings/memory/memories`; a channel detail opens from
+`/settings/channels?channel=<channel-id>`, for example
+`/settings/channels?channel=whatsapp#plugin.whatsapp.linkedPhone`.
+
+A setting ID continues a namespace the plugin owns:
+
+- `channels.<channel-id>.` for a channel listed in the manifest's `channels`
+- `plugins.entries.<plugin-id>.` for the plugin's own config
+- `plugin.<plugin-id>.` for a UI-only name, such as a status the plugin shows as a setting
+
+Use a config path when the row edits that config value and no other Settings row draws it.
+A key ending in `.*` names one row per item: `plugin.nostr.profile.*` covers
+`plugin.nostr.profile.about`. Labels are plain ASCII, at most 80 characters. An ID may
+belong to only one view. Manifest loading rejects any other ID with an error that names it.
+
+Rows drawn with the host components take the ID as a prop:
+`context.components.mountRow(container, { setting: "plugin.memory-core.dreamingSchedule", title })`.
+Rows that show a fact, a status, or an action instead pass `info: true`. `mountNavigation`
+takes the same two props. The host throws when a row names a setting ID the manifest does
+not declare for that view, so a plugin cannot draw another owner's setting. Rows drawn
+with the plugin's own markup carry the ID as the row element's `id` and the
+`data-settings-info` attribute for an information row. For bundled plugins,
+`pnpm check:control-ui-setting-ids` requires every row to do one of the two and every
+declared ID to be drawn exactly once.
 
 The browser module exports `pluginId` and a `settingsViews` array of
 `ControlUiSettingsView` from `openclaw/plugin-sdk/control-ui`. Each view declares

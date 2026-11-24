@@ -15,7 +15,8 @@ import { loadPluginManifest } from "./manifest.js";
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 const entry = "dist/control-ui/index.js";
-const memoryViews = (...panels: string[]) => panels.map((panel) => ({ section: "memory", panel }));
+const memoryViews = (...panels: string[]) =>
+  panels.map((panel) => ({ section: "memory", panel, settings: {} }));
 
 function fixture(controlUi: unknown, uiCapabilities?: unknown, channels?: string[]) {
   const plugin = writePlugin({ id: "native-ui", registration: "" });
@@ -42,7 +43,7 @@ function expectCapabilities(result: ReturnType<typeof loadPluginManifest>, expec
 }
 
 it("admits channel detail presentations only for the manifest's declared channels", () => {
-  const view = { section: "channels", panel: "detail", channelId: "custom" };
+  const view = { section: "channels", panel: "detail", channelId: "custom", settings: {} };
   const controlUi = { entry, activation: "settings-only", settingsViews: [view] };
   expect(readManifest(controlUi, undefined, ["custom"])).toMatchObject({
     ok: true,
@@ -51,6 +52,56 @@ it("admits channel detail presentations only for the manifest's declared channel
   expect(readManifest(controlUi, undefined, ["other"])).toMatchObject({ ok: false });
   const duplicate = { ...controlUi, settingsViews: [view, view] };
   expect(readManifest(duplicate, undefined, ["custom"])).toMatchObject({ ok: false });
+});
+
+it("requires each Settings view to declare the setting IDs it draws in namespaces the plugin owns", () => {
+  const settingsOf = (settings: unknown, extra: Record<string, unknown> = {}) => ({
+    entry,
+    activation: "settings-only",
+    settingsViews: [
+      {
+        section: "channels",
+        panel: "detail",
+        channelId: "custom",
+        ...(settings === undefined ? {} : { settings }),
+      },
+      { section: "memory", panel: "overview", settings: {}, ...extra },
+    ],
+  });
+  const owned = {
+    "channels.custom.dmPolicy": { label: "Direct messages" },
+    "plugins.entries.native-ui.config.feed": { label: "Feed" },
+    "plugin.native-ui.account.*": { label: "Account" },
+  };
+  expect(readManifest(settingsOf(owned), undefined, ["custom"])).toMatchObject({
+    ok: true,
+    manifest: { controlUi: settingsOf(owned) },
+  });
+  const rejected: Array<[unknown, Record<string, unknown>, string]> = [
+    [undefined, {}, "settings is required"],
+    [[], {}, "must map each setting ID"],
+    [{ "gateway.port": { label: "Port" } }, {}, 'setting ID "gateway.port" must continue one of'],
+    [{ "channels.other.token": { label: "Token" } }, {}, '"channels.other.token"'],
+    [{ "plugins.entries.other.config.x": { label: "X" } }, {}, '"plugins.entries.other.config.x"'],
+    [{ "plugin.native-ui": { label: "Bare" } }, {}, '"plugin.native-ui"'],
+    [{ "plugin.native-ui.*": { label: "Everything" } }, {}, '"plugin.native-ui.*"'],
+    [{ "plugin.native-ui.a b": { label: "Space" } }, {}, '"plugin.native-ui.a b"'],
+    [{ "plugin.native-ui.feed": { label: "Fëed" } }, {}, "plain ASCII"],
+    [{ "plugin.native-ui.feed": { label: "" } }, {}, "plain ASCII"],
+    [{ "plugin.native-ui.feed": { label: "Feed", within: "x" } }, {}, "plain ASCII"],
+    [{ "plugin.native-ui.feed": "Feed" }, {}, "plain ASCII"],
+    [
+      { "plugin.native-ui.feed": { label: "Feed" } },
+      { settings: { "plugin.native-ui.feed": { label: "Feed" } } },
+      "declared by more than one view",
+    ],
+  ];
+  for (const [settings, extra, error] of rejected) {
+    expect(readManifest(settingsOf(settings, extra), undefined, ["custom"])).toMatchObject({
+      ok: false,
+      error: expect.stringContaining(error),
+    });
+  }
 });
 
 it("carries normalized built entrypoints through discovery into runtime ownership", () => {

@@ -646,7 +646,9 @@ it.each(["providerCatalogEntry", "capabilityCatalogEntry"] as const)(
       controlUi: {
         entry: "dist/control-ui/fixture/index.js",
         activation: "settings-only",
-        settingsViews: [{ section: "channels", panel: "detail", channelId: "twitch" }],
+        settingsViews: [
+          { section: "channels", panel: "detail", channelId: "twitch", settings: {} },
+        ],
       },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     };

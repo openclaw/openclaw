@@ -36,6 +36,7 @@ import {
   keptChannelEdits,
   rebaseChannelConfigEdits,
 } from "./channel-config-draft.ts";
+import { linkedChannel } from "./channel-link.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelLabel, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelSaveFeedback, ChannelsProps } from "./view.types.ts";
@@ -51,7 +52,7 @@ export function ChannelsPage() {
   const channelCapability = context.acquireChannels(createChannelCapability);
   channelCapability.syncConfigEditsScope(gatewayPresentationScope(context.gateway).key);
   const [selectedChannel, setSelectedChannel] = createSignal<string | null>(
-    channelCapability.takeConfigReview(),
+    channelCapability.takeConfigReview() ?? linkedChannel(context),
   );
   const [savingChannel, setSavingChannel] = createSignal<string | null>(null);
   const [savedChannel, setSavedChannel] = createSignal<string | null>(null);
@@ -727,6 +728,7 @@ export function ChannelsPage() {
     // Navigation intent releases presentation before Solid parks the departing page.
     const stopNavigation = context.router.subscribe((state) => {
       if (state.location !== location) {
+        setSelectedChannel((open) => linkedChannel(context, state.location, location) ?? open);
         location = state.location;
         retireMutation();
       }

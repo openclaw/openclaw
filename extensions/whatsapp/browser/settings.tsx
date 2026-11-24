@@ -122,9 +122,9 @@ export function WhatsAppCard(props: {
         {(error) => <ErrorCallout error={error()} />}
       </Show>
       <div class="settings-group">
-        <div class="settings-row">
+        <div class="settings-row" id="plugin.whatsapp.linkedPhone">
           <div class="settings-row__text">
-            <span class="settings-row__title">
+            <span class="settings-row__title" id="plugin.whatsapp.linkedPhone-title">
               {phone() ? t("channels.whatsapp.phoneNumber") : t("common.linked")}
             </span>
             <span class="settings-row__desc">
@@ -160,7 +160,7 @@ export function WhatsAppCard(props: {
         </div>
         <Show when={login()?.message}>
           {(message) => (
-            <div class="settings-row" role="status">
+            <div class="settings-row" role="status" data-settings-info>
               <div class="settings-row__text">
                 <span class="settings-row__desc">{message()}</span>
               </div>
@@ -169,7 +169,7 @@ export function WhatsAppCard(props: {
         </Show>
         <Show when={login()?.qrDataUrl}>
           {(qr) => (
-            <div class="settings-row settings-row--stacked">
+            <div class="settings-row settings-row--stacked" data-settings-info>
               <div class="qr-wrap">
                 <img src={qr()} alt={t("channels.setup.whatsappQrAlt")} />
               </div>
@@ -194,7 +194,10 @@ export function WhatsAppCard(props: {
         }}
       />
       <details class="settings-group settings-disclosure" hidden={facts().length === 0}>
-        <summary class="settings-row settings-row--nav settings-disclosure__summary">
+        <summary
+          class="settings-row settings-row--nav settings-disclosure__summary"
+          data-settings-info
+        >
           <div class="settings-row__text">
             <span class="settings-row__title">{t("common.details")}</span>
           </div>

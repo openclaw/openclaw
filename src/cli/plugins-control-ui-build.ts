@@ -58,6 +58,7 @@ export async function buildPluginControlUi(params: {
   const presentation = normalizeManifestControlUi(
     isRecord(authored) ? authored.controlUi : undefined,
     isRecord(authored) ? authored.channels : undefined,
+    isRecord(authored) ? authored.id : undefined,
   );
   if (!presentation.ok) {
     throw new Error(presentation.error);
