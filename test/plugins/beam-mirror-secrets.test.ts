@@ -21,6 +21,43 @@ import { setupSecretsRuntimeSnapshotTestHooks } from "../../src/secrets/runtime.
 import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// A source checkout does not contain release binaries. Install one pinned
+// process fixture so this credential test takes the production registration,
+// executable verification and child-process path.
+const cleaner = vi.hoisted(
+  () =>
+    "#!" +
+    process.execPath +
+    "\n" +
+    `
+let input = "";
+process.stdin.setEncoding("utf8").on("data", (chunk) => input += chunk);
+process.stdin.on("end", () => {
+  const { source, title, updatedAt, completed, items } = JSON.parse(input);
+  process.stdout.write(JSON.stringify({ version: 2, beamId: "a".repeat(32), source, title, updatedAt, completed, items }));
+});
+`,
+);
+vi.mock("../../extensions/beam/package.json", async (original) => {
+  const current = await original<{ default: Record<string, unknown> }>();
+  const { createHash } = await import("node:crypto");
+  return {
+    default: {
+      ...current.default,
+      beamNativeRelease: {
+        version: "fixture",
+        protocol: 1,
+        platforms: {
+          [process.platform + "-" + process.arch]: {
+            executableBytes: Buffer.byteLength(cleaner),
+            executableSha256: createHash("sha256").update(cleaner).digest("hex"),
+          },
+        },
+      },
+    },
+  };
+});
+
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tokenPath = "plugins.entries.beam.config.mirror.token";
@@ -50,8 +87,13 @@ function prepare(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
 async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvider) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const builder = createRuntimeTestRegistry(createPluginRuntime());
+  const rootDir = tempDirs.make("beam-credential-plugin-");
+  const platform = path.join(rootDir, "native", process.platform + "-" + process.arch);
+  await fs.mkdir(platform, { recursive: true });
+  await fs.writeFile(path.join(platform, "beam-clean"), cleaner, { mode: 0o700 });
   const record = createPluginRecord({
     id: "beam",
+    rootDir,
     source: fileURLToPath(new URL("../../extensions/beam/index.ts", import.meta.url)),
     origin: "bundled",
     enabled: true,
