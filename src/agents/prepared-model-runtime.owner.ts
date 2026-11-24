@@ -42,6 +42,10 @@ import {
   releasePreparedPluginPublication,
   discardPreparedPluginGeneration,
 } from "./prepared-model-runtime.plugin-lifetime.js";
+import {
+  configuredOwnerCandidates,
+  getPreparedModelRuntimeConfigFingerprint,
+} from "./prepared-model-runtime.read-batch.js";
 import { retirePreparedModelRuntimeOwnerIfUnused } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeBuildStats,
@@ -51,6 +55,8 @@ import type {
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+
+export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.read-batch.js";
 
 const ownersBySnapshot = new WeakMap<PreparedModelRuntimeSnapshot, PreparedModelRuntimeOwner>();
 
@@ -198,9 +204,12 @@ export function preparedModelRuntimeConfigsMatch(
 }
 
 function modelRuntimeConfigFingerprint(config: OpenClawConfig): string {
-  // Canonical values change at publication; caller-owned projections still need a fresh hash.
+  // Canonical values change at publication; other configs reuse hashes only within a read batch.
   const published = config === getRuntimeConfigSnapshot() && getRuntimeConfigSnapshotMetadata();
-  return published ? published.fingerprint : hashRuntimeConfigValue(config);
+  if (published) {
+    return published.fingerprint;
+  }
+  return getPreparedModelRuntimeConfigFingerprint(config, () => hashRuntimeConfigValue(config));
 }
 
 export function advancePreparedModelRuntimeOwnerConfig(
@@ -301,51 +310,6 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     runtimePluginSelections: input.runtimePluginSelections,
     config: input.readOnly ? modelRuntimeConfigFingerprint(input.config) : undefined,
   });
-}
-
-type PreparedModelRuntimeReadBatch = WeakMap<
-  Map<string, PreparedModelRuntimeOwner>,
-  Map<string, PreparedModelRuntimeOwner[]>
->;
-
-let activePreparedModelRuntimeReadBatch: PreparedModelRuntimeReadBatch | undefined;
-
-/** Reuse configured candidates only during synchronous reads; never publish or yield here. */
-export function withPreparedModelRuntimeReadBatch<T>(read: () => T): T {
-  const parent = activePreparedModelRuntimeReadBatch;
-  activePreparedModelRuntimeReadBatch = new WeakMap();
-  try {
-    return read();
-  } finally {
-    activePreparedModelRuntimeReadBatch = parent;
-  }
-}
-
-function configuredOwnerCandidates(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  agentId: string | undefined,
-): Iterable<PreparedModelRuntimeOwner> {
-  const batch = activePreparedModelRuntimeReadBatch;
-  if (!batch || agentId === undefined) {
-    return owners.values();
-  }
-  let byAgent = batch.get(owners);
-  if (!byAgent) {
-    byAgent = new Map();
-    for (const owner of owners.values()) {
-      if (owner.provenance !== "configured" || owner.input.agentId === undefined) {
-        continue;
-      }
-      const matches = byAgent.get(owner.input.agentId);
-      if (matches) {
-        matches.push(owner);
-      } else {
-        byAgent.set(owner.input.agentId, [owner]);
-      }
-    }
-    batch.set(owners, byAgent);
-  }
-  return byAgent.get(agentId) ?? [];
 }
 
 let gatewayLifecycleActive = false;

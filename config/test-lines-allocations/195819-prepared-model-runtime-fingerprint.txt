@@ -1,0 +1,4 @@
+# PR #195851: bound repeated runtime-config fingerprinting during fleet catalog reads.
+# Exact +50 net test lines cover a 128-agent Gateway batch and fresh comparisons after mutation.
+# Keep the shared test-line baseline unchanged; this allocation is limited to issue #195819.
+50

@@ -8,7 +8,10 @@ import {
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import * as runtimeSnapshot from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readPreparedGatewayModelCatalogBatch } from "../gateway/server-model-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
@@ -52,6 +55,52 @@ const fixture = usePreparedModelRuntimeHarness(undefined, () => {
   vi.restoreAllMocks();
 });
 const { mocks } = fixture;
+
+describe("prepared runtime config fingerprint batches", () => {
+  it("bounds hashing for a Gateway fleet catalog read and refreshes between batches", async () => {
+    const agentIds = ["default", ...Array.from({ length: 127 }, (_, index) => `fleet-${index}`)];
+    const entries = Object.fromEntries(agentIds.map((agentId) => [agentId, {}]));
+    const config = retainLegacyDefaultAgentId(
+      { agents: { defaults: { model: "openai/gpt-5.5" }, entries } },
+      "default",
+    );
+    mocks.configuredAgentIds = agentIds;
+    for (const agentId of agentIds) {
+      mocks.configuredAgentDirs.set(agentId, fixture.state.agentDir(agentId));
+      mocks.configuredWorkspaces.set(agentId, `/tmp/${agentId}-workspace`);
+    }
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+
+    const requestConfig = structuredClone(config);
+    const hashRuntimeConfig = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
+    try {
+      const read = await readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => requestConfig,
+        includeSessionRowPolicy: false,
+      });
+      expect(read).toHaveLength(agentIds.length);
+      expect(read.every((result) => result.status === "fulfilled" && result.value)).toBe(true);
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(2);
+
+      hashRuntimeConfig.mockClear();
+      requestConfig.agents!.defaults!.model = "openai/gpt-5.4";
+      const afterMutation = await readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => requestConfig,
+        includeSessionRowPolicy: false,
+      });
+      expect(afterMutation).toHaveLength(agentIds.length);
+      expect(afterMutation.every((result) => result.status === "fulfilled" && !result.value)).toBe(
+        true,
+      );
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      hashRuntimeConfig.mockRestore();
+    }
+  });
+});
 
 function makeCatalog(
   entries: ModelCatalogEntry[],
