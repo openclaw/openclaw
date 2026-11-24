@@ -60,13 +60,12 @@ function steer(run: FollowupRun, key: string, overrides: Partial<ReplyParams>) {
   );
 }
 
-function operator(run: FollowupRun, profileId: string, assertCurrent = () => {}) {
+function operator(run: FollowupRun, profileId: string) {
   return createTestOperatorAuthority({
     profileId,
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: run.run.config, policy: {} }),
-    assertCurrent,
   });
 }
 
@@ -219,28 +218,21 @@ describe("ordinary steering into automatic model fallback", () => {
   );
 
   it.each([
-    { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-2", revoked: false, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-1", revoked: true, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-2", revoked: true, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-1", revoked: false, aborted: true, replaceBackend: false },
-    { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: true },
-    { preparation: "backend-ready", revoked: false, aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-1", aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-2", aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-1", aborted: true, replaceBackend: false },
+    { preparation: "fingerprint-1", aborted: false, replaceBackend: true },
+    { preparation: "backend-ready", aborted: false, replaceBackend: false },
   ])(
-    "preserves input at $preparation (caller revoked: $revoked, target aborted: $aborted, backend replaced: $replaceBackend)",
-    async ({ preparation, revoked, aborted, replaceBackend }) => {
-      const key = `agent:main:completed-steering-${preparation}-${revoked}-${aborted}-${replaceBackend}`;
+    "preserves input at $preparation (target aborted: $aborted, backend replaced: $replaceBackend)",
+    async ({ preparation, aborted, replaceBackend }) => {
+      const key = `agent:main:completed-steering-${preparation}-${aborted}-${replaceBackend}`;
       const holdBackend = preparation === "backend-ready";
       const read = holdBackend ? undefined : preparation === "fingerprint-1" ? 1 : 2;
       const run = createQueueTestRun({ prompt: "preserve this incoming turn", messageId: key });
       run.run.agentId = "main";
       run.run.sessionKey = key;
-      let callerCurrent = true;
-      run.operatorAuthority = operator(run, "incoming-user", () => {
-        if (!callerCurrent) {
-          throw new Error("incoming caller revoked");
-        }
-      });
+      run.operatorAuthority = operator(run, "incoming-user");
       run.run.clientCaps = ["ui-commands"];
       const operation = createReplyOperation({
         sessionKey: key,
@@ -323,27 +315,20 @@ describe("ordinary steering into automatic model fallback", () => {
         } else {
           operation.complete();
         }
-        callerCurrent = !revoked;
         resume.resolve();
-        if (revoked) {
-          await expect(incoming).rejects.toThrow("incoming caller revoked");
+        await expect(incoming).resolves.toBeUndefined();
+        expect(replacementInjected).not.toHaveBeenCalled();
+        expect(resultState.admission).toEqual({
+          status: "accepted",
+          mode: "followup",
+          reason: "steering-unavailable",
+        });
+        if (aborted || replaceBackend) {
           expect(consumeFollowup).not.toHaveBeenCalled();
-          expect(resultState.admission).toBeUndefined();
-        } else {
-          await expect(incoming).resolves.toBeUndefined();
-          expect(replacementInjected).not.toHaveBeenCalled();
-          expect(resultState.admission).toEqual({
-            status: "accepted",
-            mode: "followup",
-            reason: "steering-unavailable",
-          });
-          if (aborted || replaceBackend) {
-            expect(consumeFollowup).not.toHaveBeenCalled();
-            operation.complete();
-          }
-          expect(await delivered.promise).toBe(run);
-          expect(consumeFollowup).toHaveBeenCalledExactlyOnceWith(run);
+          operation.complete();
         }
+        expect(await delivered.promise).toBe(run);
+        expect(consumeFollowup).toHaveBeenCalledExactlyOnceWith(run);
         expect(injected).not.toHaveBeenCalled();
         expect(getFollowupQueueDepth(key)).toBe(0);
         expect(typing.cleanup).toHaveBeenCalledOnce();

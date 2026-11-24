@@ -9,17 +9,31 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   authenticateReceiptRecovery,
+  receiptRecoveryPolicyRequest,
   revalidateReceiptRecoveryRuns,
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
+import { isRecord } from "../../scripts/lib/record-shared.mjs";
 import {
   RECEIPT_RECOVERY_WORKFLOW,
   retainedPublicationArtifactSource,
 } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import {
+  revalidateQualificationAdmissionAuthority,
+  verifyQualificationAdmission,
+} from "../../scripts/release-qualification-admission.mjs";
+import {
+  authenticateFullReleaseValidationEvidence,
+  revalidateCandidateArtifactAuthority,
+} from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
-import { recoveryConsumptionFixture } from "./release-evidence-consumption.test-support.js";
+import {
+  consumptionOptions,
+  recoveryConsumptionFixture,
+} from "./release-evidence-consumption.test-support.js";
+import { fixture as admissionFixture } from "./release-qualification-admission.test-support.js";
 
 function fixture(independentQ = false) {
   const test = recoveryConsumptionFixture(independentQ);
@@ -74,7 +88,103 @@ describe("receipt-backed aggregate recovery", () => {
     );
     await expect(
       verifyOriginalReceiptQualification(test.recovery, { client: test.client }),
-    ).rejects.toThrow("original child failed release policy");
+    ).rejects.toThrow("Full release child evidence workload does not pass recovery release policy");
+  });
+
+  it("rechecks a separately admitted ledger against the original failed receipts at publication", async () => {
+    const policySha = "e".repeat(40);
+    const f = recoveryConsumptionFixture(true, { waivedFailure: true, waiverPolicySha: policySha });
+    const { c, q, admission: original } = f.direct;
+    const ledger = "scripts/lib/release-validation-waivers.json";
+    const newPolicy = admissionFixture(false, {
+      selectedRequest: receiptRecoveryPolicyRequest(
+        original.receipt,
+        policySha,
+        "00000000-1234-4123-8123-123456789abc",
+      ),
+      runId: 41,
+      workflowSource: original.sources.get(q + ":.github/workflows/full-release-validation.yml"),
+      policy: JSON.parse(
+        original.sources.get(q + ":scripts/lib/release-qualification-coverage.json")!,
+      ),
+      candidateVersion: original.receipt.baselinePolicy.candidateVersion,
+      baselinePolicySource: original.sources.get(
+        c + ":scripts/lib/upgrade-survivor-scenarios.json",
+      ),
+    });
+    const newLedger = f.client.getWorkflowSource(policySha, ledger);
+    newPolicy.sources.set(policySha + ":" + ledger, newLedger);
+    const commit = {
+      sha: policySha,
+      parents: [{ sha: q }],
+      commit: { verification: { verified: true } },
+      files: [{ filename: ledger, status: "modified" }],
+    };
+    const client = {
+      ...f.client,
+      getCommit: async () => commit,
+      getRun: (id: string) => (id === "41" ? Promise.resolve(newPolicy.run) : f.client.getRun(id)),
+      verifyQualificationAdmission: (params: Parameters<typeof verifyQualificationAdmission>[0]) =>
+        isRecord(params.descriptor) && params.descriptor.runId === 41
+          ? verifyQualificationAdmission({
+              ...params,
+              runGh: newPolicy.runGh,
+              downloadArchive: newPolicy.archive,
+            })
+          : f.client.verifyQualificationAdmission(params),
+      revalidateQualificationAdmissionAuthority: (
+        params: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
+      ) =>
+        isRecord(params.descriptor) && params.descriptor.runId === 41
+          ? revalidateQualificationAdmissionAuthority({ ...params, runGh: newPolicy.runGh })
+          : f.client.revalidateQualificationAdmissionAuthority(params),
+    };
+    const request = {
+      ...f.recovery,
+      workflowSha: f.producer.sha,
+      policyQualification: { sha: policySha, admission: newPolicy.descriptor },
+    };
+    await expect(verifyOriginalReceiptQualification(f.recovery, { client })).rejects.toThrow(
+      "workload does not pass recovery release policy",
+    );
+    const verified = await verifyOriginalReceiptQualification(request, { client });
+    const waivers = verified.children.flatMap((child) => child.waivers);
+    expect(waivers).toHaveLength(1);
+    expect(verified.children.find((child) => child.role === "normalCi")).toMatchObject({
+      workflowSha: q,
+      conclusion: "failure",
+    });
+    Object.assign(f.manifest, {
+      receiptRecovery: request,
+      waivers,
+      retainedPublicationPayloads: verified.publication.payloads,
+    });
+    const authenticate = () =>
+      authenticateReceiptRecovery({
+        manifest: f.manifest,
+        artifact: f.aggregateArtifact,
+        run: f.run,
+        client,
+        verifier: undefined,
+        expectedRunAttempts: undefined,
+      });
+    await expect(authenticate()).resolves.toMatchObject({ valid: true, waivers });
+    // Later publication commands restore this carrier record instead of re-running recovery.
+    const consumed = await authenticateFullReleaseValidationEvidence(
+      { ...consumptionOptions(f.direct), run: f.run, manifest: f.manifest, expectedRunId: "900" },
+      client,
+    );
+    expect(consumed.publicationAuthority.policy?.descriptor).toEqual(newPolicy.descriptor);
+    newPolicy.authority.permission = "read";
+    expect(() =>
+      revalidateCandidateArtifactAuthority(consumed.publicationAuthority, client),
+    ).toThrow("no longer has repository qualification authority");
+    await expect(authenticate()).rejects.toThrow(
+      "no longer has repository qualification authority",
+    );
+    newPolicy.authority.permission = "write";
+    commit.files.push({ filename: "scripts/changed-executable.mjs", status: "modified" });
+    await expect(authenticate()).rejects.toThrow("modifying only the waiver ledger");
   });
 
   it("rejects a recovery title for a different request", async () => {

@@ -174,7 +174,7 @@ describe("cron creator authority grants", () => {
     expect(consume(grant).authority).toBeUndefined();
     current = false;
     expect(() => mint(scope, undefined, undefined, undefined, "requester")).toThrow(
-      "no longer active",
+      "access has ended",
     );
   });
 
@@ -189,10 +189,10 @@ describe("cron creator authority grants", () => {
     const grant = mint(scope, undefined, runtimeAuthority);
     expect(grant).toEqual({ runId: "run-authority", token: expect.any(String) });
     expect(() => consume({ ...grant, runId: "run-other" })).toThrow(
-      "Configured MCP cron authority is no longer active",
+      "This run's MCP cron access has ended",
     );
     expect(consume(grant).authority).toEqual(runtimeAuthority);
-    expect(() => consume(grant)).toThrow("Configured MCP cron authority is no longer active");
+    expect(() => consume(grant)).toThrow("This run's MCP cron access has ended");
   });
 
   it.each([
@@ -220,7 +220,7 @@ describe("cron creator authority grants", () => {
       const unspent = mintCurrent();
       expect(consumed.authority).toBeUndefined();
       expect(consumed.assertCurrent).not.toThrow();
-      expect(() => consume(grant)).toThrow("no longer active");
+      expect(() => consume(grant)).toThrow("access has ended");
       await Promise.resolve();
       if (revoked === "issuer" || revoked === "scope") {
         current[revoked] = false;
@@ -234,8 +234,8 @@ describe("cron creator authority grants", () => {
       } else {
         scope.abort();
       }
-      expect(consumed.assertCurrent).toThrow("no longer active");
-      expect(() => consume(unspent)).toThrow("Configured MCP cron authority is no longer active");
+      expect(consumed.assertCurrent).toThrow("access has ended");
+      expect(() => consume(unspent)).toThrow("This run's MCP cron access has ended");
     },
   );
 });
@@ -345,7 +345,7 @@ describe("cron management authority grants", () => {
     expect(() => fixture.mint("cron.add")).toThrow(denied);
 
     const management = fixture.mint();
-    expect(() => consume(management)).toThrow("Configured MCP cron authority is no longer active");
+    expect(() => consume(management)).toThrow("This run's MCP cron access has ended");
     await expect(fixture.run(management, async () => "allowed")).resolves.toBe("allowed");
   });
 

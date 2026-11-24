@@ -182,7 +182,6 @@ it("enforces restricted-role grants for defaults without overriding explicit Sta
     profileId: "access-default-fixture",
     scopes: ["operator.write"],
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
-    assertCurrent() {},
   });
   const admission = prepareSystemAgentRunAdmission(
     {},

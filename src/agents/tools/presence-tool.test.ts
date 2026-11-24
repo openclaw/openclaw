@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayMethodDescriptorInput } from "../../gateway/methods/descriptor.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { NodeRegistry } from "../../gateway/node-registry.js";
@@ -25,11 +24,10 @@ import { createPresenceTool } from "./presence-tool.js";
 
 const adaPresence = { people: [{ name: "Ada" }] };
 
-function readerAuthority(scopes: string[], assertCurrent = () => {}) {
+function readerAuthority(scopes: string[]) {
   return createTestOperatorAuthority({
     profileId: ensureProfileForEmail("presence-reader@example.test").id,
     scopes,
-    assertCurrent,
   });
 }
 
@@ -177,33 +175,6 @@ describe("presence tool source authority", () => {
         );
       }
       expect(snapshot).toHaveBeenCalledTimes(allowed ? 1 : 0);
-    });
-  });
-
-  it("withholds a delayed location result after the original operator is revoked", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      let current = true;
-      const authority = readerAuthority(["operator.read"], () => {
-        if (!current) {
-          throw new Error("presence reader revoked");
-        }
-      });
-      const entered = createDeferred();
-      const release = createDeferred();
-      const { run, snapshot } = fixture(async ({ respond }) => {
-        entered.resolve();
-        await release.promise;
-        respond(true, { results: [] });
-      });
-      const pending = run(authority, () =>
-        createPresenceTool().execute("location", { include: ["location"] }),
-      );
-      const rejected = expect(pending).rejects.toThrow("presence reader revoked");
-      await entered.promise;
-      current = false;
-      release.resolve();
-      await rejected;
-      expect(snapshot).toHaveBeenCalledOnce();
     });
   });
 });

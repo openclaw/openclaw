@@ -221,11 +221,15 @@ it.each([
           callerScopedCreation: true,
         });
         expect(consumeCronCreatorAuthorityGrant(grant).authority).toBeUndefined();
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
+        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
+          /no longer active|access has ended/,
+        );
         const pending = requester!();
         revokeCronCreatorAuthorityRunScope(scope);
-        expect(() => consumeCronCreatorAuthorityGrant(pending)).toThrow("no longer active");
-        expect(() => requester!()).toThrow("no longer active");
+        expect(() => consumeCronCreatorAuthorityGrant(pending)).toThrow(
+          /no longer active|access has ended/,
+        );
+        expect(() => requester!()).toThrow(/no longer active|access has ended/);
       }
       releaseAgentRunDelegatedAuthority(authority);
       expect(bindCronManagementGrant(runId)).toBeUndefined();
@@ -285,7 +289,9 @@ it("exposes add but refuses incomplete capture and retired requester authority",
     const requester = bindCronRequesterGrant(runId)!;
     const grant = requester();
     releaseAgentRunDelegatedAuthority(authority);
-    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
-    expect(() => requester()).toThrow("no longer active");
+    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
+      /no longer active|access has ended/,
+    );
+    expect(() => requester()).toThrow(/no longer active|access has ended/);
   });
 });

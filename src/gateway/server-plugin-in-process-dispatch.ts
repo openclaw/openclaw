@@ -72,7 +72,6 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   const assertLifetime = () => {
     resolved.assertContextCurrent();
     resolved.assertInvocationCurrent();
-    operatorSource?.authority.assertCurrent();
   };
   const assertCurrent = () => {
     assertLifetime();
@@ -163,21 +162,10 @@ export async function withInProcessGatewayDispatch<T>(
     releaseOperatorAuthority = captured?.release;
     resolved.assertContextCurrent();
     resolved.assertInvocationCurrent();
-    captured?.authority.assertCurrent();
     if (captured) {
       resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
         operatorRunAuthority: captured.authority,
       });
-      const withCapturedAuthority = (assertCurrent: () => void) =>
-        composeSessionSourceAssertion([assertCurrent, captured.authority.assertCurrent]);
-      resolved.assertContextCurrent = withCapturedAuthority(resolved.assertContextCurrent);
-      resolved.assertSourceCurrent = withCapturedAuthority(resolved.assertSourceCurrent);
-      const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
-      if (assertCreatedInputSourceCurrent) {
-        resolved.assertCreatedInputSourceCurrent = withCapturedAuthority(
-          assertCreatedInputSourceCurrent,
-        );
-      }
     }
     // Only preparation refusals prove method work was never entered. Errors
     // from the callback may follow effects and must retain their original form.

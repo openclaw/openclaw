@@ -298,7 +298,6 @@ describe("generateConversationLabelWithFallback", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "label-reader",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({
         cfg,
         policy: {

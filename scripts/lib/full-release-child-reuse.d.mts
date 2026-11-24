@@ -46,6 +46,8 @@ export interface ReusableReleaseChildDependencies {
   }>;
   now?: number;
   deadlineMs?: number;
+  /** Policy already authenticated by the receipt recovery owner. */
+  waiverPolicy?: import("./release-validation-waivers.mjs").ReleaseValidationWaiver[];
   token?: string;
 }
 

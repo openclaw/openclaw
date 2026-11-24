@@ -410,6 +410,10 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
   if (!descriptor || !evidence.qualification.admission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
+  const policyDescriptor = manifest?.receiptRecovery?.policyQualification?.admission;
+  if (policyDescriptor && !evidence.policyAdmission) {
+    throw new Error("Authenticated waiver policy admission authority is missing");
+  }
   // Retain authenticated identities, not live permission or ref verdicts.
   return structuredClone({
     descriptor,
@@ -422,6 +426,10 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
           sha: manifest.workflowSha,
         }
       : null,
+    // A later waiver admission is a second operator grant; later commands recheck it too.
+    policy: policyDescriptor
+      ? { descriptor: policyDescriptor, admission: evidence.policyAdmission }
+      : null,
   });
 }
 
@@ -430,6 +438,9 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
 export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
   if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
+    if (authority.policy) {
+      evidenceClient.revalidateQualificationAdmissionAuthority(authority.policy);
+    }
     if (authority.recoveryProducer) {
       if (evidenceClient.verifyReceiptRecoveryAuthority) {
         evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);

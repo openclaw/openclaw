@@ -269,7 +269,6 @@ describe("Side chat with a published Gateway runtime", () => {
           createTestOperatorAuthority({
             profileId: "companion-reader",
             scopes: ["operator.read"],
-            assertCurrent: () => {},
             modelPolicy: prepareOperatorModelPolicy({
               cfg,
               policy: { sourceAgent: "main", allow },
