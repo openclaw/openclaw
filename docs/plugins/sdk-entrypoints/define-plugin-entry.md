@@ -63,7 +63,9 @@ export default definePluginEntry({
   a native session on this Gateway, `imported` for a received copy, or `federated`
   for a remote source. Set `automatic: true` only when this source permits
   background export. An unknown origin requires explicit selection. Assign the
-  policy at the receiving Gateway when projecting a peer's rows.
+  policy at the receiving Gateway when projecting a peer's rows. Declare
+  `stableHostThreadIdentity: true` only when the host ID and thread ID uniquely
+  identify the same native source across agents, source homes, and restarts.
 
   Providers whose rows require current source authorization declare
   `requiresFreshList: true`. Each list, search, and page request must reauthorize

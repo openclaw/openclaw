@@ -105,6 +105,7 @@ export function beamTestBarrier() {
 export type BeamTestSession = {
   threadId: string;
   sourceHomeId?: string;
+  exportPolicy?: SessionCatalogHost["sessions"][number]["exportPolicy"] | null;
   name?: string;
   modelProvider?: string;
   recencyAt: number;
@@ -156,6 +157,14 @@ export function createBeamTestCatalog(
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
             ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
+            exportPolicy:
+              session.exportPolicy === null
+                ? undefined
+                : (session.exportPolicy ?? {
+                    origin: "native-local",
+                    automatic: true,
+                    stableHostThreadIdentity: true,
+                  }),
             name: session.name,
             modelProvider: session.modelProvider,
             recencyAt: session.recencyAt,

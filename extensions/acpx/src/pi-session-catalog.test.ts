@@ -322,7 +322,7 @@ describe("Pi session catalog", () => {
       containingSessions({
         threadId: "pi-session",
         canOpenTerminal: true,
-        exportPolicy: { origin: "native-local", automatic: true },
+        exportPolicy: { origin: "native-local", automatic: true, stableHostThreadIdentity: true },
       }),
     );
     await expect(provider!.openTerminal!(localRequest)).resolves.toEqual({

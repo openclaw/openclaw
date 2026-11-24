@@ -187,7 +187,16 @@ function catalogHostMapper(
           return {
             threadId: session.threadId,
             ...(exportHomeId && exportHomeId === session.sourceHomeId
-              ? { exportPolicy: { origin: "native-local" as const, automatic: true } }
+              ? {
+                  exportPolicy: {
+                    origin: "native-local" as const,
+                    automatic: true,
+                    // The primary alias can select a different home after reconfiguration.
+                    ...(host.hostId !== CODEX_LOCAL_SESSION_HOST_ID
+                      ? { stableHostThreadIdentity: true as const }
+                      : {}),
+                  },
+                }
               : host.kind === "node" || home?.appServer.connectionClass === "remote"
                 ? { exportPolicy: { origin: "federated" as const, automatic: false } }
                 : {}),

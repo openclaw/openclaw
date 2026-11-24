@@ -159,7 +159,11 @@ function toGenericClaudeHost(
           ...metadata,
           exportPolicy:
             host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID
-              ? { origin: "native-local" as const, automatic: true }
+              ? {
+                  origin: "native-local" as const,
+                  automatic: true,
+                  stableHostThreadIdentity: true as const,
+                }
               : { origin: "federated" as const, automatic: false },
           ...(name ? { name } : {}),
           ...(recencyAt != null ? { recencyAt } : {}),

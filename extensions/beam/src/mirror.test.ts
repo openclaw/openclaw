@@ -301,38 +301,67 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
-  it("keeps same-thread snapshots in distinct source homes through reads and completion", async () => {
-    let clock = beamTestNow;
-    const reads = vi.fn();
-    const runner = fixture.runner(
-      {
-        sessions: ["home-a", "home-b"].map((sourceHomeId) => ({
-          threadId: "shared",
-          sourceHomeId,
-          recencyAt: beamTestNow,
-        })),
-        onRead: reads,
+  it("fences two homes that share an existing publication ID before either is read", async () => {
+    const read = vi.fn();
+    const runner = fixture.runner({
+      sessions: ["home-a", "home-b"].map((sourceHomeId) => ({
+        threadId: "shared",
+        sourceHomeId,
+        recencyAt: beamTestNow,
+      })),
+      onRead: read,
+    });
+    await runner.tick();
+    expect(read).not.toHaveBeenCalled();
+    expect(fixture.sent).toEqual([]);
+  });
+
+  it("addresses the original released v1 publication with the full source locator", async () => {
+    const read = vi.fn();
+    const prior = beamMirrorId("claude", "gateway:local", "shared");
+    const service = createBeamTestCatalog({
+      sessions: [{ threadId: "shared", sourceHomeId: "stable-home", recencyAt: beamTestNow }],
+      onRead: read,
+    });
+    const ids: string[] = [];
+    await withMirrorServer(
+      (_req, res, body) => {
+        const id = (JSON.parse(body) as { beamId: string }).beamId;
+        ids.push(id);
+        if (id === prior) {
+          res.writeHead(409);
+          res.end(
+            JSON.stringify({ beamId: id, handoff: { id: "1".repeat(32), owner: "gateway" } }),
+          );
+        } else {
+          res.end();
+        }
       },
-      { now: () => clock },
+      async (origin) => {
+        const runner = createBeamTestRunner({ endpoint: origin, listCatalogs: () => [service] });
+        await runTicks(runner);
+      },
     );
+    expect(ids).toEqual([prior]);
+    expect(read.mock.calls).toEqual([["shared", "stable-home", "main"]]);
+  });
+
+  it("requires explicit selection for a qualified source without a stable old identity", async () => {
+    const read = vi.fn();
+    const runner = fixture.runner({
+      onRead: read,
+      sessions: [
+        {
+          threadId: "shared",
+          sourceHomeId: "new-home",
+          recencyAt: beamTestNow,
+          exportPolicy: { origin: "native-local", automatic: true },
+        },
+      ],
+    });
     await runner.tick();
-    clock += 4 * 60 * 60_000;
-    await runner.tick();
-    expect(reads.mock.calls).toEqual([
-      ["shared", "home-a", "main"],
-      ["shared", "home-b", "main"],
-      ["shared", "home-a", "main"],
-      ["shared", "home-b", "main"],
-    ]);
-    const ids = fixture.sent.map(({ payload }) => payload.beamId);
-    expect(new Set(ids).size).toBe(2);
-    expect(ids.slice(0, 2)).toEqual(ids.slice(2));
-    expect(fixture.sent.map(({ payload }) => payload.completed)).toEqual([
-      false,
-      false,
-      true,
-      true,
-    ]);
+    expect(read).not.toHaveBeenCalled();
+    expect(fixture.sent).toEqual([]);
   });
 
   it("does not upload a pending read after catalog consent changes", async () => {

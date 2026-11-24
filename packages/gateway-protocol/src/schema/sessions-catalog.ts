@@ -74,6 +74,8 @@ export const SessionCatalogSessionSchema = closedObject({
     closedObject({
       origin: stringLiteralUnion(["native-local", "imported", "federated"]),
       automatic: Type.Boolean(),
+      /** Host and thread together retain the original native identity across agents and homes. */
+      stableHostThreadIdentity: Type.Optional(Type.Literal(true)),
     }),
   ),
   name: Type.Optional(Type.String()),

@@ -118,26 +118,11 @@ export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]
   };
 }
 
-export function beamMirrorId(
-  catalogId: string,
-  hostId: string,
-  threadId: string,
-  scope?: { agentId: string; sourceHomeId?: string },
-): string {
-  // The original v1 key belongs to the implicit main agent and an unqualified
-  // source. A home- or agent-qualified source must never overwrite that URL.
-  const identity =
-    scope && (scope.sourceHomeId || scope.agentId !== "main")
-      ? JSON.stringify([
-          "beam-catalog-locator-v1",
-          catalogId,
-          hostId,
-          threadId,
-          scope.agentId,
-          scope.sourceHomeId ?? null,
-        ])
-      : `${catalogId}\0${hostId}\0${threadId}`;
-  return createHash("sha256").update(identity).digest("hex").slice(0, 32);
+export function beamMirrorId(catalogId: string, hostId: string, threadId: string): string {
+  return createHash("sha256")
+    .update(`${catalogId}\0${hostId}\0${threadId}`)
+    .digest("hex")
+    .slice(0, 32);
 }
 
 /**
@@ -196,6 +181,7 @@ function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
 
 type BeamMirrorCandidate = SessionCatalogLocator & {
   agentId: string;
+  beamId: string;
   modelProvider?: string;
   title: string;
   recencyAt: number;
@@ -219,7 +205,13 @@ function sourceModelForMirror(
 }
 
 function mirrorCandidateKey(candidate: BeamMirrorCandidate): string {
-  return beamMirrorId(candidate.catalogId, candidate.hostId, candidate.threadId, candidate);
+  return JSON.stringify([
+    candidate.catalogId,
+    candidate.hostId,
+    candidate.threadId,
+    candidate.agentId,
+    candidate.sourceHomeId ?? null,
+  ]);
 }
 
 type TrackedMirrorSession = {
@@ -387,6 +379,9 @@ export function createBeamMirrorRunner(params: {
       }),
     );
     signal.throwIfAborted();
+    if (transcript.hostId !== candidate.hostId || transcript.threadId !== candidate.threadId) {
+      throw new Error("catalog returned a different source");
+    }
     const reduced = buildBeamMirrorItems(transcript.items);
     const sourceModel = sourceModelForMirror(candidate.modelProvider, transcript.items);
     const items = reduced.items.length
@@ -394,7 +389,7 @@ export function createBeamMirrorRunner(params: {
       : [{ type: "other" as const, text: "no shareable messages yet" }];
     return fitBeamMirrorUpload({
       version: 1,
-      beamId: mirrorCandidateKey(candidate),
+      beamId: candidate.beamId,
       source: candidate.catalogId,
       title: truncateUtf16Safe(candidate.title, 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
@@ -457,6 +452,10 @@ export function createBeamMirrorRunner(params: {
       }
       const catalogById = new Map(catalogs.map((catalog) => [catalog.id, catalog]));
       const observed = new Map<string, BeamMirrorCandidate>();
+      const observedOrigins = new Map(
+        Array.from(tracked, ([key, entry]) => [entry.candidate.beamId, key] as const),
+      );
+      const fenced = new Set<string>();
       const fullyObservedHosts = new Set<string>();
       for (const catalog of catalogs) {
         signal.throwIfAborted();
@@ -474,8 +473,10 @@ export function createBeamMirrorRunner(params: {
               fullyObservedHosts.add(`${catalog.id}\0${host.hostId}`);
             }
             for (const session of host.sessions) {
+              const legacyId = beamMirrorId(catalog.id, host.hostId, session.threadId);
               const candidate = {
                 agentId,
+                beamId: legacyId,
                 catalogId: catalog.id,
                 ...(session.sourceHomeId !== undefined
                   ? { sourceHomeId: session.sourceHomeId }
@@ -486,7 +487,21 @@ export function createBeamMirrorRunner(params: {
                 title: session.name?.trim() || `${catalog.id} session`,
                 recencyAt: session.recencyAt ?? session.updatedAt ?? 0,
               };
-              observed.set(mirrorCandidateKey(candidate), candidate);
+              const key = mirrorCandidateKey(candidate);
+              const earlier = observedOrigins.get(legacyId);
+              observedOrigins.set(legacyId, key);
+              if (
+                session.exportPolicy?.origin !== "native-local" ||
+                !session.exportPolicy.automatic ||
+                !session.exportPolicy.stableHostThreadIdentity ||
+                (earlier !== undefined && earlier !== key)
+              ) {
+                // An old ID may already name a released conversation. Never mint a
+                // second ID or write through a selection the producer cannot identify.
+                fenced.add(legacyId);
+                continue;
+              }
+              observed.set(key, candidate);
             }
           }
         } catch (error) {
@@ -494,8 +509,15 @@ export function createBeamMirrorRunner(params: {
           warnThrottled(`beam mirror list failed for ${catalog.id}: ${String(error)}`);
         }
       }
+      if (fenced.size > 0) {
+        warnThrottled(
+          "beam mirror skipped sources without an unambiguous automatic export grant; select the source explicitly to create a separate copy",
+        );
+      }
       const selected = [...observed.values()]
-        .filter((candidate) => candidate.recencyAt >= activeSinceMs)
+        .filter(
+          (candidate) => candidate.recencyAt >= activeSinceMs && !fenced.has(candidate.beamId),
+        )
         .toSorted((left, right) => right.recencyAt - left.recencyAt)
         .slice(0, MIRROR_MAX_SESSIONS);
       for (const candidate of selected) {
@@ -533,6 +555,7 @@ export function createBeamMirrorRunner(params: {
       for (const [key, entry] of tracked) {
         signal.throwIfAborted();
         if (
+          fenced.has(entry.candidate.beamId) ||
           entry.candidate.agentId !== agentId ||
           !mirror.catalogs.includes(entry.candidate.catalogId)
         ) {
