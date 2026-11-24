@@ -117,8 +117,11 @@ it.each([
   "binds admission to a resolved target and its acknowledged request %#",
   async (reply, outcome) => {
     dispatchRaw.mockReset();
-    if (reply instanceof Error) dispatchRaw.mockRejectedValue(reply);
-    else dispatchRaw.mockResolvedValue(reply);
+    if (reply instanceof Error) {
+      dispatchRaw.mockRejectedValue(reply);
+    } else {
+      dispatchRaw.mockResolvedValue(reply);
+    }
     const result = await withPluginRuntimeGatewayRequestScope(
       {
         client: { id: "plugin" } as GatewayRequestHandlerOptions["client"],

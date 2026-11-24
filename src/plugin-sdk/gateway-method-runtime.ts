@@ -61,10 +61,14 @@ export async function sendToResolvedSession(
   input: ResolvedSessionSendInput,
 ): Promise<"accepted" | "forbidden" | "unconfirmed"> {
   const send = prepareResolvedSessionSend(input);
-  if (!send) return "unconfirmed";
+  if (!send) {
+    return "unconfirmed";
+  }
   try {
     const reply = await dispatchGatewayMethod("chat.send", send.params);
-    if (reply.ok === false && reply.error?.code === "FORBIDDEN") return "forbidden";
+    if (reply.ok === false && reply.error?.code === "FORBIDDEN") {
+      return "forbidden";
+    }
     return reply.ok === true && send.acknowledged(reply.payload) ? "accepted" : "unconfirmed";
   } catch (error) {
     return error instanceof GatewayMethodDispatchForbidden ? "forbidden" : "unconfirmed";
