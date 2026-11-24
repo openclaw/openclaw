@@ -20,6 +20,8 @@ import ai.openclaw.app.ui.design.ClawTypography
 import android.content.Context
 import android.graphics.Bitmap
 import android.provider.Settings
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -330,7 +332,11 @@ class ScreenTypographyLayoutTest {
     showApp {
       AppModalBottomSheet(
         onDismissRequest = {},
-        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState =
+          rememberBottomSheetState(
+            initialValue = SheetValue.Hidden,
+            enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
+          ),
         containerColor = ClawTheme.colors.surface,
         contentColor = ClawTheme.colors.text,
       ) {

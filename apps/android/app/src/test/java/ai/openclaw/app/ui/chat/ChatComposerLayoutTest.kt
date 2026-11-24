@@ -153,6 +153,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
@@ -509,7 +510,7 @@ class ChatComposerLayoutTest {
       editor.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(fullLayouts)) }
       val fullLineHeight = ceil(fullLayouts.single().getLineBottom(0) - fullLayouts.single().getLineTop(0)).toInt()
       val textInput = fullLayouts.single().layoutInput
-      val measurer = TextMeasurer(textInput.fontFamilyResolver, density, textInput.layoutDirection)
+      val measurer = TextMeasurer(textInput.fontFamilyResolver, LocaleList.current, density, textInput.layoutDirection)
       // Use the real font metrics, including nonlinear scaling and the font's minimum line box.
       val projectLine = measurer.measure("Project", style = textInput.style.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Normal)).size.height
       val titleLine = measurer.measure("Chat", style = textInput.style.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)).size.height

@@ -59,6 +59,8 @@ class ChatMediaPlayerTest {
     var released = false
   }
 
+  // Keep implicit input-mode selection and the zero-duration animation context in this fixture.
+  @Suppress("DEPRECATION")
   @get:Rule
   val composeRule =
     createComposeRule(

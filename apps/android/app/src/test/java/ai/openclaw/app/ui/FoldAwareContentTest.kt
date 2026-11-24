@@ -44,6 +44,8 @@ import org.robolectric.annotation.Config
 class FoldAwareContentTest {
   @get:Rule val composeRule = createComposeRule()
 
+  // Keep a value-owned editor so fold movement exercises the current editor lifecycle.
+  @Suppress("DEPRECATION")
   @Test
   @Config(qualifiers = "w1800dp-h1000dp-hdpi")
   fun sidebarAllocationUsesRealConstraintsDensityAndCompletePhysicalFoldSafety() {
@@ -181,6 +183,8 @@ class FoldAwareContentTest {
     verify(book.second, book.first)
   }
 
+  // Keep a value-owned editor so fold movement exercises the current editor lifecycle.
+  @Suppress("DEPRECATION")
   @Test
   fun movingHostAndRtlPlaceOneLiveEditorInPhysicalWindowCoordinates() {
     var folds by mutableStateOf(emptyList<DisplayFeature>())
@@ -225,6 +229,8 @@ class FoldAwareContentTest {
     }
   }
 
+  // Keep a value-owned editor so fold movement exercises the current editor lifecycle.
+  @Suppress("DEPRECATION")
   @Test
   fun tabletopExposesBothPlanesOnlyWhenEverySeparatorAllowsThem() {
     var folds by mutableStateOf(emptyList<DisplayFeature>())
