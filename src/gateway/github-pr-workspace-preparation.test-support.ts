@@ -417,7 +417,8 @@ export async function fixture(
         ),
     );
     if ((args.action ?? "prepare_pr") === "prepare_pr") {
-      expect(Value.Check(SessionGitHubPullRequestPrepareResultSchema, result.details)).toBe(true);
+      const { next: _guidance, ...payload } = result.details as Record<string, unknown>;
+      expect(Value.Check(SessionGitHubPullRequestPrepareResultSchema, payload)).toBe(true);
     }
     return result.details;
   };

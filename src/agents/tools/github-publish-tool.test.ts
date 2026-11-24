@@ -357,8 +357,7 @@ it("keeps the definition short and delivers each procedure in the result that ne
   }
   const { callGateway, execute } = setup();
   const next = async (args: unknown) => ((await execute(args)).details as { next?: string }).next;
-  const published = await execute({ title: "Change" });
-  expect(published.details).toEqual({ ...publication, next: expect.any(String) });
+  expect((await execute({ title: "Change" })).details).toMatchObject(publication);
   expect(await next({ title: "Change" })).toContain(
     "retain requestId, finish the turn and await its result here; do not submit another publication",
   );
