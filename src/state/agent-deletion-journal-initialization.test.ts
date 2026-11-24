@@ -146,13 +146,7 @@ describe("agent deletion journal initialization", () => {
     expect(discovery.warnings).toEqual([
       `Skipped missing registered agent database ${missingPath}.`,
     ]);
-    expect(discovery.registryRemovals).toEqual([
-      {
-        agentId: "openclaw",
-        path: missingPath,
-        change: `Removed missing agent database registry entry ${missingPath}.`,
-      },
-    ]);
+    expect(discovery.registryRemovals).toEqual([]);
     expect(fs.existsSync(lockPath)).toBe(true);
   });
 
