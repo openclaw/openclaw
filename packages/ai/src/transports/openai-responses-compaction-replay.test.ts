@@ -401,7 +401,7 @@ describe("OpenAI Responses compaction replay", () => {
   });
 
   it.each(responseConverters)(
-    "$name keeps instructions, owner output after compaction, and later messages",
+    "$name puts instructions after compaction, then owner output and later messages",
     ({ convert }) => {
       const prefixCall = createAssistant([
         {
@@ -451,8 +451,8 @@ describe("OpenAI Responses compaction replay", () => {
       });
 
       expect(input.map((item) => item.type)).toEqual([
-        "message",
         "compaction",
+        "message",
         "reasoning",
         "message",
         "function_call",
@@ -461,8 +461,13 @@ describe("OpenAI Responses compaction replay", () => {
         "message",
         "message",
       ]);
-      expect(input[0]).toMatchObject({ type: "message", role: "developer" });
-      expect(input[1]).toMatchObject({ type: "compaction", id: "cmp_replay" });
+      // OpenAI drops input placed before the compaction item; the prompt must follow it.
+      expect(input[0]).toMatchObject({ type: "compaction", id: "cmp_replay" });
+      expect(input[1]).toMatchObject({
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "current system instructions" }],
+      });
       const encoded = JSON.stringify(input);
       expect(encoded).toContain("current system instructions");
       expect(encoded).toContain("owner text after compaction");

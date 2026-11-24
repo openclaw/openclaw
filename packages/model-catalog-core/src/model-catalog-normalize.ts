@@ -272,6 +272,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsReasoningEffort",
     "supportsTemperature",
     "supportsInstructions",
+    "cachesInstructions",
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",

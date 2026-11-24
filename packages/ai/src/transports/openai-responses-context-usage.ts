@@ -76,14 +76,19 @@ export function recordResponsesContextUsage(
     ...identity,
     includeSystemPrompt: false,
   }).filter((item) => item.type !== "function_call_output");
-  const firstInput = request.input[0];
+  // The embedded prompt is first, or directly follows the last compaction item on
+  // native routes. A wrong guess only fails the fingerprint check below.
+  const lastCompaction = request.input.findLastIndex(
+    (item: unknown) => isRecord(item) && item.type === "compaction",
+  );
+  const isPromptItem = (item: (typeof request.input)[number] | undefined) =>
+    item?.type === "message" && (item.role === "developer" || item.role === "system");
   const contextUsage = {
     ...buildProviderReplayContext(model, identity),
     projection,
     includeSystemPrompt:
       request.instructions === undefined &&
-      firstInput?.type === "message" &&
-      (firstInput.role === "developer" || firstInput.role === "system"),
+      (isPromptItem(request.input[0]) || isPromptItem(request.input[lastCompaction + 1])),
     prefixHash: contextFingerprint(request.input, replayOutput),
     prefixLength: request.input.length + replayOutput.length,
     promptTokens: usage.promptTokens,

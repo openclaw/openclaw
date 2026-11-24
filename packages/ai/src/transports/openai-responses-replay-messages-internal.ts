@@ -337,15 +337,15 @@ function convertResponsesMessagesWithStyle(
     transformMessages(replayPlan.messages),
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
+  let systemPromptItem: ResponseInputItem | undefined;
   if (includeSystemPrompt && context.systemPrompt) {
-    messages.push(
-      buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
-        {
-          type: "input_text",
-          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
-        },
-      ]),
-    );
+    systemPromptItem = buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
+      {
+        type: "input_text",
+        text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+      },
+    ]);
+    messages.push(systemPromptItem);
   }
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
@@ -628,6 +628,18 @@ function convertResponsesMessagesWithStyle(
       });
     }
     msgIndex += 1;
+  }
+  // Native OpenAI drops input before the last compaction item, so an embedded
+  // system prompt (uncached-instructions models) must follow it. Compatible
+  // endpoints, including xAI /responses/compact, keep the prompt first.
+  if (systemPromptItem && supportsNativeOpenAIResponsesEndpoint(model)) {
+    const lastCompaction = messages.findLastIndex(
+      (item) => !("role" in item) && (item as { type?: unknown }).type === "compaction",
+    );
+    if (lastCompaction > 0 && messages[0] === systemPromptItem) {
+      messages.splice(0, 1);
+      messages.splice(lastCompaction, 0, systemPromptItem);
+    }
   }
   return messages;
 }

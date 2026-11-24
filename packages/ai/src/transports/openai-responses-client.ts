@@ -287,6 +287,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               turnState?.metadata,
               replayMode,
               Boolean(v2Compaction),
+              compactRequest?.mode === "endpoint",
             ),
           );
         let params = await buildRequest("checkpoint");
