@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configModule from "../../config/config.js";
+import type * as GatewayCall from "../../gateway/call.js";
 import { recordDeferredPluginMigrations as recordMigrations } from "../../infra/deferred-plugin-migrations.js";
 import {
   completeGatewayBootLifecycle,
@@ -34,6 +36,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath as statePathFor } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { VERSION } from "../../version.js";
+import * as shared from "./shared.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 import { registerUpdateStatusWarningTests } from "./status.warnings.test-support.js";
 
@@ -50,7 +54,10 @@ const service = vi.hoisted(() => ({
   audit: vi.fn(),
 }));
 const callGateway = vi.hoisted(() => vi.fn());
-vi.mock("../../gateway/call.js", () => ({ callGateway }));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof GatewayCall>()),
+  callGateway,
+}));
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: service.readCommand }),
@@ -119,6 +126,109 @@ beforeEach(() => {
   const stateDir = tempDirs.make("openclaw-update-status-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+});
+
+it.each([
+  {
+    name: "newer npm",
+    selected: "0.0.1",
+    build: "resident-build",
+    phase: undefined,
+    remote: false,
+  },
+  {
+    name: "older npm",
+    selected: "9999.0.0",
+    build: "resident-build",
+    phase: undefined,
+    remote: false,
+  },
+  { name: "unknown build", selected: VERSION, build: undefined, phase: undefined, remote: false },
+  { name: "pending", selected: VERSION, build: "cli-build", phase: "pending", remote: false },
+  { name: "rollback", selected: VERSION, build: "cli-build", phase: "rolled-back", remote: false },
+  { name: "remote", selected: "0.0.1", build: "resident-build", phase: undefined, remote: true },
+] as const)("separates CLI, selected release and observed Gateway: $name", async (fixture) => {
+  const state = process.env.OPENCLAW_STATE_DIR!;
+  const prefix = path.join(state, "git-install");
+  const selected = path.join(prefix, "releases", "resident", "openclaw");
+  const cli = path.join(state, "npm", "openclaw");
+  for (const [root, version, buildId] of [
+    [cli, VERSION, "cli-build"],
+    [selected, fixture.selected, fixture.build],
+  ] as const) {
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    await fs.writeFile(path.join(root, "dist", "build-info.json"), JSON.stringify({ buildId }));
+  }
+  await fs.symlink(selected, path.join(prefix, "openclaw"), "dir");
+  const trial = fixture.phase
+    ? {
+        v: 2,
+        runId: "fixture-trial",
+        phase: fixture.phase,
+        target: "/candidate/openclaw",
+        previous: selected,
+        version: "9999.0.1",
+        buildId: "candidate-build",
+        createdAt: 1,
+        attempts: 0,
+        ...(fixture.phase === "rolled-back"
+          ? { outcome: { status: "rolled-back", reason: "startup failed", at: 2 } }
+          : {}),
+      }
+    : null;
+  if (trial) {
+    await fs.writeFile(path.join(prefix, "releases", ".trial"), JSON.stringify(trial));
+  }
+  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(cli);
+  vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue(
+    fixture.phase || fixture.name === "unknown build"
+      ? { kind: "unavailable" }
+      : { kind: "responding", version: "0.0.1", buildId: "resident-build" },
+  );
+  if (fixture.remote) {
+    vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      gateway: { mode: "remote" },
+    });
+  }
+  vi.stubEnv("OPENCLAW_PROFILE", "work");
+
+  const result = await jsonStatus();
+  expect(result.releaseStatus).toMatchObject({
+    cli: { version: VERSION, build: "cli-build", source: "npm" },
+    selectedRelease: { version: fixture.selected, build: fixture.build ?? null },
+    trial,
+    gateway: {
+      kind:
+        fixture.remote || fixture.phase || fixture.name === "unknown build"
+          ? "unavailable"
+          : "responding",
+    },
+  });
+  await textStatus();
+  expectOutput("Active release", "resident launcher (selected)", VERSION);
+  expect(outputText()).not.toMatch(/up to date/i);
+  if (fixture.name === "older npm") {
+    expect(result.releaseStatus.notice).toContain(
+      `openclaw --profile work update --tag ${VERSION}`,
+    );
+    expectOutput("not downgraded");
+  } else if (fixture.name === "newer npm" || fixture.name === "unknown build") {
+    expect(result.releaseStatus.notice).toContain("openclaw --profile work update");
+  }
+  if (fixture.phase) {
+    expectOutput("Release trial", "9999.0.1", fixture.phase);
+    expect(JSON.parse(await fs.readFile(path.join(prefix, "releases", ".trial"), "utf8"))).toEqual(
+      trial,
+    );
+  }
+  if (fixture.remote) {
+    expect(reportHealth.readUpdateRunReportHealth).not.toHaveBeenCalled();
+    expectOutput("not verified (remote)");
+  }
 });
 
 it.each([

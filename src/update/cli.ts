@@ -1,10 +1,18 @@
 // `openclaw update`, after the update command's refusals: a client of the
 // running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { UpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
-import { requestUpdateDowngradeConfirmation } from "../cli/update-cli/shared.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import {
+  assertGlobalUpdateOwner,
+  requestUpdateDowngradeConfirmation,
+} from "../cli/update-cli/shared.js";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
+import { resolveServiceEntrypointIndex } from "../daemon/service-layout.js";
+import { hasGatewayServiceLauncherOverride } from "../daemon/service-types.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -14,18 +22,22 @@ import {
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import {
   checkUpdateInstallationSlot,
+  resolveInstalledPackageFrontend,
   resolveUpdateInstallationIdentity,
 } from "./installation-identity.js";
-import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
+import { PREPARE_DEADLINE_MS, markForwarding, prepareUpdate } from "./run.js";
+import { resolvePrefix } from "./store.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
@@ -55,8 +67,111 @@ export type ReleaseUpdateOptions = {
   yes?: boolean;
 };
 
+/** Managed adapters call this only after service ownership and native authority admission. */
+export async function tryAdoptInstalledPackageForGateway(opts: {
+  json: boolean;
+  action: "start" | "restart";
+}): Promise<boolean | undefined> {
+  const runningRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+  if (!runningRoot) {
+    return undefined;
+  }
+  return (await delegateInstalledPackageUpdate(
+    { json: opts.json, runningRoot, restart: true },
+    opts.action,
+  ))
+    ? process.exitCode === 0
+    : undefined;
+}
+
+async function delegateInstalledPackageUpdate(
+  opts: ReleaseUpdateOptions,
+  action?: "start" | "restart",
+): Promise<boolean> {
+  const frontend = await resolveInstalledPackageFrontend(opts.runningRoot);
+  if (!frontend) {
+    return false;
+  }
+  const prefix = resolvePrefix();
+  const launcher = path.join(prefix, "openclaw-launcher.mjs");
+  await assertGlobalUpdateOwner({
+    root: opts.runningRoot,
+    installKind: "package",
+    timeoutMs: opts.timeoutMs ?? 10_000,
+  });
+  const order = compareSemverStrings(frontend.version, frontend.selectedVersion);
+  const sameBuild =
+    order === 0 && Boolean(frontend.buildId) && frontend.buildId === frontend.selectedBuildId;
+  const installedTarget =
+    !opts.tag &&
+    !opts.channel &&
+    !opts.sha &&
+    (order === 1 || (order === 0 && !sameBuild && !action));
+  const notice = (message: string) =>
+    opts.json ? defaultRuntime.error(message) : defaultRuntime.log(message);
+  if (order === -1) {
+    notice(
+      `The managed Gateway is newer than this npm package. It was not downgraded. To use ${frontend.version}, run: ${formatCliCommand(`openclaw update --tag ${frontend.version}`)}`,
+    );
+  }
+  if (sameBuild || order === -1) {
+    await markForwarding(opts.runningRoot, launcher, prefix).catch((error: unknown) =>
+      notice(
+        `The npm entry could not be attached to the resident launcher: ${formatErrorMessage(error)}. It remains a separate CLI.`,
+      ),
+    );
+  }
+  if (action && !installedTarget) {
+    if (!sameBuild && order !== -1) {
+      notice(
+        `CLI and active release have different or unknown builds. Run: ${formatCliCommand("openclaw update")}`,
+      );
+    }
+    return false;
+  }
+  if (installedTarget) {
+    notice(
+      action
+        ? `Applying the npm-installed OpenClaw ${frontend.version} before starting the Gateway.`
+        : `Applying the npm-installed OpenClaw ${frontend.version}. The selected Gateway release is ${frontend.selectedVersion} while checks run.`,
+    );
+  }
+  // Profile/state selection already ran. The resident owns VERSION, before and trial.previous.
+  const argv = [
+    process.execPath,
+    launcher,
+    "update",
+    ...(installedTarget
+      ? ["--tag", `file:${path.resolve(opts.runningRoot)}`]
+      : opts.tag
+        ? ["--tag", opts.tag]
+        : []),
+    ...(opts.channel ? ["--channel", opts.channel] : []),
+    ...(opts.sha ? ["--sha", opts.sha] : []),
+    ...(opts.json ? ["--json"] : []),
+    ...(!opts.restart ? ["--no-restart"] : []),
+    ...(opts.yes ? ["--yes"] : []),
+    ...(opts.acceptCapabilities ? ["--accept-capabilities"] : []),
+    ...(opts.timeoutMs ? ["--timeout", String(Math.ceil(opts.timeoutMs / 1000))] : []),
+  ];
+  const result = await runCommandWithTimeout(argv, {
+    timeoutMs: opts.timeoutMs ?? RUN_DEADLINE_MS,
+    stdinFileDescriptor: process.stdin.fd,
+    outputCapture: "discard",
+    onOutputChunk: (chunk, stream) => {
+      process[stream].write(chunk);
+    },
+    killProcessTree: true,
+  });
+  process.exitCode = result.code ?? 1;
+  return true;
+}
+
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
   const startedAt = Date.now();
+  if (await delegateInstalledPackageUpdate(opts)) {
+    return;
+  }
   await checkUpdateInstallationSlot(opts.runningRoot);
   const { channel } = opts;
   let timeoutMs = opts.timeoutMs;
@@ -237,6 +352,35 @@ async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> 
     return true;
   } catch (error) {
     if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
+      const service = resolveGatewayService();
+      const command = await service.readCommand(process.env, { requireEffective: true });
+      const entry = command ? resolveServiceEntrypointIndex(command.programArguments) : undefined;
+      if (
+        command &&
+        !hasGatewayServiceLauncherOverride(command) &&
+        entry !== undefined &&
+        command.programArguments[entry] === path.join(resolvePrefix(), "openclaw-launcher.mjs")
+      ) {
+        const runtime = await service.readRuntime(process.env);
+        const action = runtime.status === "running" ? "restart" : "start";
+        const started = await runCommandWithTimeout(
+          [
+            process.execPath,
+            path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+            "gateway",
+            action,
+            "--json",
+          ],
+          { timeoutMs, killProcessTree: true },
+        );
+        if (started.code !== 0) {
+          throw new Error(
+            started.stderr || started.stdout || "The managed Gateway could not start.",
+            { cause: error },
+          );
+        }
+        return true;
+      }
       return false;
     }
     throw error;
@@ -412,6 +556,10 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
     defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);
   } else if (plugins?.detail) {
     defaultRuntime.log(`Plugin notes: ${plugins.detail}`);
+  }
+  const forwarding = record.steps.find(({ step }) => step === "forwarding");
+  if (forwarding?.status === "failed") {
+    defaultRuntime.error(forwarding.detail);
   }
   if (isPendingActivation(record)) {
     return;

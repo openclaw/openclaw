@@ -473,3 +473,56 @@ it("prepares locally when the local Gateway has no usable credentials", async ()
   expect(prepared).toEqual([expect.objectContaining({ runningRoot: root })]);
   expect(process.exitCode).toBe(0);
 });
+
+it.each([
+  { version: "2026.11.10", target: true },
+  { version: "2026.11.7", target: false },
+])(
+  "lets the resident update from npm $version without an implicit downgrade",
+  async ({ version, target }) => {
+    const npmPrefix = path.join(home.home, "npm");
+    const frontend = path.join(
+      npmPrefix,
+      ...(process.platform === "win32" ? [] : ["lib"]),
+      "node_modules",
+      "openclaw",
+    );
+    const npmBin = process.platform === "win32" ? npmPrefix : path.join(npmPrefix, "bin");
+    const resident = path.join(resolvePrefix(), "releases", "resident", "openclaw");
+    await fs.mkdir(frontend, { recursive: true });
+    await fs.mkdir(resident, { recursive: true });
+    await fs.mkdir(npmBin, { recursive: true });
+    await fs.writeFile(path.join(npmBin, process.platform === "win32" ? "npm.cmd" : "npm"), "");
+    await fs.writeFile(
+      path.join(frontend, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    await fs.writeFile(
+      path.join(resident, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.11.8" }),
+    );
+    await switchLink(resident);
+    const receipt = path.join(home.home, "resident-update.json");
+    await fs.writeFile(
+      path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+      `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify(process.argv.slice(2)));`,
+    );
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    await runReleaseUpdateCli({ json: false, restart: true, runningRoot: frontend });
+    const args: string[] = JSON.parse(await fs.readFile(receipt, "utf8"));
+    expect(args).toEqual(target ? ["update", "--tag", `file:${frontend}`] : ["update"]);
+    expect(prepared).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(process.exitCode).toBe(0);
+    expect(await fs.realpath(path.join(resolvePrefix(), "openclaw"))).toBe(
+      await fs.realpath(resident),
+    );
+    if (!target) {
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("It was not downgraded"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`openclaw update --tag ${version}`));
+      expect(await fs.readFile(path.join(frontend, ".openclaw-launcher"), "utf8")).toBe(
+        `${path.join(resolvePrefix(), "openclaw-launcher.mjs")}\n`,
+      );
+    }
+  },
+);
