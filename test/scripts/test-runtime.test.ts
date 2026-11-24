@@ -1,8 +1,37 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pinnedBun from "../../scripts/lib/pinned-bun.mts";
 import { resolveTestRuntime } from "../../scripts/lib/test-runtime.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { cleanRunnerEnv, repoRoot } from "./run-vitest.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.skipIf(process.platform === "win32")(
+  "labels the selected Bun executable and its revision under a Node launcher",
+  () => {
+    const bun = path.join(tempDirs.make("oc-test-runtime-"), "bun");
+    fs.writeFileSync(
+      bun,
+      '#!/bin/sh\nif [ "$1" = --revision ]; then echo 1.4.4-canary.1+fixture; else echo bun-test-invoked; fi\n',
+      { mode: 0o755 },
+    );
+    const result = spawnSync(resolveTestNodeExecPath(), ["scripts/run-vitest.mjs", "--version"], {
+      cwd: repoRoot,
+      env: cleanRunnerEnv({ OPENCLAW_BUN_PATH: bun }),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("bun-test-invoked");
+    expect(result.stderr).toContain("[vitest] test runtime: Bun 1.4.4-canary.1+fixture");
+  },
+);
 
 describe("test runtime policy", () => {
   it.each(["node", "bun"] as const)("honors explicit %s without probing Bun", (runtime) => {
