@@ -91,11 +91,10 @@ function tryParse(pathStr: string, mode: OutputMode): OcPath | null {
 
 async function loadOcPathFile(
   absPath: string,
-  fileName: string,
+  kind: OcAst["kind"] | null,
   mode: OutputMode,
   params: { requireUtf8?: boolean } = {},
 ): Promise<OcAst | null> {
-  const kind = inferKind(fileName);
   // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
   // preserves regular-file and symlink reads while making that check reachable.
   const handle = await fs.open(absPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
@@ -251,7 +250,7 @@ export function registerPathCli(program: Command): void {
     if (ocPath === null) {
       return;
     }
-    const ast = await loadOcPathFile(resolveFsPath(ocPath, options), ocPath.file, mode);
+    const ast = await loadOcPathFile(resolveFsPath(ocPath, options), inferKind(ocPath.file), mode);
     if (ast === null) {
       return;
     }
@@ -298,7 +297,11 @@ export function registerPathCli(program: Command): void {
       process.exitCode = 2;
       return;
     }
-    const ast = await loadOcPathFile(resolveFsPath(pattern, options), pattern.file, mode);
+    const ast = await loadOcPathFile(
+      resolveFsPath(pattern, options),
+      inferKind(pattern.file),
+      mode,
+    );
     if (ast === null) {
       return;
     }
@@ -353,7 +356,7 @@ export function registerPathCli(program: Command): void {
       return;
     }
     const fsPath = resolveFsPath(ocPath, options);
-    const ast = await loadOcPathFile(fsPath, ocPath.file, mode, { requireUtf8: true });
+    const ast = await loadOcPathFile(fsPath, inferKind(ocPath.file), mode, { requireUtf8: true });
     if (ast === null) {
       return;
     }
@@ -468,8 +471,7 @@ export function registerPathCli(program: Command): void {
       options.file !== undefined
         ? resolvePath(options.file)
         : resolvePath(options.cwd ?? process.cwd(), fileArg);
-    const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
-    const ast = await loadOcPathFile(fsPath, fileName, mode);
+    const ast = await loadOcPathFile(fsPath, inferKind(fsPath) ?? inferKind(fileArg), mode);
     if (ast === null) {
       return;
     }

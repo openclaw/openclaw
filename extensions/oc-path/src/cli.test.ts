@@ -1038,31 +1038,18 @@ describe("openclaw path CLI", () => {
 
   describe("emit", () => {
     it.each([
-      ["comments", '// keep this comment\n{\n  "v": 1\n}\n'],
-      ["empty file", ""],
-    ])("CLI-E01 round-trips jsonc bytes verbatim: %s", async (_label, before) => {
-      const { filePath } = fileFixture("gateway.jsonc");
-      writeFileSync(filePath, before, "utf-8");
+      ["gateway.jsonc", undefined, "jsonc", '// keep this comment\n{\n  "v": 1\n}\n'],
+      ["empty.jsonc", undefined, "jsonc", ""],
+      ["AGENTS.md", undefined, "md", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"],
+      ["snapshot.tmp", "original.json", "jsonc", '{"count":7}\n'],
+      ["snapshot.yaml", "original.json", "yaml", '{"count":7}\n'],
+    ] as const)("round-trips %s with the expected kind", async (name, declared, kind, bytes) => {
+      const { filePath } = fileFixture(name);
+      writeFileSync(filePath, bytes, "utf-8");
       const rt = createTestRuntime();
-      await pathEmitCommand(filePath, { json: true }, rt);
+      await pathEmitCommand(declared ?? filePath, { json: true, file: declared && filePath }, rt);
       expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.kind).toBe("jsonc");
-      expect(out.bytes).toBe(before);
+      expect(JSON.parse(stdoutText(rt))).toMatchObject({ kind, bytes });
     });
-
-    it.each([["sections", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"]])(
-      "CLI-E02 round-trips md verbatim: %s",
-      async (_label, before) => {
-        const { filePath } = fileFixture("AGENTS.md");
-        writeFileSync(filePath, before, "utf-8");
-        const rt = createTestRuntime();
-        await pathEmitCommand(filePath, { json: true }, rt);
-        expect(rt.exitCode).toBe(0);
-        const out = JSON.parse(stdoutText(rt));
-        expect(out.kind).toBe("md");
-        expect(out.bytes).toBe(before);
-      },
-    );
   });
 });
