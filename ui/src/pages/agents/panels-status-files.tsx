@@ -197,6 +197,7 @@ export function AgentChannels(
             ];
             return (
               <SettingsRow
+                info
                 title={entry().label}
                 description={metaParts().join(" · ")}
                 control={

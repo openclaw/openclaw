@@ -525,6 +525,23 @@ function credentialLine(card: ModelProviderCard): string | undefined {
  * identity on one line and one status word that only changes when something needs a look.
  * Open, it lists credentials, then what they allow, then the provider's actions.
  */
+/** One provider in the list. Connected or not, a link to `providers.<id>` lands on it. */
+function ProviderListItem(props: {
+  card: ModelProviderCard;
+  class: JSX.HTMLAttributes<HTMLLIElement>["class"];
+  children: JSX.Element;
+}) {
+  return (
+    <li
+      id={`providers.${props.card.id}`}
+      class={["provider-row model-providers__row", props.class]}
+      data-provider-id={props.card.id}
+    >
+      {props.children}
+    </li>
+  );
+}
+
 export function ProviderRow(props: ProviderRowProps) {
   let summary: HTMLButtonElement | undefined;
   const card = () => props.card;
@@ -574,10 +591,7 @@ export function ProviderRow(props: ProviderRowProps) {
   // Open, the credential rows below name the account, so the summary doesn't.
   const credential = () => (open() ? undefined : credentialLine(card()));
   return (
-    <li
-      class={["provider-row model-providers__row", { "provider-row--open": open() }]}
-      data-provider-id={card().id}
-    >
+    <ProviderListItem card={card()} class={{ "provider-row--open": open() }}>
       <button
         type="button"
         class="provider-row__summary model-providers__head"
@@ -645,7 +659,7 @@ export function ProviderRow(props: ProviderRowProps) {
           <ProviderActions {...props} />
         </div>
       </Show>
-    </li>
+    </ProviderListItem>
   );
 }
 
@@ -663,7 +677,7 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
               : t("modelProviders.models", { count: String(card().modelCount) }),
         });
   return (
-    <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
+    <ProviderListItem card={card()} class="provider-row--quiet">
       <div class="provider-row__summary model-providers__head">
         <ProviderBrandIcon
           provider={card().id}
@@ -680,6 +694,6 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
       </div>
       <KeyEditor {...props} />
       {renderMutationMessage(message())}
-    </li>
+    </ProviderListItem>
   );
 }

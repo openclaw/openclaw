@@ -1,5 +1,10 @@
 import type { ControlUiSettingEntry, ControlUiSettingsPage } from "./define.js";
-import { AGENT_OVERVIEW_SETTINGS } from "./pages/agents.js";
+import {
+  AGENT_MEMORY_SETTINGS,
+  AGENT_OVERVIEW_SETTINGS,
+  AGENT_SKILLS_SETTINGS,
+  AGENT_TOOLS_SETTINGS,
+} from "./pages/agents.js";
 import { MCP_SETTINGS } from "./pages/mcp.js";
 import { MODELS_SETTINGS } from "./pages/models.js";
 
@@ -12,6 +17,9 @@ import { MODELS_SETTINGS } from "./pages/models.js";
 export const CONTROL_UI_SETTINGS_PAGES = [
   MODELS_SETTINGS,
   AGENT_OVERVIEW_SETTINGS,
+  AGENT_TOOLS_SETTINGS,
+  AGENT_SKILLS_SETTINGS,
+  AGENT_MEMORY_SETTINGS,
   MCP_SETTINGS,
 ] as const;
 

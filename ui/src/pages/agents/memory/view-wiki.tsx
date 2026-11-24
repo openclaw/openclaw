@@ -242,6 +242,7 @@ function WikiInsightRow(props: { owner: DreamingProps; card: WikiInsightCard }) 
     >
       <button
         type="button"
+        data-settings-info
         class="settings-row settings-row--nav dreams-review__row"
         aria-expanded={opensDirectly() ? undefined : expanded() ? "true" : "false"}
         onClick={() => {

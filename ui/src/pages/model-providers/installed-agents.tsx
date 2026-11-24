@@ -20,6 +20,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
+  RetryAction,
   SettingsEmpty,
   SettingsSection,
   SettingsStatus,
@@ -523,6 +524,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     return (
       <div class="model-providers__installed-agent" data-installed-agent={props.agent.id}>
         <SettingsToggleRow
+          setting={`modelProviders.installedAgents.${props.agent.id}`}
           icon={
             <Show
               when={hasProviderBrandIcon(view().agent.id)}
@@ -650,16 +652,14 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             <Errored
               fallback={(error) => (
                 <Show when={!checking()}>
-                  <div class="settings-row">
+                  <div data-settings-info class="settings-row">
                     <div class="settings-row__text">
                       <span class="settings-row__desc provider-usage__error" role="alert">
                         {modelProviderErrorMessage(error())}
                       </span>
                     </div>
                     <div class="settings-row__control">
-                      <button class="btn btn--sm" onClick={() => void load()}>
-                        {t("common.retry")}
-                      </button>
+                      <RetryAction onRetry={() => void load()} />
                     </div>
                   </div>
                 </Show>

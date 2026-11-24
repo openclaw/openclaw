@@ -24,5 +24,8 @@ export const MODELS_SETTINGS = defineSettingsPage({
       label: "Decision model",
       within: "modelProviders.moreSettings",
     },
+    "providers.*": { label: "Provider" },
+    // Each app's switch is plugins.entries.acpx.config.nativeAgents.<app>, a plugin's own config.
+    "modelProviders.installedAgents.*": { label: "Installed agent" },
   },
 });

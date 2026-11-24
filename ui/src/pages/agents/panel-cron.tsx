@@ -200,6 +200,7 @@ export function AgentCron(
         >
           {([title, read, ready, value]) => (
             <SettingsRow
+              info
               title={title}
               control={<CronValue read={read} ready={ready} value={value} />}
             />
@@ -239,6 +240,7 @@ export function AgentCron(
                 );
                 return (
                   <SettingsRow
+                    info
                     title={job().name}
                     description={description()}
                     control={

@@ -337,6 +337,7 @@ export function AgentTools(
           ])}
           <Show when={canEdit()}>
             <SettingsRow
+              setting="agent.tools.profile"
               title={t("agentTools.quickPresets")}
               stackedOnNarrow
               control={

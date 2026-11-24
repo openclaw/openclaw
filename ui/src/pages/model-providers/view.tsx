@@ -128,7 +128,7 @@ function AddProvider(props: ModelProvidersViewProps) {
 
 function renderProviderNoticeRow(text: string, detail?: string) {
   return (
-    <div class="settings-row" role="alert">
+    <div data-settings-info class="settings-row" role="alert">
       <div class="settings-row__text">
         <span class="settings-row__desc provider-usage__error">{text}</span>
         <Show when={detail && detail !== text}>
