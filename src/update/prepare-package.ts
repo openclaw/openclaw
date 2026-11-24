@@ -15,6 +15,11 @@ const PROJECT_ONLY_INSTALL_SCRIPTS = [
   "postprepare",
 ] as const;
 
+function isSpawnBrokerInterruption(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  return message.includes("Spawn broker exited") && message.includes("IPC channel disconnected");
+}
+
 export async function preparePackage(params: {
   spec: string;
   archivePath?: string;
@@ -159,9 +164,13 @@ export async function preparePackage(params: {
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };
   } catch (error) {
     await fs.rm(params.staging, { recursive: true, force: true });
+    const failureReason =
+      reason === "package-install-failed" && isSpawnBrokerInterruption(error)
+        ? "interrupted"
+        : reason;
     return {
       ok: false,
-      reason,
+      reason: failureReason,
       stderrTail: formatErrorMessage(error).slice(-8192),
     };
   }
