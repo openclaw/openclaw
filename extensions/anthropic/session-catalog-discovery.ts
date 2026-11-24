@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
@@ -385,7 +386,7 @@ async function discoverCliRecords(
 async function scanClaudeSessions(snapshot: ClaudeProjectsTreeSnapshot, requestedId?: string) {
   const context: ClaudeSessionScanContext = {
     ...snapshot,
-    complete: true,
+    complete: snapshot.complete ?? false,
     safeFiles: new Map(),
     directoriesByPath: new Map(snapshot.projectDirectories.map((dir) => [dir.directory, dir])),
   };
@@ -440,6 +441,21 @@ async function mergeClaudeSessions(
       color: undefined,
       filePath,
     });
+  }
+  // Discovery collapses equal IDs from different projects. Only a unique actual
+  // file can authorize a background read. The public locator never contains its path.
+  const occurrences = new Map<string, number>();
+  for (const directory of context.projectDirectories) {
+    for (const name of directory.childNames) {
+      if (name.endsWith(".jsonl")) {
+        occurrences.set(name, (occurrences.get(name) ?? 0) + 1);
+      }
+    }
+  }
+  for (const [id, record] of records) {
+    if (context.complete && !cli.truncated && occurrences.get(`${id}.jsonl`) === 1) {
+      records.set(id, { ...record, sourceHomeId: sha256Hex(record.filePath) });
+    }
   }
   return {
     truncated: cli.truncated,

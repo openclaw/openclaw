@@ -128,9 +128,16 @@ it.skipIf(process.platform === "win32")(
     const { clock, scheduler } = await startMirror(snapshot.config, {
       id: "claude",
       label: "Synthetic catalog",
+      supportsProcessHomeIsolation: true,
       async list() {
         const session = {
           threadId: "t1",
+          sourceHomeId: "isolated-fixture-home",
+          exportPolicy: {
+            origin: "native-local" as const,
+            automatic: true,
+            stableHostThreadIdentity: true as const,
+          },
           recencyAt: Date.now(),
           status: "stored",
           archived: false,
