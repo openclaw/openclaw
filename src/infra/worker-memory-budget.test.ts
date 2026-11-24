@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { GatewayResourceProfile } from "./gateway-resource-profile.js";
 import { createWorkerMemoryBudget } from "./worker-memory-budget-ledger.js";
 import {
+  createWorkerPoolMemoryBudget,
   getWorkerMemoryBudgetSnapshot,
   initializeWorkerMemoryBudget,
 } from "./worker-memory-budget.js";
@@ -222,7 +223,9 @@ describe("worker memory budget", () => {
     initializeWorkerMemoryBudget(profile("lean"), undefined);
     expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBe(true);
     expect(getWorkerMemoryBudgetSnapshot()).toBeDefined();
+    const previousPool = createWorkerPoolMemoryBudget({}, transcriptUrl, 2);
     initializeWorkerMemoryBudget(profile("standard"), undefined);
+    expect(previousPool?.isCurrent()).toBe(false);
     expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBeUndefined();
     expect(getWorkerMemoryBudgetSnapshot()).toBeUndefined();
   });
