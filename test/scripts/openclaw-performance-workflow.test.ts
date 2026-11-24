@@ -368,6 +368,7 @@ describe("OpenClaw performance workflow", () => {
     }
     const job = workflow.jobs?.node_cache_diagnostics;
     expect(job?.needs).toBeUndefined();
+    expect(job?.env).toBeUndefined();
     expect(evaluateWorkflowRunner(job?.["runs-on"], context)).toBe("ubuntu-24.04");
     expect(job?.["timeout-minutes"]).toBe(5);
     expect(job?.permissions).toEqual({ contents: "read" });
@@ -386,6 +387,7 @@ describe("OpenClaw performance workflow", () => {
     });
     const run = findStep("Qualify native Node cache diagnostics", "node_cache_diagnostics");
     expect(run.env).toEqual({
+      NODE_CACHE_DIAGNOSTIC_OUTPUT: "${{ runner.temp }}/node-cache-diagnostics",
       TARGET_REF: "${{ inputs.target_ref }}",
       WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
@@ -394,12 +396,16 @@ describe("OpenClaw performance workflow", () => {
     expect(run.run).toContain("--mode node-cache-diagnostics");
     const finalize = findStep("Finalize diagnostic artifact", "node_cache_diagnostics");
     const upload = findStep("Upload diagnostic artifact", "node_cache_diagnostics");
+    expect(finalize.env?.NODE_CACHE_DIAGNOSTIC_OUTPUT).toBe(
+      "${{ runner.temp }}/node-cache-diagnostics",
+    );
     expect(finalize.if).toBe("${{ always() }}");
     expect(upload.if).toBe("${{ always() }}");
     expect(upload.with?.name).toBe(
       "node-cache-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(upload.with?.path).toBe("${{ runner.temp }}/node-cache-diagnostics");
     expect(upload.with?.["retention-days"]).toBe(30);
   });
 

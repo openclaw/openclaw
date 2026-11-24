@@ -1791,8 +1791,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-    env:
-      NODE_CACHE_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/node-cache-diagnostics
     steps:
       - name: Checkout diagnostic helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1810,6 +1808,7 @@ jobs:
 
       - name: Qualify native Node cache diagnostics
         env:
+          NODE_CACHE_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/node-cache-diagnostics
           TARGET_REF: ${{ inputs.target_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
@@ -1827,6 +1826,7 @@ jobs:
       - name: Finalize diagnostic artifact
         if: ${{ always() }}
         env:
+          NODE_CACHE_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/node-cache-diagnostics
           JOB_STATUS: ${{ job.status }}
         shell: bash
         run: |
@@ -1842,7 +1842,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: node-cache-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.NODE_CACHE_DIAGNOSTIC_OUTPUT }}
+          path: ${{ runner.temp }}/node-cache-diagnostics
           if-no-files-found: error
           retention-days: 30
 
