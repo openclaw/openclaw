@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { contract as knowledge } from "../../../../../extensions/knowledge/src/contract.js";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
+import { catalogToolLabel } from "./chat-tool-operation-copy.ts";
 
 const text = (container: ParentNode, selector: string) =>
   container.querySelector(selector)?.textContent;
@@ -158,6 +160,55 @@ function recordedCard(name: string, args: unknown, output?: string, details?: un
     ],
   })[0]!;
 }
+
+it("qualifies every Knowledge tool whose contract returns a publication receipt", () => {
+  for (const op of Object.values(knowledge.operations)) {
+    if (op.output !== knowledge.operations.save_page.output || !("tool" in op)) {
+      continue;
+    }
+    const name = op.tool.name;
+    const details = { ...saved, state: "accepted", message: "Accepted for publication." };
+    expect(catalogToolLabel({ id: name, name, details }, "succeeded"), name).toMatch(
+      / · pending publication$/u,
+    );
+  }
+});
+
+it("distinguishes a page edit's outcome from inspecting its receipt", async () => {
+  const page = { ...saved, id: "page-field-notes" };
+  const edit = {
+    requestId: request.requestId,
+    id: page.id,
+    expectedRevision: 1,
+    expectedHash: recordFence.expectedHash,
+    title: "Field notes",
+    body: "Revised notes.",
+  };
+  const conflict = { ...page, state: "conflict", message: conflictMessage };
+  for (const [name, args, result, label] of [
+    ["knowledge_save_page", edit, conflict, "Save knowledge page · not applied"],
+    ["knowledge_save_page", edit, page, "Saved knowledge page"],
+    [
+      "knowledge_mutation",
+      { requestId: edit.requestId },
+      { receipt: conflict },
+      "Inspected knowledge publication",
+    ],
+  ] as const) {
+    const tool = { id: `openclaw:knowledge:${name}`, name };
+    for (const card of [
+      recordedCard(name, args, JSON.stringify(result)),
+      recordedCard("dispatch_action", { id: tool.id, args }, undefined, {
+        tool,
+        result: { details: result },
+      }),
+    ]) {
+      expect(
+        text(await mountCard(card, { expanded: false }), ".chat-tool-disclosure__content"),
+      ).toBe(label);
+    }
+  }
+});
 
 it.each([
   ["knowledge_supersede", supersede, "Supersede claims", "Superseded claims"],

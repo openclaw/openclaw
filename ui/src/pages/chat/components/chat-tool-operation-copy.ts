@@ -144,6 +144,25 @@ function browserOperation(args: Record<string, unknown> | null, labels: object):
   return Object.hasOwn(labels, key) ? key : "act";
 }
 
+// These labels describe the publication, not merely a successful tool call.
+const knowledgePublicationTools = new Set([
+  "knowledge_annotate",
+  "knowledge_correct",
+  "knowledge_create_claim",
+  "knowledge_create_relationship",
+  "knowledge_edit_body",
+  "knowledge_extract_section",
+  "knowledge_merge",
+  "knowledge_publish_batch",
+  "knowledge_recall",
+  "knowledge_reconcile_evidence",
+  "knowledge_resume",
+  "knowledge_save_page",
+  "knowledge_supersede",
+  "knowledge_unmerge",
+  "knowledge_withdraw",
+]);
+
 function knowledgePublicationQualifier(receipt: Record<string, unknown> | null | undefined) {
   switch (receipt?.state) {
     case "published":
@@ -235,10 +254,7 @@ export function catalogToolLabel(
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
-  if (
-    phase === "done" &&
-    (name === "knowledge_supersede" || name === "knowledge_reconcile_evidence")
-  ) {
+  if (phase === "done" && knowledgePublicationTools.has(name)) {
     // The dispatcher retains the called tool's structured result even when history omits its text.
     const details = asNullableRecord(card.details);
     const structured = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
