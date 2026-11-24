@@ -339,8 +339,16 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (prepared.restart && resources.session) {
             await retireSystemPromptUpdates();
             restartRecorded = true;
-            resources.session.agent.state.messages = resources.session.messages.filter(
-              (message) => getOpenClawSystemUpdateKind(message) !== "prompt-update",
+            const messages = resources.session.messages;
+            const retired = (message: (typeof messages)[number]) =>
+              getOpenClawSystemUpdateKind(message) === "prompt-update";
+            // Retiring history rows moves this turn's first message; the fence follows it,
+            // or its readers would file the current user message under accepted history.
+            state.prePromptMessageCount -= messages
+              .slice(0, state.prePromptMessageCount)
+              .filter(retired).length;
+            resources.session.agent.state.messages = messages.filter(
+              (message) => !retired(message),
             );
           }
           if (resources.session) {
