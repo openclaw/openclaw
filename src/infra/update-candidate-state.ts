@@ -622,9 +622,9 @@ export async function snapshotUpdateCandidateState(
       // full image and alter implicit row IDs before candidate migrations run.
       preserveRowIds: true,
       onProgress: progress.onProgress,
-      transform:
-        file === shared
-          ? (db: DatabaseSync) => {
+      ...(file === shared
+        ? {
+            transform: (db: DatabaseSync) => {
               contentVersion = readStateSchemaContentVersion(db);
               const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
               execApprovals.rebaseReceipt(db);
@@ -674,8 +674,9 @@ export async function snapshotUpdateCandidateState(
                     .where("path", "=", stored),
                 );
               }
-            }
-          : (db: DatabaseSync) => copyColdArchives(db, file, target),
+            },
+          }
+        : { transform: (db: DatabaseSync) => copyColdArchives(db, file, target) }),
     });
     progress.complete((await fs.stat(target)).size);
     inspected.set(identity, {
