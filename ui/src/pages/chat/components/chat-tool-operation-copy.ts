@@ -231,7 +231,18 @@ export function catalogToolLabel(
   if (!labels) {
     return undefined;
   }
-  const action = typeof args?.action === "string" ? args.action : undefined;
+  let action = typeof args?.action === "string" ? args.action : undefined;
+  if (name === "workboard_board_archive") {
+    action = args?.archived === false ? "restore" : undefined;
+  } else if (name === "workboard_verify") {
+    action = args?.outcome === "confirmed" ? "confirmed" : undefined;
+  } else if (name === "lobster" && action === "resume") {
+    if (args?.cancel === true) {
+      action = "cancel";
+    } else if (args?.approve === false) {
+      action = "decline";
+    }
+  }
   const key =
     name === "update_goal" && typeof args?.status === "string"
       ? `status_${args.status}`
