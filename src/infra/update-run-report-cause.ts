@@ -14,7 +14,7 @@ export function prependUpdateRunCause(
         )
       : undefined;
   // The serving Gateway redacts the diagnostic before recording it.
-  const detail = refusal?.detail || refusal?.stderrTail;
+  const detail = refusal?.stderrTail || refusal?.detail;
   if (detail) {
     const cause = `Cause detail: ${detail}`;
     lines.unshift(

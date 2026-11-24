@@ -142,7 +142,7 @@ it.each([
         {
           step: "diagnostic:startup",
           status: "completed",
-          detail: diagnostic,
+          detail: diagnostic.slice(0, 1024),
           stderrTail: diagnostic,
         },
       ],
