@@ -1,6 +1,5 @@
 import { expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { readInlineToolExpansion } from "./chat-activity-segments.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -49,7 +48,6 @@ it.each(["quiet", "newer output", "terminal"] as const)(
     await expect(syncSelectedSessionMessageSubscription(state)).resolves.toBe(true);
     handleAgentEvent(state, start);
     state.settings.chatInlineCommands = true;
-    state.inlineCommandPresentation = { readInlineToolExpansion };
     const ready = syncSelectedSessionMessageSubscription(state);
     await expect
       .poll(() => requestCalls(state.request, "sessions.messages.subscribe").length)

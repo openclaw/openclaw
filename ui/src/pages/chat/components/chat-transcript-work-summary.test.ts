@@ -54,7 +54,7 @@ it("keeps settled message preparation out of minute-boundary scroll updates", as
 it.each([false, true])(
   "preserves the reader at completion while following readers fold work (follow end: %s)",
   async (followEnd) => {
-    const inlineCommands = await inlineCommandPresentation();
+    const inlineCommands = inlineCommandPresentation;
     const runId = "inline-trail-run";
     const messages: unknown[] = [
       { role: "user", content: "Check the workspace", timestamp: 1_000 },

@@ -878,7 +878,7 @@ it("previews live command output without inferring completion and retains detail
     outputTruncated: true,
   };
   const options = {
-    inlineCommands: await inlineCommandPresentation(),
+    inlineCommands: inlineCommandPresentation,
     expanded: false,
     runActive: true,
     onToggleExpanded,

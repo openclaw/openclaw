@@ -15,7 +15,7 @@ import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 it("unwraps provider output in the compact trail without reformatting captured JSON", async () => {
-  const inlineCommands = await inlineCommandPresentation();
+  const inlineCommands = inlineCommandPresentation;
   const text = '{"id":9007199254740993,"state":"before","state":"after"}';
   const outputText = JSON.stringify([
     { type: "input_text", text: "Script completed\nWall time 0.8 seconds\nOutput:\n" },
@@ -149,7 +149,7 @@ it("remeasures each disclosure's own content on pointer and focus interactions",
 });
 
 it("keeps keyed bubble rows while forwarding replaced options and live disclosure overrides", async () => {
-  const inlineCommands = await inlineCommandPresentation();
+  const inlineCommands = inlineCommandPresentation;
   const initialToggle = vi.fn();
   const latestToggle = vi.fn();
   const options: GroupedMessageOptions & { showApprovalReviews: boolean } = {

@@ -11,8 +11,15 @@ import {
   reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openAiAuthor } from "./chat-flow.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openAiAuthor, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  controlUiE2eBuiltModuleRequest,
+  failControlUiModuleForDocuments,
+} from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI inline command trail" });
 const sessionKey = "agent:main:dashboard:inline-command-trail";
@@ -107,11 +114,103 @@ function command(pane: Locator, text: string) {
 
 async function saveHistory(
   gateway: MockGatewayControls,
-  history: Record<string, unknown> & { messages: unknown[] },
+  history: Record<string, unknown> & { messages: unknown[]; sessionInfo: unknown },
 ) {
   await gateway.setHistoryMessages(history.messages);
   await gateway.setMethodResponse("chat.startup", history);
   await gateway.setMethodResponse("chat.history", history);
+  // Reloaded roster and describe reads must agree with the saved transcript.
+  await gateway.setSessionsListResponse({ sessions: [history.sessionInfo] });
+}
+
+// Observe the persisted transcript, not only the independently saved sidebar.
+async function waitForSavedTranscript(page: Page, sessionId: string) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async ({ sessionId, sessionKey }) => {
+          const name = "openclaw-chat-snapshots";
+          if (!(await indexedDB.databases()).some((db) => db.name === name)) return false;
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open(name);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          try {
+            const transaction = db.transaction("snapshots", "readonly");
+            const records = await new Promise<
+              { sessionId: string; sessionKey: string; snapshot: { messages: unknown[] } }[]
+            >((resolve, reject) => {
+              const request = transaction.objectStore("snapshots").getAll();
+              transaction.oncomplete = () => resolve(request.result);
+              transaction.onerror = () => reject(transaction.error);
+            });
+            return records.some(
+              (record) =>
+                record.sessionId === sessionId &&
+                record.sessionKey.endsWith(`\u0000${sessionKey}`) &&
+                record.snapshot.messages.length > 0,
+            );
+          } finally {
+            db.close();
+          }
+        },
+        { sessionId, sessionKey },
+      ),
+    )
+    .toBe(true);
+}
+
+async function trackInlineGeometry(preview: Locator) {
+  await preview.page().evaluate(() => document.fonts.ready.then(() => undefined));
+  // Input suppresses LayoutShift entries for 500 ms; measure after that window.
+  await preview.page().waitForTimeout(550);
+  return preview.evaluateHandle((element) => {
+    const pane = element.closest("openclaw-chat-pane")!;
+    const composer = pane.querySelector<HTMLTextAreaElement>("textarea")!;
+    const thread = pane.querySelector(".chat-thread")!;
+    const anchor = element.closest(".chat-tool-msg-collapse")!;
+    const shifts: { atMs: number; value: number; recentInput: boolean }[] = [];
+    let first = 0,
+      last = 0,
+      windowValue = 0,
+      cls = 0;
+    const observer = new PerformanceObserver((entries) => {
+      for (const entry of entries.getEntries()) {
+        const value = Number(Reflect.get(entry, "value"));
+        const recentInput = Boolean(Reflect.get(entry, "hadRecentInput"));
+        shifts.push({ atMs: entry.startTime, value, recentInput });
+        if (recentInput) continue;
+        if (!last || entry.startTime - first >= 5000 || entry.startTime - last >= 1000) {
+          first = entry.startTime;
+          windowValue = 0;
+        }
+        last = entry.startTime;
+        windowValue += value;
+        cls = Math.max(cls, windowValue);
+      }
+    });
+    observer.observe({ type: "layout-shift" });
+    return {
+      read: () => ({
+        retained:
+          [element, pane, composer, anchor].every((node) => node.isConnected) &&
+          pane.querySelector("textarea") === composer &&
+          anchor.querySelector(".chat-command-trail__preview") === element,
+        anchorTop: anchor.getBoundingClientRect().top,
+        previewHeight: element.getBoundingClientRect().height,
+        composerTop: composer.getBoundingClientRect().top,
+        composerHeight: composer.getBoundingClientRect().height,
+        scrollTop: thread.scrollTop,
+        draft: composer.value,
+        selection: [composer.selectionStart, composer.selectionEnd],
+        focused: document.activeElement === composer,
+        cls,
+        shifts: [...shifts],
+      }),
+      stop: () => observer.disconnect(),
+    };
+  });
 }
 
 suite.define(() => {
@@ -411,200 +510,356 @@ suite.define(() => {
     );
   });
 
-  it("recovers a running trail across reconnect and reload, then settles a visible Stop without inventing success", async () => {
-    await suite.withPage(
-      { viewport: { width: 1200, height: 800 }, locale: "en-US" },
-      async ({ page }) => {
-        const { gateway, pane, row, runId, now, tool, emit, events } = await startRun(page);
-        await toggleInline(pane, true);
-        const firstCommand = "printf recovery-complete";
-        const runningCommand = "printf recovery-running";
-        const capturedOutput = "Started validation.\nChecked workspace.\nWaiting for completion.";
-        const newestOutput = "Newest stdout after capture fills.";
-        await tool("recovery-complete", { phase: "start", args: { command: firstCommand } });
-        await tool("recovery-complete", {
-          phase: "result",
-          result: { content: textContent("Completed check."), details: { exitCode: 0 } },
-        });
-        for (const completed of [false, true]) {
-          await emit("tool", {
-            toolCallId: "recovery-record",
-            name: "lookup_record",
-            phase: completed ? "result" : "start",
-            ...(completed
-              ? { result: { content: textContent("Recovery record checked.") } }
-              : { args: { query: "recovery evidence" } }),
+  it.each([400, 820, 1280])(
+    "keeps a running trail usable through delayed and failed row imports at %i px",
+    async (width) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 800 }, locale: "en-US", serviceWorkers: "block" },
+        async ({ page }) => {
+          const { gateway, pane, row, runId, now, tool, emit, events } = await startRun(page);
+          // Enable through the desktop menu; mobile inherits this browser preference.
+          await toggleInline(pane, true);
+          await page.setViewportSize({ width, height: 800 });
+          const firstCommand = "printf recovery-complete";
+          const runningCommand = "printf recovery-running";
+          const capturedOutput = "Started validation.\nChecked workspace.\nWaiting for completion.";
+          let newestOutput =
+            "Newest stdout after capture fills.\nStill running.\nWaiting for result.";
+          await tool("recovery-complete", { phase: "start", args: { command: firstCommand } });
+          await tool("recovery-complete", {
+            phase: "result",
+            result: { content: textContent("Completed check."), details: { exitCode: 0 } },
           });
-          await emit("item", {
-            itemId: "tool:recovery-record",
-            toolCallId: "recovery-record",
-            name: "lookup_record",
-            kind: "tool",
-            title: "Inspect recovery record",
-            phase: completed ? "end" : "start",
-            status: completed ? "completed" : "running",
+          for (const completed of [false, true]) {
+            await emit("tool", {
+              toolCallId: "recovery-record",
+              name: "lookup_record",
+              phase: completed ? "result" : "start",
+              ...(completed
+                ? { result: { content: textContent("Recovery record checked.") } }
+                : { args: { query: "recovery evidence" } }),
+            });
+            await emit("item", {
+              itemId: "tool:recovery-record",
+              toolCallId: "recovery-record",
+              name: "lookup_record",
+              kind: "tool",
+              title: "Inspect recovery record",
+              phase: completed ? "end" : "start",
+              status: completed ? "completed" : "running",
+            });
+          }
+          await tool("recovery-running", { phase: "start", args: { command: runningCommand } });
+          await tool("recovery-running", {
+            phase: "update",
+            partialResult: {
+              content: textContent(capturedOutput),
+              liveOutput: { text: `${newestOutput}\n`, omittedChars: 12_000 },
+            },
           });
-        }
-        await tool("recovery-running", { phase: "start", args: { command: runningCommand } });
-        await tool("recovery-running", {
-          phase: "update",
-          partialResult: {
-            content: textContent(capturedOutput),
-            liveOutput: { text: `${newestOutput}\n`, omittedChars: 12_000 },
-          },
-        });
-        const first = command(pane, firstCommand);
-        const running = command(pane, runningCommand);
-        const firstRow = first.locator(".chat-tool-row");
-        const runningRow = running.locator(".chat-tool-row");
-        await running.locator(".chat-tool-row--running").waitFor();
-        await firstRow.click();
-        await expect.poll(() => firstRow.getAttribute("aria-expanded")).toBe("true");
-        const recordSummary = pane.locator(".chat-tool-msg-summary", { hasText: "Lookup Record" });
-        await expect.poll(() => recordSummary.count()).toBe(1);
-        await recordSummary.click();
-        await expect.poll(() => recordSummary.getAttribute("aria-expanded")).toBe("true");
+          const first = command(pane, firstCommand);
+          const running = command(pane, runningCommand);
+          const firstRow = first.locator(".chat-tool-row");
+          const runningRow = running.locator(".chat-tool-row");
+          await running.locator(".chat-tool-row--running").waitFor();
+          await firstRow.click();
+          await expect.poll(() => firstRow.getAttribute("aria-expanded")).toBe("true");
+          const recordSummary = pane.locator(".chat-tool-msg-summary", {
+            hasText: "Lookup Record",
+          });
+          await expect.poll(() => recordSummary.count()).toBe(1);
+          await recordSummary.click();
+          await expect.poll(() => recordSummary.getAttribute("aria-expanded")).toBe("true");
 
-        const messages = [
-          {
-            role: "user",
-            content: "Run the evidence commands.",
-            timestamp: now - 1,
-            __openclaw: { id: "recovery-user", runId },
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "recovery-complete",
-                name: "exec",
-                arguments: { command: firstCommand },
-              },
-            ],
-            timestamp: now,
-            __openclaw: { id: "call-recovery-complete", runId },
-          },
-          {
-            role: "toolResult",
-            toolCallId: "recovery-complete",
-            toolName: "exec",
-            content: textContent("Completed check."),
-            timestamp: now + 1,
-            __openclaw: { id: "result-recovery-complete", runId },
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "recovery-record",
-                name: "lookup_record",
-                arguments: { query: "recovery evidence" },
-              },
-            ],
-            timestamp: now + 2,
-            __openclaw: { id: "call-recovery-record", runId },
-          },
-          {
-            role: "toolResult",
-            toolCallId: "recovery-record",
-            toolName: "lookup_record",
-            content: textContent("Recovery record checked."),
-            timestamp: now + 3,
-            __openclaw: { id: "result-recovery-record", runId },
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "recovery-running",
-                name: "exec",
-                arguments: { command: runningCommand },
-              },
-            ],
-            timestamp: now + 10,
-            __openclaw: { id: "call-recovery-running", runId },
-          },
-        ];
-        // Full progress snapshots retain tool starts/results and the latest item per ID.
-        const replay = events.filter(
-          ({ stream, data }) =>
-            stream === "tool" ||
-            (stream === "item" &&
-              !(data.phase === "start" && data.toolCallId !== "recovery-running")),
-        );
-        const activeHistory = {
-          sessionId: row.sessionId,
-          sessionInfo: { ...row, hasActiveRun: true, activeRunIds: [runId], status: "running" },
-          messages,
-          inFlightRun: { runId, startedAt: now, text: "", events: replay },
-        };
-        await saveHistory(gateway, activeHistory);
-        const expectTrail = async () => {
+          const messages = [
+            {
+              role: "user",
+              content: "Run the evidence commands.",
+              timestamp: now - 1,
+              __openclaw: { id: "recovery-user", runId },
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "recovery-complete",
+                  name: "exec",
+                  arguments: { command: firstCommand },
+                },
+              ],
+              timestamp: now,
+              __openclaw: { id: "call-recovery-complete", runId },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "recovery-complete",
+              toolName: "exec",
+              content: textContent("Completed check."),
+              timestamp: now + 1,
+              __openclaw: { id: "result-recovery-complete", runId },
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "recovery-record",
+                  name: "lookup_record",
+                  arguments: { query: "recovery evidence" },
+                },
+              ],
+              timestamp: now + 2,
+              __openclaw: { id: "call-recovery-record", runId },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "recovery-record",
+              toolName: "lookup_record",
+              content: textContent("Recovery record checked."),
+              timestamp: now + 3,
+              __openclaw: { id: "result-recovery-record", runId },
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "recovery-running",
+                  name: "exec",
+                  arguments: { command: runningCommand },
+                },
+              ],
+              timestamp: now + 10,
+              __openclaw: { id: "call-recovery-running", runId },
+            },
+          ];
+          // Full progress snapshots retain tool starts/results and the latest item per ID.
+          const replay = events.filter(
+            ({ stream, data }) =>
+              stream === "tool" ||
+              (stream === "item" &&
+                !(data.phase === "start" && data.toolCallId !== "recovery-running")),
+          );
+          const activeHistory = {
+            sessionId: row.sessionId,
+            sessionInfo: { ...row, hasActiveRun: true, activeRunIds: [runId], status: "running" },
+            messages,
+            inFlightRun: { runId, startedAt: now, text: "", events: replay },
+          };
+          await saveHistory(gateway, activeHistory);
+          const expectTrail = async () => {
+            await expect
+              .poll(() =>
+                pane.locator(".chat-activity-group--inline .chat-tool-row__cmd").allTextContents(),
+              )
+              .toEqual([firstCommand, runningCommand]);
+            await expect
+              .poll(() => running.locator(".chat-command-trail__preview pre").textContent())
+              .toBe(newestOutput);
+          };
+          const subscriptionCount = (await gateway.getRequests("sessions.messages.subscribe"))
+            .length;
+          await reconnectMockGateway(page, gateway);
+          await gateway.waitForRequest("sessions.messages.subscribe", { after: subscriptionCount });
+          await expectTrail();
+          expect(await firstRow.getAttribute("aria-expanded")).toBe("true");
+          expect(await recordSummary.getAttribute("aria-expanded")).toBe("true");
+          expect(await runningRow.getAttribute("aria-expanded")).toBe("false");
+          expect(await running.locator(".chat-tool-row--running").count()).toBe(1);
+          await runningRow.click();
           await expect
-            .poll(() =>
-              pane.locator(".chat-activity-group--inline .chat-tool-row__cmd").allTextContents(),
-            )
-            .toEqual([firstCommand, runningCommand]);
+            .poll(() => running.locator(".chat-tool-msg-body").textContent())
+            .toContain(capturedOutput);
+          await runningRow.click();
+
+          await waitForSavedTranscript(page, row.sessionId);
+          const module = controlUiE2eBuiltModuleRequest(
+            "ui/src/pages/chat/components/chat-tool-card-row.solid.tsx",
+          );
+          const held = await holdModuleResponse(page, module);
+          try {
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await held.request;
+            const preview = running.locator(".chat-command-trail__preview");
+            await expect.poll(() => preview.locator("pre").textContent()).toBe(newestOutput);
+            await expect.poll(() => runningRow.getAttribute("aria-busy")).toBe("true");
+            const composer = pane.locator("textarea");
+            await composer.fill("Keep this unsent draft.");
+            await composer.evaluate((element) => element.setSelectionRange(5, 9));
+            await waitForChatScrollIdle(page);
+            const geometry = await trackInlineGeometry(preview);
+            const before = await geometry.evaluate((capture) => capture.read());
+            const frames = [{ phase: "held", ...before }];
+            try {
+              expect(before.retained).toBe(true);
+              expect(before.focused).toBe(true);
+              for (const phase of ["stdout-held", "stdout-newest"]) {
+                newestOutput = `Current stdout: ${phase}.\nStill running.\nWaiting for result.`;
+                await tool("recovery-running", {
+                  phase: "update",
+                  outputOnly: true,
+                  partialResult: {
+                    content: textContent(capturedOutput),
+                    liveOutput: { text: newestOutput, omittedChars: 12_000 },
+                  },
+                });
+                await expect.poll(() => preview.locator("pre").textContent()).toBe(newestOutput);
+                await waitForChatScrollIdle(page);
+                const frame = await geometry.evaluate((capture) => capture.read());
+                frames.push({ phase, ...frame });
+                expect(frame).toEqual({ ...before, cls: 0, shifts: [] });
+              }
+              held.release();
+              await expect.poll(() => runningRow.getAttribute("aria-busy")).toBeNull();
+              await waitForChatScrollIdle(page);
+              const after = await geometry.evaluate((capture) => capture.read());
+              frames.push({ phase: "resolved", ...after });
+              expect(after).toEqual({ ...before, cls: 0, shifts: [] });
+            } finally {
+              try {
+                frames.push({
+                  phase: "settled",
+                  ...(await geometry.evaluate((capture) => capture.read())),
+                });
+                await writeFile(
+                  path.join(suite.artifactDir, `inline-import-geometry-${width}.json`),
+                  JSON.stringify(frames, null, 2),
+                );
+              } finally {
+                await geometry.evaluate((capture) => capture.stop());
+                await geometry.dispose();
+              }
+            }
+          } finally {
+            held.release();
+          }
+
+          // A retired chunk reloads the document; retained identity is asserted above,
+          // while this path must restore the draft and current authoritative output.
+          await saveHistory(gateway, {
+            ...activeHistory,
+            inFlightRun: {
+              ...activeHistory.inFlightRun,
+              events: events.filter(({ stream }) => stream === "tool" || stream === "item"),
+            },
+          });
+          const failure = await failControlUiModuleForDocuments(page, module);
+          let available = false;
+          await page.route("**/*", async (route) => {
+            if (route.request().headers()["x-openclaw-reachability-probe"] === "1" && !available) {
+              await route.fulfill({ status: 503 });
+            } else await route.fallback();
+          });
+          await page.reload({ waitUntil: "domcontentloaded" });
+          // The failed summary no longer contains the command label. The fixture's
+          // last preview still identifies its one running command.
+          const failedCard = pane
+            .locator(".chat-tool-msg-collapse", {
+              has: page.locator(".chat-command-trail__preview"),
+            })
+            .last();
+          const error = failedCard.locator(".lazy-view-error");
+          await error.waitFor();
+          const failedPreview = failedCard.locator(".chat-command-trail__preview");
+          await expect.poll(() => failedPreview.locator("pre").textContent()).toBe(newestOutput);
+          const failedComposer = pane.locator("textarea");
+          await failedComposer.focus();
+          await failedComposer.evaluate((element) => element.setSelectionRange(5, 9));
+          await expect.poll(() => failedComposer.inputValue()).toBe("Keep this unsent draft.");
+          await waitForChatScrollIdle(page);
+          const failedGeometry = await trackInlineGeometry(failedPreview);
+          const failedBefore = await failedGeometry.evaluate((capture) => capture.read());
+          const failedFrames = [{ phase: "failed", ...failedBefore }];
+          try {
+            expect(failedBefore.retained).toBe(true);
+            expect(failedBefore.focused).toBe(true);
+            newestOutput = "Current stdout: import failed.\nStill running.\nWaiting for result.";
+            await tool("recovery-running", {
+              phase: "update",
+              outputOnly: true,
+              partialResult: {
+                content: textContent(capturedOutput),
+                liveOutput: { text: newestOutput, omittedChars: 12_000 },
+              },
+            });
+            await expect.poll(() => failedPreview.locator("pre").textContent()).toBe(newestOutput);
+            await waitForChatScrollIdle(page);
+            const failedAfter = await failedGeometry.evaluate((capture) => capture.read());
+            failedFrames.push({ phase: "stdout-failed", ...failedAfter });
+            expect(failedAfter).toEqual({ ...failedBefore, cls: 0, shifts: [] });
+          } finally {
+            try {
+              failedFrames.push({
+                phase: "settled",
+                ...(await failedGeometry.evaluate((capture) => capture.read())),
+              });
+              await writeFile(
+                path.join(suite.artifactDir, `inline-failed-geometry-${width}.json`),
+                JSON.stringify(failedFrames, null, 2),
+              );
+            } finally {
+              await failedGeometry.evaluate((capture) => capture.stop());
+              await failedGeometry.dispose();
+            }
+          }
+          await saveHistory(gateway, {
+            ...activeHistory,
+            inFlightRun: {
+              ...activeHistory.inFlightRun,
+              events: events.filter(({ stream }) => stream === "tool" || stream === "item"),
+            },
+          });
+          const reloaded = page.waitForEvent("domcontentloaded");
+          await error.getByRole("button", { name: "Reload", exact: true }).click();
+          available = true;
+          await reloaded;
+          await expect.poll(() => failure.documentCount()).toBe(2);
           await expect
-            .poll(() => running.locator(".chat-command-trail__preview pre").textContent())
-            .toBe(newestOutput);
-        };
-        const subscriptionCount = (await gateway.getRequests("sessions.messages.subscribe")).length;
-        await reconnectMockGateway(page, gateway);
-        await gateway.waitForRequest("sessions.messages.subscribe", { after: subscriptionCount });
-        await expectTrail();
-        expect(await firstRow.getAttribute("aria-expanded")).toBe("true");
-        expect(await recordSummary.getAttribute("aria-expanded")).toBe("true");
-        expect(await runningRow.getAttribute("aria-expanded")).toBe("false");
-        expect(await running.locator(".chat-tool-row--running").count()).toBe(1);
-        await runningRow.click();
-        await expect
-          .poll(() => running.locator(".chat-tool-msg-body").textContent())
-          .toContain(capturedOutput);
-        await runningRow.click();
+            .poll(() => pane.locator("textarea").inputValue())
+            .toBe("Keep this unsent draft.");
+          await expectTrail();
+          // Disclosure maps are page-local; the browser's inline preference persists.
+          expect(await firstRow.getAttribute("aria-expanded")).toBe("false");
+          expect(await recordSummary.getAttribute("aria-expanded")).toBe("false");
+          expect(await runningRow.getAttribute("aria-expanded")).toBe("false");
+          expect(await running.locator(".chat-tool-row--running").count()).toBe(1);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          await runningRow.click();
+          await expect
+            .poll(() => running.locator(".chat-tool-msg-body").textContent())
+            .toContain(capturedOutput);
+          await runningRow.click();
 
-        await page.reload();
-        const stop = pane.getByRole("button", { name: "Stop", exact: true });
-        await stop.waitFor();
-        await expectTrail();
-        // Disclosure maps are page-local; the browser's inline preference persists.
-        expect(await firstRow.getAttribute("aria-expanded")).toBe("false");
-        expect(await recordSummary.getAttribute("aria-expanded")).toBe("false");
-        expect(await runningRow.getAttribute("aria-expanded")).toBe("false");
-        expect(await running.locator(".chat-tool-row--running").count()).toBe(1);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await runningRow.click();
-        await expect
-          .poll(() => running.locator(".chat-tool-msg-body").textContent())
-          .toContain(capturedOutput);
-        await runningRow.click();
-
-        await saveHistory(gateway, {
-          ...activeHistory,
-          sessionInfo: { ...row, hasActiveRun: false, activeRunIds: [], status: "killed" },
-          inFlightRun: null,
-        });
-        await gateway.setMethodResponse("chat.abort", { ok: true, aborted: true, runIds: [runId] });
-        await stop.click();
-        const abort = await gateway.waitForRequest("chat.abort");
-        expect(abort.params).toEqual({ sessionKey, runId, userInitiated: true });
-        await stop.waitFor({ state: "detached" });
-        expect(await pane.locator(".chat-tool-row--running").count()).toBe(0);
-        await running.getByText("Outcome unknown", { exact: true }).waitFor();
-        expect(await running.getByText("Completed", { exact: true }).count()).toBe(0);
-        expect(await running.getByText(newestOutput, { exact: true }).count()).toBe(0);
-        // A native result owns retained output. This interrupted call has no
-        // durable result, while the earlier completed command still has one.
-        await firstRow.click();
-        await expect
-          .poll(() => first.locator(".chat-tool-msg-body").textContent())
-          .toContain("Completed check.");
-      },
-    );
-  });
+          await saveHistory(gateway, {
+            ...activeHistory,
+            sessionInfo: { ...row, hasActiveRun: false, activeRunIds: [], status: "killed" },
+            inFlightRun: null,
+          });
+          await gateway.setMethodResponse("chat.abort", {
+            ok: true,
+            aborted: true,
+            runIds: [runId],
+          });
+          // A nonempty draft shows Send; Escape stops without discarding that draft.
+          await pane.locator("textarea").press("Escape");
+          const abort = await gateway.waitForRequest("chat.abort");
+          expect(abort.params).toEqual({ sessionKey, runId, userInitiated: true });
+          await expect.poll(() => pane.locator(".chat-tool-row--running").count()).toBe(0);
+          expect(await pane.locator("textarea").inputValue()).toBe("Keep this unsent draft.");
+          await running.getByText("Outcome unknown", { exact: true }).waitFor();
+          expect(await running.getByText("Completed", { exact: true }).count()).toBe(0);
+          expect(await running.getByText(newestOutput, { exact: true }).count()).toBe(0);
+          // A native result owns retained output. This interrupted call has no
+          // durable result, while the earlier completed command still has one.
+          await firstRow.click();
+          await expect
+            .poll(() => first.locator(".chat-tool-msg-body").textContent())
+            .toContain("Completed check.");
+        },
+      );
+    },
+  );
 
   it("keeps a reader's scroll position while commands append and resumes following at the end", async () => {
     await suite.withPage(

@@ -34,7 +34,6 @@ import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey, watchPresentation } from "./chat-pane-session-presentation.ts";
-import { initializeChatPaneSettings } from "./chat-pane-startup-subscriptions.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -95,9 +94,6 @@ import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
-  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandPresentation;
-  inlineCommandPreparationError?: string;
-  isCurrent?: () => boolean;
   sessionKey?: string;
   agentId?: string;
   dispatchEvent: (event: Event) => boolean;
@@ -139,7 +135,6 @@ export function createPageState(
   );
   const presentedFields = {
     settings,
-    inlineCommandPresentation: page.inlineCommandPresentation,
     accessPreferenceRevision: 0,
     assistantName: assistantIdentity.name,
     assistantAvatar: assistantIdentity.avatar,
@@ -308,7 +303,9 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  initializeChatPaneSettings(state, page);
+  state.applySettings = (patch) => {
+    state.settings = patchSettings(patch);
+  };
   attachChatRealtimeActions(
     state,
     () => !chatProviderReviewRow(state)?.providerReview,

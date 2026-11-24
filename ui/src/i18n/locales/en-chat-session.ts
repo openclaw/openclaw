@@ -166,8 +166,6 @@ const enChatSession = {
       reasoning: "Reasoning",
       toolCalls: "Tool calls",
       inlineCommands: "Inline command trail (this browser)",
-      inlineCommandsUnavailable:
-        "Couldn’t load the inline command trail. Grouped commands remain available. In View, turn Inline command trail off and on to retry.",
       commentary: "Keep commentary",
     },
     workspaceConflict: {

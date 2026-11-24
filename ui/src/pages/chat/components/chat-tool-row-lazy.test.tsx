@@ -6,6 +6,7 @@ import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
@@ -47,8 +48,11 @@ it("keeps card chrome through import recovery and retains the current resolved r
     id: "exec",
     name: "tool_call",
     args: { id: "exec", args: { command: "echo before" } },
+    outputText: "before output",
   };
   const [card, setCard] = createSignal(initialCard);
+  const [inline, setInline] = createSignal(true);
+  const [hideSummary, setHideSummary] = createSignal(false);
   const [mutations, setMutations] = createSignal<ToolCard[]>([
     {
       id: "edit",
@@ -69,7 +73,13 @@ it("keeps card chrome through import recovery and retains the current resolved r
     <>
       <ChatToolCard
         card={card()}
-        options={{ messageKey: "lazy-row", expanded: false, onToggleExpanded: toggle }}
+        options={{
+          messageKey: "lazy-row",
+          expanded: false,
+          onToggleExpanded: toggle,
+          hideSummary: hideSummary(),
+          inlineCommands: inline() ? inlineCommandPresentation : undefined,
+        }}
       />
       <For each={mutations()} keyed={(item) => item.id}>
         {(item) => (
@@ -124,10 +134,20 @@ it("keeps card chrome through import recovery and retains the current resolved r
   const placeholder = root.container.querySelector<HTMLButtonElement>(".chat-tool-row[aria-busy]")!;
   expect(placeholder.disabled).toBe(true);
   expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-    "Run echo before",
+    "Ran echo before",
   );
   expect(placeholder.querySelector(".chat-tool-disclosure__content")).not.toBeNull();
   expect(placeholder.querySelector(".chat-tool-row__chevron")).not.toBeNull();
+  const preview = root.container.querySelector(".chat-command-trail__preview")!;
+  expect(preview.textContent).toContain("before output");
+  setCard({ ...initialCard, outputText: "stdout received while loading" });
+  setHideSummary(true);
+  flush();
+  expect(root.container.querySelector(".chat-command-trail__preview")).toBe(preview);
+  expect(preview.textContent).toContain("stdout received while loading");
+  expect(placeholder.isConnected).toBe(false);
+  setHideSummary(false);
+  flush();
   await waitForSolid(() =>
     expect(root.container.querySelector(".chat-permission-card")).not.toBeNull(),
   );
@@ -166,6 +186,8 @@ it("keeps card chrome through import recovery and retains the current resolved r
   await waitForSolid(() =>
     expect(root.container.querySelectorAll('[role="alert"]')).toHaveLength(2),
   );
+  expect(root.container.querySelector(".chat-command-trail__preview")).toBe(preview);
+  expect(preview.textContent).toContain("stdout received while loading");
   expect(root.container.querySelector('button [role="alert"]')).toBeNull();
   expect(root.container.querySelector("button button")).toBeNull();
   const initialCalls = load.mock.calls.length;
@@ -182,7 +204,12 @@ it("keeps card chrome through import recovery and retains the current resolved r
   await waitForSolid(() => expect(retryStale).toHaveBeenCalledOnce());
   const canReload = retryStale.mock.calls[0]![0].canReload;
   expect(canReload()).toBe(true);
-  setCard({ id: "current-exec", name: "exec", args: { command: "echo after" } });
+  setCard({
+    id: "current-exec",
+    name: "exec",
+    args: { command: "echo after" },
+    outputText: "after output",
+  });
   flush();
   expect(canReload()).toBe(false);
   recovery.resolve(false);
@@ -203,11 +230,23 @@ it("keeps card chrome through import recovery and retains the current resolved r
     expect(root.container.querySelector(".chat-tool-row__cmd")?.textContent).toBe("echo after"),
   );
   expect(root.container.querySelectorAll('[role="alert"]')).toHaveLength(0);
+  expect(root.container.querySelector(".chat-command-trail__preview")).toBe(preview);
+  expect(preview.textContent).toContain("after output");
   expect(root.container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool");
   const row = root.container.querySelector<HTMLButtonElement>("button.chat-tool-row")!;
   expect(root.container.querySelector(".chat-tool-row[aria-busy]")).toBeNull();
   row.click();
   expect(toggle).toHaveBeenCalledWith("current-exec");
+  setInline(false);
+  flush();
+  expect(root.container.querySelector(".chat-command-trail__preview")).toBeNull();
+  expect(root.container.querySelector("button.chat-tool-row")).toBe(row);
+  setInline(true);
+  flush();
+  expect(root.container.querySelector(".chat-command-trail__preview")?.textContent).toContain(
+    "after output",
+  );
+  expect(root.container.querySelector("button.chat-tool-row")).toBe(row);
   setCard({ id: "current-exec", name: "exec", args: { command: "echo latest" } });
   flush();
   expect(root.container.querySelector("button.chat-tool-row")).toBe(row);

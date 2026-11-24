@@ -27,6 +27,7 @@ import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import { ChatPermissionCard } from "./chat-message-deferred.tsx";
 import { ToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
+import { InlineToolPreview } from "./chat-tool-inline-preview.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { resolveToolOperationLabel, resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
@@ -244,6 +245,12 @@ function ToolCardView(props: ToolCardProps & { output?: ToolCardOutput }) {
                   {props.children}
                 </ToolCardBody>
               </ChatImportBoundary>
+              {/* Preview geometry and stdout stay available while row code loads or retries. */}
+              <Show
+                when={props.options.inlineCommands && !props.options.expanded && !props.hasChildren}
+              >
+                <InlineToolPreview card={card()} output={props.output} options={props.options} />
+              </Show>
               <Show when={props.options.showApprovalReviews !== false}>
                 <ToolApprovalReviews card={card()} />
               </Show>

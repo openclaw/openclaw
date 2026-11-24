@@ -3,7 +3,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
-import { readInlineToolExpansion } from "./chat-activity-segments.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
@@ -98,8 +97,6 @@ it.each(["live", "history"] as const)(
     const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", "call"));
     expect(entry?.output).toBe("Legacy progress");
     host.settings = { chatInlineCommands: true };
-    expect(handleAgentEvent(host, progress, "history")).toBe(false);
-    host.inlineCommandPresentation = { readInlineToolExpansion };
     expect(handleAgentEvent(host, progress, "history")).toBe(true);
     expect(entry?.output).toBe("Optional stdout");
     vi.advanceTimersByTime(80);

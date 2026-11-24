@@ -467,7 +467,6 @@ export function ToolMessageSummary(props: {
 export function ToolCardBody(
   props: ToolCardProps & { displayCard: ToolCard; output?: ToolCardOutput },
 ) {
-  const InlineToolPreview = dynamic(() => props.options.inlineCommands?.InlineToolPreview);
   return (
     <>
       <Show when={!props.options.hideSummary}>
@@ -476,9 +475,6 @@ export function ToolCardBody(
           options={props.options}
           hasChildren={props.hasChildren}
         />
-      </Show>
-      <Show when={props.options.inlineCommands && !props.options.expanded && !props.hasChildren}>
-        <InlineToolPreview card={props.displayCard} output={props.output} options={props.options} />
       </Show>
       <Show when={props.options.expanded}>
         <Show

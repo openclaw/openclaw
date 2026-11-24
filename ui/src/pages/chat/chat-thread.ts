@@ -16,7 +16,7 @@ import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import type { InlineCommandDisclosurePolicy } from "./chat-inline-command-presentation.ts";
+import type { InlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import {
   messageRecoveryKey,
   type AssistantMessageExpansionState,
@@ -85,7 +85,7 @@ type ToolCardExpansionState = {
     bubbleMode: boolean;
     isFilteredProjection: boolean;
     autoExpandToolCalls: boolean;
-    inlineCommands: InlineCommandDisclosurePolicy | undefined;
+    inlineCommands: InlineCommandPresentation | undefined;
   };
 };
 
@@ -603,7 +603,7 @@ export function syncToolCardExpansionState(
   items: readonly (ChatItem | MessageGroup)[],
   autoExpandToolCalls: boolean,
   isFilteredProjection = false,
-  inlineCommands?: InlineCommandDisclosurePolicy,
+  inlineCommands?: InlineCommandPresentation,
   transcriptItems?: readonly SystemEventRenderItem[],
   bubbleMode = false,
 ): void {

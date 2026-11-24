@@ -18,7 +18,6 @@ import { chatHistoryRequestParams } from "./chat-history-request-params.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
-import { inlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -267,7 +266,7 @@ it("retains quiet stdout and buffered updates until the prepared inline pane tak
   expect(onEvent).not.toHaveBeenCalled();
   expect(pane.state.toolStreamById.size).toBe(0);
 
-  getPaneTestRuntime(pane).start(await inlineCommandPresentation());
+  getPaneTestRuntime(pane).start();
   await vi.advanceTimersByTimeAsync(0);
   await vi.dynamicImportSettled();
   await waitForSolid(() => {

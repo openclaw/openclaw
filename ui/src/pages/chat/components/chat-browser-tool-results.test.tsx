@@ -66,7 +66,7 @@ describe("browser tool results", () => {
         browserResult("verify-b", "tab-2", "https://example.com/pull/1"),
       ];
       const groups = [browserResultGroup(messages)];
-      const inlineCommands = route === "inline" ? await inlineCommandPresentation() : undefined;
+      const inlineCommands = route === "inline" ? inlineCommandPresentation : undefined;
       const options = (expanded: boolean) => ({
         showReasoning: false,
         bubbleMode,

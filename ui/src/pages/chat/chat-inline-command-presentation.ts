@@ -1,21 +1,6 @@
-import { lazyModule } from "solid-js";
+import { readInlineToolExpansion } from "./chat-activity-segments.ts";
 
-/** Loaded presentation code is the pane's readiness fact for inline commands. */
-export type InlineCommandPresentation =
-  typeof import("./components/chat-inline-command-presentation.tsx");
-
-export type InlineCommandDisclosurePolicy = Pick<
-  InlineCommandPresentation,
-  "readInlineToolExpansion"
->;
-
-const presentationModule = lazyModule(
-  () => import("./components/chat-inline-command-presentation.tsx"),
-);
-
-export async function inlineCommandPresentation(): Promise<InlineCommandPresentation> {
-  const presentation = await presentationModule();
-  // Prepare the existing row without replacing its identity when the preference changes.
-  await presentation.ToolCardBody.preload();
-  return presentation;
-}
+// Disclosure policy is available before optional row code loads. The preference
+// owns live-output admission; row-local boundaries own renderer readiness.
+export const inlineCommandPresentation = { readInlineToolExpansion };
+export type InlineCommandPresentation = typeof inlineCommandPresentation;

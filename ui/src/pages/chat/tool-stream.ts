@@ -432,7 +432,7 @@ export function handleAgentEvent(
     payload.stream === "tool" &&
     payload.data.phase === "update" &&
     payload.data.outputOnly === true &&
-    (host.settings?.chatInlineCommands !== true || !host.inlineCommandPresentation)
+    host.settings?.chatInlineCommands !== true
   ) {
     return false;
   }

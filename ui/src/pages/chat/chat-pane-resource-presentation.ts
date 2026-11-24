@@ -2,6 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { markdownSessionPublicOrigin } from "../../components/markdown-session-links.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
+import { inlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, resolveChatAvatarUrl } from "./chat-state-route.ts";
@@ -53,9 +54,7 @@ export function createChatPaneResourceProps() {
     return {
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       toolMessageSource: chatRunPresentation(state),
-      inlineCommands: state.settings.chatInlineCommands
-        ? state.inlineCommandPresentation
-        : undefined,
+      inlineCommands: state.settings.chatInlineCommands ? inlineCommandPresentation : undefined,
       fullMessageAgentId: target.agentId,
       widgetLayout: widgetLayout(state.chatMessagesBySession, state, target),
       displayFacts: createChatDisplayFacts(state.chatMessagesBySession, state, target),

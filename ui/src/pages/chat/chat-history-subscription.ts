@@ -77,8 +77,7 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
       ? state.connectionEpoch === params.connectionEpoch && state.connected
       : params.client.connectSent === params.openingDispatch) &&
     state.sessionKey.trim() === params.requestedKey &&
-    (state.settings?.chatInlineCommands === true &&
-      state.inlineCommandPresentation !== undefined) === params.includeLiveToolOutput &&
+    (state.settings?.chatInlineCommands === true) === params.includeLiveToolOutput &&
     resolveSelectedSessionMessageSubscriptionAgentId(state, params.requestedKey) ===
       (params.requestedAgentId ?? null)
   );
@@ -121,8 +120,7 @@ export function syncSelectedSessionMessageSubscription(
   const connectionEpoch = state.connectionEpoch;
   const requestedKey = state.sessionKey.trim();
   const requestedAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, requestedKey);
-  const includeLiveToolOutput =
-    state.settings?.chatInlineCommands === true && state.inlineCommandPresentation !== undefined;
+  const includeLiveToolOutput = state.settings?.chatInlineCommands === true;
   const recoverLiveToolOutput =
     includeLiveToolOutput &&
     state.chatSessionMessageSubscription != null &&

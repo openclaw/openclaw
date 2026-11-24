@@ -1,3 +1,5 @@
 # Preserve both restoring states, hold expiry, cancellation, and initial-submission
 # coverage through the existing real-pane warm-mount fixture.
-5
+# Also cover delayed/failed row imports, stdout, retained composer and layout
+# across desktop/mobile warm reloads through the existing browser fixture.
+156
