@@ -63,7 +63,7 @@ describe("workspace upload cancellation", () => {
     const token = service.prepareUpload("environment", snapshot.manifestRef);
     const reached = createDeferred();
     const release = createDeferred();
-    const finished = createDeferred();
+    let handler: Promise<boolean | void> | undefined;
     if (boundary === "after body") {
       const realpath = fs.realpath.bind(fs);
       vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
@@ -88,7 +88,7 @@ describe("workspace upload cancellation", () => {
     const callback = createNodeWorkspaceTransferHttpCallback(service);
     const server = createServer((req, res) => {
       incoming = req;
-      void handleNodeWorkspaceTransferHttpRequest({
+      handler = handleNodeWorkspaceTransferHttpRequest({
         req,
         res,
         clientIp: "127.0.0.1",
@@ -100,11 +100,9 @@ describe("workspace upload cancellation", () => {
           }
           return authorized;
         },
-      })
-        .catch((error: unknown) =>
-          res.destroy(error instanceof Error ? error : new Error(String(error))),
-        )
-        .finally(() => finished.resolve());
+      }).catch((error: unknown) => {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -168,7 +166,7 @@ describe("workspace upload cancellation", () => {
         expect(cleanupSettled, "cleanup must join blocked staging validation").toBe(false);
       }
       release.resolve();
-      await finished.promise;
+      await handler;
       if (cancellation === "discard-and-fail") {
         await expect(
           cleanup?.catch((error: unknown) => {
@@ -204,7 +202,8 @@ describe("workspace upload cancellation", () => {
       release.resolve();
       server.closeAllConnections();
       await request;
-      await finished.promise;
+      // A failed connection never starts a handler.
+      await handler;
       await cleanup?.catch(() => undefined);
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
