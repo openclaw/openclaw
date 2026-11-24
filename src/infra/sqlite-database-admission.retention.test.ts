@@ -570,7 +570,7 @@ it.each(["reference-first", "close-first", "explicit-retirement", "path-replaced
           kind: "open-error",
           message:
             ordering === "explicit-retirement"
-              ? "SQLite database admission retired during native open"
+              ? "SQLite physical descriptor custody retired during native open"
               : "SQLite database changed identity during native open",
         });
         expect(Atomics.load(new Int32Array(firstReference), 0)).toBe(0);
