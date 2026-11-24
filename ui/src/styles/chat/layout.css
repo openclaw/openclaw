@@ -1698,6 +1698,31 @@ openclaw-chat-video-player {
   }
 }
 
+/* A guest's pending suggestion is a preview; the owner retains the full review row. */
+.session-suggestion--awaiting {
+  grid-template-columns: fit-content(30%) minmax(0, 1fr) auto;
+  background: var(--chat-composer-surface, var(--popover));
+}
+
+.session-suggestion--awaiting .session-suggestion__author,
+.session-suggestion--awaiting .session-suggestion__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-suggestion--awaiting .session-suggestion__author {
+  background: var(--person-reference-bg);
+  color: var(--chat-text-link, var(--link));
+}
+
+.session-suggestion--awaiting .session-suggestion__state {
+  grid-column: auto;
+  padding: 0;
+  font-weight: normal;
+}
+
 .task-suggestion {
   position: relative;
   grid-area: 1 / 1;
