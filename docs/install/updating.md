@@ -40,6 +40,26 @@ The first conversion keeps existing PATH shims working through forwarding
 entries and stages an owned user service's launcher definition with a backup.
 System-owned service definitions keep their forwarding entries.
 
+Installing a newer package with `npm i -g openclaw@<version>` after conversion
+replaces the npm package, not a running Gateway. Run `openclaw update`, or use
+your next managed `openclaw gateway start` or `openclaw gateway restart`, to apply
+that installed package through the same release checks and trial. The old
+Gateway keeps serving during preparation. The npm entry then follows the
+resident launcher's selected release, including automatic rollback.
+If the Gateway is already running, `gateway start` leaves it running and reports
+the old serving version and the prepared new version. Run
+`openclaw gateway restart` to apply the prepared release.
+
+`openclaw update status` shows the invoking CLI, selected release, pending
+trial, and observed Gateway separately. An unavailable or remote Gateway is
+not treated as a verified local release. Saved update results are historical,
+not a current health check.
+
+An older npm package does not silently downgrade a newer managed Gateway.
+Managed start/restart keeps the selected release. Use
+`openclaw update --tag <version>` for an explicit downgrade. An explicit
+`--tag` or `--channel` remains your target selection instead of the npm package.
+
 Plugin maintenance failures are warnings, not failed core updates. Retry them
 with `openclaw plugins update --all`. An already-current installation still maintains
 plugins and restarts only when needed and restart was requested.
@@ -288,6 +308,15 @@ and service ownership revalidation finish. At activation, the legacy
 existing CLI paths keep working without retaining a separate release selection.
 This also applies with `--no-restart`; the launcher selects the pending candidate
 on its next start. The installed updater must contain this repair.
+
+Local npm frontends can offer their installed package to a managed package
+release. The resident release runs the update, with an explicit local package
+source, and publishes forwarding with the validated pending trial. Managed
+start/restart then uses its existing native activation once, preserving restart
+options such as `--force` and `--wait`. An already pending trial goes straight
+to activation, even when the npm entry could not be attached to the launcher.
+The installed resident updater must contain forwarding publication support.
+Git installation identity checks and Gateway RPC admission remain unchanged.
 
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs

@@ -44,6 +44,16 @@ const catalog = {
 };
 const listed = (overrides: object) => ({ catalogs: [{ ...catalog, ...overrides }] });
 describe("session catalog schemas", () => {
+  it("requires list and read on a discovered route", () => {
+    const methods = { list: "notebook.list", read: "notebook.read" };
+    checkCatalog(
+      Catalog.SessionsCatalogRouteResultSchema,
+      { catalogId: "notebook", routeSegment: "notes", methods },
+      [{ methods: { list: methods.list } }, { methods: { read: methods.read } }],
+    );
+    expect(Value.Check(Catalog.SessionsCatalogRouteResultSchema, null)).toBe(true);
+  });
+
   it("accepts only the closed prefix-search contract", () => {
     checkCatalog(Catalog.SessionCatalogShareRouteSchema, SHARE_ROUTE, [
       { kind: "future-route" },
