@@ -161,7 +161,13 @@ function fixture(substitute = false, recoveryAttempt = 1) {
         if (JSON.stringify(selection) !== JSON.stringify(normalCiSelection)) {
           throw new Error("Receipt or exact dispatch inputs changed");
         }
-        return { selection, run: await origin.client.getRun(normal.runId), receipt: {}, jobs: [] };
+        return {
+          selection,
+          run: await origin.client.getRun(normal.runId),
+          receipt: {},
+          jobs: [],
+          compositeJobs: [],
+        };
       },
     ),
     loadManifest: vi.fn((id: string, attempt: number) => {
