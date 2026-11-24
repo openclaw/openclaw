@@ -15,7 +15,7 @@ function objects(namespace: string) {
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = ${namespace} AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
     UNION ALL
-    SELECT 'COLUMN', c.relname, a.attname, c.relowner, COALESCE(a.attacl, '{}'::aclitem[])
+    SELECT 'COLUMN', c.relname, a.attname, c.relowner, a.attacl
     FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = ${namespace} AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
