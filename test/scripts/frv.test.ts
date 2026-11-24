@@ -1464,8 +1464,10 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(plan([first, second]), "77", {
-        getWorkflowSource: async () =>
-          JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] }),
+        getReleaseEvidenceClient: () => ({
+          ...createReleaseEvidenceClient(REPOSITORY),
+          getWorkflowSource: () => emptyWaiverSource,
+        }),
         getAttemptJobs: downstreamRead,
         getJobLog: downstreamRead,
         getParentJobs: async () => [
