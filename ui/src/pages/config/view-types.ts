@@ -34,7 +34,8 @@ type ConfigViewOptions = Partial<
     ConfigData,
     | "schemaRead"
     | "onRetrySchema"
-    | "appearanceDisplayReady"
+    | "configReadAccess"
+    | "appearanceDataRequested"
     | "onAppearanceDataNeeded"
     | "mutationAllowed"
     | "openFileAllowed"
@@ -74,6 +75,8 @@ type ConfigViewOptions = Partial<
     | "nativeNotifications"
     | "onNativeNotificationsRequestPermission"
     | "onNativeNotificationsSendTest"
+    | "notificationAgents"
+    | "onNotificationAgentsLoad"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"

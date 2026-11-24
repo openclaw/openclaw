@@ -14,23 +14,6 @@ const requireUndiciPackage = createRequire(
 );
 const undiciErrors = (requireUndiciPackage("./index.js") as typeof import("undici")).errors;
 
-describe("isToolResultError", () => {
-  it("keeps real failures fatal even with a completed status", () => {
-    expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
-    expect(isToolResultError({ details: { status: "completed", error: "spawn failed" } })).toBe(
-      true,
-    );
-    expect(isToolResultError({ details: { ok: false, status: "completed" } })).toBe(true);
-  });
-
-  it("keeps failure statuses and statusless nonzero exits fatal", () => {
-    expect(isToolResultError({ details: { status: "failed", exitCode: 1 } })).toBe(true);
-    expect(isToolResultError({ details: { status: "failed", exitCode: 127 } })).toBe(true);
-    expect(isToolResultError({ details: { status: "killed", exitCode: 137 } })).toBe(true);
-    expect(isToolResultError({ details: { exitCode: 1 } })).toBe(true);
-  });
-});
-
 describe("resolveToolExecutionErrorKind", () => {
   it("recognizes structured timeout identities", () => {
     expect(
@@ -191,6 +174,12 @@ describe("resolveToolResultFailureKind", () => {
     [{ status: "cancelled", timedOut: true }, "timed_out"],
     [{ status: "cancelled" }, "cancelled"],
     [{ status: "timeout" }, "timed_out"],
+    [{ status: "completed", timedOut: true }, "timed_out"],
+    [{ status: "completed", error: "spawn failed" }, "failed"],
+    [{ ok: false, status: "completed" }, "failed"],
+    [{ status: "failed", exitCode: 1 }, "failed"],
+    [{ status: "failed", exitCode: 127 }, "failed"],
+    [{ status: "killed", exitCode: 137 }, "cancelled"],
     [{ status: "failed", ok: true }, undefined],
     [{ status: "failed", success: true }, undefined],
     [{ status: "failed", success: true, ok: false }, "failed"],
@@ -224,14 +213,5 @@ describe("resolveToolResultFailureKind", () => {
 
     expect(resolveToolResultFailureKind({ details: hostileDetails })).toBeUndefined();
     expect(resolveToolResultFailureKind(hostileResult)).toBeUndefined();
-  });
-
-  it("does not classify completed nonzero exits as failures", () => {
-    expect(
-      resolveToolResultFailureKind({ details: { status: "completed", exitCode: 1 } }),
-    ).toBeUndefined();
-    expect(resolveToolResultFailureKind({ details: { status: "failed", exitCode: 1 } })).toBe(
-      "failed",
-    );
   });
 });

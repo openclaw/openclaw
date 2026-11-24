@@ -4,6 +4,7 @@ import path from "node:path";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
 import {
@@ -460,12 +461,47 @@ export async function readPiSessionFileBaseline(
   }
 }
 
+// One authoritative candidate snapshot serves every selected thread in this poll.
+// Discarding the native discovery generation also retires its file-origin mapping.
+const exportFilesByDiscovery = new WeakMap<
+  PiFileCandidate[],
+  Promise<Map<string, string | null>>
+>();
+async function scanExportFiles(candidates: PiFileCandidate[]) {
+  if (candidates.length >= MAX_DISCOVERY_FILES) {
+    throw new Error("Pi session discovery is incomplete");
+  }
+  const files = new Map<string, string | null>();
+  for await (const summary of scanPiSummaries(candidates)) {
+    files.set(summary.threadId, files.has(summary.threadId) ? null : summary.file);
+  }
+  return files;
+}
+
 export async function readPiSessionById(
   threadId: string,
   env: NodeJS.ProcessEnv,
+  sourceHomeId?: string,
 ): Promise<Record<string, unknown>[]> {
   const cacheKey = threadCacheKey(piSessionStore(env).root, threadId);
-  const file = threadFileCache.get(cacheKey) ?? (await findPiSummary(threadId, env))?.file;
+  let file: string | undefined;
+  if (sourceHomeId === undefined) {
+    file = threadFileCache.get(cacheKey) ?? (await findPiSummary(threadId, env))?.file;
+  } else {
+    // Legacy publication IDs omit the backing file. Refuse duplicate IDs and
+    // store changes even when the normal interactive cache has selected a winner.
+    const candidates = await piFileCandidates(env);
+    let files = exportFilesByDiscovery.get(candidates);
+    if (!files) {
+      files = scanExportFiles(candidates);
+      exportFilesByDiscovery.set(candidates, files);
+    }
+    const selected = (await files).get(threadId);
+    if (!selected || sha256Hex(selected) !== sourceHomeId) {
+      throw new Error("Pi source selection changed or is ambiguous");
+    }
+    file = selected;
+  }
   if (!file) {
     throw new Error("Pi session was not found");
   }

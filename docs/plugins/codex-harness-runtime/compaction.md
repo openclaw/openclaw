@@ -38,8 +38,10 @@ Whole turns and tool/result pairs stay intact; required instructions and the
 active request or runtime-refresh exchange are outside the historical cap.
 With compaction disabled, older history is still omitted with a notice;
 no-cap defaults and the full saved transcript are unchanged.
-The notice appears in the seed and user-facing events. Native rollout/token
-fuses and owning-engine compaction with native follow-up remain unchanged.
+The notice appears in the seed and user-facing events. Saved rollout file size
+does not trigger thread rotation: it includes history that Codex has already
+compacted. Native token-pressure protection and owning-engine compaction with
+native follow-up remain in place.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.

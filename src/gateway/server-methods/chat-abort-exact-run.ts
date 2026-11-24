@@ -186,6 +186,14 @@ export async function stopExactClientRun(params: {
           cancel,
           assertCurrent,
           stopReason: "rpc",
+          // An exact chat.abort is a deliberate cancellation of the pending input,
+          // independently of the caller's userInitiated presentation flag.
+          pendingInputEndCause:
+            params.stoppedSession &&
+            active.adapter.kind === "chat-send" &&
+            active.input.phase === "injecting"
+              ? "user-stop"
+              : undefined,
           onAbortPrepared: params.onAbortPrepared,
           onAbortCommitted: markAborted,
         }).aborted,

@@ -21,6 +21,8 @@ test("projects.list projects raw Enterprise origins into read-safe identity with
       originUrl: "https://user:placeholder@ghe.example.test/acme/private.git?secret=placeholder",
     },
   ]);
+  // Read scope lists only public repositories; credential-bearing origins never reach the lookup.
+  vi.stubGlobal("fetch", async () => Response.json({ visibility: "public" }));
   const invoke = (scopes: string[]) =>
     invokeProjectMethod("projects.list", {}, cfg, scopes, undefined, projectsHandlers);
   const read = await invoke(["operator.sessions.read"]);
@@ -35,7 +37,6 @@ test("projects.list projects raw Enterprise origins into read-safe identity with
           source: "registered",
           repositoryIdentity: "acme/console",
         },
-        { id: "credentials", displayName: "Credentials", source: "registered" },
       ],
     },
   });
@@ -58,4 +59,5 @@ test("projects.list projects raw Enterprise origins into read-safe identity with
       ],
     },
   });
+  vi.unstubAllGlobals();
 });

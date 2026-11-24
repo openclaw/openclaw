@@ -80,7 +80,7 @@ function readImportedHistory(
   entries: readonly Record<string, unknown>[],
   options?: Omit<
     Parameters<typeof readClaudeCliSessionMessagesAsync>[0],
-    "cliSessionId" | "homeDir"
+    "cliSessionId" | "projectsDir"
   >,
 ) {
   return withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
@@ -297,7 +297,7 @@ describe("cli session history", () => {
   });
 
   it("rejects path-like Claude CLI session ids", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, filePath }) => {
+    await withClaudeProjectsDir(async ({ filePath }) => {
       const projectDir = path.dirname(filePath);
       const projectsDir = path.dirname(projectDir);
       const sentinel = `${JSON.stringify(claudeUser("must not import", { uuid: "path-traversal-sentinel" }))}\n`;
@@ -309,7 +309,7 @@ describe("cli session history", () => {
       }
 
       for (const cliSessionId of ["../outside", "nested/session", "nested\\session"]) {
-        expect(await readClaudeCliSessionMessagesAsync({ cliSessionId, homeDir })).toEqual([]);
+        expect(await readClaudeCliSessionMessagesAsync({ cliSessionId, projectsDir })).toEqual([]);
       }
     });
   });
@@ -424,7 +424,10 @@ describe("cli session history", () => {
     expect(messages.map(readRecord).map(({ role, content }) => ({ role, content }))).toEqual([
       { role: "user", content: "current recovered ask" },
       { role: "user", content: "summary" },
-      { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }] },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done", is_error: false }],
+      },
       { role: "assistant", content: "response" },
       { role: "user", content: syntheticPrompt },
     ]);

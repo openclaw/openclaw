@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectControlUiModuleAttribution,
+  collectControlUiCoverageAttribution,
+  formatControlUiCoverageAttribution,
   formatControlUiModuleAttribution,
 } from "../../scripts/lib/control-ui-module-attribution.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -84,5 +86,109 @@ describe("Control UI emitted module attribution", () => {
     expect(report).toContain("non-additive");
     expect(report).toContain("25 B unmapped raw");
     expect(report).toContain("missing source map: assets/chat.js");
+  });
+
+  it("attributes nested coverage and fetched-only assets without confusing UTF-16 with bytes", () => {
+    const dist = tempDirs.make("control-ui-coverage-attribution-");
+    fs.mkdirSync(path.join(dist, "assets"));
+    const code = "αα;aaa();bbb();🙂;\n";
+    fs.writeFileSync(path.join(dist, "assets/shared.js"), code);
+    fs.writeFileSync(
+      path.join(dist, "assets/shared.js.map"),
+      JSON.stringify({
+        version: 3,
+        sources: ["../../ui/src/a.ts", "../../ui/src/b.ts"],
+        names: [],
+        mappings: "AAAA,S,MCAA;",
+      }),
+    );
+    fs.writeFileSync(path.join(dist, "assets/prefetch.js"), "never()");
+    fs.writeFileSync(
+      path.join(dist, "assets/prefetch.js.map"),
+      JSON.stringify({
+        version: 3,
+        sources: ["../../ui/src/b.ts"],
+        names: [],
+        mappings: "AAAA",
+      }),
+    );
+    fs.writeFileSync(path.join(dist, "assets/opaque.js"), "opaque");
+    const coverage = [
+      {
+        url: "http://localhost/control/assets/shared.js",
+        loadedBytes: 23,
+        functions: [
+          {
+            ranges: [
+              { startOffset: 0, endOffset: 19, count: 1 },
+              { startOffset: 3, endOffset: 15, count: 0 },
+              { startOffset: 9, endOffset: 12, count: 1 },
+            ],
+          },
+        ],
+      },
+      {
+        url: "http://localhost/control/assets/opaque.js",
+        loadedBytes: 6,
+        functions: [{ ranges: [{ startOffset: 0, endOffset: 6, count: 0 }] }],
+      },
+    ];
+    const report = collectControlUiCoverageAttribution(
+      dist,
+      coverage,
+      [
+        ...coverage.map((entry) => ({ ...entry, decodedBytes: 0 })),
+        { url: "http://localhost/control/assets/prefetch.js", decodedBytes: 7 },
+        { url: "http://localhost/control/assets/prefetch.js", decodedBytes: 7 },
+        { url: "http://localhost/control/assets/inflight.js", decodedBytes: 0 },
+        { url: "http://localhost/control/assets/style.css", decodedBytes: 10 },
+      ],
+      "coverage cutoff",
+    );
+    expect(report).toMatchObject({
+      loadedBytes: 36,
+      executedBytes: 14,
+      unusedBytes: 22,
+      fetchedOnlyBytes: 7,
+      inventoryScope: "coverage cutoff",
+      missingSourceMaps: ["assets/opaque.js"],
+      unmapped: { loadedBytes: 13, executedBytes: 4, unusedBytes: 9, fetchedOnlyBytes: 0 },
+      modules: [
+        {
+          module: "ui/src/b.ts",
+          loadedBytes: 12,
+          executedBytes: 5,
+          unusedBytes: 7,
+          fetchedOnlyBytes: 7,
+        },
+        {
+          module: "ui/src/a.ts",
+          loadedBytes: 11,
+          executedBytes: 5,
+          unusedBytes: 6,
+          fetchedOnlyBytes: 0,
+        },
+      ],
+    });
+    expect(report.assets).toHaveLength(3);
+    expect(collectControlUiCoverageAttribution(dist, coverage, []).inventoryScope).toBe(
+      "whole-run (may include later fetches)",
+    );
+    expect(collectControlUiCoverageAttribution(dist, coverage).inventoryScope).toBe("V8 only");
+    expect(formatControlUiCoverageAttribution(report)).toContain("<unmapped>");
+    expect(
+      formatControlUiCoverageAttribution(collectControlUiCoverageAttribution(dist, coverage)),
+    ).toContain("fetched-only scripts are excluded");
+    expect(() =>
+      collectControlUiCoverageAttribution(dist, [{ ...coverage[0]!, loadedBytes: 19 }]),
+    ).toThrow("Coverage/bundle byte mismatch");
+    expect(() =>
+      collectControlUiCoverageAttribution(dist, [
+        {
+          ...coverage[0]!,
+          functions: [{ ranges: [{ startOffset: 0, endOffset: 24, count: 1 }] }],
+        },
+      ]),
+    ).toThrow("Coverage range outside bundle text");
   });
 });

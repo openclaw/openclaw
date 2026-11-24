@@ -11,6 +11,8 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { pageFixture, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
+  clickPluginSwitch,
+  findPluginSwitch,
   createDiscoveryDetail,
   createInspectResult,
   createPlugin,
@@ -156,18 +158,16 @@ it("reconciles enablement with publication during the mutation refresh", async (
   const reconnect = vi.spyOn(harness.gateway, "connect");
   const { page, find } = await harness.mount("/settings/plugins/workboard#lifecycle", catalog);
   await runtimeConfig.ensureLoaded();
-  await clickPluginAction(page, "Enable Workboard");
+  await clickPluginSwitch(page, "Workboard", false);
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
       pluginId: "workboard",
       enabled: true,
     }),
   );
-  const busyButton = find<HTMLButtonElement>('[aria-label="Enable Workboard"]');
-  expect(busyButton?.getAttribute("aria-busy")).toBe("true");
-  expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
-  expect(page.querySelectorAll(spinner)).toHaveLength(1);
-  busyButton!.click();
+  const pendingSwitch = findPluginSwitch(page, "Workboard");
+  expect(pendingSwitch?.getAttribute("aria-disabled")).toBe("true");
+  pendingSwitch!.click();
   catalog = {
     ...catalog,
     generation: 7,
@@ -183,7 +183,9 @@ it("reconciles enablement with publication during the mutation refresh", async (
   mutationConfig.resolve(enablementSnapshot);
   await waitForSolid(() => {
     expect(find(spinner)).toBeNull();
-    expect(find('[aria-label="Disable Workboard"]')).not.toBeNull();
+    const settled = findPluginSwitch(page, "Workboard");
+    expect(settled?.checked).toBe(true);
+    expect(settled?.getAttribute("aria-disabled")).toBeNull();
   });
   expect(find(".plugins-row-message")).toBeNull();
   expect(harness.calls("plugins.setEnabled")).toHaveLength(1);
@@ -241,7 +243,7 @@ it.each([
     );
     await runtimeConfig.ensureLoaded();
     const actionStart = request.mock.calls.length;
-    await clickPluginAction(page, action === "enable" ? "Enable Workboard" : "Disable Workboard");
+    await clickPluginSwitch(page, "Workboard", action === "disable");
     await waitForSolid(() => {
       expect(find(alert)?.textContent).toContain(error.message);
       expect(find(spinner)).toBeNull();
@@ -252,9 +254,9 @@ it.each([
     expect(calls.filter(([method]) => method === methodName)).toHaveLength(1);
     expect(calls.filter(([method]) => method === "plugins.list")).toHaveLength(applied ? 1 : 0);
     expect(calls.filter(([method]) => method === "config.get")).toHaveLength(applied ? 1 : 0);
-    expect(
-      find(`[aria-label="${applied && action === "enable" ? "Disable" : "Enable"} Workboard"]`),
-    ).not.toBeNull();
+    expect(findPluginSwitch(page, "Workboard")?.checked).toBe(
+      Boolean(applied) && action === "enable",
+    );
     expect(find(".plugins-install")).toBeNull();
   },
 );

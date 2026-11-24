@@ -13,10 +13,13 @@ import {
 const predecessor = 30;
 const target = OPENCLAW_AGENT_SCHEMA_VERSION;
 const scope = [
+  "agent_tool_usage",
   "memory_index_chunks",
   "memory_index_sources",
   "schema_meta",
   "session_creation_operations",
+  "session_pending_inputs",
+  "session_transcript_active_event_facts",
   "session_transcript_cold_archive_chunks",
   "transcript_events",
 ];
@@ -94,7 +97,14 @@ it("restores historical triggers while retaining later unrelated writes and stat
   await withFixture(
     "memory-revision-restore.sqlite",
     async ({ database, restore }) => {
+      // Scoped restoration covers a store before optional pending-input first use.
+      // A present AUTOINCREMENT table correctly requires a full database backup.
+      expect(rows(database, "SELECT * FROM session_pending_inputs")).toEqual([]);
+      database.exec("DROP TABLE session_pending_inputs");
       await restore(() => retained(database));
+      expect(
+        rows(database, "SELECT name FROM sqlite_schema WHERE name = 'session_pending_inputs'"),
+      ).toEqual([]);
       database.exec("UPDATE memory_index_chunks SET text = 'old-writer-update'");
       expect(row(database, "SELECT revision FROM memory_index_state WHERE id = 1")).toEqual({
         revision: 3,

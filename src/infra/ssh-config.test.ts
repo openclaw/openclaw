@@ -68,6 +68,16 @@ describe("ssh-config", () => {
     });
   });
 
+  it.each(["/tmp/keys/two  spaces", "/tmp/keys/with\ttab"])(
+    "preserves whitespace inside the resolved identity path %j",
+    async (identity) => {
+      runCommandMock.mockResolvedValueOnce(
+        commandResult({ stdout: `identityfile none\nidentityfile ${identity}\n` }),
+      );
+      await expect(resolveSshConfig(target)).resolves.toEqual({ identityFiles: [identity] });
+    },
+  );
+
   it("adds non-default port and trimmed identity arguments", async () => {
     await expect(
       resolveSshConfig({ ...target, port: 2022 }, { identity: "  /tmp/custom_id  " }),

@@ -31,8 +31,6 @@ export type CommandContext = {
   accountId?: string;
   ownerList: string[];
   senderIsOwner: boolean;
-  /** Captured host owner capability, rechecked by handlers at awaited effect boundaries. */
-  assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
   /** Original command admission, rechecked after awaited preparation. */
   assertAuthorizedCurrent?: () => void;
@@ -85,7 +83,8 @@ export type HandleCommandsParams = {
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model. */
+  model: string | undefined;
   contextTokens: number;
   contextTokenProjection?: ModelContextTokenProjection;
   isGroup: boolean;

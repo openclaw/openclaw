@@ -6,22 +6,6 @@ import { isRecord } from "./lib/record-shared.mjs";
 export const QUALIFICATION_COVERAGE_PATH = "scripts/lib/release-qualification-coverage.json";
 const SCHEMA = "openclaw.release-qualification-coverage/v1";
 
-export function qualificationAdmissionContract(source) {
-  if (typeof source !== "string" || Buffer.byteLength(source) > 1024 * 1024) {
-    throw new Error("Invalid qualification workflow source");
-  }
-  const matches = [
-    ...source.matchAll(/^ {2}FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: *([^\r\n]+)$/gmu),
-  ];
-  if (!matches.length && !source.includes("FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT")) {
-    return undefined;
-  }
-  if (matches.length !== 1 || !/^(?:"1"|'1'|1)$/u.test(matches[0][1])) {
-    throw new Error("Unsupported qualification admission workflow contract");
-  }
-  return "1";
-}
-
 function object(value, keys, label) {
   if (
     !isRecord(value) ||
@@ -52,7 +36,28 @@ function names(value, label, allowEmpty = false) {
 // This is data validation, never candidate-code evaluation. P reads this document
 // from immutable Q, seals the selected coverage, then verifies the same literals.
 export function validateQualificationCoverage(value) {
-  object(value, ["schema", "profile", "children", "requiredParentJobs"], "qualification coverage");
+  object(
+    value,
+    [
+      "schema",
+      "profile",
+      "children",
+      "requiredParentJobs",
+      ...(value?.exemptions === undefined ? [] : ["exemptions"]),
+    ],
+    "qualification coverage",
+  );
+  if (
+    value.exemptions !== undefined &&
+    (!Array.isArray(value.exemptions) ||
+      value.exemptions.length !== 1 ||
+      value.exemptions[0]?.childRole !== "productPerformance" ||
+      value.exemptions[0]?.disposition !== "waived-not-run" ||
+      !Array.isArray(value.children) ||
+      value.children.some((child) => child.key === "productPerformance"))
+  ) {
+    throw new Error("Invalid explicit qualification exemption");
+  }
   if (value.schema !== SCHEMA || !["beta", "stable", "full"].includes(value.profile)) {
     throw new Error("Unsupported qualification coverage schema or profile");
   }
@@ -91,6 +96,7 @@ export function validateQualificationCoverage(value) {
     profile: value.profile,
     children,
     requiredParentJobs: names(value.requiredParentJobs, "qualification requiredParentJobs"),
+    ...(value.exemptions === undefined ? {} : { exemptions: value.exemptions }),
   };
   if (Buffer.byteLength(canonicalAsciiJson(coverage)) > 32 * 1024) {
     throw new Error("Qualification coverage exceeds 32 KiB");
@@ -186,11 +192,13 @@ export function validateQualificationJobs(
   }
   for (const name of names(requiredNames, "required job names")) {
     const matches = jobs.filter((job) => job.name === name);
+    if (matches.length <= 1 && waivedJobNames.has(name)) {
+      continue;
+    }
     if (
       matches.length !== 1 ||
       matches[0].status !== "completed" ||
-      (matches[0].conclusion !== "success" &&
-        !(matches[0].conclusion === "failure" && waivedJobNames.has(name)))
+      matches[0].conclusion !== "success"
     ) {
       throw new Error(label + " required job did not succeed exactly once: " + name);
     }

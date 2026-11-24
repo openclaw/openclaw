@@ -21,6 +21,7 @@ import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   E2E_VITEST_CONFIG,
+  hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
   isRoutableChangedTarget,
   isTestFileTarget,
@@ -35,15 +36,19 @@ import {
   packChangedExtensionConfigShards,
   resolveChangedExtensionRoots,
 } from "./ci-extension-test-shards.mts";
+import { routeBoatNodeTestJobs } from "./ci-node-test-capacity.mts";
 import {
   canSplitWholeConfigGroup,
   listNodeTestConfigFiles,
   listWholeConfigFiles,
+  type NodeTestVolume,
+  type NodeTestTargetVolume,
 } from "./ci-node-test-inventory.mts";
 import {
   UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
+  prepareNodeTestVolumes,
   packNodeTestGroups,
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
@@ -54,6 +59,7 @@ import {
   SOURCE_CHANNEL_TEST_POLICY,
   type NodeTestShard,
   type RuntimeTestSelection,
+  type NodeTestVolumeContext,
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
@@ -92,6 +98,7 @@ export { isCiDocumentationPath, resolveReleaseFastLaneScope } from "../ci-change
 
 type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
+  targetVolumes?: NodeTestTargetVolume[];
 };
 type CwdOptions = { cwd?: string };
 type PlanDiagnostic = (reason: string) => void;
@@ -209,7 +216,7 @@ export function hasUiE2eAffectingChange(
       (file) =>
         !file.startsWith("ui/src/") ||
         !isUiTestTarget(file) ||
-        /\.(?:browser|node)\.test\.ts$/u.test(file) ||
+        /\.(?:browser|node)\.test\.tsx?$/u.test(file) ||
         /(?:^|\/)(?:e2e|test-helpers|test-fixtures|fixtures|__fixtures__)(?:\/|$)/u.test(file) ||
         path.posix.normalize(file) !== file ||
         !existsSync(path.join(cwd, file)) ||
@@ -217,6 +224,11 @@ export function hasUiE2eAffectingChange(
     )
   ) {
     return true;
+  }
+  // A complete reverse scan can prove an ordinary unit entry is unshared without
+  // loading every UI consumer. Unknown inventories retain the forward traversal.
+  if (!hasImportGraphConsumers(relevantPaths, cwd, { tooling: true, resolveAliases: true })) {
+    return false;
   }
   // Test entry names are not enough: a fixture or application may import one.
   // Reuse the canonical import graph rather than orphaning that consumer's proof.
@@ -236,6 +248,7 @@ const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 const PR_NODE_TEST_SECONDS = 150;
+const CHANGED_PRIVATE_QA_JOB_SECONDS = 300;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
@@ -425,6 +438,33 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
   return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
 }
 
+// Agent, compaction, prompt and transport behavior tests sit 3-10 imports from these owners
+// (#204252), past the two-import walk; their full importer closure is nearly the whole suite.
+// A change here selects every importer in its own directory plus this declared behavior set.
+const TRANSITIVE_IMPORTER_OWNERS =
+  /^(?:src\/agents\/|src\/auto-reply\/reply\/agent-runner|packages\/agent-core\/src\/harness\/compaction\/|packages\/ai\/src\/transports\/)/u;
+// Globs name test inventories; a `.test.ts` suffix would make them literal test targets.
+const DECLARED_BEHAVIOR_TESTS = [
+  "src/**/*prompt-cache*",
+  "src/**/*compaction*",
+  "packages/**/*prompt-cache*",
+  "packages/**/*compaction*",
+  "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
+  "src/cron/session-context-accounting.gateway.integration.test.ts",
+];
+// Owed results are delivered by background exec completion in src/agents, past the two-import
+// walk: #204265 changed src/sessions/owed.ts with green PR CI while these tests went red on main.
+// A change here selects only this declared set, not its directory's importers.
+const OWED_RESULT_OWNERS = /^src\/sessions\/owed\.ts$/u;
+const OWED_RESULT_BEHAVIOR_TESTS = [
+  "src/agents/bash-process-durable.test.ts",
+  "src/agents/bash-tools.exec-notify.store-failure.test.ts",
+  "src/agents/bash-tools.exec-runtime.test.ts",
+  "src/agents/bash-tools.exec.egress-lifecycle.test.ts",
+  "src/agents/bash-tools.notify-on-exit-ack.test.ts",
+  "src/agents/bash-tools.test.ts",
+];
+
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
   changedPaths: string[],
@@ -442,7 +482,13 @@ export function resolveChangedNodeTestTargets(
     broad: false,
     boundedOwners: true,
     baseRef: options.baseRef,
-    aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
+    aggressive: aggressive
+      ? {
+          maxDirectImporters: 20,
+          maxDirectoryTests: 30,
+          transitiveOwners: TRANSITIVE_IMPORTER_OWNERS,
+        }
+      : undefined,
     adaptiveMarkdown: options.adaptiveMarkdown
       ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
       : undefined,
@@ -483,6 +529,21 @@ export function resolveChangedNodeTestTargets(
     targets: policyTargets,
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
+  // A test-only edit runs itself; only owner source selects the declared behavior set.
+  const sourcePaths = paths.filter((file) => !isTestFileTarget(file));
+  const behaviorOwners = sourcePaths.filter((file) => TRANSITIVE_IMPORTER_OWNERS.test(file));
+  const owedOwners = sourcePaths.filter((file) => OWED_RESULT_OWNERS.test(file));
+  const declaredBehavior = aggressive
+    ? [
+        ...(behaviorOwners.length > 0 ? DECLARED_BEHAVIOR_TESTS : []),
+        ...(owedOwners.length > 0 ? OWED_RESULT_BEHAVIOR_TESTS : []),
+      ]
+    : [];
+  recordSelection({
+    rule: "declared-behavior",
+    input: [...behaviorOwners, ...owedOwners].join(", "),
+    targets: declaredBehavior,
+  });
   const owners = [
     ...new Set([
       ...targetPlan.targets,
@@ -500,6 +561,7 @@ export function resolveChangedNodeTestTargets(
         ? ["test/vitest-projects-config.test.ts"]
         : []),
       ...policyTargets,
+      ...declaredBehavior,
     ]),
   ];
   let inventory: string[] | undefined;
@@ -539,6 +601,12 @@ export function resolveChangedNodeTestTargets(
     return target.includes("*") ? allFiles().filter((file) => path.matchesGlob(file, target)) : [];
   };
   const expanded = new Map(owners.map((target) => [target, expandTarget(target)]));
+  // The declared behavior set is an explicit owner opt-in, including PR-exempt files.
+  for (const target of declaredBehavior) {
+    for (const file of expanded.get(target) ?? []) {
+      optInTargets.add(file);
+    }
+  }
   const files = [...expanded.values()].flat();
   const selected = [...new Set([...files, ...smoke])]
     .filter(
@@ -696,22 +764,61 @@ function createChangedTargetShards(
         inheritedPolicies.set(target, policy);
       }
     }
+    // Amortize private QA preparation only within an already selected slow
+    // policy's envelope, and reserve the build inside the 300-second job budget.
+    const policySeconds = new Map<string, number>();
+    for (const { target } of targets) {
+      const policy = inheritedPolicies.get(target)!;
+      if (policy.mode === "private-qa") {
+        const key = JSON.stringify(policy);
+        policySeconds.set(
+          key,
+          Math.max(
+            policySeconds.get(key) ?? PR_NODE_TEST_SECONDS,
+            Math.min(
+              costOf(target),
+              CHANGED_PRIVATE_QA_JOB_SECONDS - VITEST_PRETEST_BUILD_SECONDS["private-qa"],
+            ),
+          ),
+        );
+      }
+    }
     // Longest-first placement avoids stranding a slow target with cheap neighbors.
-    const bins: { targets: typeof targets; seconds: number; policy: string }[] = [];
-    for (const entry of targets.toSorted((a, b) => costOf(b.target) - costOf(a.target))) {
-      const cost = costOf(entry.target);
-      const policy = JSON.stringify(inheritedPolicies.get(entry.target));
-      const bin = bins.find(
-        (candidate) =>
-          candidate.policy === policy &&
-          candidate.targets.length < CHANGED_NODE_TEST_TARGETS_PER_JOB &&
-          candidate.seconds + cost <= PR_NODE_TEST_SECONDS,
-      );
-      if (bin) {
-        bin.targets.push(entry);
-        bin.seconds += cost;
-      } else {
-        bins.push({ targets: [entry], seconds: cost, policy });
+    const sortedTargets = targets.toSorted((a, b) => costOf(b.target) - costOf(a.target));
+    const pack = (limits?: ReadonlyMap<string, number>) => {
+      const bins: { targets: typeof targets; seconds: number; policy: string }[] = [];
+      for (const entry of sortedTargets) {
+        const cost = costOf(entry.target);
+        const policy = JSON.stringify(inheritedPolicies.get(entry.target));
+        const bin = bins.find(
+          (candidate) =>
+            candidate.policy === policy &&
+            candidate.targets.length < CHANGED_NODE_TEST_TARGETS_PER_JOB &&
+            candidate.seconds + cost <= (limits?.get(policy) ?? PR_NODE_TEST_SECONDS),
+        );
+        if (bin) {
+          bin.targets.push(entry);
+          bin.seconds += cost;
+        } else {
+          bins.push({ targets: [entry], seconds: cost, policy });
+        }
+      }
+      return bins;
+    };
+    let bins = pack();
+    if (policySeconds.size > 0) {
+      const packed = pack(policySeconds);
+      // First-fit placement can need more bins at a larger capacity. Retain the
+      // original plan unless fewer jobs are needed and neither QA policy grows.
+      if (
+        packed.length < bins.length &&
+        [...policySeconds.keys()].every(
+          (policy) =>
+            packed.filter((bin) => bin.policy === policy).length <=
+            bins.filter((bin) => bin.policy === policy).length,
+        )
+      ) {
+        bins = packed;
       }
     }
     targetChunks.push(...bins.map((bin) => bin.targets));
@@ -728,7 +835,9 @@ function createChangedTargetShards(
       predictedSeconds: Math.ceil(chunk.reduce((sum, { target }) => sum + costOf(target), 0)),
     };
     const inheritedPolicy = inheritedPolicies.get(chunk[0]!.target);
-    const pretestBuildMode = inheritedPolicy ? inheritedPolicy.mode : buildModeOf(chunk);
+    // Packing can move every runtime consumer out of an originally prepared
+    // row. Charge the build only to its final readers; retain serial admission.
+    const pretestBuildMode = buildModeOf(chunk);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
@@ -1018,9 +1127,9 @@ export function packChangedNodeBoundary(shards: ChangedNodeTestShard[]): Changed
   if (!boundary) {
     return shards;
   }
-  // All 97 observed boundary test steps fit 73s, including both runtimes.
-  // Reserve 90s and retain the ordinary 150s selected-row budget.
-  const boundarySeconds = 90;
+  // Seven post-fix Bun boundary runs on two CPUs stayed below 34s.
+  // Keep the 90s Node/dual reserve and the ordinary 150s selected-row budget.
+  const boundarySeconds = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY === "bun-all" ? 60 : 90;
   const recipient = shards
     .filter(
       (shard) =>
@@ -1098,8 +1207,21 @@ export function createChangedNodeTestShards(
       dedicatedUiE2e?: boolean;
       dedicatedUiTests?: boolean;
       selectedTestTargets?: readonly string[];
+      volumeContext?: NodeTestVolumeContext;
     } = {},
 ): ChangedNodeTestShard[] | null {
+  if (options.runnerBackend === "boat") {
+    const jobs = createChangedNodeTestShards(changedPaths, { ...options, runnerBackend: "hybrid" });
+    return (
+      jobs &&
+      routeBoatNodeTestJobs(
+        jobs,
+        options.compactNodeJobCap === undefined
+          ? undefined
+          : options.compactNodeJobCap + jobs.filter((job) => job.requiresDist).length,
+      )
+    );
+  }
   const cwd = options.cwd ?? process.cwd();
   const fallback = (reason: string) => {
     options.onFallback?.(reason);
@@ -1214,6 +1336,7 @@ export function createChangedNodeTestShards(
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's
   // synthetic or alternate source root with coincidentally matching paths.
+  let describeVolume: ReturnType<typeof prepareNodeTestVolumes> | undefined;
   const canonicalShards = canonicalTargets.length
     ? path.resolve(cwd) === process.cwd()
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
@@ -1225,11 +1348,18 @@ export function createChangedNodeTestShards(
           // These exact targets already passed deferral above, including explicit policy watches.
           includeReleaseOnlyRuntimeTests: true,
           includePrExemptRuntimeTests: true,
+          volumeContext: options.volumeContext,
+          onVolumePrepared: (describe) => {
+            describeVolume = describe;
+          },
         })
       : null
     : [];
   if (canonicalShards === null) {
     return fallback("test targets lack canonical shard metadata");
+  }
+  if (!describeVolume && options.volumeContext && path.resolve(cwd) === process.cwd()) {
+    describeVolume = prepareNodeTestVolumes(options.volumeContext);
   }
   const artifactBoundaryOwned =
     changedBuildArtifacts || canonicalShards.some((shard) => shard.requiresDist);
@@ -1335,20 +1465,72 @@ export function createChangedNodeTestShards(
   // Time-based splitting must not make an admitted owner plan exceed the matrix
   // budget. Retain its compact rows, including plugin work, without widening scope.
   const cap = options.compactNodeJobCap;
+  const withVolumes = (result: ChangedNodeTestShard[]) => {
+    if (describeVolume) {
+      const describe = describeVolume;
+      for (const job of result) {
+        for (const group of job.groups ?? []) {
+          try {
+            group.volume = describeVolume({ ...group, env: { ...job.env, ...group.env } });
+          } catch {
+            delete group.volume;
+          }
+        }
+        if (job.targets?.length) {
+          job.targetVolumes = job.targets.flatMap((target) => {
+            const sourcePlans = prTargetPlans.find((entry) => entry.target === target)?.sourcePlans;
+            if (!sourcePlans?.length) {
+              return [];
+            }
+            try {
+              // Direct children use source routing, not the canonical config remap.
+              // The target runtime projection also preserves native-Bun and Node exceptions.
+              const volume: NodeTestVolume = {
+                ...describe({ ...job, configs: [], shard_name: job.shardName }),
+                entries: sourcePlans.flatMap((plan) =>
+                  plan.watchMode || plan.forwardedArgs.some((arg) => arg !== target)
+                    ? []
+                    : describe(
+                        {
+                          ...job,
+                          configs: [plan.config],
+                          shard_name: job.shardName,
+                          includePatterns: plan.includePatterns ?? [target],
+                        },
+                        [target],
+                      ).entries,
+                ),
+              };
+              return [
+                {
+                  target,
+                  configs: [...new Set(sourcePlans.map((plan) => plan.config))],
+                  volume,
+                },
+              ];
+            } catch {
+              return [];
+            }
+          });
+        }
+      }
+    }
+    return result;
+  };
   if (cap === undefined || bounded.filter((shard) => !shard.requiresDist).length <= cap) {
-    return bounded;
+    return withVolumes(bounded);
   }
   const otherNonDistRows = [...otherShards, ...boundaryShards].filter(
     (shard) => !shard.requiresDist,
   ).length;
   if (shards.filter((shard) => !shard.requiresDist).length <= cap || otherNonDistRows >= cap) {
-    return shards;
+    return withVolumes(shards);
   }
   // Only target chunks may grow to fit the remaining rows; all other owners
   // keep their compact execution envelopes and the workflow owns final admission.
-  return [
+  return withVolumes([
     ...otherShards,
     ...createChangedTargetShards(changedTargets, names, cap - otherNonDistRows),
     ...boundaryShards,
-  ];
+  ]);
 }

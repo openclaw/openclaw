@@ -325,7 +325,6 @@ export function consumeGatewaySubagentCompletionToolHandoff(
     | "client"
     | "providerOverride"
     | "modelOverride"
-    | "restoredCronContinuation"
     | "resolvedSessionKey"
     | "getAdmittedSessionId"
   >,
@@ -338,9 +337,7 @@ export function consumeGatewaySubagentCompletionToolHandoff(
     inputProvenance,
     internalEvents: params.request.internalEvents,
   });
-  return params.providerOverride === undefined &&
-    params.modelOverride === undefined &&
-    params.restoredCronContinuation === undefined
+  return params.providerOverride === undefined && params.modelOverride === undefined
     ? consumeSubagentCompletionToolHandoff({
         handoffId: params.client?.internal?.delegatedToolPolicyHandoffId,
         sourceTool: inputProvenance?.sourceTool,

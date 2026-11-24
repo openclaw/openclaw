@@ -6,7 +6,7 @@ import {
   setupInteractions,
   type DispatchPluginInteractiveHandlerResult,
 } from "./interactions.test-runtime.js";
-import { actionBody, button, singleButtonBlocks } from "./interactions.test-support.js";
+import { actionBody, button, plainText, singleButtonBlocks } from "./interactions.test-support.js";
 
 const {
   ack,
@@ -101,5 +101,26 @@ describe("Slack interaction lifecycle", () => {
     await handling;
     expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("gives the agent an unclaimed agent button as data without the mark", async () => {
+    dispatchPluginInteractiveHandlerMock.mockResolvedValue({
+      matched: false,
+      handled: false,
+      duplicate: false,
+    });
+    const { getHandler } = setupInteractions();
+    await getHandler()({
+      ack,
+      body: actionBody({ text: "Choose", blocks: [] }),
+      action: {
+        type: "button",
+        action_id: "openclaw:callback_button:1:1",
+        value: "::/pick a",
+        text: plainText("Choose"),
+      },
+    });
+    expect(dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0].data).toBe("::/pick a");
+    expect(enqueueSessionEventMock.mock.calls[0]?.[0]).toBe("callback_data: /pick a");
   });
 });

@@ -255,6 +255,7 @@ export async function prepareCodexThreadRequestContext(
     model: startModelSelection.model,
     modelProvider: startModelProvider,
     preserveNativeModel: binding.preserveNativeModel === true,
+    preserveNativeCollaboration: binding.connectionScope === "supervision",
     nativeModelProvider:
       binding.connectionScope === "supervision" ? binding.modelProvider : undefined,
     hostSystemAgentActive: options.preflight.hostSystemAgentActive,
@@ -336,7 +337,12 @@ export async function publishCodexThreadInferenceBinding(
         params.inferenceProviderRoutes,
       );
     }
-    return { ...binding, preparedServiceTier: params.appServer.serviceTier };
+    return {
+      ...binding,
+      preparedServiceTier: params.appServer.serviceTier,
+      // Preflight stored its effective config here; reporting reuses it instead of re-reading.
+      ...(params.nativeConfig ? { preparedEffectiveConfig: params.nativeConfig } : {}),
+    };
   };
   return params.authority ? await params.authority.withCurrent(publish) : publish();
 }

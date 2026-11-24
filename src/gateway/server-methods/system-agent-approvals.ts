@@ -1,4 +1,7 @@
-import { listVisiblePendingApprovalRequests } from "./approval-record-lookup.js";
+import {
+  approvalReaderSessionPolicy,
+  listVisiblePendingApprovalRequests,
+} from "./approval-record-lookup.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemAgentApprovalHandlers: GatewayRequestHandlers = {
@@ -10,7 +13,7 @@ export const systemAgentApprovalHandlers: GatewayRequestHandlers = {
         ? await listVisiblePendingApprovalRequests({
             manager,
             client,
-            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+            ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
           })
         : [],
       undefined,

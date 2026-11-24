@@ -1,5 +1,5 @@
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { readDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentPathWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -77,7 +77,8 @@ export async function withSessionActor<T>(
   lifetime.assertCurrent();
   const options = toDatabaseOptions(scope);
   const database = { ...options, path: resolveOpenClawAgentSqlitePath(options) };
-  const identity = readDatabasePathIdentitySync(database.path);
+  const identity = await readDatabasePathIdentity(database.path);
+  lifetime.assertCurrent();
   if (!identity.key.startsWith("file:")) {
     return undefined;
   }

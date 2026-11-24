@@ -695,6 +695,21 @@ it("coalesces starts, reuses its listening URL, and restarts after stop", async 
   checkUrl(await server.start());
 });
 
+it.each([
+  ["starts when streaming.provider names it", "openai", true],
+  ["stays off under automatic selection", undefined, false],
+])("media streaming with a provider that is ready only when named %s", async (_name, named, on) => {
+  // Ready only once named, like a provider whose one key is a saved key.
+  mocks.stt.isConfiguredAsync = async (ctx) => ctx.selectedExplicitly === true;
+  onTestFinished(() => {
+    delete mocks.stt.isConfiguredAsync;
+  });
+  const config = { provider: "twilio", streaming: { enabled: true, provider: named } };
+  const { server } = fixture(config, streamingProvider());
+  await server.start();
+  expect(server.getMediaStreamHandler() !== null).toBe(on);
+});
+
 it("logs transcript counts without disclosing inactive-stream speech", async () => {
   const { server, messages } = fixture(streamConfig, streamingProvider(), [], {
     getCallByProviderCallId: () => undefined,

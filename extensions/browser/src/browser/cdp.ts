@@ -90,11 +90,14 @@ export async function createTargetViaCdp(opts: {
   signal?: AbortSignal;
   /** Wait for the created document to finish navigation and return its authoritative URL. */
   waitForNavigationResult?: boolean;
+  allowOperatorPages?: true;
 }): Promise<{ targetId: string; finalUrl?: string }> {
   opts.signal?.throwIfAborted();
   await assertBrowserNavigationAllowed({
     url: opts.url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
+      allowOperatorPages: opts.allowOperatorPages,
+    }),
   });
   const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);

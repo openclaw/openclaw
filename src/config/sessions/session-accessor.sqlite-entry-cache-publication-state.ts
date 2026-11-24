@@ -51,6 +51,13 @@ const unknownSharingAuthorities = resolveGlobalSet<string>(
   "close-and-restart",
 );
 
+export class SessionSharingAuthorityUnknownError extends Error {
+  constructor() {
+    super("Session sharing authority is unknown until the Gateway restarts");
+    this.name = "SessionSharingAuthorityUnknownError";
+  }
+}
+
 /** ID selection cannot pass a worker commit whose identity facts are not yet published. */
 export function isSessionIdSelectionPublished(params: {
   databaseIdentity: string;
@@ -403,7 +410,10 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     },
     initialize: (snapshot: CommittedSessionSharingFacts) => {
       const acquisition = read.acquisition;
-      if (!active || !acquisition || unknownSharingAuthorities.has(key)) {
+      if (unknownSharingAuthorities.has(key)) {
+        throw new SessionSharingAuthorityUnknownError();
+      }
+      if (!active || !acquisition) {
         throw new Error("Session sharing acquisition is no longer current");
       }
       read.facts = reconcileSessionSharingAcquisition(acquisition, snapshot);

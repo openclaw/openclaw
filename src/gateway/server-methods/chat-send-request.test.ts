@@ -195,6 +195,18 @@ it("keeps ordinary typed @names inert and fingerprints only explicit selections"
   expect(first.requestIdentity).toBe((await fingerprint("alex-one")).requestIdentity);
 });
 
+it.each(["openclaw-macos", "openclaw-linux", "openclaw-ios", "openclaw-android"] as const)(
+  "accepts signed-in native UI mention input from %s",
+  async (id) => {
+    const client = humanClient();
+    client.connect.client.id = id;
+    client.connect.client.mode = "ui";
+    expect((await normalize({ message: "@Bob hello", mentions: [mention(0, 4)] }, client)).ok).toBe(
+      true,
+    );
+  },
+);
+
 it("requires authenticated human ingress and rejects unsupported mention modes", async () => {
   const mentions = [mention(0, 4)];
   const unqualified = humanClient();
@@ -323,3 +335,26 @@ it("retains App attachment receipts without changing model text and binds them t
   await expectRejected({ message: "/stop", appContext });
   await expectRejected({ appContext: [{ title: "x".repeat(201) }] });
 });
+
+it.each([
+  [undefined, "off", false],
+  ["other-tool", "off", false],
+  ["openclaw_agent_consult", undefined, false],
+  ["openclaw_agent_consult", "off", true],
+] as const)(
+  "normalizes only explicit trusted Talk preferences (%s, %s)",
+  async (sourceTool, thinking, expected) => {
+    const result = await normalizeChatSendRequest({
+      params: requestParams({
+        ...(thinking ? { thinking } : {}),
+        ...(sourceTool ? { systemInputProvenance: { kind: "internal_system", sourceTool } } : {}),
+      }),
+      client: null,
+      trustedSystemInput: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.normalizeThinkingLevelOverride).toBe(expected);
+    }
+  },
+);

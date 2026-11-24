@@ -10,6 +10,7 @@ import {
 } from "../packages/gateway-protocol/src/client-info.js";
 import type { BoardSnapshot } from "../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
+import { waitForControlUiDocument } from "../src/commands/control-ui-handoff.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
@@ -43,7 +44,7 @@ const FINAL_HTML = `<h1>Restart chart</h1>
 it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
   "resumes a Control UI task after graceful restart and publishes an interactive dashboard without reconnecting",
   { timeout: 600_000 },
-  async () => {
+  async ({ signal }) => {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) {
       throw new Error("Gateway widget restart live proof requires OPENAI_API_KEY");
@@ -123,6 +124,10 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         };
         await instance.state.writeConfig(config);
         await instance.startGateway();
+        // Backend readiness can precede the cold UI build; finish setup before restarting.
+        await expect(
+          waitForControlUiDocument({ url: `http://127.0.0.1:${instance.port}/`, signal }),
+        ).resolves.toEqual({ ready: true });
         const deviceIdentity = loadOrCreateDeviceIdentity({
           path: instance.state.path("proof-device", "client", "credentials.sqlite"),
         });

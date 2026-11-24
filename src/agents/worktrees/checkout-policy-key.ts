@@ -3,7 +3,42 @@ import path from "node:path";
 import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../infra/git-exec.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { requireGit, worktreePathExists } from "./git.js";
-import { setWorktreePreparationTemplate } from "./preparation-timing.js";
+import {
+  recordWorktreeTemplateProbeFailure,
+  setWorktreePreparationTemplate,
+} from "./preparation-timing.js";
+import type { WorktreeTemplateRecord } from "./template-registry.js";
+
+export async function validateWorktreeTemplateStatus(
+  record: Pick<WorktreeTemplateRecord, "path" | "sourceCommit">,
+  git: WorktreeGitPolicy,
+  options: GitCommandOptions,
+): Promise<boolean> {
+  const status = await git.run(
+    record.path,
+    ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
+    options,
+  );
+  // NUL records keep filenames from impersonating HEAD headers.
+  const fields = status.stdout.split("\0");
+  const heads = fields.filter((field) => field.startsWith("# branch.oid "));
+  if (status.termination !== "exit" || status.code !== 0 || status.stdoutTruncatedBytes) {
+    recordWorktreeTemplateProbeFailure("validation-failed", status);
+    return false;
+  }
+  const failure =
+    fields.pop() !== ""
+      ? "status-malformed"
+      : !fields.every((field) => field.startsWith("# "))
+        ? "dirty"
+        : heads.length !== 1 || heads[0] !== `# branch.oid ${record.sourceCommit}`
+          ? "head-mismatch"
+          : undefined;
+  if (failure) {
+    setWorktreePreparationTemplate(undefined, { validationFailure: failure });
+  }
+  return !failure;
+}
 
 // Path-dependent filters and sparse configuration need a fresh checkout.
 // Hash effective checkout configuration so policy changes retire the cache.

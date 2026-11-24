@@ -46,6 +46,7 @@ import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-tele
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
+  gatewayServerIsolatedTestFiles,
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
@@ -90,6 +91,7 @@ import {
   filterUnitConfigTestFiles,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
+  classifyPackageJsonScriptChange,
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
@@ -146,6 +148,7 @@ import {
   resolveShardTimingKey,
   type VitestShardTimingSpec,
 } from "./lib/vitest-shard-metadata.mts";
+import { readWindowsTargets } from "./lib/windows-test-targets.mts";
 
 export { isTestFileTarget } from "./lib/changed-path-facts.mjs";
 
@@ -177,7 +180,12 @@ type ChangedTestTargetOptions = {
   broad?: boolean;
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
-  aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
+  aggressive?: {
+    maxDirectImporters: number;
+    maxDirectoryTests: number;
+    /** Owners whose behavior tests sit many imports away also select importers in their directory. */
+    transitiveOwners?: RegExp;
+  };
   adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
@@ -763,11 +771,7 @@ const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
 ];
 const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-snapshots.test.ts"];
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
-const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
-  "extensions/codex/src/manifest.test.ts",
-  "extensions/openai/openai-provider.test.ts",
-  "test/scripts/codex-client-version-contract.test.ts",
-];
+const CODEX_VERSION_CONTRACT_TEST_TARGETS = ["extensions/codex/src/manifest.test.ts"];
 // The iframe script and native document load as assets outside the import graph.
 const MERMAID_RENDERER_TEST_TARGETS = [
   "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
@@ -1526,6 +1530,26 @@ function includePatternMatchesAnyFile(pattern: string, files: string[]) {
       // Keep Node's separator, dot-segment, and platform handling for other paths.
       ((!literalPattern || !isNormalizedLiteralPath(file)) && path.matchesGlob(file, pattern)),
   );
+}
+
+function createIncludePatternMatcher(patterns: string[]) {
+  const literals = new Set<string>();
+  const globs: string[] = [];
+  for (const pattern of patterns) {
+    if (isNormalizedLiteralPath(pattern)) {
+      literals.add(pattern);
+    } else {
+      globs.push(pattern);
+    }
+  }
+  return (file: string) => {
+    if (literals.has(file)) {
+      return true;
+    }
+    // Noncanonical paths retain Node's separator and dot-segment semantics.
+    const candidates = isNormalizedLiteralPath(file) ? globs : patterns;
+    return candidates.some((pattern) => file === pattern || path.matchesGlob(file, pattern));
+  };
 }
 
 function resolveExplicitSourceTestTargets(
@@ -3243,6 +3267,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "pr-metadata",
       "pr-prepare-gates",
       "pr-prepare-preflight",
+      "pr-prepare-testbox",
       "pr-wrappers",
       "pr-gate-base",
     ],
@@ -3287,6 +3312,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/e2e/cron-cli-docker.sh", [dockerBuild, "docker-e2e-observability"]],
   ["scripts/ios-release-upload.sh", ["ios-release-wrapper-args", "ios-release-fastlane-gates"]],
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
+  ["scripts/container-registry-readback.mjs", ["container-registry-readback"]],
   ["scripts/lib/bundled-plugin-build-entries.mjs", ["bundled-plugin-build-entries", releaseCheck]],
   ["scripts/lib/docker-e2e-package.sh", [dockerBuild]],
   ["scripts/relay-build-limit-warnings.mts", [dockerBuild]],
@@ -3299,7 +3325,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "test/plugin-npm-release.test.ts",
       "test/plugin-clawhub-release.test.ts",
       "android-version",
-      "android-pin-version",
       "docker-release-policy",
       "docker-release-artifacts",
       "full-release-validation-at-sha",
@@ -3422,7 +3447,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   [
     "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
-    [dockerBuild, dockerE2e, pluginPrerelease, "bundled-plugin-install-uninstall-probe"],
+    [dockerBuild, dockerE2e, pluginPrerelease],
   ],
   ["scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh", ["plugin-update-unchanged-docker"]],
   ["scripts/e2e/lib/plugin-update/probe.mjs", ["plugin-update-unchanged-docker"]],
@@ -3576,7 +3601,12 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
   [
     /^\.github\/workflows\/vercel-container-registry-publish\.yml$/u,
-    ["docker-channel-promote", "release-plan-producer", "vercel-container-registry-publish"],
+    [
+      "container-registry-readback",
+      "docker-channel-promote",
+      "release-plan-producer",
+      "vercel-container-registry-publish",
+    ],
   ],
   [
     /^\.github\/workflows\/plugin-clawhub-new\.yml$/u,
@@ -3708,12 +3738,15 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["security-review-script", "security-review-rollout"],
   ],
   [
-    /^scripts\/github\/(?:guard-review|security-review-policy)\.mjs$/u,
+    /^scripts\/(?:github\/(?:dependency-manifests|guard-review|security-review-policy)|lib\/release-version)\.mjs$/u,
     [
       "dependency-guard-script",
       "security-sensitive-guard-script",
       "security-review-script",
       "security-review-rollout",
+      "security-review-admission",
+      "security-review-workflow",
+      "pr-merge-prior-ci",
     ],
   ],
   [/^scripts\/github\/guard-shared\.mjs$/u, ["security-review-script", "security-review-event"]],
@@ -3753,7 +3786,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       npmPostpublish,
     ],
   ],
-  [/^scripts\/lib\/android-version\.ts$/u, ["android-version", "android-pin-version"]],
+  [/^scripts\/lib\/android-version\.ts$/u, ["android-version"]],
   [
     /^scripts\/lib\/docker-e2e-plan\.(?:mjs|mts)$/u,
     [dockerE2e, "docker-all-scheduler", pluginPrerelease],
@@ -4380,9 +4413,10 @@ function resolveToolingTestTargets(
     semanticTargets.length ||
     conventionalTargets?.length,
   );
+  // A conventional filename is an owner hint, not an exhaustive consumer list.
   const importGraphResult =
     !options.boundedOwners &&
-    !hasDirectOwner &&
+    (!hasDirectOwner || conventionalTargets?.length) &&
     (options.forceFullImportGraph ||
       TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext)))
       ? options.forceFullImportGraph
@@ -4712,6 +4746,31 @@ function newlyConsumedMockModules(
   );
 }
 
+function changedWindowsTestInventory(cwd: string, baseRef: string | undefined): string[] | null {
+  if (!baseRef) {
+    return null;
+  }
+  const before = spawnSync("git", ["show", `${baseRef}:package.json`], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (before.error || before.status !== 0) {
+    return null;
+  }
+  try {
+    const after = fs.readFileSync(path.join(cwd, "package.json"), "utf8");
+    if (classifyPackageJsonScriptChange(before.stdout, after) !== "windowsTestTooling") {
+      return null;
+    }
+    const previous = new Set(readWindowsTargets(JSON.parse(before.stdout).scripts));
+    return readWindowsTargets(JSON.parse(after).scripts).filter((file) => !previous.has(file));
+  } catch {
+    return null;
+  }
+}
+
 function resolveBoundedChangedTestTargetPlan(
   changedPaths: string[],
   options: ChangedTestTargetOptions,
@@ -4804,12 +4863,26 @@ function resolveBoundedChangedTestTargetPlan(
       graph ??= getImportGraph(cwd, graphOptions, changedPaths);
       directImporters = new Set(walkAffectedTestsFromImportGraph([changedPath], graph, 1));
       const directCount = new Set(graph.reverseImports.get(changedPath)).size;
-      const depth = options.aggressive
-        ? directCount < options.aggressive.maxDirectImporters
+      const depth = !options.aggressive
+        ? undefined
+        : directCount < options.aggressive.maxDirectImporters
           ? 2
-          : 1
-        : undefined;
+          : 1;
       affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph, depth);
+      if (options.aggressive?.transitiveOwners?.test(changedPath)) {
+        // Every transitive importer in the owner's own directory; a package root reaches its
+        // whole package, so it relies on the declared behavior set instead.
+        const directory = path.posix.dirname(changedPath);
+        const packageRoot = /^(?:src|packages|extensions)\/[^/]+(?:\/src)?$/u.test(directory);
+        if (!packageRoot) {
+          affectedTests = uniqueOrdered([
+            ...affectedTests,
+            ...walkAffectedTestsFromImportGraph([changedPath], graph).filter((file) =>
+              file.startsWith(`${directory}/`),
+            ),
+          ]);
+        }
+      }
     }
     if (graph) {
       const changedExports =
@@ -4885,6 +4958,19 @@ function resolveBoundedChangedTestTargetPlan(
         }),
     );
     for (const manifest of manifests) {
+      const windowsTargets =
+        manifest === "package.json" ? changedWindowsTestInventory(cwd, options.baseRef) : null;
+      if (windowsTargets !== null) {
+        // Windows inventory edits do not change the package's runtime API.
+        // Keep manifest readers above and admit new Windows targets explicitly.
+        targets.push(...windowsTargets);
+        options.onSelection?.({
+          rule: "windows-test-inventory",
+          input: manifest,
+          targets: windowsTargets,
+        });
+        continue;
+      }
       const name = readImportGraphManifest(cwd, manifest).name;
       if (typeof name !== "string") {
         continue;
@@ -5056,7 +5142,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
     gatewayPluginTestFiles.includes(relative) &&
     (beforeDatabaseWorkerOwnership || !gatewayDatabaseWorkerTestFiles.includes(relative))
   ) {
-    return "gatewayMethods";
+    return gatewayServerIsolatedTestFiles.includes(relative) ? "gateway" : "gatewayMethods";
   }
   if (beforeDatabaseWorkerOwnership) {
     const formerFastKind = databaseWorkerCoreFormerFastKinds.get(relative);
@@ -5488,8 +5574,8 @@ export function buildVitestRunPlans(
       ? [toScopedIncludePattern(targetArg, cwd)]
       : [];
   });
-  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter((file) =>
-    databaseWorkerPatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
+  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter(
+    createIncludePatternMatcher(databaseWorkerPatterns),
   );
   const hasPackageFileTarget = classifiedTargets.some(
     ({ kind, relative }) =>
@@ -5593,10 +5679,9 @@ export function buildVitestRunPlans(
   const activeIncludePatterns = activeTargetArgs.map((target) =>
     toScopedIncludePattern(target, cwd),
   );
+  const matchesActiveIncludePattern = createIncludePatternMatcher(activeIncludePatterns);
   const impliedToolingIsolatedTargets = !watchMode
-    ? toolingIsolatedTestFiles.filter((file) =>
-        activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-      )
+    ? toolingIsolatedTestFiles.filter(matchesActiveIncludePattern)
     : [];
   if (impliedToolingIsolatedTargets.length > 0) {
     const current = groupedTargets.get("toolingIsolated") ?? [];
@@ -5609,9 +5694,8 @@ export function buildVitestRunPlans(
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
   const uiIncludePatterns = uiTargets.map((target) => toScopedIncludePattern(target, cwd));
-  const impliedUiTimingTargets = uiTimingTestFiles.filter((file) =>
-    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const matchesUiIncludePattern = createIncludePatternMatcher(uiIncludePatterns);
+  const impliedUiTimingTargets = uiTimingTestFiles.filter(matchesUiIncludePattern);
   if (impliedUiTimingTargets.length > 0) {
     groupedTargets.set("uiTiming", [
       ...new Set([...(groupedTargets.get("uiTiming") ?? []), ...impliedUiTimingTargets]),
@@ -5636,9 +5720,7 @@ export function buildVitestRunPlans(
       ]);
     }
   }
-  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
-    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter(matchesUiIncludePattern);
   if (impliedUiIsolatedTargets.length > 0) {
     const current = groupedTargets.get("uiIsolated") ?? [];
     for (const target of impliedUiIsolatedTargets) {
@@ -5650,9 +5732,7 @@ export function buildVitestRunPlans(
   }
   // Source-child ownership can cross shared suites (for example state tests).
   // Match every active target so broad selections cannot silently omit excluded children.
-  const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
-    activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const impliedCliProcessTargets = cliProcessTestFiles.filter(matchesActiveIncludePattern);
   if (impliedCliProcessTargets.length > 0) {
     const current = groupedTargets.get("cliProcess") ?? [];
     for (const target of impliedCliProcessTargets) {

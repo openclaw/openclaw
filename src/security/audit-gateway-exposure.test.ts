@@ -140,6 +140,7 @@ describe("security audit gateway exposure findings", () => {
       ["no_allowlist", "warn", { ...proxy, allowUsers: [] }],
       ["allow_loopback", "warn", { ...allowed, allowLoopback: true }, ["127.0.0.1"]],
       ["device_auto_approve", "warn", { ...allowed, deviceAutoApprove: { enabled: true } }],
+      ["narrow_to_device_grant", "warn", { ...allowed, narrowToDeviceGrant: true }],
       [
         "device_auto_approve_admin",
         "critical",
@@ -160,6 +161,10 @@ describe("security audit gateway exposure findings", () => {
       };
       const findings = audit(cfg);
       expect(hasFinding(`gateway.trusted_proxy_${suffix}`, severity, findings), suffix).toBe(true);
+      expect(
+        hasFinding("gateway.trusted_proxy_narrow_to_device_grant", "warn", findings),
+        suffix,
+      ).toBe(suffix === "narrow_to_device_grant");
       const checkIds = findings.map((finding) => finding.checkId);
       expect(checkIds, suffix).toContain("gateway.trusted_proxy_auth");
       for (const id of [

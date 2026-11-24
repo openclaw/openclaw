@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  resolveIdentityPathViaExistingAncestorSync,
-  resolveIdentityPathViaExistingAncestor,
-  resolveRealpathOrAbsolute,
-} from "./boundary-path.js";
+import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 
 afterEach(() => vi.restoreAllMocks());
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,40 +19,3 @@ it("keeps missing paths lexical and falls back on non-missing errors", async () 
   });
   expect(resolveRealpathOrAbsolute("denied")).toBe(path.resolve("denied"));
 });
-
-it.each([true, false])("resolves ancestor identity with a reachable ancestor: %s", (reachable) => {
-  const aliasRoot = path.resolve("identity-alias");
-  const targetPath = path.join(aliasRoot, "locked", "leaf");
-  const canonicalRoot = path.resolve("identity-real");
-  vi.spyOn(fsSync.realpathSync, "native").mockImplementation((candidate) => {
-    const resolved = path.resolve(String(candidate));
-    if (reachable && resolved === aliasRoot) {
-      return canonicalRoot;
-    }
-    throw new Error("simulated realpath failure");
-  });
-
-  expect(resolveIdentityPathViaExistingAncestorSync(targetPath)).toBe(
-    reachable ? path.join(canonicalRoot, "locked", "leaf") : targetPath,
-  );
-});
-
-it.each([true, false])(
-  "resolves runtime ancestor identity asynchronously with a reachable ancestor: %s",
-  async (reachable) => {
-    const aliasRoot = path.resolve("identity-alias");
-    const targetPath = path.join(aliasRoot, "locked", "leaf");
-    const canonicalRoot = path.resolve("identity-real");
-    const synchronous = vi.spyOn(fsSync.realpathSync, "native");
-    vi.spyOn(fs, "realpath").mockImplementation(async (candidate) => {
-      if (reachable && path.resolve(String(candidate)) === aliasRoot) {
-        return canonicalRoot;
-      }
-      throw new Error("simulated realpath failure");
-    });
-    expect(await resolveIdentityPathViaExistingAncestor(targetPath)).toBe(
-      reachable ? path.join(canonicalRoot, "locked", "leaf") : targetPath,
-    );
-    expect(synchronous).not.toHaveBeenCalled();
-  },
-);

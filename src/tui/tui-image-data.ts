@@ -1,4 +1,4 @@
-import { readImageMetadataFromHeader } from "../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "../media/image-processor-config.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import type { TuiImageData } from "./tui-backend.js";

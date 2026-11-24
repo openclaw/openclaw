@@ -21,7 +21,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-context.js";
 import { VERSION } from "../version.js";
 import {
   getStateRuntimeSchemaAdmission,
@@ -75,6 +75,8 @@ import {
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import { stateWorkerDiskMigrations } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { stateWorkerRetentionMigration } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { stateWorkerProvisionSourceMigration } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { stateApprovalProfileMigration } from "./openclaw-state-db-schema-v41-approval-profile.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -538,6 +540,8 @@ export const versionedStateMigrations = [
   stateTemplateNamesMigration,
   ...stateWorkerDiskMigrations,
   stateWorkerRetentionMigration,
+  stateWorkerProvisionSourceMigration,
+  stateApprovalProfileMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -564,6 +568,8 @@ export function migrateBoundedStateSchema(
     stateTemplateNamesMigration,
     ...stateWorkerDiskMigrations,
     stateWorkerRetentionMigration,
+    stateWorkerProvisionSourceMigration,
+    stateApprovalProfileMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.

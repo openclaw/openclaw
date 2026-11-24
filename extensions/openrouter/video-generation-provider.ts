@@ -118,6 +118,18 @@ function isOpenRouterVideoJobComplete(
 }
 
 export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvider {
+  const createModeCapabilities = () => ({
+    maxVideos: 1,
+    supportedDurationSeconds: [...SUPPORTED_DURATION_SECONDS],
+    supportsAspectRatio: true,
+    supportsResolution: true,
+    supportsSize: true,
+    supportsAudio: true,
+    aspectRatios: [...SUPPORTED_ASPECT_RATIOS],
+    resolutions: [...SUPPORTED_RESOLUTIONS],
+  });
+  const generateCapabilities = createModeCapabilities();
+  const { maxVideos, ...imageToVideoCapabilities } = createModeCapabilities();
   return {
     id: "openrouter",
     label: "OpenRouter",
@@ -130,27 +142,12 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
         callback_url: "string",
         seed: "number",
       },
-      generate: {
-        maxVideos: 1,
-        supportedDurationSeconds: [...SUPPORTED_DURATION_SECONDS],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: true,
-        aspectRatios: [...SUPPORTED_ASPECT_RATIOS],
-        resolutions: [...SUPPORTED_RESOLUTIONS],
-      },
+      generate: generateCapabilities,
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
+        maxVideos,
         maxInputImages: 4,
-        supportedDurationSeconds: [...SUPPORTED_DURATION_SECONDS],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: true,
-        aspectRatios: [...SUPPORTED_ASPECT_RATIOS],
-        resolutions: [...SUPPORTED_RESOLUTIONS],
+        ...imageToVideoCapabilities,
       },
       videoToVideo: {
         enabled: false,

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
@@ -119,6 +120,11 @@ suite.define(() => {
         await openChatDetails(page);
         await flushSnapshot();
         await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+        expect(
+          await page
+            .locator("openclaw-app-sidebar")
+            .evaluate((element: AppSidebarElement) => element.snapshotCaptureStatus()),
+        ).toBe("saved");
 
         const appearance = () =>
           pane

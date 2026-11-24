@@ -60,7 +60,7 @@ function report(period: Period, key: string, partial = false): ReportDocument {
   return reportDocument(
     [
       {
-        ...member("alice", "Alice"),
+        ...member("alice", "Alice &copy; a > b <b>x</b>"),
         github: {
           ...counts,
           items: [
@@ -387,7 +387,7 @@ describe("Team Reports HTTP responses", () => {
     const markdown = await fetchPath(`/reports/${period}/${key}/report.md`);
     expect(markdown.status).toBe(200);
     expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
-    expect(markdown.body).toContain(key);
+    expect(markdown.body).toContain("### Alice \\&copy; a \\> b \\<b\\>x\\</b\\> (@alice)\n");
     expect(markdown.body).not.toContain(maliciousTitle);
     expect(markdown.body).toContain("> Model summary unavailable: completion failed\n");
     expect(markdown.body).toBe(renderMarkdown(report(period, key), summary) + markdownSuffix);

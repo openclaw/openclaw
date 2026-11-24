@@ -1,7 +1,9 @@
 import { reasoningTagTextPolicy } from "../provider-options.js";
 import {
   PROVIDER_CONTEXT_HANDOFF,
+  PROVIDER_DEFERRED_TOOL_NAMES,
   PROVIDER_MODEL_INPUT,
+  PROVIDER_STATE_SCOPE,
   type ProviderStreamOptions,
 } from "../provider-types.js";
 import { modelRequestBodyState } from "../transports/model-request-body.js";
@@ -25,6 +27,8 @@ export function buildBaseOptions(
   const baseOptions = {
     [PROVIDER_CONTEXT_HANDOFF]: options?.[PROVIDER_CONTEXT_HANDOFF],
     [PROVIDER_MODEL_INPUT]: options?.[PROVIDER_MODEL_INPUT],
+    [PROVIDER_DEFERRED_TOOL_NAMES]: options?.[PROVIDER_DEFERRED_TOOL_NAMES],
+    [PROVIDER_STATE_SCOPE]: options?.[PROVIDER_STATE_SCOPE],
     temperature: options?.temperature,
     ...(options?.serviceTier ? { serviceTier: options.serviceTier } : {}),
     maxTokens: options?.maxTokens,
@@ -34,6 +38,7 @@ export function buildBaseOptions(
     apiKey: apiKey || options?.apiKey,
     transport: options?.transport,
     cacheRetention: options?.cacheRetention,
+    ...(options?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     promptCacheTtl: options?.promptCacheTtl,
     sessionId: options?.sessionId,
     promptCacheKey: options?.promptCacheKey,

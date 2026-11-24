@@ -1,3 +1,4 @@
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
@@ -7,22 +8,31 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
-import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeMessage,
+} from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import type { InlineCommandDisclosurePolicy } from "./chat-inline-command-presentation.ts";
 import {
   messageRecoveryKey,
   type AssistantMessageExpansionState,
 } from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
+import type { SystemEventRenderItem } from "./chat-system-event-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
 import type { ChatItemsFacts } from "./chat-thread-facts.ts";
+import { sameChatItemsStructuralInput, sameEntries } from "./chat-thread-input-match.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
+import { carryMovedDisclosures } from "./chat-tool-activity-coalesce.ts";
+import { activityDisclosureCalls } from "./components/chat-activity-projection.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
@@ -71,8 +81,11 @@ type ToolCardExpansionState = {
   lastSync?: {
     // The scan memo must not retain messages after their owning pane releases them.
     items: WeakRef<readonly RenderChatItem[]>;
+    transcriptItems?: WeakRef<readonly SystemEventRenderItem[]>;
+    bubbleMode: boolean;
     isFilteredProjection: boolean;
     autoExpandToolCalls: boolean;
+    inlineCommands: InlineCommandDisclosurePolicy | undefined;
   };
 };
 
@@ -126,6 +139,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
     previous.isStreaming === next.isStreaming &&
     previous.visibleContent === next.visibleContent &&
+    previous.startsActivityGroup === next.startsActivityGroup &&
     previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
@@ -147,6 +161,7 @@ const CHAT_ITEM_FIELDS = {
     "text",
     "label",
     "handoffBoundary",
+    "activityBoundary",
     "startsTurn",
     "boundaryId",
     "timestamp",
@@ -312,78 +327,6 @@ function stabilizeChatItems(
   return sameEntries(stabilized, previous) ? previous : stabilized;
 }
 
-function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): boolean {
-  return (
-    previous === next ||
-    (previous !== undefined &&
-      next !== undefined &&
-      previous.length === next.length &&
-      previous.every((entry, index) => entry === next[index]))
-  );
-}
-
-function sameChatItemsStructuralInput(
-  previous: BuildChatItemsProps,
-  next: BuildChatItemsProps,
-  ignoreWorkingPhase = false,
-): boolean {
-  const previousReasoning = previous.reasoning?.items;
-  const nextReasoning = next.reasoning?.items;
-  const previousActive = activeChatReasoning(previous.reasoning);
-  const nextActive = activeChatReasoning(next.reasoning);
-  return (
-    previous.sessionKey === next.sessionKey &&
-    previous.archiveNotice?.key === next.archiveNotice?.key &&
-    previous.archiveNotice?.label === next.archiveNotice?.label &&
-    previous.runId === next.runId &&
-    previous.compactionStatus === next.compactionStatus &&
-    previous.locale === next.locale &&
-    previous.messages === next.messages &&
-    previous.toolMessages === next.toolMessages &&
-    previous.guardianNotices === next.guardianNotices &&
-    previous.streamSegments === next.streamSegments &&
-    previous.streamStartedAt === next.streamStartedAt &&
-    previous.reasoning?.runId === next.reasoning?.runId &&
-    previous.showReasoning === next.showReasoning &&
-    previousReasoning?.length === nextReasoning?.length &&
-    (previousReasoning?.every(
-      (item, index) =>
-        item === nextReasoning?.[index] ||
-        (item === previousActive &&
-          nextReasoning?.[index] === nextActive &&
-          sameFields(previousActive, nextActive, ["itemId", "startedAt"])),
-    ) ??
-      true) &&
-    previous.queue === next.queue &&
-    previous.initialTurnId === next.initialTurnId &&
-    // renderChat derives this list of immutable Gateway records on every render,
-    // including scroll-driven ones; identity would rebuild all loaded history.
-    sameEntries(previous.pendingInputs, next.pendingInputs) &&
-    previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
-    previous.workerSetupPending === next.workerSetupPending &&
-    previous.showToolCalls === next.showToolCalls &&
-    previous.persistCommentary === next.persistCommentary &&
-    (ignoreWorkingPhase ||
-      (previous.runWorking === next.runWorking && previous.runFinalizing === next.runFinalizing)) &&
-    previous.runActive === next.runActive &&
-    previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
-    previous.subagentWait?.runId === next.subagentWait?.runId &&
-    (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
-    previous.questionPrompts === next.questionPrompts &&
-    // Loading only suppresses progress indicators on an initially empty thread.
-    (previous.loading === next.loading || (!next.runWorking && !next.subagentWait)) &&
-    sameEntries(previous.replyPeople, next.replyPeople) &&
-    previous.replyLocalPerson === next.replyLocalPerson &&
-    previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery &&
-    previous.messageRecovery?.messages === next.messageRecovery?.messages &&
-    previous.messageRecovery?.revision === next.messageRecovery?.revision &&
-    previous.messageRecovery?.displayFacts === next.messageRecovery?.displayFacts &&
-    previous.messageRecovery?.canFetchFullMessage === next.messageRecovery?.canFetchFullMessage &&
-    previous.messageRecovery?.agentId === next.messageRecovery?.agentId
-  );
-}
-
 function liveStreamIdentity(input: BuildChatItemsProps): string {
   return JSON.stringify([input.sessionKey, input.runId ?? null, input.streamStartedAt]);
 }
@@ -473,7 +416,15 @@ export function buildCachedChatItems(
     input.runFinalizing === true &&
     input.runActive === true &&
     previousInput.stream !== input.stream;
-  if (previousInput && sameChatItemsStructuralInput(previousInput, input, finalizingOnset)) {
+  if (
+    previousInput &&
+    sameChatItemsStructuralInput(
+      previousInput,
+      input,
+      finalizingOnset,
+      cached.facts?.hasContentBeforeProgress,
+    )
+  ) {
     if (
       previousInput.stream === input.stream &&
       activeChatReasoning(previousInput.reasoning)?.text ===
@@ -552,9 +503,19 @@ export function subscribeExpansionState(
   };
 }
 
-function writeExpansionState<T>(values: Map<string, T>, key: string, value: T): boolean {
-  if (values.has(key) && values.get(key) === value) {
+function writeExpansionState<T>(
+  values: Map<string, T>,
+  key: string,
+  value: T,
+  explicit = false,
+): boolean {
+  const choices = explicitToolExpansions.get(values);
+  const newChoice = explicit && choices !== undefined && !choices.has(key);
+  if (!newChoice && values.has(key) && values.get(key) === value) {
     return false;
+  }
+  if (newChoice) {
+    choices.add(key);
   }
   values.set(key, value);
   expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
@@ -562,17 +523,31 @@ function writeExpansionState<T>(values: Map<string, T>, key: string, value: T): 
 }
 
 export function setExpansionState<T>(values: Map<string, T>, key: string, value: T): void {
-  explicitToolExpansions.get(values)?.add(key);
-  if (writeExpansionState(values, key, value)) {
+  if (writeExpansionState(values, key, value, true)) {
     for (const notify of expansionListeners.get(values) ?? []) {
       notify();
     }
   }
 }
 
+export function toggleExpansionState(
+  values: Map<string, boolean>,
+  key: string,
+  expanded = values.get(key) ?? false,
+): void {
+  setExpansionState(values, key, !expanded);
+}
+
+export function getExplicitToolExpansion(values: ReadonlyMap<string, boolean>, key: string) {
+  return explicitToolExpansions.get(values)?.has(key) ? values.get(key) : undefined;
+}
+
 function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
+  const previous = values.get(key);
   if (values.delete(key)) {
-    expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    if (previous !== false) {
+      expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    }
   }
 }
 
@@ -623,54 +598,24 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-/**
- * A run that ends or hands off swaps its live tool rows for their stored
- * copies, which arrive under other message keys. Disclosure ids stay scoped to
- * their message, so what the reader had opened is carried across by tool call,
- * and only where one disclosure names that call on each side.
- */
-function carryMovedDisclosures(
-  state: ToolCardExpansionState,
-  previous: ReadonlyMap<string, string> | undefined,
-  current: ReadonlyMap<string, string>,
-): void {
-  if (!previous) {
-    return;
-  }
-  const { expanded, explicit } = state;
-  const single = (calls: ReadonlyMap<string, string>) => {
-    const ids = new Map<string, string | null>();
-    for (const [id, call] of calls) {
-      ids.set(call, ids.has(call) ? null : id);
-    }
-    return ids;
-  };
-  const targets = single(current);
-  for (const [call, source] of single(previous)) {
-    const target = targets.get(call);
-    const open = source ? expanded.get(source) : undefined;
-    if (!source || !target || current.has(source) || explicit.has(target) || open === undefined) {
-      continue;
-    }
-    writeExpansionState(expanded, target, open);
-    if (explicit.has(source)) {
-      explicit.add(target);
-    }
-  }
-}
-
 export function syncToolCardExpansionState(
   sessionKey: string,
   items: readonly (ChatItem | MessageGroup)[],
   autoExpandToolCalls: boolean,
   isFilteredProjection = false,
+  inlineCommands?: InlineCommandDisclosurePolicy,
+  transcriptItems?: readonly SystemEventRenderItem[],
+  bubbleMode = false,
 ): void {
   const state = getToolCardExpansionState(sessionKey);
   const { expanded, initialized, explicit, lastSync } = state;
   if (
     lastSync?.items.deref() === items &&
     lastSync.isFilteredProjection === isFilteredProjection &&
-    lastSync.autoExpandToolCalls === autoExpandToolCalls
+    lastSync.autoExpandToolCalls === autoExpandToolCalls &&
+    lastSync.inlineCommands === inlineCommands &&
+    lastSync.transcriptItems?.deref() === transcriptItems &&
+    lastSync.bubbleMode === bubbleMode
   ) {
     return;
   }
@@ -683,7 +628,12 @@ export function syncToolCardExpansionState(
     }
     if (!initialized.has(id)) {
       if (!explicit.has(id)) {
-        writeExpansionState(expanded, id, autoExpandToolCalls);
+        if (autoExpandToolCalls) {
+          writeExpansionState(expanded, id, true);
+        } else {
+          // Closed is already the rendering default; discovering it changes only inventory.
+          expanded.set(id, false);
+        }
       }
       initialized.add(id);
     }
@@ -695,26 +645,78 @@ export function syncToolCardExpansionState(
     let groupCallId: string | undefined;
     for (const entry of item.messages) {
       const cards = extractToolCardsCached(entry.message);
+      const standalone = isStandaloneToolMessageForDisplay(entry.message);
+      const imageCard =
+        cards.length === 1 && unwrapToolCallForDisplay(cards[0]!).name === "view_image"
+          ? cards[0]
+          : undefined;
+      // Bare live tool envelopes still render the card; text/media owns the outer disclosure.
+      const imageMessage = Boolean(
+        imageCard &&
+        standalone &&
+        resolveMessageVisibleContent(entry.message, normalizeMessage(entry.message)) !== "none",
+      );
+      const imageIdentity = imageCard?.callId
+        ? JSON.stringify([imageCard.runId, imageCard.callId])
+        : undefined;
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        groupCallId ??= cards[cardIndex]?.callId;
-        retainDisclosure(`${entry.key}:toolcard:${cardIndex}`, cards[cardIndex]?.callId, "card");
+        const card = cards[cardIndex]!;
+        groupCallId ??= card.callId;
+        retainDisclosure(
+          `${entry.key}:toolcard:${cardIndex}`,
+          imageCard ? (imageMessage ? undefined : imageIdentity) : card.callId,
+          imageCard ? "image" : "card",
+        );
       }
-      if (!isStandaloneToolMessageForDisplay(entry.message)) {
+      if (!standalone) {
         continue;
       }
-      retainDisclosure(`toolmsg:${entry.key}`, cards[0]?.callId, "message");
+      retainDisclosure(
+        `toolmsg:${entry.key}`,
+        imageCard ? (imageMessage ? imageIdentity : undefined) : cards[0]?.callId,
+        imageCard ? "image" : "message",
+      );
     }
-    if (groupCallId) {
+    if (groupCallId && !transcriptItems) {
       calls.set(`activity:${item.key}`, `activity:${groupCallId}`);
     }
   }
+  if (transcriptItems) {
+    for (const [id, call] of activityDisclosureCalls(
+      transcriptItems,
+      bubbleMode,
+      Boolean(inlineCommands),
+    )) {
+      if (id.startsWith("lifecycle:")) {
+        retainDisclosure(id, undefined, "lifecycle");
+      }
+      calls.set(id, call);
+    }
+  }
   if (!isFilteredProjection) {
-    carryMovedDisclosures(state, state.calls, calls);
-    state.calls = calls;
+    carryMovedDisclosures(state, state.calls, calls, writeExpansionState);
+    // A history refresh can remove live rows while older tools remain visible.
+    // Keep explicitly chosen activity segments tied to their run-scoped calls.
+    if (calls.size > 0) {
+      const represented = new Set(calls.values());
+      for (const [id, call] of state.calls ?? []) {
+        if (
+          (id.startsWith("activity:") || id.startsWith("lifecycle:")) &&
+          explicit.has(id) &&
+          !calls.has(id) &&
+          !represented.has(call)
+        ) {
+          calls.set(id, call);
+        }
+      }
+      state.calls = calls;
+    }
   }
   if (autoExpandToolCalls && !lastSync?.autoExpandToolCalls) {
-    for (const toolCardId of initialized) {
-      writeExpansionState(expanded, toolCardId, true);
+    for (const id of initialized) {
+      if (!explicit.has(id)) {
+        writeExpansionState(expanded, id, true);
+      }
     }
   }
   // A render reconciles its own history without notifying sibling panes. Their
@@ -730,7 +732,10 @@ export function syncToolCardExpansionState(
   }
   state.lastSync = {
     items: new WeakRef(items),
+    transcriptItems: transcriptItems ? new WeakRef(transcriptItems) : undefined,
+    bubbleMode,
     isFilteredProjection,
     autoExpandToolCalls,
+    inlineCommands,
   };
 }

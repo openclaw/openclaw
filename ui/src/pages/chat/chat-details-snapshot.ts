@@ -12,49 +12,52 @@ export type DetailsSubagents = NonNullable<ChatDetailsSnapshot["subagents"]>;
 export type DetailsSubagent = DetailsSubagents["rows"][number];
 export type DetailsAutomation = NonNullable<ChatDetailsSnapshot["automations"]>["rows"][number];
 export type DetailsSnapshotPatch = Partial<Omit<ChatDetailsSnapshot, "locale">>;
+export const DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS = 3;
 
 export function isDetailsSubagentWorking(row: Pick<DetailsSubagent, "status">) {
   return row.status === "running" || row.status === "waiting";
 }
 
+/** Older display receipts also contain subsessions; retain only the subagent collection. */
+export function detailsSubagentCollection(value: DetailsSubagents): DetailsSubagents {
+  return {
+    total:
+      value.total -
+      value.counts.reduce((sum, entry) => sum + (entry.listed === false ? entry.count : 0), 0),
+    rows: value.rows.filter((row) => row.listed !== false),
+    counts: value.counts.filter((entry) => entry.listed !== false),
+  };
+}
+
 export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile = false) {
   const collection = rows.filter((row) => row.listed !== false);
-  const ordinary = rows.filter((row) => row.listed === false);
   const counts: DetailsSubagents["counts"] = [];
-  for (const row of rows) {
-    const listed = row.listed === false ? false : undefined;
+  for (const row of collection) {
     const status = isDetailsSubagentWorking(row)
       ? "running"
-      : listed !== false && row.status !== "queued"
+      : row.status !== "queued"
         ? "done"
         : row.status;
-    const count = counts.find((entry) => entry.status === status && entry.listed === listed);
+    const count = counts.find((entry) => entry.status === status);
     if (count) {
       count.count += 1;
     } else {
-      counts.push({ status, count: 1, listed });
+      counts.push({ status, count: 1 });
     }
   }
   return {
-    total: rows.length,
+    total: collection.length,
     rows: [
       ...collection.filter(isDetailsSubagentWorking),
       ...collection.filter((row) => !isDetailsSubagentWorking(row)),
     ]
       .slice(0, collection.length > (mobile ? 3 : 5) ? 4 : 5)
-      .map(({ key, label, status }): DetailsSubagent => ({ key, label, status }))
-      .concat(
-        ordinary.slice(0, 3).map(({ key, label, status, activity, progress, session }) => ({
-          key,
-          label,
-          status,
-          listed: false,
-          activity,
-          progress,
-          session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
-        })),
-      ),
-    // Ordinary totals cannot be recovered from their capped preview rows.
+      .map(({ key, label, status, session }): DetailsSubagent => ({
+        key,
+        label,
+        status,
+        session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
+      })),
     counts: counts.toSorted((a, b) => {
       const order = ["running", "queued", "done", "failed", "stopped"];
       return order.indexOf(a.status) - order.indexOf(b.status);

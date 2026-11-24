@@ -106,60 +106,25 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         const details = await openChatDetails(page);
         await module.request;
-        const loading = details.locator("openclaw-panel-loading-skeleton");
-        await loading.waitFor();
-        await nextPaint(page);
-        const shimmer = await loading
-          .locator(".skeleton")
-          .first()
-          .evaluate((element) => {
-            const style = getComputedStyle(element, "::after");
-            return {
-              opacity: Number(style.opacity),
-              seconds: Number.parseFloat(style.animationDuration),
-              name: style.animationName,
-            };
-          });
-        if (artifacts) {
-          await capture(page, details, loading, "loading", artifacts);
-        }
-        expect(shimmer.opacity).toBeLessThanOrEqual(0.3);
-        if (reducedMotion === "reduce") {
-          expect(shimmer.name).toBe("none");
-        } else {
-          expect(shimmer.seconds).toBeGreaterThanOrEqual(3);
-        }
-        // Sample content handoff after the surface's independent entrance motion.
+        const loading = details.getByRole("status", { name: "Loading…", exact: true });
+        await loading.waitFor({ state: "attached" });
+        expect(await loading.getAttribute("aria-busy")).toBe("true");
+        // The accessible loading state must not take up the future panel's space.
         await expect.poll(() => details.evaluate((panel) => panel.getAnimations().length)).toBe(0);
         const before = (await details.boundingBox())!;
-        const firstContentFrame = await details.evaluateHandle((panel) => ({
-          frame: new Promise<number>((resolve) => {
-            const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
-            const observer = new MutationObserver(() => {
-              if (!pending.isConnected) {
-                observer.disconnect();
-                requestAnimationFrame(() => resolve(panel.getBoundingClientRect().height));
-              }
-            });
-            observer.observe(panel, { childList: true, subtree: true });
-          }),
-        }));
+        expect(before.height).toBe(48);
+        expect(await details.evaluate((panel) => getComputedStyle(panel).boxShadow)).not.toBe(
+          "none",
+        );
+
         module.release();
-        const firstHeight = await firstContentFrame.evaluate((probe) => probe.frame);
-        await firstContentFrame.dispose();
+        await loading.waitFor({ state: "hidden" });
         await details.locator(".chat-environment__branch").waitFor();
         await expect
           .poll(() => details.evaluate((panel) => panel.getAnimations({ subtree: true }).length))
           .toBe(0);
         const after = (await details.boundingBox())!;
-        expect(before.height).toBeGreaterThan(after.height);
-        if (reducedMotion === "reduce") {
-          expect(firstHeight).toBe(after.height);
-        } else {
-          expect(Math.abs(firstHeight - before.height)).toBeLessThan(
-            (before.height - after.height) / 2,
-          );
-        }
+        expect(after.height).toBeGreaterThan(before.height);
         if (artifacts) {
           await capture(
             page,
@@ -170,7 +135,7 @@ suite.define(() => {
           );
           await writeFile(
             path.join(artifacts, "measurements.json"),
-            JSON.stringify({ cpuRate, reducedMotion, before, firstHeight, after }, null, 2),
+            JSON.stringify({ cpuRate, reducedMotion, before, after }, null, 2),
           );
         }
         expect(after.x).toBe(before.x);
@@ -178,6 +143,57 @@ suite.define(() => {
         expect(
           await details.locator(".chat-details-desktop-body").evaluate((body) => body.style.height),
         ).toBe("");
+        if (cpuRate === 4) {
+          expect(
+            await details.locator(".chat-details-desktop-body").evaluate(async (body) => {
+              const content = body.querySelector<HTMLElement>(
+                ".chat-details-desktop-body__content",
+              )!;
+              const bodyRect = body.getBoundingClientRect.bind(body);
+              const contentRect = content.getBoundingClientRect.bind(content);
+              const offsetWidth = Object.getOwnPropertyDescriptor(
+                HTMLElement.prototype,
+                "offsetWidth",
+              )!;
+              const clientWidth = Object.getOwnPropertyDescriptor(
+                Element.prototype,
+                "clientWidth",
+              )!;
+              let reads = 0;
+              const read = <T>(value: () => T) => {
+                reads++;
+                return value();
+              };
+              Object.defineProperties(body, {
+                getBoundingClientRect: { configurable: true, value: () => read(bodyRect) },
+                offsetWidth: {
+                  configurable: true,
+                  get: () => read(() => offsetWidth.get!.call(body)),
+                },
+                clientWidth: {
+                  configurable: true,
+                  get: () => read(() => clientWidth.get!.call(body)),
+                },
+              });
+              Object.defineProperty(content, "getBoundingClientRect", {
+                configurable: true,
+                value: () => read(contentRect),
+              });
+              try {
+                body.dispatchEvent(new Event("scroll"));
+                await new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+                });
+                return reads;
+              } finally {
+                for (const key of ["getBoundingClientRect", "offsetWidth", "clientWidth"]) {
+                  Reflect.deleteProperty(body, key);
+                }
+                Reflect.deleteProperty(content, "getBoundingClientRect");
+              }
+            }),
+          ).toBe(0);
+        }
       });
     },
   );
@@ -264,7 +280,10 @@ suite.define(() => {
   it.each([false, true])(
     "reads Outputs after startup settles and releases hidden demand (history error=%s)",
     async (historyError) => {
-      await suite.withPage(options, async ({ page }) => {
+      // Cached wide Details wait for this module before revealing the transcript.
+      // Start closed so the native toggle can exercise demand while the module is held.
+      const outputsOptions = { ...options, viewport: { width: 1280, height: 1000 } };
+      await suite.withPage(outputsOptions, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           ...scenario,
           authMethod: "trusted-proxy",
@@ -309,8 +328,12 @@ suite.define(() => {
         await page.reload();
         await gateway.waitForRequest("connect");
         await transcript.waitFor();
+        await openChatDetails(page);
         await module.request;
-        await page.locator(".chat-details[data-desktop] openclaw-panel-loading-skeleton").waitFor();
+        await page
+          .locator(".chat-details[data-desktop]")
+          .getByRole("status", { name: "Loading…", exact: true })
+          .waitFor({ state: "attached" });
         await nextPaint(page);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         await gateway.resolveDeferred("connect");

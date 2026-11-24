@@ -183,6 +183,13 @@ export class GatewayServiceStopUnsafeError extends Error {
   override name = "GatewayServiceStopUnsafeError";
 }
 
+/** The Gateway that answers a maintenance drain is not the process its caller inspected. */
+export class GatewayMaintenanceResidentChangedError extends Error {
+  constructor() {
+    super("Gateway process changed during maintenance drain");
+  }
+}
+
 /** Native preparation can wrap a custody refusal alongside an authority or cleanup failure. */
 export function hasGatewayServiceStopUnsafeError(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(

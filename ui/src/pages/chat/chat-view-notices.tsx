@@ -53,6 +53,7 @@ export type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   runError?: ChatRunError | null;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
+  onDismissRunError?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
 };
 

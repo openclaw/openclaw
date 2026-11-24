@@ -1,2 +1,0 @@
-# Registered refresh regression for stale PR base metadata and pending target preservation.
-50

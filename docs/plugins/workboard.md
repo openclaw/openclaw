@@ -377,7 +377,9 @@ parameters. Choosing **All boards** returns to `/workboard`.
 
 A board can store an `automationJobId` reference to the automation job that
 owns its AI-categorization prompt, model, schedule, and run history. The board
-page shows an **Automation** link when that reference is present. Matching
+page shows an **Automation** link when that reference is present. The board
+header and card details show **Disabled** when the linked automation is disabled,
+not a suspended run. Opening the link does not enable or run it. Matching
 session events nudge the attached automation through the active Workboard service's
 scheduler authority, including after the worker's tool authority closes, with events
 for the same board coalesced for 60 seconds. If an attempt ends while its run is
@@ -458,6 +460,7 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                                                       |
 | `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                                                                 |
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                                                          |
+| `workboard_verify`                                                                                                                               | Record what a checker checked on a card and what it concluded. Evidence only; see Verification.                                                                                                                                 |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                                                               |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                                                            |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                                                              |
@@ -506,6 +509,29 @@ attempt cannot settle it again. Unblocking and promoting the card leaves it
 observations are logged with the card and attempt IDs. Explicitly linking a
 different session still allows that session's lifecycle to synchronize.
 
+### Verification
+
+A checker can record what it checked on a card and what it concluded with
+`workboard_verify`. Proof stays what the worker reports and attempts stay the card's
+run history; a verification can name the proof, artifact, or run it checked.
+
+Each verification records `scope` (what was checked), `outcome` (`confirmed`,
+`disputed`, or `inconclusive`), an optional `proofId`, `artifactId`, or `runId` it
+covered, and an optional note and http(s) URL. Workboard stamps `checkerId` with the
+caller and sets `checkedOwnWork` when that caller is the card's assignee, session, or
+claim owner. `false` only means no match was found; it does not establish
+independence.
+
+Verifications live in `metadata.automation.verifications`. Completion never waits on
+them, proof statuses keep their meaning, dependency scheduling ignores them, and a
+`disputed` verification on a `done` card leaves it `done`. Generic metadata writes
+(`workboard_create`, `workboard.cards.update`) cannot add, edit, or remove them. A card
+keeps its 4 newest verifications, and only in room its other records leave: when the
+card is near its 24 KiB metadata budget, Workboard drops the oldest verification
+first, never proof, attempts, comments, or artifacts. `workboard_verify` returns an
+error when a new verification cannot fit. Workboard versions before this one ignore
+the field and may drop it on their next write to the card.
+
 ## Dispatch
 
 Dispatch is Gateway-local: it does not spawn arbitrary OS processes. Normal
@@ -516,6 +542,10 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 3. Marks board-configured triage cards as orchestration candidates.
 4. Claims a small batch of ready cards and starts worker runs through the
    Gateway subagent runtime.
+
+The Control UI reports the counts from that pass. Marking a card for planning
+does not mean it has been specified or decomposed. If workers cannot start, the
+result shows the first start failure alongside the total failure count.
 
 Idle scans leave ready-card history unchanged. Existing dispatch counters and
 timestamps remain as historical values; new launches use the card's launch,
@@ -574,12 +604,18 @@ dispatch that needs writes.
 ### Worker selection
 
 Each pass starts **at most 3 workers by default**. Ready cards are ordered by
-priority, then position, then creation time. A pass starts only one card per
-owner/agent and skips owners that already have running or review work on the
-board. Archived cards, cards with an active claim, and cards not in `ready`
-status are never selected for worker starts (they can still be affected by the
-data side of dispatch: stale-claim cleanup, dependency promotion, timeout
-cleanup).
+priority, then position, then creation time. Each owner/agent may hold one
+active card at a time by default: a card counts while it is `running`, its run
+is still marked running, or its claim has not expired, so a card waiting for
+review counts only in those cases. The count covers every board, and the
+board's `maxActivePerOwner` orchestration setting (1 to 20, default 1) raises
+the limit for cards on that board. Unassigned cards all share the
+`workboard-dispatcher` owner, so set it above 1 to run several of them at once.
+A pass tries one card per owner before starting extra cards for the same
+owner, and the per-pass cap still applies. Archived cards, cards with an
+active claim, and cards not in `ready` status are never selected for worker
+starts (they can still be affected by the data side of dispatch: stale-claim
+cleanup, dependency promotion, timeout cleanup).
 
 Session keys are fixed per board/card, so repeated dispatches route
 back to the same worker lane instead of creating unrelated sessions:
@@ -611,9 +647,10 @@ as unavailable. They surface as command errors, and so does any Gateway
 failure when an explicit `--url`/`--token` target was given.
 
 Board metadata can set `autoDecompose`, `autoDecomposePerDispatch`,
-`defaultAssignee`, and `orchestratorProfile`. OpenClaw records this intent and
-exposes it in worker context. Actual specification/decomposition still runs
-through the normal Workboard tools.
+`defaultAssignee`, `orchestratorProfile`, and `maxActivePerOwner` (see
+[Worker selection](#worker-selection)). OpenClaw records the first four as
+intent and exposes them in worker context. Actual specification/decomposition
+still runs through the normal Workboard tools.
 
 ## CLI and slash command
 
@@ -732,6 +769,8 @@ it stays visible for follow-up.
 New cards can start from Workboard templates (`bugfix`, `docs`, `release`,
 `pr_review`, `plugin`). Templates prefill title, notes, labels, and priority.
 The template id is stored as card metadata.
+
+Card forms, inline label editing, and bulk edits offer searchable labels from the currently loaded cards in the board and agent scope. You can add a new label directly; commas are part of a label, not a separator in these controls. Selections remain drafts until Save or Apply. Bulk label modes keep their distinct meanings: Keep unchanged, Add, Replace (empty clears labels), and Remove. Adding labels is blocked if a selected card would exceed its existing 12-label limit. The loaded suggestions are not a complete label catalog.
 
 <a id="dashboard-workflow" />
 
@@ -875,9 +914,10 @@ openclaw workboard list --status ready
 
 If the CLI reports data-only dispatch, start or restart the Gateway and
 retry - data-only dispatch updates local board state but cannot start
-subagent worker runs. Cards can also be skipped when another card for the
-same owner or agent is already running or waiting for review. Complete,
-block, or release that active work before dispatching more for the same
+subagent worker runs. Cards can also be skipped when the same owner or agent
+already holds as many active cards as the board's
+`maxActivePerOwner` allows (default 1). Complete, block, or release that
+active work, or raise the board's limit, before dispatching more for the same
 owner.
 
 ## Related

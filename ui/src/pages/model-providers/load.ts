@@ -8,6 +8,7 @@ import type {
   ModelCatalogProviderOutcome,
   ModelCatalogResult,
 } from "../../api/types.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -59,10 +60,10 @@ function settleRequest<T>(promise: Promise<T>): Promise<RequestResult<T>> {
   );
 }
 
-export async function loadModelProvidersData(
+export function startModelProvidersData(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
-): Promise<ModelProvidersData> {
+) {
   const loadConfiguredCatalog = (refresh = false) =>
     settleRequest(
       loadModelCatalog(client, {
@@ -81,39 +82,41 @@ export async function loadModelProvidersData(
         refreshResult.ok ? refreshResult : loadConfiguredCatalog(),
       )
     : loadConfiguredCatalog();
-  const [authStatus, catalog, refreshResult] = await Promise.all([
-    authStatusLoad,
-    catalogLoad,
-    catalogRefresh ?? Promise.resolve(undefined),
-  ]);
-  return {
+  const auth = authStatusLoad.then((authStatus) => ({
     authStatus: authStatus.ok ? authStatus.result : null,
-    providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
-    pendingProviders: catalog.ok ? (catalog.result.pendingProviders ?? []) : [],
-    catalogRequestFailed: !catalog.ok || (refreshResult !== undefined && !refreshResult.ok),
-    catalogError:
-      refreshResult && !refreshResult.ok
-        ? errorMessage(refreshResult.error)
-        : catalog.ok
-          ? catalogDiscoveryError(catalog.result)
-          : errorMessage(catalog.error),
-    providerUsage: null,
-    providerUsageFailed: false,
     updatedAt: Date.now(),
-    // Auth status is the primary provider list; its failure is the only one
-    // worth surfacing as a page-level error.
+    // Auth status is the primary provider list; catalog failure is sectional.
     error: authStatus.ok
       ? (authStatus.result.unavailable?.message ?? null)
       : errorMessage(authStatus.error),
-  };
+  }));
+  const catalog = Promise.all([catalogLoad, catalogRefresh ?? Promise.resolve(undefined)]).then(
+    ([result, refreshResult]): ModelProvidersCatalogData => ({
+      providerOutcomes: result.ok ? (result.result.providerOutcomes ?? []) : [],
+      pendingProviders: result.ok ? (result.result.pendingProviders ?? []) : [],
+      catalogRequestFailed: !result.ok || (refreshResult !== undefined && !refreshResult.ok),
+      catalogError:
+        refreshResult && !refreshResult.ok
+          ? errorMessage(refreshResult.error)
+          : result.ok
+            ? catalogDiscoveryError(result.result)
+            : errorMessage(result.error),
+    }),
+  );
+  return { auth, catalog };
 }
+
+export type ModelProvidersCatalogData = Pick<
+  ModelProvidersData,
+  "providerOutcomes" | "pendingProviders" | "catalogRequestFailed" | "catalogError"
+>;
 
 /** Names the providers whose listing failed, so the warning points at its cause. */
 export function catalogDiscoveryError(result: ModelCatalogResult): string | null {
   const failed = new Set(
     (result.providerOutcomes ?? [])
       .filter((outcome) => outcome.status === "unavailable")
-      .map((outcome) => outcome.provider),
+      .map((outcome) => providerDisplayLabel(outcome.provider)),
   );
   return modelCatalogRefreshError(
     result,

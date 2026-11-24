@@ -22,6 +22,10 @@ type Args = {
   key: string;
   out: string;
   filter?: string;
+  /** Publish gate: only the release's own refresh verdict, no row behavior. */
+  refreshOnly?: boolean;
+  /** RELEASED_READER_ENTRIES: reader name to its stable dist entry, without extension. */
+  readerEntries: Record<string, string>;
 };
 
 const args = JSON.parse(process.argv[2] ?? "{}") as Args;
@@ -67,15 +71,26 @@ function assertSandboxed(sandbox: string): string {
   return insideSandbox("OPENCLAW_CONFIG_PATH");
 }
 
-// Released chunk names are hashed and export aliases minified; function
-// declarations keep source names. Find the chunk that declares and exports one.
+// A release that ships the reader's stable entry runs it from there; a missing export
+// fails. Older releases are searched: chunk names are hashed and export aliases
+// minified, but function declarations keep source names (also in whitespace-minified
+// chunks, since 2026.11.10-beta.1). Find the chunk that declares and exports one.
+// Remove the search once every tagged release ships the stable entries.
 const chunks = fs
   .readdirSync(dist)
   .filter((file) => file.endsWith(".mjs"))
   .map((file) => path.join(dist, file));
 async function releasedExport(name: string, marker?: string): Promise<unknown> {
-  const declaration = new RegExp(`(?:^|\\n)(?:async )?function ${name}\\(`);
-  const exported = new RegExp(`export \\{[^}]*\\b${name}(?: as (\\w+))?\\s*[,}]`);
+  const entry = args.readerEntries[name] && path.join(dist, `${args.readerEntries[name]}.js`);
+  if (entry && fs.existsSync(entry)) {
+    const value = (await import(pathToFileURL(entry).href))[name];
+    if (typeof value !== "function") {
+      throw new Error(`released reader entry point ${entry} does not export ${name}`);
+    }
+    return value;
+  }
+  const declaration = new RegExp(`(?<![\\w$.])function ${name}\\(`);
+  const exported = new RegExp(`export\\s*\\{[^}]*(?<![\\w$])${name}(?: as ([\\w$]+))?\\s*[,}]`);
   for (const file of chunks) {
     const source = fs.readFileSync(file, "utf8");
     if (!declaration.test(source) || (marker && !source.includes(marker))) {
@@ -474,7 +489,11 @@ const READERS: Array<[keyof Readers, string?]> = [
   ["mapThinkingLevel"],
 ];
 const found: Partial<Record<keyof Readers, unknown>> = {};
-for (const [name, marker] of READERS) {
+for (const [name, marker] of args.refreshOnly
+  ? READERS.filter(([reader]) =>
+      ["refreshRemoteModelCatalog", "captureRuntimeConfigAsyncReader"].includes(reader),
+    )
+  : READERS) {
   found[name] = await releasedExport(name, marker);
 }
 // SAFETY: each entry is the release's own function of that source name; released dist ships no types.
@@ -488,6 +507,13 @@ fs.writeFileSync(configPath, JSON.stringify(config));
 await reader.captureRuntimeConfigAsyncReader()();
 // The release's own fetch, parse, minVersion and freshness rules decide what it accepts.
 const refresh = await reader.refreshRemoteModelCatalog({ config, force: true });
+const version = (
+  JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { version: string }
+).version;
+if (args.refreshOnly) {
+  fs.writeFileSync(args.out, JSON.stringify({ version, refresh, rows: [] } satisfies ReleaseRun));
+  process.exit(0);
+}
 await reader.prepareRemoteModelCatalogStartupSnapshot();
 await reader.ensurePluginRegistryLoaded({ config, scope: "all" });
 const [filterProvider, ...filterModel] = (args.filter ?? "").split("/");
@@ -611,9 +637,6 @@ for (const entry of catalog) {
   rows.push(row);
 }
 
-const version = (
-  JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { version: string }
-).version;
 const run: ReleaseRun = { version, refresh, rows };
 fs.writeFileSync(args.out, JSON.stringify(run));
 plainServer.close();

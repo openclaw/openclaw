@@ -1,8 +1,8 @@
 // Test instrumentation rejects state access outside the shared worker home without redirecting it.
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import * as statePaths from "../state/openclaw-state-db.paths.js";
 
 /** Fail before host metadata discovery can read state outside the worker's owned home. */

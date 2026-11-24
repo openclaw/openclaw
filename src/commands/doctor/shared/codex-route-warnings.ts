@@ -309,7 +309,10 @@ export function collectCodexRuntimeCompatibilityWarnings(
   const warnings = collectCodexAppServerCommandWarnings(cfg, advisories);
   const modelParamHits = collectCodexModelParamHits(cfg, env);
   if (modelParamHits.length > 0) {
-    warnings.push(formatCodexModelParamWarning(modelParamHits));
+    const target = modelParamHits.some((hit) => hit.removable)
+      ? warnings
+      : (advisories ?? warnings);
+    target.push(formatCodexModelParamWarning(modelParamHits));
   }
   return warnings;
 }

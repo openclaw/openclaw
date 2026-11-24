@@ -165,6 +165,15 @@ describe("method scope resolution and authorization", () => {
       WRITE,
       OWN_WRITE,
     ],
+    // URL clones reuse or register repositories with the Gateway's GitHub identity.
+    [
+      "sessions.create",
+      { projectGitUrl: "https://github.com/openclaw/openclaworg.git" },
+      WRITE,
+      OWN_WRITE,
+    ],
+    ["projects.searchRemote", { query: "openclaw" }, WRITE, READ],
+    ["worktrees.list", {}, WRITE, READ],
     ["sessions.create", { agentId: "main", incognito: true }, ADMIN, WRITE],
     ["sessions.create", { key: incognitoKey }, ADMIN, WRITE],
     ["sessions.create", { parentSessionKey: incognitoKey }, ADMIN, WRITE],
@@ -323,6 +332,7 @@ describe("session-scoped method admission", () => {
 
   it.each([
     ["sessions.diff", ownSession, true],
+    ["openclawId.status", {}, true],
     ["controlUi.sessionPullRequests.subscribe", { sessionKeys: [ownKey.key] }, true],
     ["controlUi.sessionPullRequests.checks", ownSession, true],
     ["sessions.files.assets", { ...ownSession, path: "index.html", refs: ["a.png"] }, true],
@@ -376,6 +386,8 @@ describe("session-scoped method admission", () => {
     ["sessions.delete", { ...ownKey, archivedOnly: true }],
     ["agent", { message: "/reset" }],
     ["tools.invoke", {}],
+    ["openclawId.people", {}],
+    ["openclawId.authority", {}],
     ["plugins.sessionAction", { pluginId: "custom", actionId: "protected" }],
   ] as const)("does not turn the session grant into broader authority for %s", (method, params) => {
     admission(method, [OWN_WRITE], params).toMatchObject({ allowed: false });

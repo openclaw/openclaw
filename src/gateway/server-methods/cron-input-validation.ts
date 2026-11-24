@@ -5,15 +5,20 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import {
+  resolveCronJobEffectiveAgentId,
+  tryResolveCronJobEffectiveAgentId,
+} from "../../cron/agent-id.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
@@ -32,6 +37,10 @@ import {
 import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import {
+  resolveCronRunAdmissionSource,
+  resolveCronSessionWorkspaceOwnershipError,
+} from "../../cron/run-authority.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
@@ -52,8 +61,9 @@ import {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { readGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
@@ -63,7 +73,10 @@ import { preparePersonalModelAccountSelection } from "./users-model-account-acce
 type InferenceCaller = Pick<
   GatewayRequestHandlerOptions,
   "client" | "context" | "signal" | "hasCurrentClientAuthority"
->;
+> & {
+  /** Native workflows may retain their authenticated requester without a creating conversation. */
+  captureIndependentOperatorSource?: true;
+};
 
 /**
  * The entry a job's cron session takes its runtime override from: the target row of a
@@ -213,9 +226,13 @@ export async function assertValidCronUpdatePatch(params: {
   if (
     "agentId" in params.patch ||
     "sessionTarget" in params.patch ||
-    "sessionKey" in params.patch
+    "sessionKey" in params.patch ||
+    "payload" in params.patch ||
+    "schedule" in params.patch ||
+    "trigger" in params.patch ||
+    params.patch.enabled === true
   ) {
-    await assertCronDoesNotTargetAgentHarness(nextJob, params.cfg);
+    await assertValidCronSessionTarget(nextJob, params.cfg);
   }
   // Clearing a concrete channel (channel: null) while keeping a bare announce `to`
   // intentionally falls back to "last" in multi-channel configs. Use the same
@@ -269,12 +286,9 @@ export async function assertValidCronUpdatePatch(params: {
   return nextJob;
 }
 
-export async function assertCronDoesNotTargetAgentHarness(
-  input: {
-    agentId?: string | null;
-    sessionTarget?: string | null;
-    sessionKey?: string | null;
-  },
+export async function assertValidCronSessionTarget(
+  input: CronJobCreate &
+    Partial<Pick<CronStoredJob, "scheduledToolPolicy" | "toolsAllowProvenance">>,
   cfg: OpenClawConfig,
 ): Promise<void> {
   const targetSessionKey =
@@ -300,6 +314,32 @@ export async function assertCronDoesNotTargetAgentHarness(
         : AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
     );
   }
+  if (
+    input.payload.kind === "agentTurn" &&
+    resolveCronSessionTargetSessionKey(input.sessionTarget)
+  ) {
+    const entry = loaded.entry;
+    const ownershipError = resolveCronSessionWorkspaceOwnershipError({
+      cfg,
+      agentId: loaded.agentId,
+      sessionKey: loaded.canonicalKey,
+      ownerSessionKey: input.owner?.sessionKey,
+      admissionSource: resolveCronRunAdmissionSource(input),
+      hasWorkspaceBinding: Boolean(
+        entry &&
+        (entry.spawnedCwd?.trim() ||
+          entry.worktree ||
+          resolveIngressWorkspaceOverrideForSessionRun({
+            spawnedBy: entry.spawnedBy,
+            workspaceDir: entry.spawnedWorkspaceDir,
+            cwd: entry.spawnedCwd,
+          })),
+      ),
+    });
+    if (ownershipError) {
+      throw new TypeError(ownershipError);
+    }
+  }
   if (!reservedKey || loaded.entry) {
     // `harness:*` was historically a valid public key. Preserve an existing
     // unlocked row while reserving missing keys for trusted harness creation.
@@ -314,7 +354,9 @@ export async function assertCronDoesNotTargetAgentHarness(
 export async function captureCronCreatorSession(
   job: CronJobCreate & Partial<Pick<CronStoredJob, "operatorSource" | "streamOperatorSource">>,
   callerScope: CronCallerScope | undefined,
-  caller: InferenceCaller,
+  caller: InferenceCaller & {
+    onOperatorAuthority?: (authority: AdmittedRunOperatorAuthority) => void;
+  },
   cfg: OpenClawConfig,
   hasRuntimeAuthority = false,
 ) {
@@ -347,7 +389,8 @@ export async function captureCronCreatorSession(
   const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const createdActor = callerScope
     ? attributeDelegatedSessionCreator(
-        legacyActor,
+        legacyActor ??
+          (callerScope.creatorProfileId ? { type: "agent", id: callerScope.agentId } : undefined),
         callerScope.creatorProfileId,
         callerScope.agentId,
       )
@@ -373,7 +416,10 @@ export async function captureCronCreatorSession(
       ? await captureCronInferenceForCaller(
           {
             cfg,
-            agentId: agentId ?? resolveDefaultAgentId(cfg),
+            agentId: resolveCronJobEffectiveAgentId(
+              { ...job, agentId },
+              tryResolveAmbientOwnerAgentId(cfg),
+            ),
             model: job.payload.model,
             isGmailHook:
               (job.payload.externalContentSource ??
@@ -387,14 +433,23 @@ export async function captureCronCreatorSession(
           caller,
         )
       : undefined;
+  const directControlUi =
+    caller.client?.internal?.authenticatedControlUi === true &&
+    !caller.client.internal.syntheticClient &&
+    !caller.client.internal.agentRuntimeIdentity &&
+    !caller.client.internal.agentToolCaller &&
+    Boolean(caller.client.connId) &&
+    readGatewayDeviceSourceAuthority(caller.hasCurrentClientAuthority) !== undefined;
   const independent = Boolean(
+    directControlUi ||
+    caller.captureIndependentOperatorSource ||
     inheritedAuthority?.openclawIdPrincipal ||
     caller.client?.internal?.openclawIdPrincipal ||
     job.operatorSource?.source.kind === "gateway" ||
     job.operatorSource?.source.snapshot.openclawIdPrincipal ||
     job.streamOperatorSource,
   );
-  let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
   try {
     if (!inheritedAuthority && independent) {
       if (!caller.hasCurrentClientAuthority) {
@@ -402,7 +457,7 @@ export async function captureCronCreatorSession(
           "Current authenticated requester authority is required to reauthorize this automation.",
         );
       }
-      captured = await captureGatewayOperatorRunAuthority({
+      captured = await prepareGatewayOperatorRunAuthority({
         client: caller.client,
         context: caller.context,
         hasCurrentClientAuthority: caller.hasCurrentClientAuthority,
@@ -438,7 +493,11 @@ export async function captureCronCreatorSession(
                   }
                   return selected;
                 })()
-              : (loaded?.agentId ?? agentId ?? resolveDefaultAgentId(cfg)),
+              : (loaded?.agentId ??
+                resolveCronJobEffectiveAgentId(
+                  { ...job, agentId },
+                  tryResolveAmbientOwnerAgentId(cfg),
+                )),
             sessionKey: loaded?.canonicalKey,
             sourceRunId:
               caller.client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId ??
@@ -451,13 +510,16 @@ export async function captureCronCreatorSession(
         "This requester cannot retain the authenticated execution authority for the automation.",
       );
     }
+    // Optional work inside this request may use the same grant; never put it into job options.
+    if (operatorAuthority) {
+      caller.onOperatorAuthority?.(operatorAuthority);
+    }
     return {
       ...inference,
       ...(operatorSource ? { operatorSource } : {}),
       operatorSourceUnavailable: Boolean(
         parentLinked && operatorAuthority && job.payload.kind === "agentTurn" && !operatorSource,
       ),
-      assertOperatorSourceCurrent: operatorSource ? operatorAuthority?.assertCurrent : undefined,
       disposeOperatorSource: captured?.release,
       ...(sourceConversation ? { sourceConversation } : {}),
       ...(createdActor ? { createdActor } : {}),
@@ -483,7 +545,9 @@ export async function captureCronUpdatedInferenceBinding(
     return undefined;
   }
   const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
-  const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
+  // The owner the job runs as. Cron's default is the ambient owner (configured system agent),
+  // read from config because the lazy cron service has no default before it loads.
+  const agentId = resolveCronJobEffectiveAgentId(nextJob, tryResolveAmbientOwnerAgentId(cfg));
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;

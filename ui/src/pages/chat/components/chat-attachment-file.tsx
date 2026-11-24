@@ -26,6 +26,7 @@ export function AttachmentRemove(props: {
       class={props.class ?? "chat-attachment-remove"}
       icon="x"
       label={props.label}
+      tooltip={false}
       disabled={props.disabled}
       onClick={(event) => props.onClick(event)}
     />

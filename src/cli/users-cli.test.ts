@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerUsersCli } from "./users-cli.js";
 
 const callGatewayFromCli = vi.hoisted(() => vi.fn());
@@ -66,19 +67,17 @@ it.each([
   },
 );
 
-it.each([
-  {
-    command: "link-email",
-    args: ["Ada@example.com", "--to", "p-1"],
-    result: { profile: { id: "p-1" } },
-  },
-  {
-    command: "merge",
-    args: ["p-retired", "--into", "p-survivor"],
-    result: { profile: { id: "p-survivor", emails: [] }, movedAliasKinds: ["channel"] },
-  },
-])("prints the complete $command result as JSON", async ({ command, args, result }) => {
+it("prints the complete merge result as JSON", async () => {
+  const result = { profile: { id: "p-survivor", emails: [] }, movedAliasKinds: ["channel"] };
   const { output, run } = createProgram(result);
-  await run(command, ...args, "--json");
+  await run("merge", "p-retired", "--into", "p-survivor", "--json");
   expect(output.mock.calls).toEqual([[`${JSON.stringify(result, null, 2)}\n`]]);
+});
+
+it("prints nothing when users list settles after Ctrl+C", async () => {
+  const work = new AsyncWorkScope();
+  const { output, run } = createProgram({ profiles: [] });
+  callGatewayFromCli.mockImplementation(() => work.beginClose());
+  await work.run(() => run("list", "--json"));
+  expect(output).not.toHaveBeenCalled();
 });

@@ -8,6 +8,7 @@ import type { SessionTranscriptWatermark } from "./session-history-read.types.js
 export type SessionRowDatabaseFacts = SessionEntrySummary & {
   hasBoard: boolean;
   activitySummaryWatermark?: SessionTranscriptWatermark;
+  transcriptHasMessages?: boolean;
   /** Undefined needs backfill; null is a completed, empty bounded projection. */
   transcriptPreview?: string | null;
   transcriptAssistantMessage: SessionRowAssistantMessageFact;

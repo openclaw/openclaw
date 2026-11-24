@@ -13,8 +13,20 @@ describe("engine configuration selection", () => {
       colorScheme: "light",
       reducedMotion: "no-preference",
       forcedColors: "none",
+      accessibility: "default",
     });
     expect(control).toEqual({ ...baseline, name: "control" });
+  });
+
+  it.each([
+    ["accessibility", "on"],
+    ["accessibility-off", "off"],
+  ])("resolves %s and its matching A/A control", (name, accessibility) => {
+    const [baseline, configuration, control] = resolveEngineConfigurations(
+      `default,${name},${name}-control`,
+    );
+    expect(configuration).toEqual({ ...baseline, name, accessibility });
+    expect(control).toEqual({ ...configuration, name: `${name}-control` });
   });
 
   it("resolves each axis without changing unrelated defaults", () => {
@@ -32,7 +44,7 @@ describe("engine configuration selection", () => {
     ]);
   });
 
-  it("expands the complete census without duplicating Claw light or the A/A control", () => {
+  it("expands the cross-engine census without controls or Chromium-only modes", () => {
     const configurations = resolveEngineConfigurations("all");
     const names = configurations.map(({ name }) => name);
     expect(configurations).toHaveLength(29);
@@ -47,6 +59,7 @@ describe("engine configuration selection", () => {
     expect(names).toContain("scale:2");
     expect(names).not.toContain("theme:claw:light");
     expect(names).not.toContain("control");
+    expect(configurations.every(({ accessibility }) => accessibility === "default")).toBe(true);
   });
 
   it.each(["default,default", "all,default", "all,theme:crt:dark"])(

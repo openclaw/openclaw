@@ -1,13 +1,12 @@
+import type { TemplatePluginPresentation } from "./template-plugin-icon.tsx";
+import type { TemplateAddFailure } from "./templates-add-agent.ts";
 import type {
-  TemplateAddReviewPlan,
   TemplateCatalogDetail,
   TemplateCatalogEntry,
+  TemplateCatalogIntegration,
 } from "./templates-catalog-client.ts";
 
 export type TemplatesCatalogViewProps = {
-  /** Read only inside the catalog Loading/Errored slot. */
-  readEntries: () => TemplateCatalogEntry[];
-  catalogRequest: Promise<TemplateCatalogEntry[]> | undefined;
   basePath: string;
   modal?: boolean;
   selected: TemplateCatalogEntry | null;
@@ -15,12 +14,13 @@ export type TemplatesCatalogViewProps = {
   /** Read only inside the detail contents Loading/Errored slot. */
   readDetail: () => TemplateCatalogDetail | null;
   detailRequest: Promise<TemplateCatalogDetail | null> | undefined;
-  installedPluginPackages: ReadonlySet<string>;
-  addError: string | null;
+  /** null: pending; undefined: no metadata available. */
+  readPluginPresentation: (
+    item: TemplateCatalogIntegration,
+  ) => TemplatePluginPresentation | null | undefined;
+  addFailure: Pick<TemplateAddFailure, "entry" | "message"> | null;
   applying: boolean;
   consentWarning: string | null;
-  reviewPlan: TemplateAddReviewPlan | null;
-  addedAgentId: string | null;
   canAdd: boolean;
   preview?: {
     kind: "instruction" | "skill";
@@ -31,13 +31,11 @@ export type TemplatesCatalogViewProps = {
   readPreview?: () => void;
   onClosePreview?: () => void;
   onOpenPreview: (kind: "instruction" | "skill", name: string) => void;
+  /** The whole text of one workspace file of the shown release. */
+  readInstruction?: (name: string) => Promise<string>;
   onBack: () => void;
-  onRetryCatalog: () => void;
   onRetryDetail: () => void;
   onConfirm: () => void | Promise<void>;
   onConfirmConsent: () => void | Promise<void>;
   onCancelConsent: () => void;
-  onConfirmReview: () => void | Promise<void>;
-  onCancelReview: () => void;
-  onRetryOpenChat: () => void | Promise<void>;
 };

@@ -118,6 +118,57 @@ function peoplePicker(page: ReturnType<typeof mountPage>) {
   );
 }
 
+it("keeps unaccepted session results unknown and retains accepted empty results during refresh", async () => {
+  const page = sessionsPage();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  let pending = createDeferred<WorkboardSessionsBoardRead>();
+  page.request.mockImplementation((method, params) =>
+    method === "workboard.sessionsBoard.read" ? pending.promise : request(method, params),
+  );
+  const counts = () => page.container.querySelectorAll(".workboard-column__count");
+  const empty = () => page.container.querySelectorAll(".workboard-sessions__empty");
+  await page.connect();
+  expect.soft(counts()).toHaveLength(0);
+  expect.soft(empty()).toHaveLength(0);
+  const workingColumn = page.container.querySelector('[data-session-column="working"]');
+  expect.soft(workingColumn?.getAttribute("aria-label")).toBe("Working");
+  pending.reject(new Error("Session inventory unavailable"));
+  await vi.advanceTimersByTimeAsync(0);
+  const alert = page.container.querySelector('[role="alert"]');
+  expect(alert?.textContent).toContain("Session inventory unavailable");
+  expect.soft(empty()).toHaveLength(0);
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  page.fixture.emit("plugin.workboard.changed", { epoch: "readiness", revision: 1 });
+  await vi.advanceTimersByTimeAsync(0);
+  pending.resolve({ ...page.result, sessions: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(empty()).toHaveLength(2);
+  expect(counts()[0]?.textContent).toBe("0");
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  page.fixture.emit("plugin.workboard.changed", { epoch: "readiness", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(empty()).toHaveLength(2);
+  pending.reject(new Error("Refresh unavailable"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(empty()).toHaveLength(2);
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  expect.soft(empty()).toHaveLength(0);
+  expect.soft(counts()).toHaveLength(0);
+  pending.reject(new Error("People view unavailable"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect.soft(empty()).toHaveLength(0);
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  peoplePicker(page).onSelect("everyone");
+  await vi.advanceTimersByTimeAsync(0);
+  pending.resolve(page.result);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(counts()[0]?.textContent).toBe("1");
+  page.dispose();
+});
+
 it("retains session clocks on host refreshes and updates timestamps, titles and locale", async () => {
   const page = sessionsPage();
   await page.connect();

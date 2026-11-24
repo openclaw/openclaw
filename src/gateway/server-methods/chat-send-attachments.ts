@@ -86,8 +86,8 @@ export async function prepareChatSendAttachments(params: {
               loadGatewayModelCatalog: context.loadGatewayModelCatalog,
               loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
               agentId,
-              provider: resolvedSessionModel.provider,
-              model: resolvedSessionModel.model,
+              provider: resolvedSessionModel?.provider,
+              model: resolvedSessionModel?.model,
             });
             return imageSupport.value;
           };

@@ -14,7 +14,7 @@ import {
   shouldPrecompressControlUiAsset,
 } from "../ui/config/control-ui-asset-compression.ts";
 import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import {
   MERMAID_RENDERER_ASSET,
@@ -46,8 +46,9 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Coordinator-approved full locale hints: measured document plus 64 B headroom.
-  documentGzipBytes: 13_893,
+  // Coordinator-approved full locale hints plus the warm-frame admission hint
+  // (#195865): measured 13,962 B plus 64 B headroom.
+  documentGzipBytes: 14_026,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -57,13 +58,45 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  // Coordinator accepted transcript mounting's minifier variance; complete build plus 64 B.
-  // Josh Lehman approved the OpenClaw ID sidebar mounts and sign-in callback check
-  // (#192352, 2026-11-06): on main 0a6590652dc this branch measures Chat 1,288,774 B
-  // and New Session 797,124 B; main's concurrent growth gets 256 B of headroom.
-  chatBootJsGzipBytes: 1_289_030,
-  newBootJsGzipBytes: 797_380,
+  // Coordinator-accepted shipped feature cost after paydown #199196.
+  // Measured on main 5328b275: exact route totals, with no added headroom.
+  // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
+  // Chat reader stability (#199080): its anchor and row-admission code, measured +1,333 B.
+  // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,313,182 B
+  // (+1,215 B over main 97dd78cc) plus 64 B headroom.
+  // Continuation wakes (#200056): measured 1,314,286 B (+979 B over main 7f234bd9) plus 64 B.
+  // Ayaan approved the #198133 tool-call history cost (2026-11-16): measured +10,341 B
+  // over its merge base plus 64 B headroom.
+  // Approved publication task filtering: +90 B over 054fd978, with no added headroom.
+  // Popover prompt cache hit rate (#200223, Ayaan shipped 2026-11-17): measured +737 B
+  // over its merge base plus 64 B headroom.
+  // Vyctor-approved navigation stack (#200013): +5,501 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  // Ayaan approved the #201130 Codex update recovery (2026-11-18): measured 1,332,226 B
+  // (+911 B over paired base 1,331,315 B) plus 64 B headroom.
+  // Ayaan approved the plugin composer task card (#201695, 2026-11-19): measured 1,332,573 B
+  // (+849 B over paired base 1,331,724 B) plus 64 B headroom.
+  // Josh approved the #202534 transcript file-link availability cost (2026-11-20): measured
+  // 1,333,835 B (+477 B over paired base 1,333,358 B at d5a99b07) plus 64 B headroom.
+  // First-frame composer banner (#203246): #202800 lazy-loaded the banner that the
+  // #202534 measurement included; restoring it measured 1,334,416 B (+777 B over paired
+  // base 1,333,639 B at a3357794) plus 64 B headroom.
+  // Provider plugin labels on chat failure headings (#204230, standing merge authority):
+  // measured 1,334,559 B (+89 B over paired base 1,334,470 B at d16017ca) plus 64 B headroom.
+  // Voice API-key guidance (#204128): measured 1,335,688 B (+1,221 B over paired
+  // base 1,334,467 B at e2973f93), with no added headroom.
+  // Combined with b36ba3fed2: measured 1,335,757 B, retaining main's 64 B headroom.
+  // Peter requested the single Daybreak toggle (#204302, 2026-11-23): model-switch remap and
+  // stale-program repair measured +451 B over paired base 1,334,559 B at 34c8570c; on top of
+  // main's 1,335,821 B limit (which keeps its 64 B headroom) that is 1,336,272 B.
+  chatBootJsGzipBytes: 1_336_272,
+  // The same shared lazy signer adds the coordinator-accepted +235 B here.
+  // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
+  // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
+  // Same #200223 popover cache hit rate: measured +408 B over its merge base plus 64 B.
+  // Vyctor-approved navigation stack (#200013): +5,611 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  newBootJsGzipBytes: 822_243,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -72,18 +105,29 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Normalized shared application chunk plus 64 B toolchain headroom.
-  // Josh Lehman approved the OpenClaw ID shared-chunk growth (#192352, 2026-11-06):
-  // measured 560,277 B; main's concurrent growth gets 256 B of headroom.
-  largestJsGzipBytes: 560_533,
+  // Same snapshot-save repair, measured shared chunk plus 64 B.
+  // The same shared-chunk trade, measured plus 64 B.
+  // Josh approved the #196456 key-warning delta: +2,527 B; inherited debt stays.
+  // Same #198491 approval, absorbing inherited debt: measured 572,080 B (+1,010 B over main)
+  // plus 64 B headroom.
+  // Continuation wakes (#200056): measured 572,376 B plus 64 B.
+  // Vyctor-approved navigation stack (#200013): +4,803 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  largestJsGzipBytes: 577_243,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
-  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 325_109,
-  totalCssRawBytes: 1_675_754,
+  // Coordinator-accepted shipped feature cost after paydown #196291 and #196320.
+  // Measured on main a58dbe09: exact totals, with no added headroom.
+  // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
+  // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
+  // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
+  // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
+  // Ayaan accepted the automations (#200808, #200817) and catalog/Skill Workshop (#202515,
+  // #202537, #202531, #202572, #202532) redesign styles (2026-11-22): measured on main 265577c4
+  // at 344,948 B gzip / 1,779,112 B raw, with no added headroom. Trim tracked in #203445.
+  totalCssGzipBytes: 344_948,
+  totalCssRawBytes: 1_779_112,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -445,6 +489,15 @@ function controlUiPerformanceWarnings(
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
 ): string[] {
   const warnings: string[] = [];
+  for (const [metric, actual, cap] of [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes],
+    ["total CSS gzip", metrics.total.css.gzipBytes, budgets.totalCssGzipBytes],
+    ["total CSS raw", metrics.total.css.rawBytes, budgets.totalCssRawBytes],
+  ] as const) {
+    if (actual > cap) {
+      warnings.push(`${metric} is ${actual - cap} B over its fixed ceiling (${actual} > ${cap} B)`);
+    }
+  }
   if (metrics.startup.css.gzipBytes > CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES) {
     warnings.push(
       `startup CSS gzip is above the ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B advisory target; remaining hard-ceiling headroom: ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B`,
@@ -818,6 +871,16 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     );
   } else {
     process.stdout.write(`${result.report}\n`);
+  }
+  // Keep inherited overages visible even when the build only reports budgets.
+  if (limitsAreAdvisory()) {
+    reportLimitViolations(
+      result.warnings.map((message) => ({
+        file: "scripts/check-control-ui-performance.mts",
+        title: "Control UI performance warning",
+        message,
+      })),
+    );
   }
   if (!reportOnly) {
     const metricFiles: Record<string, string> = {

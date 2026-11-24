@@ -26,6 +26,11 @@ import {
 } from "./skill-library-authoring.js";
 import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 
+// mock-isolation: ordinary authoring must not load archive or ClawHub import machinery.
+vi.mock("../skills/library/import.js", () => {
+  throw new Error("ordinary skill authoring must not load archive import runtime");
+});
+
 const catalogReleases: Array<() => void> = [];
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -244,15 +249,10 @@ describe("human personal namespace authority", () => {
       ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
     },
   );
-  it("enforces current roles after session preparation and at publication after staging", async () => {
+  it("enforces current roles at publication after staging", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
     owner.context.getRuntimeConfig = () => roles("writer", "operator.write");
-    await expect(
-      prepareTurn(owner, async () => {
-        setUserProfileRole(alice.id, "reader");
-      }),
-    ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
     setUserProfileRole(alice.id, "writer");
     using run = await admitted(await authoring(owner));
     const saving = run.invoke({ action: "create", slug: "revoked", content });

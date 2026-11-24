@@ -17,6 +17,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
+import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
 import { ensureWorkerEnvironmentStoreSchema } from "./store-schema.js";
@@ -77,6 +78,41 @@ describe("worker environment store", () => {
     { environmentId, state }: Awaited<ReturnType<typeof makeReady>>,
     sessionId: string,
   ) => move(environmentId, state, "attached", attachedPatch(sessionId, environmentId));
+
+  it("retains the immutable original provisioning source across store restart", async () => {
+    const channel: QueuedOperatorRecoverySource = {
+      kind: "channel",
+      snapshot: {
+        reference: { version: 1, id: "11111111-1111-4111-8111-111111111111" },
+        profileId: "original-person",
+        scopes: ["operator.admin"],
+      },
+    };
+    const unavailable: QueuedOperatorRecoverySource = { kind: "unavailable" };
+    const intents = [undefined, unavailable, channel].map((provisionSource, index) => ({
+      environmentId: `source-${index}`,
+      providerId: "provider",
+      profileId: "profile",
+      profileSnapshot: { settings: {} },
+      provisionOperationId: `provision-source-${index}`,
+      provisionSource,
+    }));
+    for (const intent of intents) {
+      await store.createIntent(intent);
+    }
+    await reopen();
+    for (const intent of intents) {
+      expect(store.get(intent.environmentId)?.provisionSource).toEqual(intent.provisionSource);
+      await expect(store.createIntent(intent)).resolves.toMatchObject({ state: "requested" });
+      const replacement = intent.provisionSource?.kind === "unavailable" ? channel : unavailable;
+      for (const provisionSource of [replacement, ...(intent.provisionSource ? [undefined] : [])]) {
+        await expect(store.createIntent({ ...intent, provisionSource })).rejects.toThrow(
+          "provisioning source is immutable",
+        );
+      }
+      expect(store.get(intent.environmentId)?.provisionSource).toEqual(intent.provisionSource);
+    }
+  });
 
   it("revalidates agent incarnation inside worker admission without joining its writer lock", async () => {
     const options = { path: database.path };

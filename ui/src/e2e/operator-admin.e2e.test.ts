@@ -95,13 +95,7 @@ async function expectDenied(control: Locator, gateway: MockGatewayControls, meth
 
 async function expectAgentCreationDenied(page: Page, gateway: MockGatewayControls) {
   const createAgent = page.getByRole("button", { name: "New agent", exact: true });
-  await expect.poll(() => createAgent.isDisabled()).toBe(true);
-  expect(await createAgent.getAttribute("title")).toContain(
-    "You need admin access to set up OpenClaw.",
-  );
-  const url = page.url();
-  await createAgent.click({ force: true });
-  expect(page.url()).toBe(url);
+  expect(await createAgent.count()).toBe(0);
   expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
 }
 
@@ -194,8 +188,7 @@ suite.define(() => {
       await page.locator("#agents-tab-overview").click();
       await page.locator(".agents-page-menu__trigger").click();
       const setDefault = page.getByRole("menuitem", { name: "Set default", exact: true });
-      await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      await setDefault.click({ force: true });
+      expect(await setDefault.count()).toBe(0);
       await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 
@@ -240,6 +233,10 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      await page
+        .locator(".skill-discovery")
+        .getByRole("button", { name: "Installed", exact: true })
+        .click();
       const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
         hasText: "Deploy Helper",
       });
@@ -248,10 +245,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
-      const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
-      const globalSkillToggle = skillDialog.getByRole("switch");
+      const skillPage = page.locator(".skill-page", { hasText: "Deploy Helper" });
+      const globalSkillToggle = skillPage.getByRole("switch");
       await expectDenied(globalSkillToggle, gateway, "skills.update");
-      const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
+      const install = skillPage.getByRole("button", { name: "Install Deploy Helper" });
       await expectDenied(install, gateway, "skills.install");
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
@@ -259,11 +256,20 @@ suite.define(() => {
       await page.getByText("tightened the review step").waitFor();
       expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
       await page.getByRole("button", { name: "read-only-skill" }).first().click();
+      await page.locator(".sw-timeline").getByText("tightened the review step").waitFor();
+      expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
+      await page.getByRole("button", { name: "Instructions", exact: true }).click();
       await gateway.waitForRequest("skills.workshop.read");
       await expect
         .poll(() => page.locator(".sw-markdown").textContent())
         .toContain("Review without mutation access.");
       expect(await page.getByRole("button", { name: "Archive", exact: true }).count()).toBe(0);
+      // Learning mode and the learning session sit behind the start page's gear.
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       const learningOff = page.getByRole("button", { name: "Off", exact: true });
       await expectDenied(learningOff, gateway, "config.patch");
       expect(await gateway.getRequests("skills.workshop.restore")).toHaveLength(0);
@@ -293,8 +299,7 @@ suite.define(() => {
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
       await page.locator(".agents-page-menu__trigger").click();
       const setDefault = page.getByRole("menuitem", { name: "Set default", exact: true });
-      await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      await setDefault.click({ force: true });
+      expect(await setDefault.count()).toBe(0);
       await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 
@@ -302,9 +307,13 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      await page
+        .locator(".skill-discovery")
+        .getByRole("button", { name: "Installed", exact: true })
+        .click();
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const install = page
-        .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
+        .locator(".skill-page", { hasText: "Deploy Helper" })
         .getByRole("button", { name: "Install Deploy Helper" });
       await expectDenied(install, gateway, "skills.install");
     });

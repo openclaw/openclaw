@@ -3,8 +3,8 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import { acquireCronRootTranscriptLease } from "../../config/sessions/transcript-lease.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -27,6 +27,7 @@ import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
@@ -58,7 +59,6 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
-import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
@@ -74,6 +74,7 @@ import { log } from "./logger.js";
 import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
+import { publishClaimedSessionWriter } from "./run/compaction-accounting-bridge.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import type {
   RunEmbeddedAgentInternalParams,
@@ -86,6 +87,8 @@ import {
 } from "./run/model-admission.js";
 import {
   bindRunToPreparedModelRuntime,
+  initializeReadOnlyRunModelCatalog,
+  prepareRunModelRuntimeProjects,
   resolvePreparedRuntimeWorkspaces,
 } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -192,6 +195,7 @@ async function runEmbeddedAgentForSession(
         // Native preparation must consume the claim's postimage, not the pre-queue row.
         sessionAdmission = { ...sessionAdmission, entry };
       }
+      publishClaimedSessionWriter(params.onCompactionAccounting, runSessionTarget, entry);
     },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;
@@ -255,14 +259,10 @@ async function runEmbeddedAgentForSession(
         if (cliDispatched) {
           return cliDispatched;
         }
-        const preReplyTarget = { ...runSessionTarget, ...params.sessionTarget };
-        const preReplyGeneration = await prepareCronRootSessionGeneration(
-          {
-            ...preReplyTarget,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? preReplyTarget.sessionKey,
-            lifecycleRevision: preReplyTarget.expectedLifecycleRevision,
-          },
+        const preReply = { ...runSessionTarget, ...params.sessionTarget };
+        const preReplyGeneration = await acquireCronRootTranscriptLease(
+          chatRef({ ...preReply, sessionKey: params.sessionKey ?? preReply.sessionKey }),
+          { sessionId: params.sessionId, lifecycleRevision: preReply.expectedLifecycleRevision },
           (reason) => laneController.laneTaskAbortController.abort(reason),
         );
         using _ = { [Symbol.dispose]: () => preReplyGeneration?.release() };
@@ -367,9 +367,14 @@ async function runEmbeddedAgentForSession(
             });
           preparedRuntimeResource = preparedModelRuntimeLease;
           startupStages.mark("prepared-runtime");
-          const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
           let preparedLeaseActive = true;
           try {
+            const preparedModelRuntimeOwnerSnapshot = await initializeReadOnlyRunModelCatalog(
+              params,
+              preparedModelRuntimeLease.snapshot,
+              requestedRuntimeSelection,
+              laneController.abortSignal,
+            );
             throwIfAborted();
             if (
               params.pluginGeneration &&
@@ -388,22 +393,14 @@ async function runEmbeddedAgentForSession(
             });
             params = rebound.runParams;
             const workspaceResolution = rebound.workspaceResolution;
-            const projects = await prepareAgentPromptProjects({
-              config: params.config,
-              workspaceDir: workspaceResolution.workspaceDir,
-              cwd: params.cwd,
-              sessionId: params.sessionId,
-            });
-            const { activeProjectKeys } = projects;
-            const preparedModelRuntime = Object.freeze({
-              ...preparedModelRuntimeOwnerSnapshot,
-              ...projects,
-            });
+            const preparedModelRuntime = await prepareRunModelRuntimeProjects(
+              params,
+              preparedModelRuntimeOwnerSnapshot,
+            );
             const runPrepared = async () => {
               params = refresh.withDeliveryCallbacks(params);
               const preparedAgentId = workspaceResolution.agentId;
               const resolvedWorkspace = workspaceResolution.workspaceDir;
-              const agentDir = preparedModelRuntime.agentDir;
               const progressController = createEmbeddedRunProgressController({
                 attempt: params,
                 noteLaneTaskProgress,
@@ -470,7 +467,7 @@ async function runEmbeddedAgentForSession(
                 sessionKey: resolvedSessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: resolvedWorkspace,
-                activeProjectKeys: [...activeProjectKeys],
+                activeProjectKeys: [...preparedModelRuntime.activeProjectKeys],
                 modelProviderId: provider,
                 modelId,
                 trigger: params.trigger,
@@ -552,10 +549,13 @@ async function runEmbeddedAgentForSession(
                 contextEngineAgentId,
                 provider,
                 modelId,
-                agentDir,
+                agentDir: preparedModelRuntime.agentDir,
                 workspaceResolution,
                 workspaceDir: resolvedWorkspace,
-                bootstrapWorkspaceDir: resolveRunBootstrapWorkspaceDir(params, canonicalWorkspace),
+                bootstrapWorkspaceDir: await resolveRunBootstrapWorkspaceDir(
+                  params,
+                  canonicalWorkspace,
+                ),
                 isCanonicalWorkspace,
                 globalLane,
                 hookRunner,
@@ -649,10 +649,10 @@ async function runEmbeddedAgentForSession(
               : run());
             const continuation = refresh.takeContinuation();
             if (refreshed || continuation) {
-              mergeCompletedAgentUsage({
+              await mergeCompletedAgentUsage({
                 usage,
                 diagnosticUsage,
-                agentMeta: result.meta.agentMeta,
+                agentMetas: [result.meta.agentMeta],
                 config: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
                 agentDir: params.agentDir,
               });

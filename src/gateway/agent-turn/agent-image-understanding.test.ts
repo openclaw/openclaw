@@ -166,9 +166,7 @@ it.each(["preparation", "adapter"] as const)(
       });
     }
 
-    await expect(prepare(configuredVision, execution)).rejects.toThrow(
-      "Image attachments could not be analyzed.",
-    );
+    await expect(prepare(configuredVision, execution)).rejects.toThrow("Request authority expired");
     expect(describeImage).toHaveBeenCalledTimes(phase === "adapter" ? 1 : 0);
     expect(sendPixels).not.toHaveBeenCalled();
     if (phase === "adapter") {

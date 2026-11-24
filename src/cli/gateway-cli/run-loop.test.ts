@@ -6,6 +6,7 @@ import { PluginRuntimeCloseRetainedError } from "../../plugins/runtime-close-err
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { registerExternalHandoffShutdownTests } from "./run-loop-external-handoff.test-support.js";
+import { registerExternalRestartSignalTests } from "./run-loop-external-signal.test-support.js";
 import { registerGatewayLogSettlementTests } from "./run-loop-log-settlement.test-support.js";
 import { gatewayWorkAdmissionActual, runLoopFixture } from "./run-loop-mocks.test-support.js";
 import { registerNaturalExitTests } from "./run-loop-natural-exit.test-support.js";
@@ -15,6 +16,7 @@ import {
   registerGracefulGatewayShutdownTests,
   registerShutdownCompletionTests,
 } from "./run-loop-shutdown-completion.test-support.js";
+import { registerGatewayStartupSignalTests } from "./run-loop-startup-signals.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
 import { registerHostedUpdateStopTests } from "./run-loop-stop.test-support.js";
 import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-support.js";
@@ -299,6 +301,7 @@ describe("runGatewayLoop", () => {
   });
 
   registerGatewayStartupFailureTests(mocks.gatewayLog, fixtures);
+  registerGatewayStartupSignalTests(fixtures);
 
   registerGracefulGatewayShutdownTests(fixtures);
 
@@ -772,42 +775,7 @@ describe("runGatewayLoop", () => {
     },
   );
 
-  it.each([true, false])(
-    "clears the SIGUSR2 token before applying external restart policy (allowed: %s)",
-    async (allowed) => {
-      mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
-      mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(allowed);
-      await mocks.withRunningGateway(async ({ captureSignal, close, start }) => {
-        const restartDrainSignal = gatewayWorkAdmissionActual.getGatewayRestartDrainSignal();
-        captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
-        expect(mocks.markGatewayRestartHandled).toHaveBeenCalledOnce();
-        expect(close).not.toHaveBeenCalled();
-        expect(start).toHaveBeenCalledOnce();
-        if (allowed) {
-          expect(mocks.scheduleGatewayRestart).toHaveBeenCalledWith({
-            delayMs: 0,
-            reason: "SIGUSR2",
-          });
-          expect(mocks.markGatewayRestartHandled.mock.invocationCallOrder[0]).toBeLessThan(
-            mocks.scheduleGatewayRestart.mock.invocationCallOrder[0] ?? 0,
-          );
-        } else {
-          expect(mocks.scheduleGatewayRestart).not.toHaveBeenCalled();
-          expect(restartDrainSignal.aborted).toBe(false);
-          expect(gatewayWorkAdmissionActual.isGatewayRestartDraining()).toBe(false);
-          expect(mocks.gatewayLog.warn.mock.calls).toEqual([
-            ["SIGUSR2 restart ignored (not authorized; commands.restart=false)."],
-            [
-              "An unauthorized SIGUSR2 restart signal was received and ignored. " +
-                "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
-                "or restart the gateway through your service manager.",
-            ],
-          ]);
-        }
-      });
-    },
-  );
+  registerExternalRestartSignalTests(waitForLoopTurn);
 
   it.each([true, false])(
     "consumes file-intent SIGUSR2 and cancels pending reloads (authorized=%s)",
@@ -820,8 +788,7 @@ describe("runGatewayLoop", () => {
 
       await mocks.withRunningGateway(async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.abortPendingChannelReloads).toHaveBeenCalledOnce();
         expect(mocks.consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
@@ -1092,7 +1059,7 @@ describe("runGatewayLoop", () => {
     await mocks.withRunningGateway(
       async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
           expect.objectContaining({ port: 18789, probeHosts: ["10.0.0.25"] }),

@@ -1,2 +1,0 @@
-39
-# Persisted transcript silence, progress, source-row and delivery controls.

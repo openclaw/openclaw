@@ -327,12 +327,12 @@ it("keeps legacy ownership while cleanup is pending", async ({ auth: { agentDir 
 
 it("keeps legacy ownership when inspection fails", async ({ auth: { agentDir } }) => {
   const sourcePath = resolveAuthProfileDatabasePath(agentDir);
-  const inspectIdentity = databaseIdentity.inspectDatabasePathIdentitySync;
+  const inspectIdentity = databaseIdentity.inspectDatabasePathIdentity;
   let sourceInspectionFailed = false;
   {
     using _ = vi
-      .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
-      .mockImplementation((pathname) => {
+      .spyOn(databaseIdentity, "inspectDatabasePathIdentity")
+      .mockImplementation(async (pathname) => {
         if (!sourceInspectionFailed && path.resolve(pathname) === path.resolve(sourcePath)) {
           sourceInspectionFailed = true;
           throw Object.assign(new Error("permission denied"), { code: "EACCES" });

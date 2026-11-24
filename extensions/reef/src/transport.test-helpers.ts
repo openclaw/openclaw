@@ -49,6 +49,10 @@ export class ControlledSocket {
     this.emit("close");
   }
 
+  terminate(): void {
+    this.close();
+  }
+
   emit(type: string, event: unknown = {}): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);

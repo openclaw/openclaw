@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import {
   createTrustedCronScheduledToolPolicy,
@@ -36,14 +37,8 @@ function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
     : undefined;
 }
 
-/** Snapshots the permissions used by all scheduled message actions. */
-export function resolveCronJobMessageToolAuthorityInputs(job: CronStoredJob) {
-  const policy = resolveCronJobScheduledMessagePolicy(job);
-  return policy ? { policy } : undefined;
-}
-
 /** Snapshots the normalized permissions used by scheduled message access. */
-export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
   const policy = resolveCronJobScheduledMessagePolicy(job);
   if (!policy) {
     return undefined;
@@ -66,16 +61,6 @@ export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
         }
       : {}),
   };
-}
-
-export function cronJobMessageToolAuthorityInputsEqual(
-  previous: CronStoredJob,
-  next: CronStoredJob,
-): boolean {
-  return isDeepStrictEqual(
-    resolveCronJobMessageToolAuthorityInputs(previous),
-    resolveCronJobMessageToolAuthorityInputs(next),
-  );
 }
 
 export function cronJobMessageActionAuthorityInputsEqual(
@@ -241,6 +226,15 @@ export function reconcileCronChannelRequesterAuthority(params: {
     });
   }
 
+  // A local operator capture is not an account requester. Keep that existing
+  // origin only while both definitions still have operator admission; otherwise
+  // normal requester reconciliation must narrow or clear it.
+  const operatorOrigin =
+    previousJob &&
+    resolveCronRunAdmissionSource(previousJob) === "operator-schedule" &&
+    resolveCronRunAdmissionSource(job) === "operator-schedule"
+      ? previous?.callerOrigin
+      : undefined;
   if (fullSurface) {
     const {
       callerOrigin: _previousOrigin,
@@ -249,7 +243,7 @@ export function reconcileCronChannelRequesterAuthority(params: {
     } = fullSurface;
     job.toolsAllowProvenance = {
       ...provenance,
-      callerOrigin: callerOrigin ?? { kind: "unknown" },
+      callerOrigin: callerOrigin ?? operatorOrigin ?? { kind: "unknown" },
       ...(channelRequester ? { channelRequester } : {}),
     };
   } else if (callerOrigin) {

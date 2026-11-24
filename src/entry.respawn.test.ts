@@ -40,7 +40,7 @@ const voltaShim = "/home/alice/.volta/bin/volta-shim";
 
 const originalExitCode = process.exitCode;
 afterEach(() => {
-  process.exitCode = originalExitCode;
+  process.exitCode = originalExitCode ?? 0;
   vi.restoreAllMocks();
   vi.mocked(attachChildProcessBridge).mockReset();
   vi.unstubAllGlobals();
@@ -210,7 +210,7 @@ it("spawns the standalone plan without adding runtime flags", async () => {
 });
 
 it("records status after the respawn child closes", async () => {
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const { child, spawn, detach } = mockChild();
   const writeError = vi.fn();
 
@@ -231,7 +231,7 @@ it("records status after the respawn child closes", async () => {
   expect(vi.mocked(attachChildProcessBridge).mock.calls[0]).toEqual([child, expect.any(Function)]);
 
   child.emit("exit", 7, null);
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
   child.emit("close", 7, null);
   await completion;
   expect(process.exitCode).toBe(7);

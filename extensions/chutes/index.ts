@@ -37,24 +37,6 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
     ).trim();
   const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
 
-  await ctx.prompter.note(
-    isRemote
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
-          "",
-          `Redirect URI: ${redirectUri}`,
-        ].join("\n")
-      : [
-          "Browser will open for Chutes authentication.",
-          "If the callback doesn't auto-complete, paste the redirect URL.",
-          "",
-          `Redirect URI: ${redirectUri}`,
-        ].join("\n"),
-    "Chutes OAuth",
-  );
-
   const progress = ctx.prompter.progress("Starting Chutes OAuth…");
   try {
     const { onAuth, onPrompt } = ctx.oauth.createVpsAwareHandlers({
@@ -76,7 +58,7 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       manual: isRemote,
       onAuth,
       onPrompt,
-      onProgress: (message) => progress.update(message),
+      onProgress: (message, reason) => progress.update(message, reason),
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
 
@@ -96,22 +78,10 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
           : {}),
       },
       configPatch: applyChutesProviderConfig({}),
-      notes: [
-        "Chutes OAuth tokens auto-refresh. Re-run login if refresh fails or access is revoked.",
-        `Redirect URI: ${redirectUri}`,
-      ],
+      notes: ["Chutes OAuth tokens auto-refresh.", `Redirect URI: ${redirectUri}`],
     });
   } catch (err) {
-    progress.stop("Chutes OAuth failed");
-    await ctx.prompter.note(
-      [
-        "Trouble with OAuth?",
-        "Verify CHUTES_CLIENT_ID (and CHUTES_CLIENT_SECRET if required).",
-        `Verify the OAuth app redirect URI includes: ${redirectUri}`,
-        "Chutes docs: https://chutes.ai/docs/sign-in-with-chutes/overview",
-      ].join("\n"),
-      "OAuth help",
-    );
+    progress.stop();
     throw err;
   }
 }

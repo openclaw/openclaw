@@ -1,9 +1,9 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   loadTranscriptEvents,
@@ -68,7 +68,7 @@ it.each(["commit", "rollback"] as const)(
         const control = new WeakRef({});
         for (let pass = 0; pass < 4; pass++) {
           await nextTurn();
-          queryObjects(WeakRef);
+          forceFullGc();
         }
         expect(control.deref()).toBeUndefined();
         expect(reference.deref()).toBeUndefined();

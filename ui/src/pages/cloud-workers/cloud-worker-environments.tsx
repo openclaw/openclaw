@@ -44,6 +44,7 @@ import { showToast } from "../../lib/toast.ts";
 import { CloudEnvironmentsAdminRequired } from "./cloud-worker-admin-required.tsx";
 import {
   cloudEnvironments,
+  environmentReadyAt,
   environmentState,
   isUnassignedPreparation,
   showPreparationRow,
@@ -78,9 +79,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const [view, setView] = createStore<{
     result: SnapshotsResult | null;
     inventory: EnvironmentsListResult | null;
+    initialInventorySettled: boolean;
   }>({
     result: null,
     inventory: null,
+    initialInventorySettled: false,
   });
   const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> }>();
   const readPending = createMemo<boolean>(() => loadRequest()?.promise.then(() => false) ?? false, {
@@ -233,6 +236,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           return;
         }
         setView((draft) => {
+          draft.initialInventorySettled = true;
           draft.inventory = {
             ...inventory,
             environments: inventory.environments.filter(
@@ -264,6 +268,9 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         }
       } catch (error) {
         if (gateway.isCurrent(scope)) {
+          setView((draft) => {
+            draft.initialInventorySettled = true;
+          });
           throw error;
         }
       } finally {
@@ -324,11 +331,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       });
       if (gateway.isCurrent(scope)) {
         setNotice(
-          i18n.t(
-            result.reused
-              ? "cloudWorkersPage.snapshots.buildReused"
-              : "cloudWorkersPage.snapshots.buildStarted",
-          ),
+          i18n.t(`cloudWorkersPage.snapshots.${result.reused ? "buildReused" : "buildStarted"}`),
         );
         await load();
       }
@@ -543,6 +546,8 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     return settled;
   }
 
+  const snapshotsKnown = () =>
+    view.result !== null || (gateway.connected && !canCall("crabbox.images.list"));
   const environments = createMemo(() =>
     cloudEnvironments(
       view.result?.images ?? [],
@@ -568,8 +573,12 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const current = createMemo(
     () => environments().find((environment) => environment.key === selected()) ?? environments()[0],
   );
+  // First-load readiness survives credential changes; scoped inventory still clears.
   return (
-    <>
+    <Show
+      when={!canCall("environments.list") || view.initialInventorySettled}
+      fallback={<SettingsPage children={<SettingsEmpty message={t("common.loading")} />} />}
+    >
       <SettingsPage>
         <Show
           when={canCall("environments.list") || view.inventory !== null}
@@ -594,20 +603,18 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           <Show
             when={environments().length}
             fallback={
-              <SettingsEmpty
-                message={
-                  loading() ? (
-                    t("common.loading")
-                  ) : (
+              view.inventory && (
+                <SettingsEmpty
+                  message={
                     <>
                       {t("cloudWorkersPage.environments.empty")}{" "}
                       <DocsLink url="https://docs.openclaw.ai/gateway/cloud-workers">
                         {t("cloudWorkersPage.environments.docs")}
                       </DocsLink>
                     </>
-                  )
-                }
-              />
+                  }
+                />
+              )
             }
           >
             <div class="cloud-environments">
@@ -617,18 +624,8 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
               >
                 <For each={environments()} keyed={(environment) => environment.key}>
                   {(entry) => {
-                    const state = () => environmentState(entry());
-                    const age = () => {
-                      const builtAt = entry()
-                        .images.filter((image) => image.state === "available")
-                        .toSorted(
-                          (a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0),
-                        )[0]?.createdAtMs;
-                      const worker = entry().workers.find(
-                        (w) => w.worker?.state === "ready",
-                      )?.worker;
-                      return builtAt ?? (worker ? Date.now() - worker.ageMs : undefined);
-                    };
+                    const state = () => environmentState(entry(), snapshotsKnown());
+                    const age = () => environmentReadyAt(entry());
                     return (
                       <button
                         type="button"
@@ -643,7 +640,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                       >
                         <span>{entry().label}</span>
                         <span class="cloud-environments__status">
-                          {t(`cloudWorkersPage.environments.${state()}`)}
+                          {state() ? t(`cloudWorkersPage.environments.${state()}`) : null}
                           {state() === "ready" && age() !== undefined
                             ? ` · ${formatRelativeTimestamp(age())}`
                             : ""}
@@ -658,6 +655,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                   <CloudWorkerEnvironmentSheet
                     environment={environment()}
                     profiles={view.result?.profiles ?? []}
+                    snapshotsKnown={snapshotsKnown()}
                     busy={
                       presentation().image.read() || presentation().preparing.read() || loading()
                     }
@@ -722,6 +720,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           </Show>
         </SettingsDisclosure>
       </SettingsPage>
-    </>
+    </Show>
   );
 }

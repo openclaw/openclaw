@@ -48,6 +48,7 @@ import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
+import { refuseEarlyGitReleaseSchemaChange } from "./update-candidate-check-early-release.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
@@ -58,7 +59,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 import {
   commitReadyUpdatePluginCohort,
   settleDelegatedUpdatePluginCohort,
@@ -101,6 +102,14 @@ async function finalizeMigratedUpdate(): Promise<void> {
     routeLogsToStderr();
     if (typeof finishUpdateRun !== "function") {
       throw new Error("Update recovery writer is unavailable.");
+    }
+    const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+    const refusal = root ? refuseEarlyGitReleaseSchemaChange(root) : null;
+    if (refusal) {
+      // The early release updater reports this stderr as the failed check before any change.
+      process.stderr.write(`${refusal}\n`);
+      process.exitCode = 1;
+      return;
     }
     process.stdout.write(
       JSON.stringify({
@@ -295,7 +304,7 @@ async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<
     process.env[POST_CORE_UPDATE_ENV] !== "1" ||
     process.env[UPDATE_RUN_ID_ENV] !== input.runId ||
     !executingRoot ||
-    resolveUpdateInstallRoot(executingRoot) !== resolveUpdateInstallRoot(input.root)
+    !updateInstallRootsMatch(executingRoot, input.root)
   ) {
     throw new Error("Post-core update does not match its delegated run and installed runtime.");
   }

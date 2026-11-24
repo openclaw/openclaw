@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { throwAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -106,10 +107,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (recorder.hasPersisted()) {
       return blockedOwner();
     }
-    const assertCurrent = () => {
-      state.getPreDispatchAbortSignal()?.throwIfAborted();
-      params.replyOptions?.operatorAuthority?.assertCurrent();
-    };
+    const assertCurrent = () => state.getPreDispatchAbortSignal()?.throwIfAborted();
     let lastOwner: PluginBindingTranscriptOwner | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const targetSessionStoreEntry = await resolveSessionStoreLookup(
@@ -469,6 +467,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordProcessed("skipped", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     state.completeDispatchReplyOperation();
+    throwAgentRunRestartAbortReason(operation?.abortSignal.reason);
     return attachSourceReplyDeliveryMode({
       ...baseDispatchResult(queuedFinal),
       ...(state.turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),

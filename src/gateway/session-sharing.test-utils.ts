@@ -87,6 +87,11 @@ export function rolePolicyConfig(writeAgents: "*" | string[] = "*"): OpenClawCon
             agents: "*",
             scopes: ["operator.read", "operator.write"],
           },
+          invited: {
+            sessions: { others: "invited" },
+            agents: "*",
+            scopes: ["operator.read", "operator.write", "operator.sessions.write"],
+          },
           view: {
             sessions: { others: "view" },
             agents: "*",
@@ -109,7 +114,7 @@ export function rolePolicyConfig(writeAgents: "*" | string[] = "*"): OpenClawCon
 }
 
 export function roleClient(
-  role: "none" | "view" | "suggest" | "write",
+  role: "none" | "invited" | "view" | "suggest" | "write",
   label: string = role,
 ): GatewayClient {
   const profile = ensureProfileForEmail(`${label}@example.test`);

@@ -137,18 +137,19 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
-  <Accordion title="Repeated tool errors stop the turn">
+  <Accordion title="Repeated tool calls stop the turn">
     With `tools.toolSearch` unset, embedded runs using native local Ollama expose
     policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
     directly. Other optional tools remain deferred. Explicit Tool Search settings
     keep their configured behavior. Direct exposure does not enable a denied
     tool, enable memory, or configure a web-search provider.
 
-    After three consecutive identical failures for the same tool and arguments,
-    OpenClaw blocks that exact action and gives the model one chance to replan.
-    An unchanged retry ends the turn without executing the call again. Unknown
-    tool IDs also count. This protection is always active; enabling
-    `tools.loopDetection` is not required.
+    When the model repeats the same tool call with the same arguments, OpenClaw
+    adds a redirect note to the third result and ends the turn at the twentieth
+    call (`tool_repeat_limit`). Results do not matter: repeated failures and
+    repeated successes count the same way. Calls to an unavailable tool count by
+    name. The guard is on by default; `tools.loopDetection.enabled: false`
+    turns it off.
 
     Ollama 0.40's generic parser can mistake a chat-template marker for an
     advertised tool name. Tool Search uses the collision-free `dispatch_action`
