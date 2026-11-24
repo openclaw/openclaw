@@ -1,20 +1,16 @@
 import { getAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
-/**
- * Per-file mutation queue.
- *
- * Serializes reads and mutations targeting the same real file while allowing independent files to run in parallel.
- */
+import { racePromiseWithAbortSignal } from "../../../../packages/retry/src/index.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../../infra/boundary-path.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { createKeyedFifoLeaseRegistry } from "../../../shared/keyed-fifo-lease.js";
+import { ToolInputError } from "../../tool-input-error.js";
 
-const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
-  Symbol.for("openclaw.fileMutationTails"),
-  "close-only",
-);
+const fileLeases = createKeyedFifoLeaseRegistry(Symbol.for("openclaw.fileMutationLeases"));
 const keyAdmissions = resolveGlobalSingleton(
   Symbol.for("openclaw.fileMutationKeyAdmissions"),
   () => ({ fallbackScope: {}, tails: new WeakMap<object, Promise<void>>() }),
 );
+const FILE_QUEUE_WAIT_MS = 3 * 60_000;
 
 export async function resolveFileMutationQueueKey(
   filePath: string,
@@ -25,69 +21,76 @@ export async function resolveFileMutationQueueKey(
     resolveIdentityPathViaExistingAncestorSync(filePath));
 }
 
-/**
- * Preserve source-call admission while backend-owned physical identities resolve concurrently.
- * Registration is ordered per assistant message; file operations still use only fileMutationTails.
- */
 export async function withFileMutationQueueKeyResolution<T>(
   keyResolution: Promise<string>,
   fn: () => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   return await withFileMutationQueueKeysResolution(
     keyResolution.then((key) => [key]),
     fn,
+    signal,
   );
 }
 
+/** Order physical reservations by source call, even when backend identity resolves out of order. */
 export async function withFileMutationQueueKeysResolution<T>(
   keysResolution: Promise<readonly string[]>,
   fn: () => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const scope = getAgentToolExecutionContext()?.assistantMessage ?? keyAdmissions.fallbackScope;
   const previousAdmission = keyAdmissions.tails.get(scope) ?? Promise.resolve();
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () =>
+      deadline.abort(
+        new ToolInputError(
+          "The file operation is still waiting for access. Retry later, work on another file, or ask the operator to restart the Gateway if this persists.",
+        ),
+      ),
+    FILE_QUEUE_WAIT_MS,
+  );
+  timer.unref();
+  const waiting = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
   void keysResolution.catch(() => undefined);
-  let operation!: Promise<T>;
   const admission = previousAdmission.then(async () => {
-    const keys = await keysResolution;
-    operation = enqueueFileMutationQueueKeys(keys, fn);
+    const keys = await racePromiseWithAbortSignal(
+      keysResolution,
+      waiting,
+      (aborted) => aborted.reason,
+    );
+    waiting.throwIfAborted();
+    return fileLeases.reserve(keys);
   });
   const tail = admission.then(
     () => undefined,
     () => undefined,
   );
   keyAdmissions.tails.set(scope, tail);
-  const cleanup = () => {
+  void tail.then(() => {
     if (keyAdmissions.tails.get(scope) === tail) {
       keyAdmissions.tails.delete(scope);
     }
-  };
-  tail.then(cleanup, cleanup);
-  await admission;
-  return await operation;
-}
-
-function enqueueFileMutationQueueKeys<T>(
-  queueKeys: readonly string[],
-  fn: () => Promise<T>,
-): Promise<T> {
-  const keys = [...new Set(queueKeys)].toSorted();
-  const current = Promise.all(
-    keys.map((key) => (fileMutationTails.get(key) ?? Promise.resolve()).catch(() => undefined)),
-  ).then(fn);
-  const tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  for (const key of keys) {
-    fileMutationTails.set(key, tail);
+  });
+  let lease: Awaited<typeof admission>;
+  try {
+    lease = await racePromiseWithAbortSignal(admission, waiting, (aborted) => aborted.reason);
+    await lease?.wait(waiting);
+    waiting.throwIfAborted();
+  } catch (error) {
+    // An abort can race the reservation receipt, but must never release a predecessor.
+    void admission.then(
+      (reserved) => reserved?.release(),
+      () => {},
+    );
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  const cleanup = () => {
-    for (const key of keys) {
-      if (fileMutationTails.get(key) === tail) {
-        fileMutationTails.delete(key);
-      }
-    }
-  };
-  tail.then(cleanup, cleanup);
-  return current;
+  try {
+    return await fn();
+  } finally {
+    lease?.release();
+  }
 }

@@ -174,6 +174,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       await preflightUpdateHunks(hunks, fileOps, patchOptions.signal);
       return await commitPatchHunks(hunks, fileOps, patchOptions);
     },
+    patchOptions.signal,
   );
 }
 

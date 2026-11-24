@@ -415,6 +415,7 @@ export function createReadToolDefinition(
                     buffer: await ops.readFile(resolved.absolutePath, signal),
                   };
                 },
+                signal,
               );
               ({ absolutePath, note, buffer } = snapshot);
             } catch (error) {

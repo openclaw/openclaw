@@ -551,6 +551,97 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("first snapshot");
   });
 
+  it("cancels a same-file read without releasing the writer it queued behind", async () => {
+    const cwd = tempDirs.make("openclaw-read-abort-queue-");
+    const target = path.join(cwd, "shared.txt");
+    const key = await resolveFileMutationQueueKey(target);
+    await fs.writeFile(target, "before");
+    const started = createDeferred();
+    const release = createDeferred();
+    const writer = withFileMutationQueueKeyResolution(Promise.resolve(key), async () => {
+      started.resolve();
+      await release.promise;
+      await fs.writeFile(target, "after");
+    });
+    await started.promise;
+    const readFile = vi.fn(async (name: string) => await fs.readFile(name));
+    const tool = createReadToolDefinition(cwd, { operations: { access: fs.access, readFile } });
+    const controller = new AbortController();
+    const stopped = tool.execute(
+      "stopped",
+      { path: target },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+    const outcome = stopped.then(
+      () => "completed",
+      () => "cancelled",
+    );
+    const nextTurn = () =>
+      new Promise<string>((resolve) => {
+        setImmediate(() => resolve("waiting"));
+      });
+    let nextRead: ReturnType<typeof tool.execute> | undefined;
+    try {
+      expect(await Promise.race([outcome, nextTurn()])).toBe("waiting");
+      controller.abort();
+      expect(await Promise.race([outcome, nextTurn()])).toBe("cancelled");
+      nextRead = tool.execute("live", { path: target }, undefined, undefined, {} as never);
+      void nextRead.catch(() => {});
+      await nextTurn();
+      expect(readFile).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, stopped, nextRead]);
+    }
+    expect(textContent(await nextRead!)).toBe("after");
+  });
+
+  it("unblocks later file tools after cancelling a stalled backend identity lookup", async () => {
+    const cwd = tempDirs.make("openclaw-read-abort-identity-");
+    const stuckPath = path.join(cwd, "stuck.txt");
+    const livePath = path.join(cwd, "live.txt");
+    await fs.writeFile(livePath, "still available");
+    const started = createDeferred();
+    const finishIdentity = createDeferred();
+    const tool = createReadToolDefinition(cwd, {
+      operations: {
+        access: fs.access,
+        readFile: fs.readFile,
+        async resolveQueueKey(candidate) {
+          if (candidate === stuckPath) {
+            started.resolve();
+            await finishIdentity.promise;
+          }
+          return candidate;
+        },
+      },
+    });
+    const controller = new AbortController();
+    const ctx = {} as never;
+    const cancelled = tool.execute("stuck", { path: stuckPath }, controller.signal, undefined, ctx);
+    void cancelled.catch(() => {});
+    await started.promise;
+    controller.abort();
+    const live = tool.execute("live", { path: livePath }, undefined, undefined, ctx);
+    const deadline = AbortSignal.timeout(1_000);
+    try {
+      await expect(cancelled).rejects.toThrow();
+      await expect(
+        Promise.race([
+          live.then(textContent),
+          new Promise((resolve) => {
+            deadline.addEventListener("abort", () => resolve("blocked"), { once: true });
+          }),
+        ]),
+      ).resolves.toBe("still available");
+    } finally {
+      finishIdentity.resolve();
+      await Promise.allSettled([cancelled, live]);
+    }
+  });
+
   it("queues every accepted Unicode spelling before reading a new file", async () => {
     const tempDir = tempDirs.make("openclaw-read-unicode-order-");
     const writePath = path.join(tempDir, "caf\u00e9.txt");
