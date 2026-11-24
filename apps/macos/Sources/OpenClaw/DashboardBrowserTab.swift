@@ -27,6 +27,7 @@ final class DashboardBrowserTab: NSView, @MainActor NSTextFinderBarContainer {
     var title: String?
     var favicon: String?
     var faviconGeneration: UInt64 = 0
+    var faviconRefreshPending = false
     var navigationWasUserActivated = false
     var observations: [NSKeyValueObservation] = []
     /// WebKit's reload replays the last committed item, which a failed first load never
