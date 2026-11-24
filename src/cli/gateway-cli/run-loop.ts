@@ -16,6 +16,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import { handOffGatewayStartupSignals, registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
@@ -175,8 +176,12 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     gatewayLog,
   );
   const releaseLockIfHeld = async (): Promise<void> => {
-    await cleanup.waitForPersistence(bootCompletion);
-    await cleanup.waitForPersistence(lock?.release());
+    if (
+      !(await cleanup.waitForPersistence(bootCompletion)) ||
+      !(await cleanup.waitForPersistence(lock?.release()))
+    ) {
+      throw new Error("Gateway state custody release did not settle; successor cannot start");
+    }
     lock = null;
   };
   const exitReplacedInstallation = async (replacement: GatewayInstallationReplacement) => {
@@ -352,6 +357,10 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     failure?: ShutdownFailure,
   ): Promise<void> => {
     await cleanup.settleResource("restart.close.signals", () => signals.drain());
+    pendingRestartCompletion = loopCompletion.formatRestartCompletion(
+      activeRestartRequest,
+      Boolean(failure),
+    );
     let cancelled = initiallyCancelled;
     const foregroundHandoff =
       expectedOwner && !cancelled && eagerLifecycleRuntime.isForegroundUpdateHandoff(expectedOwner);
@@ -379,6 +388,13 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         cancelled = true;
       }
     }
+    if (
+      !cancelled &&
+      pendingRestartCompletion &&
+      (foregroundHandoff || isUpdateProcessRestartReason(activeRestartRequest?.restartReason))
+    ) {
+      completeBoot(pendingRestartCompletion);
+    }
     await releaseLockIfHeld();
     if (forcedExitStarted) {
       return;
@@ -389,10 +405,6 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     }
     // Lock release may yield while a managed update upgrades this restart.
     const restartReason = activeRestartRequest?.restartReason;
-    pendingRestartCompletion = loopCompletion.formatRestartCompletion(
-      activeRestartRequest,
-      Boolean(failure),
-    );
     const isUpdateRestart = isUpdateProcessRestartReason(restartReason);
 
     if (cancelled) {
@@ -443,42 +455,28 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
       ),
     };
     const isStandaloneUpdate = Boolean(foregroundHandoff) || (isUpdateRestart && !supervisorMode);
+    if (isStandaloneUpdate) {
+      await cleanup.drainProcessResources();
+      await releaseOpenClawStateDatabaseCustody();
+    }
     const respawn = isStandaloneUpdate
       ? eagerLifecycleRuntime.respawnGatewayProcessForUpdate(respawnOptions)
       : eagerLifecycleRuntime.restartGatewayProcessWithFreshPid(respawnOptions);
     if (respawn.mode === "spawned") {
-      const child = respawn.child;
-      if (foregroundUpdateClosed) {
-        updateSuccessor.commit(child);
-      }
-      const observedRestartRequest = activeRestartRequest;
-      const accepted = await updateSuccessor.observeReadiness(child, {
+      const accepted = await updateSuccessor.observeReadiness(respawn.child, {
         port: params.lockPort,
         host: params.healthHost,
-        foreground: foregroundUpdateClosed,
+        config: params.healthConfig,
         // Old-server cleanup must not consume the replacement's readiness window.
         beforeWait: () => forceActiveRestartExit?.(),
-        isCurrent: () => !foregroundUpdateClosed && activeRestartRequest === observedRestartRequest,
       });
-      if (updateSuccessor.stopRequested) {
+      if (accepted || updateSuccessor.stopRequested) {
         return finishLoopAfterCleanup(0);
       }
-      if (accepted) {
-        gatewayLog.info(
-          `restart mode: update process respawn (spawned pid ${respawn.pid ?? "unknown"})`,
-        );
-        return finishLoopAfterCleanup(0);
-      }
-      gatewayLog.warn(
-        `update respawn child did not become healthy (${respawn.pid ?? "unknown"}); ${foregroundUpdateClosed ? "shutdown pending; retaining the replacement until it closes; inspect its startup logs" : installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
+      gatewayLog.error(
+        "Gateway launcher exited before readiness. Restart it with: openclaw gateway",
       );
-      try {
-        await (foregroundUpdateClosed ? updateSuccessor.cancel() : child.kill());
-      } catch (error) {
-        gatewayLog.warn(`update respawn child did not settle: ${formatErrorMessage(error)}`);
-      }
-      await markRestartHandoffUnavailable("restart-unhealthy");
-      return reacquireAndResumeInProcessRestart();
+      return finishLoopAfterCleanup(1);
     }
     if (respawn.mode === "supervised") {
       // Native service markers belong to the resident launcher, not this child.

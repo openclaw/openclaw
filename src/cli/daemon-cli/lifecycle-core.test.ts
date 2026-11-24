@@ -299,20 +299,29 @@ it("runs the service mutation guard before restarting a loaded service", async (
   );
 });
 
-it("aborts loaded-service mutation when the service guard rejects", async () => {
-  const repairLoadedService = vi.fn();
-
-  await expect(
-    restart({
-      beforeServiceMutation: () => {
-        throw new Error("service mutation denied");
-      },
-      repairLoadedService,
-    }),
-  ).rejects.toThrow("service mutation denied");
-
-  expectNoCalls(writeGatewayRestartIntentSync, repairLoadedService, service.restart);
-});
+it.each([false, true])(
+  "aborts native mutation when custody release rejects (async=%s)",
+  async (async) => {
+    const repairLoadedService = vi.fn();
+    await expect(
+      restart({
+        beforeServiceMutation: () => {
+          const error = new Error("state custody could not be released");
+          if (async) {
+            return Promise.reject(error);
+          }
+          throw error;
+        },
+        repairLoadedService,
+      }),
+    ).rejects.toThrow("__exit__:1");
+    expectNoCalls(repairLoadedService, service.restart);
+    expect(readJsonLog()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("state custody could not be released"),
+    });
+  },
+);
 
 it("repairs managed port drift before restarting", async () => {
   service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });

@@ -9,6 +9,11 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { resolveStateDir } from "../config/paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import {
+  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import * as gatewayLockProcessModule from "./gateway-lock-process.js";
@@ -24,6 +29,10 @@ import {
   captureGatewayStateOwner,
   captureStateDatabaseAccess,
 } from "./gateway-state-owner.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  captureSqliteDatabaseDescriptorCustodyLocations,
+} from "./sqlite-database-admission.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
@@ -189,6 +198,34 @@ beforeEach(() => {
 });
 
 afterAll(() => fixtureRootTracker.cleanup());
+
+it("releases every native shared-state reader and identity descriptor before handing off custody", async () => {
+  const env = await makeEnv();
+  const lock = expectGatewayLock(
+    await acquireForTest(env, { listenerMode: "foreground", port: 43823 }),
+  );
+  const database = lock.run(() => openOpenClawStateDatabase({ env }));
+  try {
+    await executeExistingOpenClawStateRead({ env }, { type: "backup.runs" });
+    expect(database.db.isOpen).toBe(true);
+    expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toContain(database.path);
+    const admissions = captureSqliteDatabaseAdmissions(undefined, { location: database.path });
+    expect(admissions).toHaveLength(1);
+    const descriptor = admissions[0]!.descriptor;
+    expect(fsSync.fstatSync(descriptor).isFile()).toBe(true);
+    await lock.release();
+    expect(database.db.isOpen).toBe(false);
+    expect(() => fsSync.fstatSync(descriptor)).toThrowError(
+      expect.objectContaining({ code: "EBADF" }),
+    );
+    expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).not.toContain(database.path);
+    const successor = expectGatewayLock(await acquireForTest(env, { databaseAccess: "none" }));
+    await successor.release();
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    await lock.release();
+  }
+});
 
 afterEach(async () => {
   vi.useRealTimers();

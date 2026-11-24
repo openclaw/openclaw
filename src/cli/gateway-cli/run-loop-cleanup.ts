@@ -104,6 +104,10 @@ export function createGatewayRunCleanup(
       graceMs,
     );
   const drainProcessResources = async () => {
+    if (processResourcesDrained) {
+      await flushLogs();
+      return;
+    }
     // Retained callbacks remain callable after an update replaces on-disk chunks.
     if (!isForegroundUpdateClosed()) {
       await settleResource("restart.close.provider-local-services", () =>

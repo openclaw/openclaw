@@ -44,11 +44,12 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createNullWriter } from "../../shared/null-writer.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import {
   tryAdoptInstalledPackageForGateway,
   waitForReleaseUpdateFailure,
 } from "../../update/cli.js";
-import { resolvePrefix } from "../../update/store.js";
+import { readTrial, resolvePrefix } from "../../update/store.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   isTerminalInteractive,
@@ -262,6 +263,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     return false;
   }
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
+  await releaseOpenClawStateDatabaseCustody();
   return await runServiceStart({
     serviceNoun: "Gateway",
     service,
@@ -311,6 +313,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
               deadline: healthDeadline,
               deadlineOutcome: "snapshot",
               env: context.env,
+              config: context.config ?? {},
               supervisorKeepsAlive: process.platform === "darwin",
               signal: getAsyncWorkSignal(),
             }),
@@ -326,11 +329,19 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         }),
       ]);
       if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
-        const failure = preparedRunId
-          ? await waitForReleaseUpdateFailure(preparedRunId)
-          : undefined;
-        if (failure) {
-          fail(failure);
+        if (health.operatorScopeWarning) {
+          warnings.push(health.operatorScopeWarning);
+        }
+        if (preparedRunId) {
+          const trial = await readTrial();
+          if (trial?.runId === preparedRunId && trial.phase === "pending") {
+            warnings.push(`OpenClaw ${trial.version} is prepared. Run: openclaw gateway restart`);
+            return;
+          }
+          const failure = await waitForReleaseUpdateFailure(preparedRunId);
+          if (failure) {
+            fail(failure);
+          }
         }
         return;
       }
@@ -471,8 +482,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     readDriftContext: () => ({ config: configPorts.config ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
-    beforeServiceMutation: () =>
-      assertGatewayServiceActionAllowed("restart", "restart the gateway"),
+    beforeServiceMutation: () => {
+      assertGatewayServiceActionAllowed("restart", "restart the gateway");
+      return releaseOpenClawStateDatabaseCustody();
+    },
     restartOwnedProcess: preserveDefinition
       ? undefined
       : async () => {
@@ -627,6 +640,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         throw new Error("unreachable after gateway restart health failure");
       }
 
+      if (preparedRunId) {
+        const failure = await waitForReleaseUpdateFailure(preparedRunId);
+        if (failure) {
+          fail(failure);
+        }
+        return { outcome: "completed" };
+      }
       const waitForHealthy = async () =>
         await waitForGatewayHealthyRestart({
           service,
@@ -635,7 +655,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
           ...(process.platform === "win32" ? { timeoutMs: restartWaitMs } : {}),
           env: restartContext.env,
-          config: restartContext.config,
+          config: restartContext.config ?? {},
           probeHosts: await resolveGatewayServiceProbeHosts(restartContext),
           requireOwnedListener: restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1",
           supervisorKeepsAlive: process.platform === "darwin",
@@ -675,11 +695,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
-        const failure = preparedRunId
-          ? await waitForReleaseUpdateFailure(preparedRunId)
-          : undefined;
-        if (failure) {
-          fail(failure);
+        if (health.operatorScopeWarning) {
+          warnings.push(health.operatorScopeWarning);
         }
         return { outcome: "completed", readiness: health };
       }

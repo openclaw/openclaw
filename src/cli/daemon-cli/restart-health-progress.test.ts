@@ -6,6 +6,8 @@ import {
   makeGatewayService,
   monotonicClock,
   requestStartupProbe,
+  readActiveGatewayLockIdentity,
+  readGatewayOwnerLease,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
 } from "./restart-health.test-helpers.js";
@@ -16,6 +18,46 @@ const { waitForGatewayHealthyRestart, formatGatewayRestartFailure } =
 describe("restart startup progress", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it("keeps a portless file owner starting through a long migration without opening its store", async () => {
+    const readyAtMs = 120_000;
+    readActiveGatewayLockIdentity.mockResolvedValue({
+      pid: 8000,
+      ownerId: "migrating-gateway",
+      createdAt: "2026-11-25T00:00:00.000Z",
+    });
+    readGatewayOwnerLease.mockImplementation(() => {
+      throw new Error("restart observer opened a migrating store");
+    });
+    const service = makeGatewayService({ status: "stopped" });
+    vi.mocked(service.readRuntime).mockImplementation(async () =>
+      monotonicClock.nowMs < readyAtMs ? { status: "stopped" } : { status: "running", pid: 8000 },
+    );
+    inspectPortUsage.mockImplementation(async (port) => ({
+      port,
+      status: monotonicClock.nowMs < readyAtMs ? "free" : "busy",
+      listeners: monotonicClock.nowMs < readyAtMs ? [] : [{ pid: 8000 }],
+      hints: [],
+    }));
+    callGateway.mockImplementation(gatewayHealthResponse());
+    const onProgress = vi.fn();
+    const health = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      config: {},
+      probeHosts: ["127.0.0.1"],
+      timeoutMs: 180_000,
+      requireOwnedListener: true,
+      onProgress,
+    });
+    expect(health).toMatchObject({
+      healthy: true,
+      waitOutcome: "healthy",
+      elapsedMs: readyAtMs,
+    });
+    expect(onProgress).toHaveBeenCalledWith("startup migration");
+    expect(readGatewayOwnerLease).not.toHaveBeenCalled();
+  });
 
   it.each([
     { name: "advancing startup", advances: true, expected: "healthy", elapsedMs: 90_000 },
@@ -284,6 +326,13 @@ describe("restart startup progress", () => {
         status: "running",
         pid: monotonicClock.nowMs >= (replacedAtMs ?? Infinity) ? 8001 : 8000,
       }));
+      if (migration) {
+        readActiveGatewayLockIdentity.mockResolvedValue({
+          pid: 8000,
+          ownerId: "migrating-gateway",
+          createdAt: "2026-11-25T00:00:00.000Z",
+        });
+      }
       if (readyAtMs !== undefined) {
         inspectPortUsage.mockImplementation(async (port) => ({
           port,
@@ -298,7 +347,6 @@ describe("restart startup progress", () => {
       const health = await waitForGatewayHealthyRestart({
         service,
         port: 18789,
-        isStartupMigrationActive: () => migration && monotonicClock.nowMs >= 1_000,
         requireOwnedListener: true,
         env: updateInProgress ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {},
       });

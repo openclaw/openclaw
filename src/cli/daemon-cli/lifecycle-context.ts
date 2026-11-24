@@ -10,6 +10,7 @@ import {
   type UpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { ignoreNonCleanupCommandError } from "../../process/exec-result.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
 
 export async function resolveGatewayLifecycleContext(
@@ -57,11 +58,12 @@ export async function waitForGatewayUpdateRecovery(
     throw new Error("Recovery Gateway version is unavailable.");
   }
   const service = resolveGatewayService();
-  const { port, env } = await resolveGatewayLifecycleContext(service, true);
+  const { port, env, config } = await resolveGatewayLifecycleContext(service, true);
   return await waitForGatewayHealthyRestart({
     service,
     port,
     env,
+    config: config ?? {},
     expectedVersion,
     expectedBuildId,
     timeoutMs,
@@ -78,13 +80,8 @@ async function releasingHelperStateReaders<T>(check: () => Promise<T>): Promise<
   } catch (error) {
     outcome = { error };
   }
-  const [{ closeOpenClawStateDatabaseWorkersByPathAsync }, { resolveOpenClawStateSqlitePath }] =
-    await Promise.all([
-      import("../../state/openclaw-state-db-cache.js"),
-      import("../../state/openclaw-state-db.paths.js"),
-    ]);
   try {
-    await closeOpenClawStateDatabaseWorkersByPathAsync(resolveOpenClawStateSqlitePath());
+    await releaseOpenClawStateDatabaseCustody();
   } catch (cleanupError) {
     throw "error" in outcome
       ? createSqliteLifecycleAggregateError(
