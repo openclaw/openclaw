@@ -28,6 +28,10 @@ export function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+export function isToolCallArgumentBufferExceededError(raw: string): boolean {
+  return /\bexceeded\s+tool[-_\s]?call\s+argument\s+buffer\s+limit\b/i.test(raw);
+}
+
 export function hasRateLimitTpmHint(raw: string): boolean {
   return matchesContextOverflowMessage(raw, "tpm-rate-limit-hint");
 }
@@ -41,7 +45,8 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
   // overflow — unless the request alone exceeds the whole limit, which no wait can satisfy.
   if (
     (hasRateLimitTpmHint(errorMessage) && !isProviderRequestSizeCeilingError(errorMessage)) ||
-    isReasoningConstraintErrorMessage(errorMessage)
+    isReasoningConstraintErrorMessage(errorMessage) ||
+    isToolCallArgumentBufferExceededError(errorMessage)
   ) {
     return false;
   }

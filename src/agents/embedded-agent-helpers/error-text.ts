@@ -80,6 +80,8 @@ const RUNTIME_FAILURE_COPY: Partial<
     "Couldn't connect to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   tls_certificate: TLS_CERTIFICATE_ERROR_USER_TEXT,
   model_not_found: MODEL_NOT_FOUND_USER_TEXT,
+  tool_call_argument_buffer_exceeded:
+    "This tool call's arguments exceeded the 256KB streaming buffer limit. Try a smaller or narrower tool call.",
 };
 const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;

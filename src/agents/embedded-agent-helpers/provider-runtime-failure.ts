@@ -10,7 +10,10 @@ import {
   isReplayInvalidErrorMessage,
 } from "../failover/classification-rules.js";
 import { classifyFailoverReason, classifyFailoverSignal } from "../failover/classify.js";
-import { isContextOverflowErrorFromTables } from "../failover/context-overflow-tables.js";
+import {
+  isContextOverflowErrorFromTables,
+  isToolCallArgumentBufferExceededError,
+} from "../failover/context-overflow-tables.js";
 import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverSignal } from "../failover/signal.js";
@@ -131,6 +134,9 @@ export function classifyProviderRuntimeFailureKind(
   }
   if (message && (formatExecDeniedUserMessage(message) || SANDBOX_BLOCKED_RE.test(message))) {
     return "sandbox_blocked" as const;
+  }
+  if (message && isToolCallArgumentBufferExceededError(message)) {
+    return "tool_call_argument_buffer_exceeded" as const;
   }
   if (message && isReplayInvalidErrorMessage(message)) {
     return "replay_invalid" as const;
