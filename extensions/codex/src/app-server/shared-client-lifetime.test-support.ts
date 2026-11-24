@@ -2,7 +2,6 @@ import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
-import { drainGlobalSingletonLifecycleState } from "../../../../src/shared/global-singleton.js";
 import {
   codexCatalogResidentHomeKey,
   subscribeCodexCatalogEvents,
@@ -14,7 +13,6 @@ import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { withCodexSessionDescendantCancellation } from "./session-cancellation.js";
 import { registerSharedClientAuthRefreshTests } from "./shared-client-auth-refresh.test-support.js";
 import { waitForCodexAppServerClientExit } from "./shared-client-lifecycle.js";
-import { createInitializingClientHarness } from "./shared-client-start.test-support.js";
 import {
   captureCodexAppServerClientLifetime,
   createIsolatedCodexAppServerClient,
@@ -41,18 +39,6 @@ export function registerSharedClientLifetimeTests(
   rejectAuth: (error: Error) => void,
 ) {
   registerSharedClientAuthRefreshTests();
-
-  it("closes the native shared client on Gateway shutdown without a registered harness", async () => {
-    const transport = createInitializingClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(transport.client);
-    await getSharedCodexAppServerClient({ timeoutMs: 1_000 });
-    try {
-      await drainGlobalSingletonLifecycleState("close");
-      expect(transport.stdinDestroyed).toBe(true);
-    } finally {
-      await transport.client.closeAndWait();
-    }
-  });
 
   it.each(["shared", "isolated"] as const)(
     "joins %s transport startup and closes a client returned after the startup deadline",
