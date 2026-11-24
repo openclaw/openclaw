@@ -71,12 +71,11 @@ validation even when first published to beta.
   package integrity, and all Linux/Windows/macOS Gateway checks, including
   Windows packaged install/upgrade in Release Checks. All-group qualification
   includes all nine Gateway install/upgrade combinations.
-- Selected `openclaw/ci-gate` must succeed unless checked-in exact-job grants
-  cover every failed cause. Missing, skipped, or cancelled required coverage
-  blocks. Exact failed live-provider/Telegram leaves and operator-accepted
-  `2026.11.5-beta.3`/candidate-bound `2026.11.4` jobs may use that policy;
-  candidate, job, version, and attempt restrictions still apply. **FRV must
-  conclude success; publishers cannot waive it.**
+- Selected `openclaw/ci-gate` must succeed unless it is itself waived. A matching
+  job waiver does not require a run; omit `jobName` to waive the entire child
+  role and all descendants without a run or receipt. Optional `step` limits a
+  job waiver to the first incomplete or failed step. Unwaived gaps block, and
+  waived is not passed. **FRV must conclude success.**
 - Coverage spans source CI, packages, plugins, Gateway installs/upgrades, and
   selected app, UI, Telegram, QA, and live-provider checks. Inspect recorded
   profile/OS coverage; skipped or deferred is not passed.

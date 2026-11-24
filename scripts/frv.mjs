@@ -67,6 +67,7 @@ import {
 import {
   decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
+  isWaived,
   readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
 } from "./lib/release-validation-waivers.mjs";
@@ -939,9 +940,14 @@ export async function preflightContinuation(
       "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
     );
   }
-  const missingChildren = selectedChildren(plan)
+  const waiverPolicy = await readReleaseWaiverPolicy(plan, client);
+  const scope = { targetVersion: plan.targetVersion, targetSha: plan.targetSha };
+  const children = selectedChildren(plan).filter(
+    ({ key }) => !isWaived({ ...scope, childRole: key }, waiverPolicy),
+  );
+  const missingChildren = children
     .filter((child) => !hasExactChildRunIdentity(child))
-    .map((child) => child.key)
+    .map(({ key }) => key)
     .toSorted();
   if (missingChildren.length > 0) {
     throw new Error(
@@ -1046,7 +1052,7 @@ export async function preflightContinuation(
     Boolean(selection),
   );
   const childObservations = await Promise.all(
-    selectedChildren(plan).map(async (child) => {
+    children.map(async (child) => {
       const sourceParentAttempt = child.sourceParentAttempt ?? source.sourceRunAttempt;
       const parentJob = exactParentJob(parentJobs, child, sourceParentAttempt);
       const [childRun, parentLog] = await Promise.all([
@@ -1194,7 +1200,11 @@ export async function inspectContinuation(plan, client, options = {}) {
   const waiverPolicy = await readReleaseWaiverPolicy(plan, client);
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
-      if (!hasExactChildRunIdentity(child)) {
+      const waived = isWaived(
+        { childRole: child.key, targetSha: plan.targetSha, targetVersion: plan.targetVersion },
+        waiverPolicy,
+      );
+      if (waived || !hasExactChildRunIdentity(child)) {
         return {
           compositeJobsSha256: "",
           conclusion: "",
@@ -1203,7 +1213,7 @@ export async function inspectContinuation(plan, client, options = {}) {
           passed: false,
           plannedRunAttempt: child.runAttempt ?? null,
           runId: String(child.runId ?? ""),
-          status: "missing",
+          status: waived ? "waived" : "missing",
           url: String(child.url ?? ""),
         };
       }

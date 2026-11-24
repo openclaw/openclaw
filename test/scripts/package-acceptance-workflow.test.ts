@@ -3553,6 +3553,9 @@ function runFullReleaseChildDispatch(
   const workdir = tempDirs.make("full-release-child-dispatch-");
   const ghPath = resolve(workdir, "gh");
   const sleepPath = resolve(workdir, "sleep");
+  const waiverTools = resolve(workdir, "workflow/scripts");
+  mkdirSync(waiverTools, { recursive: true });
+  writeFileSync(resolve(waiverTools, "find-reusable-release-child.mjs"), "process.exit(3);\n");
   const callsPath = resolve(workdir, "gh-calls");
   const statusPath = resolve(workdir, "status-polls");
   writeFileSync(callsPath, "");
@@ -3618,6 +3621,7 @@ function runFullReleaseChildDispatch(
     GITHUB_RUN_ATTEMPT: "2",
     GITHUB_RUN_ID: "77",
     GITHUB_STEP_SUMMARY: resolve(workdir, "github-summary"),
+    GITHUB_WORKSPACE: workdir,
     MOCK_GH_CALLS: callsPath,
     MOCK_GH_CHILD_SHA: parentSha,
     MOCK_GH_CONCLUSION: "success",
@@ -3699,11 +3703,19 @@ exit 2
 `,
   );
   writeExecutable(sleepPath, "#!/bin/sh\nexit 0\n");
-  const result = runBash(script, {
-    cwd: workdir,
-    env,
-    timeout: 10_000,
-  });
+  const result = runBash(
+    script
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        "false",
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.8.1"),
+    {
+      cwd: workdir,
+      env,
+      timeout: 10_000,
+    },
+  );
   // A count-prefixed NUL record preserves empty, quoted, and multiline arguments.
   const fields = readFileSync(callsPath, "utf8").split("\0");
   const calls: { args: string[]; childWorkflowRef: string; dispatchRunName?: string }[] = [];
