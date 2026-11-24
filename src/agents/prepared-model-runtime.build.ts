@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
@@ -140,31 +141,6 @@ async function buildSnapshotBatch(
     pluginGeneration: PreparedModelRuntimePluginGeneration,
     catalogFacts: PreparedModelRuntimeCatalogFacts,
   ) => {
-    const { input, inventoryOwner } = candidate;
-    if (
-      inventoryOwner?.provenance === "configured" &&
-      !input.readOnly &&
-      (inventoryOwner.catalogInventory ||
-        inventoryOwner.catalogAttempt ||
-        input.config.gateway?.controlUi?.enabled !== false)
-    ) {
-      const agentId = input.agentId ?? resolveAuthProfileDatabaseOwnerId(input.agentDir);
-      const env = agentFacts.env;
-      // Background catalog saves must not create the shared session database underneath
-      // the first chat's missing-store facts. Admit local storage before publishing its
-      // configured owner; provider discovery remains asynchronous. Existing read-only
-      // startup admissions already have a database and must not borrow write permission.
-      if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
-        // Admission belongs to this build, not the individual catalog generation.
-        // Auth changes can retire that generation while this publication drains them.
-        await prepareOpenClawAgentDatabaseExecution(
-          { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
-          () => assertBuildCurrent(input),
-          signal,
-        );
-        assertBuildCurrent(input);
-      }
-    }
     const catalogAccess = await createFullModelCatalogAccess(
       {
         catalogOwner: candidate.catalogOwner,
@@ -268,7 +244,34 @@ async function buildSnapshotBatch(
       // Already-resolved promises do not let timers or Gateway I/O run.
       await nextTurn();
       for (const candidate of groupCandidates) {
-        assertBuildCurrent(candidate.input);
+        const { input, inventoryOwner } = candidate;
+        assertBuildCurrent(input);
+        if (
+          inventoryOwner?.provenance !== "configured" ||
+          input.readOnly ||
+          (!inventoryOwner.catalogInventory &&
+            !inventoryOwner.catalogAttempt &&
+            input.config.gateway?.controlUi?.enabled === false)
+        ) {
+          continue;
+        }
+        const agentId = input.agentId ?? resolveAuthProfileDatabaseOwnerId(input.agentDir);
+        const env = input.env ?? process.env;
+        const path = resolveAuthProfileDatabasePath(input.agentDir);
+        if (
+          !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
+          inspectDatabasePathIdentitySync(path)?.key.startsWith("path:")
+        ) {
+          // First-birth initialization can publish auth facts. Finish it before
+          // this owner captures credentials, and leave existing stores to their
+          // own admission and recovery paths.
+          await prepareOpenClawAgentDatabaseExecution(
+            { agentId, path, env },
+            () => assertBuildCurrent(input),
+            signal,
+          );
+          assertBuildCurrent(input);
+        }
       }
       const prepareInboundPluginRegistry = groupCandidates.some(
         (candidate) => candidate.prepareInboundPluginRegistry,

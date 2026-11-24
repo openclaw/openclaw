@@ -27,6 +27,9 @@ type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 const tempDirs = createTempDirTracker();
 let fixtureRoot: string;
 
+// Native readers infer the durable owner from the agent directory.
+const defaultAgentDir = () => path.join(fixtureRoot, "default", "agent");
+
 const mocks = vi.hoisted(() => {
   const model = (provider = "openai", id = "gpt-5.5", name = "GPT-5.5") => ({
     provider,
@@ -251,13 +254,13 @@ vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
 
 vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./legacy-inherited-auth-dir.js")>()),
-  resolveLegacyInheritedAuthDir: () => path.join(fixtureRoot, "agent"),
+  resolveLegacyInheritedAuthDir: defaultAgentDir,
 }));
 
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
   listAgentIds: () => ["default"],
-  resolveAgentDir: () => path.join(fixtureRoot, "agent"),
+  resolveAgentDir: defaultAgentDir,
   resolveAgentWorkspaceDir: () => path.join(fixtureRoot, "workspace"),
 }));
 
@@ -320,8 +323,8 @@ const snapshotFor = (config: OpenClawConfig) =>
   getPreparedModelRuntimeSnapshot({
     agentId: "default",
     config,
-    agentDir: path.join(fixtureRoot, "agent"),
-    inheritedAuthDir: path.join(fixtureRoot, "agent"),
+    agentDir: defaultAgentDir(),
+    inheritedAuthDir: defaultAgentDir(),
     workspaceDir: path.join(fixtureRoot, "workspace"),
   });
 const refresh = (config: OpenClawConfig) =>
@@ -399,7 +402,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       getPreparedModelCatalogSnapshot({
         agentId: "default",
         config,
-        agentDir: path.join(fixtureRoot, "agent"),
+        agentDir: defaultAgentDir(),
         workspaceDir: path.join(fixtureRoot, "workspace"),
       })?.entries,
     ).toEqual(configuredCatalog.entries);
