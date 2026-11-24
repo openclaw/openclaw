@@ -154,7 +154,12 @@ try {
     "public-dist-tags.json",
   );
   save("cli-env.json", env);
-  await command("openclaw", ["config", "set", "gateway.mode", "local"], "config.log");
+  const bootstrap = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
+  await waitFor(ready, "T did not initialize its state");
+  const stopped = once(bootstrap, "exit");
+  process.kill(-bootstrap.pid, "SIGTERM");
+  await stopped;
+  await waitFor(async () => !(await ready()), "T still owns the seed database");
   const seed = new DatabaseSync(database);
   seed.exec(
     "INSERT INTO mcp_oauth_stores VALUES ('release-survivor-a', 1, '{\"sentinel\":\"a\"}', 1), ('release-survivor-b', 1, '{\"sentinel\":\"b\"}', 2)",
