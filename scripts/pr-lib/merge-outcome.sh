@@ -470,7 +470,7 @@ merge_outcome_load_local() {
 merge_outcome_write() {
   local record="$1" blob tree next parent entries capture
   shift
-  if [ -n "$MERGE_OUTCOME_RECORD" ] && [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .version)" = 2 ]; then
+  if [ -n "${MERGE_OUTCOME_RECORD:-}" ] && [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .version)" = 2 ]; then
     printf '%s\n%s\n' "$MERGE_OUTCOME_RECORD" "$record" | merge_retention_transition >/dev/null || {
       merge_outcome_stop "retention metadata or phase changed"; return 1;
     }

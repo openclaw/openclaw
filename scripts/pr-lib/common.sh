@@ -557,7 +557,10 @@ require_worktree_cleanup_evidence() (
   local path="$1" pr="${2:-}"
   # Retention survives missing captures and reaches GC, stale provisioning and removal.
   if [ -n "$pr" ] || pr=$(pr_number_from_worktree_dir "$path"); then
-    merge_outcome_load_local "$pr" || return 1
+    merge_outcome_load_local "$pr" || {
+      echo "Preserving $path: invalid retained merge outcome; reconcile the earlier request manually before cleanup." >&2
+      return 1
+    }
     if [ -n "$MERGE_OUTCOME_OID" ] &&
       [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .version)" = 2 ]; then
       echo "Preserving $path: explicit merge resource retention; cleanup is not authorized." >&2
