@@ -64,7 +64,7 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
   it.each([false, true])(
     "admits a sealed additive newer writer without rewriting metadata (readOnly=%s)",
     (readOnly) => {
-      withEngineStoreAdmission(() => {
+      fixture(({ db, open, invalidate }) => {
         const additiveSql =
           "ALTER TABLE items ADD COLUMN label TEXT; CREATE TABLE future_items (id BIGINT PRIMARY KEY);";
         const nextDdl = `${ddl}\n${additiveSql}`;
@@ -78,38 +78,31 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
           fromSchema: { postgres: ddl },
           schema: { postgres: nextDdl },
         };
-        using store = createPostgresEngineTestFixture({
-          directory: dirs.make("pg-reader-floor-"),
-          connection: connection!,
-          schemaPrefix: "floor",
-          schema,
-        });
-        expect(store.open().prepare("SELECT * FROM openclaw_schema_meta").get()).not.toHaveProperty(
+        expect(db.prepare("SELECT * FROM openclaw_schema_meta").get()).not.toHaveProperty(
           "min_reader",
         );
-        const writer = store.open({
+        const next = {
           ...schema,
           version: 2,
           postgres: nextDdl,
           postgresMigrations: [compatibleStep],
-        });
+        };
+        const writer = open(next);
+        const read = (target = schema) =>
+          openPostgresEngineTestStore({
+            anchor: writer.anchor,
+            schema: target,
+            input: { connection: connection!, schemaPrefix: "r2", readOnly: readOnly || undefined },
+          });
         expect(
           writer.prepare("SELECT version, min_reader FROM openclaw_schema_meta").get(),
         ).toEqual({
           version: 2,
           min_reader: 1,
         });
-        store.invalidate();
+        invalidate();
         const before = writer.prepare("SELECT * FROM openclaw_schema_meta").get();
-        const reader = openPostgresEngineTestStore({
-          anchor: writer.anchor,
-          schema,
-          input: {
-            connection: connection!,
-            schemaPrefix: "floor",
-            readOnly: readOnly ? true : undefined,
-          },
-        });
+        const reader = read();
         try {
           expect(getPostgresPhysicalFacts(reader)).toMatchObject({ version: 2, minReader: 1 });
           expect(reader.prepare("SELECT id, value FROM items").all()).toEqual([]);
@@ -123,35 +116,26 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
         } finally {
           reader.close();
         }
-        store.invalidate();
-        const strictWriter = store.open({
-          ...schema,
+        invalidate();
+        const strictWriter = open({
+          ...next,
           version: 3,
-          postgres: nextDdl,
           postgresMigrations: [
             compatibleStep,
             {
               version: 3,
               sql: "SELECT 1",
-              fromSchema: { postgres: nextDdl },
-              schema: { postgres: nextDdl },
+              fromSchema: compatibleStep.schema,
+              schema: compatibleStep.schema,
             },
           ],
         });
         expect(
           strictWriter.prepare("SELECT version, min_reader FROM openclaw_schema_meta").get(),
         ).toEqual({ version: 3, min_reader: null });
-        store.invalidate();
+        invalidate();
         expect(() =>
-          openPostgresEngineTestStore({
-            anchor: writer.anchor,
-            schema: { ...schema, postgres: "SELECT forbidden_schema_work_before_reader_floor" },
-            input: {
-              connection: connection!,
-              schemaPrefix: "floor",
-              readOnly: readOnly ? true : undefined,
-            },
-          }),
+          read({ ...schema, postgres: "SELECT forbidden_schema_work_before_reader_floor" }),
         ).toThrow(StartupMaintenanceRequiredError);
       });
     },
@@ -159,11 +143,8 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
 
   it.each(["absent", "null"] as const)("uses the writer version for a legacy %s floor", (floor) => {
     fixture(({ db, open, invalidate }) => {
-      db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN min_reader BIGINT");
-      if (floor === "absent") {
-        db.exec("ALTER TABLE openclaw_schema_meta DROP COLUMN min_reader");
-      } else {
-        db.exec("UPDATE openclaw_schema_meta SET min_reader = NULL");
+      if (floor === "null") {
+        db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN min_reader BIGINT");
       }
       invalidate();
       expect(getPostgresPhysicalFacts(open())).toMatchObject({ version: 1, minReader: 1 });

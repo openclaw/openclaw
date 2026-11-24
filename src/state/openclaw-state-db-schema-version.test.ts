@@ -380,23 +380,16 @@ it("publishes and clears an explicit state floor in the version writer's transac
   admitSqliteSchema(database);
   expect(read(database)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   expect(getStateSchemaVersionAdmission(database)?.minReader).toBe(1);
+  const floor = database.prepare("SELECT min_reader FROM config_machine_state WHERE state_key=?");
   expect(() =>
     runSqliteImmediateTransactionSync(database, () => {
       resolveStateSchemaVersionToPublish(database);
       throw new Error("rollback strict publication");
     }),
   ).toThrow("rollback strict publication");
-  expect(
-    database
-      .prepare("SELECT min_reader FROM config_machine_state WHERE state_key=?")
-      .get(CONTENT_VERSION_KEY),
-  ).toEqual({ min_reader: 1 });
+  expect(floor.get(CONTENT_VERSION_KEY)).toEqual({ min_reader: 1 });
   runSqliteImmediateTransactionSync(database, () => resolveStateSchemaVersionToPublish(database));
-  expect(
-    database
-      .prepare("SELECT min_reader FROM config_machine_state WHERE state_key=?")
-      .get(CONTENT_VERSION_KEY),
-  ).toEqual({ min_reader: null });
+  expect(floor.get(CONTENT_VERSION_KEY)).toEqual({ min_reader: null });
   expect(getStateSchemaVersionAdmission(database)?.minReader).toBeUndefined();
 });
 
@@ -414,15 +407,8 @@ describe("shared-state reader floor", () => {
     {
       using writer = openNodeSqliteDatabase(pathname);
       writer.exec("BEGIN IMMEDIATE");
-      if (
-        !writer
-          .prepare("PRAGMA table_info(config_machine_state)")
-          .all()
-          .some((column) => column.name === "min_reader")
-      ) {
-        writer.exec("ALTER TABLE config_machine_state ADD COLUMN min_reader INTEGER");
-      }
       writer.exec(`
+        ALTER TABLE config_machine_state ADD COLUMN min_reader INTEGER;
         CREATE TABLE future_state_notes (note TEXT) STRICT;
         ALTER TABLE audit_events ADD COLUMN future_note TEXT;
         PRAGMA user_version = ${futureVersion};
