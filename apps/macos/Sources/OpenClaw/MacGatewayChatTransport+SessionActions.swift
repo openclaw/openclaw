@@ -93,12 +93,9 @@ extension MacGatewayChatTransport {
             .sessionUnreadAckContract,
             ifCurrentServerLease: serverLease)
         let transport = self
-        return await OpenClawChatSessionMutationRouteLease(
+        return OpenClawChatSessionMutationRouteLease(
             sessionTarget: { transport.sessionTarget(for: $0) },
             unreadAckContract: unreadAckContract,
-            allowPinWrites: self.connection.supportsServerCapability(
-                .personalSessionPins,
-                ifCurrentServerLease: serverLease) == true,
             receivesPatchReceipts: true,
             request: self.leasedRequest(serverLease))
     }

@@ -60,7 +60,6 @@ extension ChatSessionSidebar {
             connected: self.viewModel.healthOK,
             mainSessionKey: self.sessionAgentID(session).map { self.viewModel.mainSessionKey(forAgent: $0) } ?? self
                 .viewModel.selectedAgentMainSessionKey,
-            canEditPins: self.menuActions.canTogglePin(session, at: now),
             pin: {
                 self.viewModel.setSessionPinned(
                     key: session.key,
@@ -162,7 +161,6 @@ private struct ChatSidebarRow: View {
     let now: Date
     let connected: Bool
     let mainSessionKey: String
-    let canEditPins: Bool
     let pin: () -> Void
     let archive: () -> Void
     let archiving: Bool
@@ -308,7 +306,7 @@ private struct ChatSidebarRow: View {
                 .accessibilityLabel(self.node.session
                     .pinned == true ? String(localized: "Unpin") : String(localized: "Pin"))
                 .focused(self.$focus, equals: .pin)
-                .disabled(!self.connected || !self.canEditPins)
+                .disabled(!self.connected)
             }
             Button(action: self.archive) {
                 Image(systemName: self.node.session.isArchived ? "tray.and.arrow.up" : "archivebox")

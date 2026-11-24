@@ -97,7 +97,6 @@ import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
-  migrateSessionArchiveUndoMarker,
   migrateSessionCreatorNamespaces,
   migrateSessionTranscriptActiveProjection,
   migrateSessionTranscriptGenerations,
@@ -109,6 +108,10 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import { AGENT_INDEX_RETIREMENT_SQL } from "./openclaw-agent-index-retirement-migration.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  migrateAgentMemberAccessInTransaction,
+} from "./openclaw-agent-member-access-schema.js";
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
@@ -134,7 +137,6 @@ import {
   withoutTrajectoryPayloadColumns,
 } from "./openclaw-agent-trajectory-storage-migration.js";
 import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
-import { AGENT_ARCHIVE_UNDO_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -402,8 +404,8 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
           migrateAgentPendingInputEndingsInTransaction(db);
         }
-        if (crossesVersion(AGENT_ARCHIVE_UNDO_SCHEMA_VERSION)) {
-          migrateSessionArchiveUndoMarker(db);
+        if (crossesVersion(AGENT_MEMBER_ACCESS_SCHEMA_VERSION)) {
+          migrateAgentMemberAccessInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

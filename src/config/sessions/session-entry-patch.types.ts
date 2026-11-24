@@ -2,10 +2,7 @@ import type { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-data
 import type { ConversationAuthority } from "./conversation-authority.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type {
-  SessionEntryPatchOperation,
-  SessionEntryPatchWriteIntent,
-} from "./session-entry-patch-operation.js";
+import type { SessionEntryPatchOperation } from "./session-entry-patch-operation.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle-projection.js";
 import type {
@@ -39,7 +36,7 @@ export type SessionEntryPatchGuard = {
   };
 };
 
-export type SessionEntryPatchCommit = SessionEntryPatchWriteIntent & {
+export type SessionEntryPatchCommit = {
   selection: SessionEntryPatchSelection;
   prepared: SqliteLifecycleTargetSnapshot;
   sessionKey: string;
@@ -92,7 +89,7 @@ export type SessionEntryPatchCommitObserver = (
 
 export type SessionEntryPatchReduction = Omit<
   SessionEntryPatchCommit,
-  "prepared" | "writeBase" | "next" | keyof SessionEntryPatchWriteIntent
+  "prepared" | "writeBase" | "next"
 > & {
   operation: SessionEntryPatchOperation;
   fallbackEntry?: SessionEntry;

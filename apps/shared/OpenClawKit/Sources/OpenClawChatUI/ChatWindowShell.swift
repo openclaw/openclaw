@@ -145,6 +145,7 @@ public struct OpenClawChatWindowShell: View {
             // its native safe area and window controls.
             .ignoresSafeArea(.container, edges: self.viewModel.usesWebConversation ? .top : [])
             .environment(\.openClawChatDesktopLayout, true)
+            .environment(\.openClawChatWindowCommands, self.windowCommands)
             .navigationTitle(self.activeSessionTitle)
             .toolbar { self.detailToolbar }
             .background(self.keyboardShortcutHandlers)
@@ -204,7 +205,6 @@ public struct OpenClawChatWindowShell: View {
                     self.viewModel.refreshSessions(limit: 200)
                 }
             }
-            .environment(\.openClawChatWindowCommands, self.windowCommands)
     }
 
     /// Key equivalents only fire for installed views; buttons inside a closed
@@ -425,9 +425,6 @@ public struct OpenClawChatWindowShell: View {
                         : String(localized: "Pin")),
                     systemImage: self.activeSessionEntry?.pinned == true ? "pin.slash" : "pin")
             }
-            .disabled(self.activeSessionEntry.map { self.windowCommands.sessionMenuActions.canTogglePin(
-                $0,
-                at: self.viewModel.sidebarRosterClock.gatewayDate()) } != true)
 
             Button {
                 self.viewModel.setSessionUnread(

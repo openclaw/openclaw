@@ -47,8 +47,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   archived_at INTEGER,
   last_read_at INTEGER,
   last_interaction_at INTEGER,
-  last_activity_at INTEGER,
-  archive_undo_marker TEXT
+  last_activity_at INTEGER
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_entry_snapshots (
@@ -294,6 +293,7 @@ CREATE TABLE IF NOT EXISTS session_members (
   identity_id TEXT NOT NULL,
   added_by TEXT NOT NULL,
   added_at INTEGER NOT NULL,
+  access TEXT CHECK (access IS NULL OR access IN ('read', 'suggest', 'send')),
   PRIMARY KEY (session_key, identity_id),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;

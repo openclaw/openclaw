@@ -11,7 +11,6 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionEntryPatchWriteIntent } from "./session-entry-patch-operation.js";
 import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -37,9 +36,7 @@ export function replaceSessionEntryInDatabase(
 ): SessionEntryIdentityChange {
   const identityKeys = collectSessionEntryLookupKeys(sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
-  const written = writeSessionEntry(database, sessionKey, entry, {
-    archiveUndo: { kind: "invalidate" },
-  });
+  const written = writeSessionEntry(database, sessionKey, entry);
   const current = new Map(previous);
   current.set(sessionKey, written);
   return { previous, current };
@@ -48,7 +45,7 @@ export function replaceSessionEntryInDatabase(
 /** Revalidate prepared rows and apply the patch on the already-admitted connection. */
 export function applySessionEntryPatchInDatabase(
   database: OpenClawAgentDatabase,
-  params: SessionEntryPatchWriteIntent & {
+  params: {
     operationLabel: "session-entry.patch" | "session-entry-target.patch";
     validateCanonicalKeys: boolean;
     readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
@@ -76,7 +73,7 @@ export function writeSessionEntryPatchInDatabase(
   database: OpenClawAgentDatabase,
   params: Pick<
     Parameters<typeof applySessionEntryPatchInDatabase>[1],
-    "sessionKey" | "writeBase" | "next" | "options" | "invalidateArchiveUndo"
+    "sessionKey" | "writeBase" | "next" | "options"
   > & { fresh: SqliteLifecycleTargetSnapshot },
 ): SessionEntryPatchMutation {
   const { fresh } = params;
@@ -96,7 +93,6 @@ export function writeSessionEntryPatchInDatabase(
   const selectedPreviousEntry = fresh[0]?.entry ?? params.writeBase;
   const postimages: SessionEntryWritePostimages = new Map();
   const persisted = writeSessionEntry(database, params.sessionKey, params.next, {
-    archiveUndo: params.invalidateArchiveUndo ? { kind: "invalidate" } : undefined,
     ...(params.options.consumePendingReset ? { consumePendingReset: true } : {}),
     ...(params.options.providerReviewMutation ? { providerReviewMutation: true } : {}),
     previousEntry: selectedPreviousEntry,

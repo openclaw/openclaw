@@ -21,7 +21,7 @@ extension ChatSessionSidebar {
             set: { if !$0 { self.sessionPendingRename = nil } })
     }
 
-    func contextMenu(for session: OpenClawChatSessionEntry, isChild: Bool, now: Date? = nil) -> some View {
+    func contextMenu(for session: OpenClawChatSessionEntry, isChild: Bool, now: Date = .now) -> some View {
         var session = session
         session.agentId = OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
@@ -31,7 +31,7 @@ extension ChatSessionSidebar {
             isChild: isChild,
             groups: self.groups,
             actions: self.menuActions,
-            now: now ?? self.sidebarClock.gatewayDate(),
+            now: now,
             inspect: { self.inspectedSession = session },
             rename: {
                 self.renameText = session.label ?? session.displayName ?? ""
@@ -79,7 +79,6 @@ private struct ChatSessionSidebarRowMenu: View {
                         pinned: self.session.pinned != true,
                         agentID: self.session.agentId)
                 }
-                .disabled(!self.actions.canTogglePin(self.session, at: self.now))
             }
             // Snooze shares Pin's root-session eligibility.
             if ChatSessionSidebarEligibility.canPin(self.session, isChild: self.isChild), !self.session.isArchived,

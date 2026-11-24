@@ -8,6 +8,7 @@ import {
 } from "../../state/openclaw-agent-db-identity.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -33,8 +34,7 @@ import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sql
 import type {
   SqliteSessionEntryReplacement,
   SessionEntryReplacementCommit,
-  ReplacementProjectionOptions,
-  ReplacementProjectionParams,
+  SessionEntryWorkerLifecycle,
 } from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
@@ -51,6 +51,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionEntryCommitContext,
+  SessionEntryCreateWithTranscriptOptions,
   SessionEntryReplacement,
 } from "./session-accessor.types.js";
 import {
@@ -68,8 +69,43 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
-export type SessionEntryCanonicalReplacement = SqliteSessionEntryReplacement & {
+export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
   previousSessionKeys: readonly string[];
+};
+
+type ReplacementProjectionOptions = {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
+  creationOperation?: SessionEntryReplacementCommit["creationOperation"];
+  fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
+  onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
+  retainedExecution?: OpenClawAgentDatabaseExecution;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
+  assertCommitAllowed?: () => void;
+  withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
+  ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
+  labelClaim?: SessionEntryReplacementCommit["labelClaim"];
+  preparedTranscript?: SessionEntryReplacementCommit["preparedTranscript"];
+  checkPendingArchiveRecovery?: boolean;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
+  env?: NodeJS.ProcessEnv;
+  activeSessionKey?: string;
+  agentId?: string;
+  consumePendingReset?: boolean;
+  requireWriteSuccess?: boolean;
+  sessionKeys?: readonly string[];
+  includeSessionWindowOwner?: string;
+  includeLabelOwners?: string;
+  skipMaintenance?: boolean;
+  storePath: string;
+};
+
+type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions & {
+  afterCommitted?: (result: T, context: SessionEntryCommitContext) => Promise<void>;
+  update: (
+    entries: SessionEntryReplacementSnapshot[],
+  ) =>
+    | Promise<{ result: T; replacements?: Iterable<TReplacement> }>
+    | { result: T; replacements?: Iterable<TReplacement> };
 };
 
 type CreationProjection = {
@@ -100,9 +136,6 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
         memory.authority,
       )
     : [];
-  if (params.includeArchiveUndoMarkers) {
-    throw new Error("Archive Undo is unavailable for memory-only sessions.");
-  }
   const prepared = new Map(snapshots.map(({ sessionKey, entry }) => [sessionKey, entry]));
   const windowOwner =
     params.includeSessionWindowOwner &&
@@ -348,7 +381,6 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     projection: "replacement",
                     replacementSelection: {
                       fieldPatch: params.fieldPatch,
-                      includeArchiveUndoMarkers: params.includeArchiveUndoMarkers,
                       sessionKeys: params.sessionKeys,
                       includeSessionWindowOwner: params.includeSessionWindowOwner,
                       includeLabelOwners: params.includeLabelOwners,
@@ -653,7 +685,6 @@ export async function applySessionEntryExactReplacements<T>(params: {
 }): Promise<T> {
   return await applySqliteSessionEntryReplacementProjection(params, (replacements) =>
     [...(replacements ?? [])].map(({ entry, sessionKey }) => ({
-      archiveUndo: { kind: "invalidate" },
       entry,
       sessionKey,
     })),
@@ -674,18 +705,12 @@ export async function applySessionEntryCanonicalReplacements<T>(
         : {}),
     },
     (replacements) =>
-      [...(replacements ?? [])].map((replacement) => {
-        const normalized: SessionEntryCanonicalReplacement = {
-          entry: replacement.entry,
-          previousSessionKeys: uniqueStrings(
-            replacement.previousSessionKeys.map((key) => key.trim()).filter(Boolean),
-          ),
-          sessionKey: replacement.sessionKey.trim(),
-        };
-        if (replacement.archiveUndo) {
-          normalized.archiveUndo = replacement.archiveUndo;
-        }
-        return normalized;
-      }),
+      [...(replacements ?? [])].map((replacement) => ({
+        entry: replacement.entry,
+        previousSessionKeys: uniqueStrings(
+          replacement.previousSessionKeys.map((key) => key.trim()).filter(Boolean),
+        ),
+        sessionKey: replacement.sessionKey.trim(),
+      })),
   );
 }

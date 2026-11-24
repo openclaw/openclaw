@@ -19,6 +19,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-validation-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
@@ -38,7 +39,6 @@ import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
 } from "./openclaw-migration-witness.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import {
   expectRow,
   expectRows,
@@ -115,9 +115,9 @@ describe("pending input additive schema", () => {
     const filename = openOpenClawAgentDatabase(options).path;
     const database = await previousDatabase(filename);
     database.exec(`
+      ALTER TABLE session_members DROP COLUMN access;
       ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
       ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
-      ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
       PRAGMA user_version = 42;
       UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
     `);
@@ -203,8 +203,8 @@ describe("pending input additive schema", () => {
     {
       using old = await previousDatabase(filename);
       old.exec(`
+        ALTER TABLE session_members DROP COLUMN access;
         DROP TABLE session_pending_inputs;
-        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);
@@ -421,9 +421,9 @@ describe("pending input additive schema", () => {
     {
       using old = await previousDatabase(filename);
       old.exec(`
+        ALTER TABLE session_members DROP COLUMN access;
         ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
         ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
-        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);

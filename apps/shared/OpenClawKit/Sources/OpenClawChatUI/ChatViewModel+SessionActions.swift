@@ -441,8 +441,7 @@ extension OpenClawChatViewModel {
     public func fetchSessionList(
         search: String?,
         archived: Bool,
-        agentID: String? = nil,
-        preservingPersonalPinOrder: Bool = false) async -> [OpenClawChatSessionEntry]
+        agentID: String? = nil) async -> [OpenClawChatSessionEntry]
     {
         let session = self.currentSessionSnapshot()
         let query = ChatPayloadDecoding.trimmedNonEmptyString(search)
@@ -453,9 +452,7 @@ extension OpenClawChatViewModel {
                 archived: archived,
                 agentID: agentID ?? session.deliveryAgentID)
             guard self.isCurrentSession(session) else { return [] }
-            return OpenClawChatSessionListOrganizer.organize(
-                res.sessions,
-                preservingPersonalPinOrder: preservingPersonalPinOrder)
+            return OpenClawChatSessionListOrganizer.organize(res.sessions)
         } catch {
             // A superseded (cancelled) fetch must not produce fallback rows;
             // the newer task owns the scoped list. Callers also guard on
@@ -946,22 +943,16 @@ extension OpenClawChatViewModel {
     public func setSessionPinned(key: String, pinned: Bool, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
         let row = self.sidebarData?.row(key: key, agentID: target.agentID ?? self.activeAgentId)
-        #if os(macOS)
-        if pinned, let observed = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId),
-           observed.isSnoozed(at: self.sidebarRosterClock.gatewayDate()) { return }
-        #endif
         let pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
         self.mutateSessionOptimistically(
             target: target,
             field: .pinned,
             update: { $0.pinned = pinned
                 $0.pinnedAt = pinnedAt
-                #if !os(macOS)
                 if pinned {
                     $0.snoozedUntil = nil
                     $0.snoozedAt = nil
                 }
-                #endif
             },
             mutation: { routeLease in
                 try await routeLease.patchSession(

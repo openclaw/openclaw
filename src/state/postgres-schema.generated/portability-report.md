@@ -25,7 +25,7 @@
 | agent    | column        |   448 |        412 |       36 |
 | agent    | index         |   109 |        105 |        4 |
 | agent    | foreignKey    |    30 |         30 |        0 |
-| agent    | check         |    75 |         75 |        0 |
+| agent    | check         |    76 |         76 |        0 |
 | agent    | trigger       |     8 |          4 |        4 |
 | agent    | virtualTable  |     2 |          0 |        2 |
 | agent    | internalTable |    10 |          0 |       10 |

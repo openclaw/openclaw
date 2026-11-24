@@ -6,6 +6,7 @@ import {
   bindSynchronousSessionSource,
   withSessionSourceValidation,
 } from "../config/sessions/session-source-authority.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
@@ -101,6 +102,7 @@ it("allocates once and reuses the first runtime admission across fallback", asyn
     canonicalIdentity: null,
     profileId: "operator",
     scopes: ["operator.write"],
+    grant: decideTurnGrant(["operator.write"]),
   });
   const prepared = prepareRun({
     cfg: enabledConfig,
@@ -253,6 +255,7 @@ it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refus
       canonicalIdentity: null,
       profileId: "native-operator",
       scopes: ["operator.write"],
+      grant: decideTurnGrant(["operator.write"]),
       retain: () => {
         sourceHolds++;
         return () => sourceHolds--;

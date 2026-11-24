@@ -175,7 +175,6 @@ class ConnectionManagerTest {
         ConnectionManager.MODEL_SELECTION_POLICY_CLIENT_CAPABILITY,
         "presence-deltas",
         "health-summary",
-        "personal-session-pins",
       ),
       options.caps,
     )
@@ -192,7 +191,6 @@ class ConnectionManagerTest {
         ConnectionManager.MODEL_SELECTION_POLICY_CLIENT_CAPABILITY,
         "presence-deltas",
         "health-summary",
-        "personal-session-pins",
       ),
       options.caps,
     )
@@ -426,10 +424,11 @@ class ConnectionManagerTest {
     params: GatewayTlsParams?,
     expectedFingerprint: String? = null,
   ) {
-    assertEquals(expectedFingerprint, requireNotNull(params).expectedFingerprint)
+    assertEquals(expectedFingerprint, params?.expectedFingerprint)
   }
 
   private fun assertTlsRequired(params: GatewayTlsParams?) {
+    assertTrue(params != null)
     assertTls(params)
   }
 

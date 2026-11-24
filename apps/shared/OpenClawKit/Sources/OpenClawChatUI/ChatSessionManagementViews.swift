@@ -130,9 +130,6 @@ struct ChatSessionInspectorSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
 
     @Environment(\.dismiss) private var dismiss
-    #if os(macOS)
-    @Environment(\.openClawChatWindowCommands) private var windowCommands
-    #endif
     @State private var legacySession: OpenClawChatSessionEntry
     private let target: OpenClawChatSessionTarget
     private let sessionID: String?
@@ -206,11 +203,6 @@ struct ChatSessionInspectorSheet: View {
                     .disabled(self.isMutatingGroup)
                     Toggle("Pinned", isOn: self.pinnedBinding)
                         .font(OpenClawChatTypography.body)
-                        #if os(macOS)
-                        .disabled(self.windowCommands?.sessionMenuActions.canTogglePin(
-                            self.displayedSession,
-                            at: self.viewModel.sidebarRosterClock.gatewayDate()) != true)
-                        #endif
                     Toggle("Archived", isOn: self.archivedBinding)
                         .font(OpenClawChatTypography.body)
                         .disabled(!ChatSessionSidebarModel.canArchiveSession(

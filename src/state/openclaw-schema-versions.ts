@@ -3,9 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 export const AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION = 41;
 export const AGENT_TOOL_USAGE_SCHEMA_VERSION = 42;
 export const AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION = 43;
-export const AGENT_ARCHIVE_UNDO_SCHEMA_VERSION = 44;
 
-// v44 reserves a private archive occurrence marker without inferring authority for existing rows.
+export const AGENT_MEMBER_ACCESS_SCHEMA_VERSION = 44;
+
+// v44 stores optional per-session invitation levels.
 // v43 records pending-input endings and reserves their original-source envelope.
 // v42 adds opt-in, decayed tool usage without backfilling transcripts.
 // v41 keeps active transcript byte and dependency facts outside payload overflow chains.
