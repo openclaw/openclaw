@@ -161,17 +161,21 @@ describe("Beam receiver", () => {
           expect(publicationId).toBe(previousEntry.value.publicationId);
         }
         const after = Date.now();
+        const stored = await store.get(body.beamId);
         if (accepted) {
+          expect(stored?.revision).toMatch(/^[a-f0-9-]{36}$/);
+          expect(stored?.revision).not.toBe(previousEntry?.value.revision);
           expected = {
             ...body,
             publicationId,
+            revision: stored?.revision,
             receivedAt,
             createdAt: second ? 600 : 100,
             uploaderProfileId: profileId,
             publisherProfileId: second ? "publisher-600" : "publisher-100",
           };
         }
-        expect(await store.get(body.beamId)).toEqual(expected);
+        expect(stored).toEqual(expected);
         const entry = await entryFor(body.beamId);
         if (accepted) {
           assert(entry, "Beam upload did not persist its entry");
