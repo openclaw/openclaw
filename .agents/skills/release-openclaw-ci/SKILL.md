@@ -103,7 +103,7 @@ pnpm ci:full-release -- \
 5. Let the helper create Q transport and obtain immutable P admission. Never hand-construct either or select moving main.
 6. Reuse the exact successful parent through `pnpm release:candidate -- --full-release-validation-run-id <run> --skip-dispatch`, retaining original tag, P, route, scope, and other options. Checklist `--workflow-sha` means **P**; its fresh dispatch defaults Q=C. Avoid a second Q=C qualification.
 7. Reconciliation preserves original Q. Changing Q needs a new request, never an edited record.
-8. Reuse is neither automatic nor automatically invalid: preserve producer Q/run/attempt and authenticated receipt; require identical workload closure, exact C/inputs/candidate bindings, current artifacts, and policy acceptance. Executable shared-script changes invalidate all roles; the Q grant-ledger-only exception permits reevaluation, not reuse of an old verdict; non-normal-CI roles compare full workflow/root trees. Rerun invalid or unwaived failed work and reverify retained package/image payloads; never relabel a failed parent green.
+8. Reuse is neither automatic nor automatically invalid: preserve producer Q/run/attempt and authenticated receipt; require authenticated producer tooling, exact C/inputs/candidate bindings, current artifacts, and acceptance under current Q grants. Tooling changes alone do not invalidate execution; deliberately opt out of reuse when the new harness must run. Rerun invalid or unwaived failed work and reverify retained package/image payloads; never relabel a failed parent green.
 9. Require successful final verification before publication. Supplemental Telegram: retained admitted Q ref/harness, package C. Parallels: isolated Q checkout/dependencies, exact C tarballs. Never use moving main or P's harness.
 10. Record replacement tuple/evidence in handoff. This procedure grants no merge, dispatch, or publication authority.
 
@@ -285,19 +285,12 @@ With `reuse_evidence=true`:
 
 - Within **two minutes**, scan at most **100** recent runs, probe at most **40** target receipt inventories, and fully validate at most **five** matching receipts per role. Nonmatching inventories do not spend full-validation budget.
 - Empty-string inputs equal absent inputs (GitHub omits them from `github.event.inputs`); nonempty defaults and candidate descriptor bytes match exactly.
-- Raw successful children, or failed children accepted by current Q grants, may come from failed, cancelled, or active parents at the same Q, or across Q only with authenticated Git-tree proof of identical workload closure. Independent Q requires authenticated tooling lineage; missing/unsupported/changed closure fails closed.
-
-| Closure     | Exact contents                                                                                                                                                                                                                                                                           |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| All roles   | Owning/reusable workflows, local actions, complete scripts tree, root config/dependency files. Executable shared-script changes invalidate every child, regardless of control-only intent. Only `scripts/lib/release-validation-waivers.json` is excluded for Q grant-data reevaluation. |
-| Normal CI   | Also complete `config`, `packages`, `src`, `test` trees for Q-owned harness dependencies; even unrelated changes there invalidate reuse. Other product directories come from C and are excluded. Unrelated parent-workflow changes alone do not invalidate normal CI.                    |
-| Other roles | Conservatively all workflows and full root tree.                                                                                                                                                                                                                                         |
-
+- Raw successful children, or failed children accepted by current Q grants, may come from failed, cancelled, or active parents at the same Q or across Q. Independent Q requires authenticated tooling lineage; the original producer Q is not relabeled.
 - Logs identify reuse, evaluated rejections, skipped runs, and fresh dispatches. Current-parent adoption witness/immutable plan bind each selection.
 - Admitted P evaluates retained failures against pinned Q grants using the current candidate version; a matching waiver avoids redispatch after the required initial run. Frozen Q still supplies dispatch-input defaults.
-- Collectors/final verification recheck live attempt/conclusion, closure, tooling lineage, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
+- Collectors/final verification recheck live attempt/conclusion, tooling lineage, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
 - Current-parent source/publication admission, successful-parent changelog reuse, and artifact producers' sealed receipts are unchanged.
-- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
+- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs alone do not establish eligibility. Set `reuse_evidence=false` when fresh execution under the new Q is required. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
 
 ### Optional beta performance
 

@@ -100,8 +100,10 @@ in the release handoff, not public Q data or published docs ([#199776](https://g
 Commit authorized grants directly to Q’s `scripts/lib/release-validation-waivers.json`;
 no grant PR to `main`, no grant cherry-pick into C. Pin the new Q in a fresh
 request/admission, then reevaluate eligible raw successful/failed receipts under
-its grants. The ledger-only delta preserves workload identity; executable Q
-changes do not. Public Q branches are not private storage.
+its grants. Executable Q changes do not by themselves invalidate authenticated
+child receipts; opt out of reuse when the new harness must run. Historical artifact
+selection has a separate workload compatibility check. Public Q branches are not
+private storage.
 A failed-job grant is not permission to skip the job or change C. All other
 required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor

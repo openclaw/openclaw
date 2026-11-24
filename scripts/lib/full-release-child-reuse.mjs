@@ -527,6 +527,7 @@ const BETA2_BOOKKEEPING_BLOBS = new Map([
   ["test/scripts/release-upgrade-baseline.test.ts", "23c00952c86b67d33707a8237cded5a837ef3255"],
 ]);
 
+// Stable historical artifact selection still requires equivalent producer workloads.
 export async function validateReleaseWorkloadIdentity(workflowSha, request, deps) {
   if (workflowSha === request.workflowSha) {
     return;
@@ -534,11 +535,9 @@ export async function validateReleaseWorkloadIdentity(workflowSha, request, deps
   const comparison = await deps.github(
     "compare/" + workflowSha + "..." + request.workflowSha + "?per_page=1",
   );
-  // Parent orchestration and current-verdict policy do not change a sealed child
-  // execution. Keep this list explicit: child workflows, harnesses, build inputs,
-  // and shared helpers still require workload equivalence below. #203854 plus a
-  // grant update must not invalidate unchanged child execution. The current
-  // policy, exact inputs, live attempt, and authenticated receipt are checked next.
+  // Parent orchestration and verdict policy do not change artifact production.
+  // Keep this list explicit: child workflows, harnesses, build inputs, and
+  // shared helpers still require workload equivalence below.
   // GitHub caps changed files at 300; a capped inventory cannot prove equivalence.
   const orchestrationPaths = new Set([
     RELEASE_VALIDATION_WAIVERS_PATH,
@@ -576,7 +575,6 @@ export async function validateReleaseWorkloadIdentity(workflowSha, request, deps
 
 async function validateEvidence(selection, request, deps) {
   validateSelectionIdentity(selection, request);
-  await validateReleaseWorkloadIdentity(selection.workflowSha, request, deps);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
   if (
@@ -855,7 +853,7 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         inputs: normalized.inputs,
       };
       const verified = await validateEvidence(selection, normalized, resolved);
-      report(`run ${run.id} ${run.display_title}: reused: verified receipt and workload closure`);
+      report(`run ${run.id} ${run.display_title}: reused: verified child receipt`);
       summary(true);
       return verified.selection;
     } catch (error) {

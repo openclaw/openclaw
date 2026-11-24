@@ -2047,7 +2047,7 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     for (const spec of coverage.children) {
       const child = children.find((entry) => entry.key === spec.key);
       // Reuse retains the original producer. Strict validation authenticates
-      // either its child workload closure or the whole-root changelog delta.
+      // either its sealed child evidence or the whole-root changelog delta.
       const producer =
         child.source === "reused"
           ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)

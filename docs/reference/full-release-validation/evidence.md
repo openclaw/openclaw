@@ -142,15 +142,13 @@ The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
 setup failures remain blocking; aggregate causes are also checked exactly.
 
-A Q change limited to the grant ledger does not change workload identity. With
+Child receipts record execution at their producer Q, not at the current Q. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be
-reused after authentication and reevaluation under the new Q grants. Preserve
-original producer Q, run/attempt, candidate, inputs, artifact digests, and raw
-conclusions; a prior accepted verdict is not a substitute for reevaluation.
-Removing or narrowing a grant can make retained failures blocking again. Broad
-Q changes to executable scripts, workflows, actions, dependencies, or other
-workload inputs still invalidate affected workload evidence; the ledger exception
-is not a general control-only exemption.
+reused across Q after authenticating the producer and reevaluating the raw results
+under current Q grants. Preserve original producer Q, run/attempt, candidate,
+inputs, artifact digests, and raw conclusions. A prior accepted verdict is not a
+substitute for reevaluation: removing or narrowing a grant can make retained
+failures blocking again.
 
 Accepted receipts return before another child is dispatched; the required initial
 run cannot be skipped. Failed parents without final manifests can supply eligible
