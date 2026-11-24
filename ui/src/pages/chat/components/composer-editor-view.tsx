@@ -380,6 +380,18 @@ export function mountComposerEditor(
 
   input.after(view.dom);
   input.hidden = true;
+  const inputStyle = input.getAttribute("style");
+  // Cocoa WebKit moves the native caret when setSelectionRange targets a
+  // display:none field. Keep the raw port rendered, invisible and out of flow.
+  Object.assign(input.style, {
+    display: "block",
+    position: "absolute",
+    visibility: "hidden",
+    width: "0",
+    height: "0",
+    minHeight: "0",
+    padding: "0",
+  });
   input.setAttribute("aria-hidden", "true");
   input.tabIndex = -1;
 
@@ -567,6 +579,11 @@ export function mountComposerEditor(
       unregister();
       view.destroy();
       input.hidden = false;
+      if (inputStyle === null) {
+        input.removeAttribute("style");
+      } else {
+        input.setAttribute("style", inputStyle);
+      }
       input.removeAttribute("aria-hidden");
       input.removeAttribute("tabindex");
     },
