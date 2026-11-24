@@ -520,7 +520,6 @@ export async function captureCronCreatorSession(
       operatorSourceUnavailable: Boolean(
         parentLinked && operatorAuthority && job.payload.kind === "agentTurn" && !operatorSource,
       ),
-      assertOperatorSourceCurrent: operatorSource ? operatorAuthority?.assertCurrent : undefined,
       disposeOperatorSource: captured?.release,
       ...(sourceConversation ? { sourceConversation } : {}),
       ...(createdActor ? { createdActor } : {}),

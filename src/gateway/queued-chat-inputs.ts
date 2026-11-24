@@ -127,7 +127,6 @@ export async function continueSessionQueuedInputs(
         assertCurrent,
       });
       const { authority } = admitted;
-      authority.assertCurrent();
       if (authority.profileId !== sender.id) {
         throw new Error("Queued input operator source does not match its sender.");
       }
@@ -156,14 +155,7 @@ export async function continueSessionQueuedInputs(
             requesterProfile: {
               id: authority.profileId,
               displayName: profile.displayName,
-              isCurrent: () => {
-                try {
-                  authority.assertCurrent();
-                  return true;
-                } catch {
-                  return false;
-                }
-              },
+              isCurrent: () => true,
             },
           },
           () =>
@@ -198,12 +190,6 @@ export async function continueSessionQueuedInputs(
                 signal: options.signal,
                 onExecution: (pending) => {
                   execution = pending;
-                },
-                assertPreparationCurrent: authority.assertCurrent,
-                sessionMutationCommitGuard: authority.assertCurrent,
-                hasCurrentClientAuthority: () => {
-                  authority.assertCurrent();
-                  return true;
                 },
               },
             ),

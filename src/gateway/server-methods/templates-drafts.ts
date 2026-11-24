@@ -11,7 +11,9 @@ import {
   validateTemplatesDraftsSaveParams,
   validateTemplatesDraftsReviewParams,
   validateTemplatesDraftsPublishParams,
+  validateTemplatesDraftsSignInParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
@@ -24,6 +26,7 @@ import {
   fetchClawHubPackageVersion,
   fetchClawHubPackageSecurity,
 } from "../../infra/clawhub-packages.js";
+import { readPersonalTemplateClawHubToken } from "../../secrets/store/secret-store-clawhub-template.js";
 import { assertTemplatesEnabled, TemplatesDisabledError } from "../../templates/availability.js";
 import { templateDraftPrompt } from "../../templates/draft-prompt.js";
 import {
@@ -41,6 +44,10 @@ import {
 } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import {
+  createTemplateClawHubSignIn,
+  readTemplateClawHubPublisher,
+} from "../template-clawhub-sign-in.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -48,28 +55,48 @@ import { updateWorkspaceFile } from "./workspace-fs.js";
 
 type DraftTarget = { workspaceDir: string; draftId: string; choices?: TemplateDraftReviewChoices };
 
+const signInOwners = new WeakMap<
+  NonNullable<GatewayRequestHandlerOptions["context"]["getClientConnIds"]>,
+  ReturnType<typeof createTemplateClawHubSignIn>
+>();
+
+function personalClawHubTarget(options: GatewayRequestHandlerOptions) {
+  const profileId = options.client?.authenticatedUserProfile?.profileId;
+  if (!profileId) {
+    throw new TemplateProjectError(
+      "human_required",
+      "Connect with a personal Gateway profile to sign in to ClawHub.",
+    );
+  }
+  return { profileId, baseUrl: resolveClawHubBaseUrl() };
+}
+
+async function templateClawHubConnection(
+  options: GatewayRequestHandlerOptions,
+  assertCurrent: () => void,
+) {
+  const target = personalClawHubTarget(options);
+  // The legacy environment/CLI credential belongs to the Gateway owner, never
+  // to another administrator who happens to connect to the same Gateway.
+  const token =
+    (await readPersonalTemplateClawHubToken(target)) ??
+    (target.profileId === GATEWAY_OWNER_PROFILE_ID ? await resolveClawHubAuthToken() : undefined);
+  assertCurrent();
+  return { token, baseUrl: target.baseUrl };
+}
+
 async function personalPublisher(options: ClawHubFetchOptions) {
-  const token = options.token ?? (await resolveClawHubAuthToken());
-  if (!token) {
+  const baseUrl = resolveClawHubBaseUrl(options.baseUrl);
+  const token = options.token;
+  const publisher = token ? await readTemplateClawHubPublisher(baseUrl, token) : null;
+  if (!token || !publisher) {
     throw new TemplateProjectError(
       "clawhub_login_required",
-      "Sign in with `clawhub login` on this Gateway before publishing under your personal ClawHub identity.",
+      "Sign in to ClawHub before reviewing or publishing this Template.",
     );
   }
   // Capture the same credential and registry for identity, review, and publication.
-  const connection = { ...options, token, baseUrl: resolveClawHubBaseUrl(options.baseUrl) };
-  const result = await fetchClawHubJson<{ user?: { handle?: string | null } }>({
-    ...connection,
-    path: "/api/v1/whoami",
-  });
-  const publisher = result.user?.handle?.trim().toLowerCase();
-  if (!publisher || !/^[a-z0-9][a-z0-9._-]*$/.test(publisher)) {
-    throw new TemplateProjectError(
-      "clawhub_identity_required",
-      "Your ClawHub account needs a personal publisher handle.",
-    );
-  }
-  return { publisher, connection };
+  return { publisher, connection: { ...options, token, baseUrl } };
 }
 
 function reviewToken(
@@ -382,7 +409,9 @@ function draftError(error: unknown, publishing = false, publicationStarted = fal
             },
           },
         }
-      : {};
+      : known && code === "clawhub_login_required"
+        ? { details: { templateSignIn: { required: true } } }
+        : {};
   if (
     error instanceof TemplatesDisabledError ||
     (error instanceof TemplateProjectError &&
@@ -482,20 +511,93 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
     },
     draftError,
   ),
+  "templates.drafts.signIn": defineValidatedGatewayMethod(
+    "templates.drafts.signIn",
+    validateTemplatesDraftsSignInParams,
+    async (options) => {
+      const { params, context } = options;
+      const authority = draftAuthority(options, params.agentId, params.sourceSessionKey);
+      const source = await resolveSessionMutationAuthorizationAsync({
+        client: options.client,
+        context,
+        method: "chat.history",
+        requestParams: { sessionKey: params.sourceSessionKey, agentId: params.agentId },
+        sessionScope: "operator.sessions.read",
+        assertInvocationCurrent: authority.assertCurrent,
+      });
+      try {
+        if (source.error || !context.getClientConnIds) {
+          throw new TemplateProjectError(
+            "source_forbidden",
+            source.error?.message ?? "The conversation is unavailable.",
+          );
+        }
+        const identity = personalClawHubTarget(options);
+        const target = {
+          ...identity,
+          sourceSessionKey: params.sourceSessionKey,
+          draftId: params.draftId,
+          assertCurrent: () => {
+            authority.assertCurrent();
+            source.authorization?.assertCurrent();
+            if (resolveClawHubBaseUrl() !== identity.baseUrl) {
+              throw new TemplateProjectError(
+                "clawhub_registry_changed",
+                "ClawHub settings changed. Start sign-in again.",
+              );
+            }
+          },
+        };
+        target.assertCurrent();
+        let owner = signInOwners.get(context.getClientConnIds);
+        if (!owner) {
+          owner = createTemplateClawHubSignIn();
+          signInOwners.set(context.getClientConnIds, owner);
+        }
+        if (params.action === "status") {
+          await readTemplateDraft(authority.workspaceDir, params.draftId);
+          const connection = await templateClawHubConnection(options, target.assertCurrent);
+          const publisher = connection.token
+            ? await readTemplateClawHubPublisher(connection.baseUrl, connection.token)
+            : null;
+          target.assertCurrent();
+          options.respond(true, { status: publisher ? "connected" : "required" });
+          return;
+        }
+        if (params.action === "start") {
+          await readTemplateDraft(authority.workspaceDir, params.draftId);
+        }
+        const result =
+          params.action === "start"
+            ? await owner.start(target)
+            : params.action === "poll"
+              ? await owner.poll(target, params.requestId)
+              : owner.cancel(target, params.requestId);
+        target.assertCurrent();
+        options.respond(true, result);
+      } finally {
+        source.authorization?.release?.();
+      }
+    },
+    draftError,
+  ),
   "templates.drafts.review": defineValidatedGatewayMethod(
     "templates.drafts.review",
     validateTemplatesDraftsReviewParams,
     async (options) => {
       const { params } = options;
       const authority = draftAuthority(options, params.agentId);
-      const review = await reviewTemplateDraft({
-        workspaceDir: authority.workspaceDir,
-        draftId: params.draftId,
-        choices: params.choices,
-        checkPublication: params.checkPublication,
-        reviewToken: params.reviewToken,
-        attemptId: params.attemptId,
-      });
+      const review = await reviewTemplateDraft(
+        {
+          workspaceDir: authority.workspaceDir,
+          draftId: params.draftId,
+          choices: params.choices,
+          checkPublication: params.checkPublication,
+          reviewToken: params.reviewToken,
+          attemptId: params.attemptId,
+        },
+        await templateClawHubConnection(options, authority.assertCurrent),
+      );
       authority.assertCurrent();
       options.respond(true, review);
     },
@@ -520,6 +622,7 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
           () => {
             publicationStarted = true;
           },
+          await templateClawHubConnection(options, authority.assertCurrent),
         );
         authority.assertCurrent();
         options.respond(true, result);

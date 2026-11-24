@@ -151,9 +151,7 @@ it.each(["agent", "chat"] as const)(
       await runWithCronCreatorAuthorityCapability(capability, async () => {
         const grant = mintCronCreatorAuthorityGrant(capability);
         invalidateGatewayDeviceRevocation(context, "original-device", "operator");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-          "cron authority is no longer active",
-        );
+        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("cron access has ended");
       });
     } finally {
       caller.release();

@@ -4,7 +4,6 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
-  createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
   runInHarnessToolAuthorityForTest,
   useProviderToolSchemaRuntimeForTest,
@@ -72,27 +71,6 @@ useProviderToolSchemaRuntimeForTest(["codex"]);
 
 type Send = (message: unknown) => void;
 type NativeReply = (request: JsonObject, send: Send) => unknown;
-type OperatorSource = NonNullable<
-  Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["operatorSource"]
->;
-function mutableOperator(profileId: string, readPolicy: () => OperatorSource["modelPolicy"]) {
-  const listeners = new Set<() => void>();
-  const source: OperatorSource = {
-    profileId,
-    scopes: ["operator.write"],
-    assertCurrent: () => {},
-    get modelPolicy() {
-      return readPolicy();
-    },
-    onModelPolicyChanged: (listener) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-  };
-  return { source, listeners };
-}
 const completedTurn = (threadId: string, turn: JsonObject) => ({
   method: "turn/completed",
   params: { threadId, turn: { id: "turn-1", status: "completed", items: [], ...turn } },
@@ -318,209 +296,180 @@ describe("Codex native configuration", () => {
     },
   );
 
-  it.each(["allowed", "revoked"] as const)(
-    "retains live model authority during a same-model Access retry (%s)",
-    async (permission) => {
-      stubCodexInferenceTransportEnv();
-      const catalogModel = "catalog-primary";
-      const runtimeModel = "native-primary";
-      const allowedModels = new Set([catalogModel]);
-      const { source: operatorSource, listeners: policyListeners } = mutableOperator(
-        "restricted-retry-fixture",
-        () => {
-          const models = [...allowedModels].map((model) => ({ provider: "openai", model }));
-          return {
-            models,
-            allows: (ref) => ref.provider === "openai" && allowedModels.has(ref.model),
-          };
-        },
-      );
-      const params = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
-        provider: "openai",
+  it("retains admitted model authority during a same-model Access retry", async () => {
+    stubCodexInferenceTransportEnv();
+    const catalogModel = "catalog-primary";
+    const runtimeModel = "native-primary";
+    const operatorSource = {
+      profileId: "restricted-retry-fixture",
+      scopes: ["operator.write"],
+      modelPolicy: {
+        models: [{ provider: "openai", model: catalogModel }],
+        allows: (ref: { provider: string; model: string }) =>
+          ref.provider === "openai" && ref.model === catalogModel,
+      },
+    };
+    const params = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
+      provider: "openai",
+    });
+    params.agentDir = path.join(tempDir, "agent");
+    params.authProfileId = "openai:retry-policy";
+    params.authProfileStore.profiles[params.authProfileId] = {
+      ...createCodexTestOAuthProfile("synthetic-account"),
+      expires: Date.now() + 60 * 60 * 1_000,
+    };
+    params.modelId = catalogModel;
+    params.model = {
+      ...params.model,
+      id: catalogModel,
+      params: buildCodexRuntimeModelParams(catalogModel, runtimeModel),
+    };
+    setCodexTestToolFactory(params, () => []);
+    agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "retry-model-policy.sqlite"),
+      params.sessionId,
+    );
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, operatorSource);
+    const abortController = new AbortController();
+    params.abortSignal = abortController.signal;
+    const primaryStarted = createDeferred<void>();
+    const retryStarted = createDeferred<void>();
+    const turnModels: unknown[] = [];
+    let nativeResponse = threadStartResult("thread-policy", { cwd: tempDir });
+    const startThread: NativeReply = (request, send) => {
+      if (typeof request.model !== "string") {
+        throw new Error("Expected the selected native model in the thread request");
+      }
+      nativeResponse = { ...nativeResponse, model: request.model };
+      send({
+        method: "thread/status/changed",
+        params: { threadId: "thread-policy", status: { type: "notLoaded" } },
       });
-      params.agentDir = path.join(tempDir, "agent");
-      params.authProfileId = "openai:retry-policy";
-      params.authProfileStore.profiles[params.authProfileId] = {
-        ...createCodexTestOAuthProfile("synthetic-account"),
-        expires: Date.now() + 60 * 60 * 1_000,
-      };
-      params.modelId = catalogModel;
-      params.model = {
-        ...params.model,
-        id: catalogModel,
-        params: buildCodexRuntimeModelParams(catalogModel, runtimeModel),
-      };
-      setCodexTestToolFactory(params, () => []);
-      agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
-      await attachSqliteSessionTarget(
-        params,
-        path.join(tempDir, "retry-model-policy.sqlite"),
-        params.sessionId,
-      );
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, operatorSource);
-      const allowedControl = params.hostCapabilities.bindModelExecution?.({
-        provider: "openai",
-        model: catalogModel,
-      });
-      const sourceControl = params.hostCapabilities.retainSourceAuthority?.();
-      const abortController = new AbortController();
-      params.abortSignal = abortController.signal;
-      const primaryStarted = createDeferred<void>();
-      const retryStarted = createDeferred<void>();
-      const turnModels: unknown[] = [];
-      let nativeResponse = threadStartResult("thread-policy", { cwd: tempDir });
-      const startThread: NativeReply = (request, send) => {
-        if (typeof request.model !== "string") {
-          throw new Error("Expected the selected native model in the thread request");
-        }
-        nativeResponse = { ...nativeResponse, model: request.model };
-        send({
-          method: "thread/status/changed",
-          params: { threadId: "thread-policy", status: { type: "notLoaded" } },
-        });
-        return nativeResponse;
-      };
-      const transport = nativeClient(
-        resolveCodexAppServerHomeDir(params.agentDir),
-        {
-          "config/read": () => ({ config: {}, origins: {}, layers: [] }),
-          "account/login/start": () => ({ type: "chatgptAuthTokens" }),
-          "account/read": () => ({
-            account: { type: "chatgpt", email: "synthetic@example.test", planType: "team" },
-            requiresOpenaiAuth: true,
-          }),
-          "model/list": () => ({
-            data: [
-              {
-                id: runtimeModel,
-                model: runtimeModel,
-                displayName: "Fixture",
-                description: "Fixture",
-                hidden: false,
-                isDefault: true,
-                defaultReasoningEffort: "medium",
-                supportedReasoningEfforts: [],
-                availableAccessPrograms: { cyber: ["standard", "daybreakBlue"] },
-              },
-            ],
-            nextCursor: null,
-          }),
-          "thread/read": () => ({ thread: nativeResponse.thread }),
-          "thread/start": startThread,
-          "thread/resume": startThread,
-          "turn/start": (request) => {
-            turnModels.push(request.model);
-            return turnStartResult(`turn-${turnModels.length}`);
-          },
-          "thread/backgroundTerminals/list": () => ({ data: [], nextCursor: null }),
+      return nativeResponse;
+    };
+    const transport = nativeClient(
+      resolveCodexAppServerHomeDir(params.agentDir),
+      {
+        "config/read": () => ({ config: {}, origins: {}, layers: [] }),
+        "account/login/start": () => ({ type: "chatgptAuthTokens" }),
+        "account/read": () => ({
+          account: { type: "chatgpt", email: "synthetic@example.test", planType: "team" },
+          requiresOpenaiAuth: true,
+        }),
+        "model/list": () => ({
+          data: [
+            {
+              id: runtimeModel,
+              model: runtimeModel,
+              displayName: "Fixture",
+              description: "Fixture",
+              hidden: false,
+              isDefault: true,
+              defaultReasoningEffort: "medium",
+              supportedReasoningEfforts: [],
+              availableAccessPrograms: { cyber: ["standard", "daybreakBlue"] },
+            },
+          ],
+          nextCursor: null,
+        }),
+        "thread/read": () => ({ thread: nativeResponse.thread }),
+        "thread/start": startThread,
+        "thread/resume": startThread,
+        "turn/start": (request) => {
+          turnModels.push(request.model);
+          return turnStartResult(`turn-${turnModels.length}`);
         },
-        (method, request, send) => {
-          if (method === "turn/start") {
-            (turnModels.length === 1 ? primaryStarted : retryStarted).resolve();
-          } else if (method === "turn/interrupt") {
-            assert(request.turnId !== undefined, "interrupt must carry a turn id");
-            send(
-              completedTurn("thread-policy", {
-                id: request.turnId,
-                status: "interrupted",
-              }),
-            );
-          }
-        },
-      );
-      // The controlled stdio fixture represents the managed process returned by startup.
-      ownCodexInferenceClient(transport.client);
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
-      const harness = createCodexAppServerAgentHarness({
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: {
-          appServer: {
-            command: process.execPath,
-            args: ["app-server"],
-            homeScope: "agent",
-            cyberFailover: { mode: "auto" },
-          },
-        },
-      });
-      assert(
-        typeof harness.runAttempt === "function",
-        "Registered Codex harness must support run attempts",
-      );
-      // Model policy owns this proof; cold preparation must not spend its logical clock.
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const runAttempt = harness.runAttempt.bind(harness);
-      const run = runInHarnessToolAuthorityForTest(params, "codex", runAttempt);
-      const settled = run.then(
-        () => false,
-        () => false,
-      );
-      try {
-        await Promise.race([primaryStarted.promise, run]);
-        expect(turnModels).toEqual([runtimeModel]);
-        expect(getCodexInferenceThread(transport.client, "thread-policy")).toBeDefined();
-        const error = { message: "Synthetic provider refusal", codexErrorInfo: "cyberPolicy" };
-        transport.send({
-          method: "error",
-          params: { threadId: "thread-policy", turnId: "turn-1", error, willRetry: false },
-        });
-        transport.send(completedTurn("thread-policy", { status: "failed", error }));
-        const retried = await Promise.race([retryStarted.promise.then(() => true), settled]);
-        if (permission === "revoked") {
-          allowedModels.delete(catalogModel);
-          for (const listener of policyListeners) {
-            listener();
-          }
-        }
-        expect(allowedControl?.signal.aborted).toBe(permission === "revoked");
-        expect(sourceControl?.signal?.aborted).toBe(false);
-        if (permission === "allowed") {
-          allowedControl?.assertCurrent();
-        }
-        sourceControl?.assertCurrent();
-        if (retried) {
-          transport.send(
+        "thread/backgroundTerminals/list": () => ({ data: [], nextCursor: null }),
+      },
+      (method, request, send) => {
+        if (method === "turn/start") {
+          (turnModels.length === 1 ? primaryStarted : retryStarted).resolve();
+        } else if (method === "turn/interrupt") {
+          assert(request.turnId !== undefined, "interrupt must carry a turn id");
+          send(
             completedTurn("thread-policy", {
-              id: "turn-2",
-              items: [{ type: "agentMessage", id: "retry-answer", text: "Synthetic retry reply" }],
+              id: request.turnId,
+              status: "interrupted",
             }),
           );
         }
-        expect(retried).toBe(true);
-        expect(turnModels).toEqual([runtimeModel, runtimeModel]);
-        expect(
-          transport.requests
-            .filter(({ method }) => method === "turn/start")
-            .map(({ params: request }) =>
-              isJsonObject(request) ? request.cyberAccessProgram : undefined,
-            ),
-        ).toEqual([undefined, "daybreakBlue"]);
-        if (permission === "revoked") {
-          await expect(run).rejects.toThrow("operator role cannot use this model");
-        } else {
-          await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
-        }
-        expect(params).toMatchObject({ modelId: catalogModel, model: { id: catalogModel } });
-        const transcript = await readTranscriptMessagesByIdentity(params);
-        expect(transcript.filter((message) => message.role === "user")).toHaveLength(1);
-      } finally {
-        abortController.abort("test_cleanup");
-        await run.catch(() => undefined);
-        allowedControl?.release();
-        sourceControl?.release();
-        closeHost();
-        await harness.dispose?.();
-        await transport.client.closeAndWait();
+      },
+    );
+    // The controlled stdio fixture represents the managed process returned by startup.
+    ownCodexInferenceClient(transport.client);
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: {
+        appServer: {
+          command: process.execPath,
+          args: ["app-server"],
+          homeScope: "agent",
+          cyberFailover: { mode: "auto" },
+        },
+      },
+    });
+    assert(
+      typeof harness.runAttempt === "function",
+      "Registered Codex harness must support run attempts",
+    );
+    // Model policy owns this proof; cold preparation must not spend its logical clock.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const runAttempt = harness.runAttempt.bind(harness);
+    const run = runInHarnessToolAuthorityForTest(params, "codex", runAttempt);
+    const settled = run.then(
+      () => false,
+      () => false,
+    );
+    try {
+      await Promise.race([primaryStarted.promise, run]);
+      expect(turnModels).toEqual([runtimeModel]);
+      expect(getCodexInferenceThread(transport.client, "thread-policy")).toBeDefined();
+      const error = { message: "Synthetic provider refusal", codexErrorInfo: "cyberPolicy" };
+      transport.send({
+        method: "error",
+        params: { threadId: "thread-policy", turnId: "turn-1", error, willRetry: false },
+      });
+      transport.send(completedTurn("thread-policy", { status: "failed", error }));
+      const retried = await Promise.race([retryStarted.promise.then(() => true), settled]);
+      if (retried) {
+        transport.send(
+          completedTurn("thread-policy", {
+            id: "turn-2",
+            items: [{ type: "agentMessage", id: "retry-answer", text: "Synthetic retry reply" }],
+          }),
+        );
       }
-      expect(policyListeners.size).toBe(0);
-    },
-  );
+      expect(retried).toBe(true);
+      expect(turnModels).toEqual([runtimeModel, runtimeModel]);
+      expect(
+        transport.requests
+          .filter(({ method }) => method === "turn/start")
+          .map(({ params: request }) =>
+            isJsonObject(request) ? request.cyberAccessProgram : undefined,
+          ),
+      ).toEqual([undefined, "daybreakBlue"]);
+      await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
+      expect(params).toMatchObject({ modelId: catalogModel, model: { id: catalogModel } });
+      const transcript = await readTranscriptMessagesByIdentity(params);
+      expect(transcript.filter((message) => message.role === "user")).toHaveLength(1);
+    } finally {
+      abortController.abort("test_cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+      await harness.dispose?.();
+      await transport.client.closeAndWait();
+    }
+  });
 
   it.each<{
     transport: "stdio" | "websocket" | "unix";
     hasAnswer: boolean;
     nativeProvider: string;
     configuredProvider?: string;
-    modelPolicyAction?: "deny" | "revoke";
+    modelPolicyAction?: "deny";
   }>([
     { transport: "stdio", hasAnswer: false, nativeProvider: "openai" },
     { transport: "websocket", hasAnswer: false, nativeProvider: "openai" },
@@ -528,7 +477,6 @@ describe("Codex native configuration", () => {
     // Earlier releases recorded disabled search for custom native providers.
     { transport: "stdio", hasAnswer: true, nativeProvider: "copilot" },
     { transport: "stdio", hasAnswer: true, nativeProvider: "openai", modelPolicyAction: "deny" },
-    { transport: "stdio", hasAnswer: true, nativeProvider: "openai", modelPolicyAction: "revoke" },
   ])(
     "preserves supervised native model and transport/home guards over $transport (answer: $hasAnswer, provider: $nativeProvider, configured: $configuredProvider, model policy: $modelPolicyAction)",
     async ({
@@ -696,13 +644,6 @@ describe("Codex native configuration", () => {
             throw new Error("Codex attempt ended before turn/start", { cause: result });
           }),
         ]);
-        if (modelPolicyAction === "revoke") {
-          modelRevocation.abort(new Error("operator model permission was revoked"));
-          harness.send(completedTurn("thread-existing", { status: "interrupted" }));
-          await expect(run).rejects.toThrow("operator model permission was revoked");
-          expect(releaseModelExecution).toHaveBeenCalledOnce();
-          return;
-        }
         harness.send(
           completedTurn("thread-existing", {
             items: hasAnswer

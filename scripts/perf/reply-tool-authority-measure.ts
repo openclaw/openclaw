@@ -43,14 +43,10 @@ const {
     : "../../src/auto-reply/reply/reply-tool-authority.js"
 );
 const route = { provider: "synthetic", model: "synthetic-model" };
-let authorityChecks = 0;
 const authority = createAdmittedRunOperatorAuthority({
   canonicalIdentity: null,
   profileId: "synthetic-operator",
   scopes: ["operator.read", "operator.write", "operator.admin"],
-  assertCurrent() {
-    authorityChecks++;
-  },
 });
 const config = captureRuntimeConfig({
   plugins: {
@@ -124,7 +120,6 @@ async function workload(count: number) {
 }
 await workload(256);
 globalThis.gc();
-authorityChecks = 0;
 const inspector = new Session();
 inspector.connect();
 if (values.mode !== "timing") {
@@ -158,7 +153,6 @@ const result = {
   mode: values.mode,
   attemptProperties: Object.keys(input.run).length,
   fingerprint,
-  authorityChecks,
   hostLoad,
   elapsedMs,
   cpuMs: (cpuUsage.user + cpuUsage.system) / 1000,

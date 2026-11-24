@@ -98,7 +98,6 @@ function createExecOperatorSource(profileId = "exec-guest") {
     profileId,
     scopes: ["operator.write"],
     signal: controller.signal,
-    assertCurrent: () => controller.signal.throwIfAborted(),
     retain,
   });
   return { controller, authority, retain, release };
@@ -624,7 +623,7 @@ describe("operator source lifetime", () => {
       expect(guest.session).toMatchObject({ finalizing: true, exited: false });
       expect(source.release).not.toHaveBeenCalled();
 
-      expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
+      expect(source.authority.signal?.aborted).toBe(true);
       expect(staff.session.exited).toBe(false);
       cleanup.release();
       await expect(guest.promise).resolves.toMatchObject({

@@ -228,10 +228,11 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-    });
+    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(
+      sessionManager,
+      { provider: attempt.provider, modelId: attempt.modelId },
+      attempt.promptCacheKeepWarm,
+    );
     const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
@@ -548,6 +549,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
       ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
       ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
+      ...(attempt.sessionForkRequest?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>

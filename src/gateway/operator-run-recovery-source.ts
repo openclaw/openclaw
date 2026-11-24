@@ -70,7 +70,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
   authority: Pick<
     AdmittedRunOperatorAuthority,
-    "profileId" | "scopes" | "gatewayAccessGrant" | "assertCurrent" | "openclawIdPrincipal"
+    "profileId" | "scopes" | "gatewayAccessGrant" | "openclawIdPrincipal"
   >;
   modelPolicy: PreparedOperatorModelPolicy | undefined;
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
