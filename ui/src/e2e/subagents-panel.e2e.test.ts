@@ -389,7 +389,9 @@ suite.define(() => {
           expect(await heading.evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(
             1,
           );
-          if (overflows) await heading.press("End");
+          if (overflows) {
+            await heading.press("End");
+          }
           await expect
             .poll(() => heading.evaluate((e) => e.scrollHeight - e.clientHeight - e.scrollTop))
             .toBeLessThanOrEqual(1);

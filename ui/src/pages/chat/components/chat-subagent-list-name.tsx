@@ -6,7 +6,9 @@ const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export function SubagentListName(props: { name: string }) {
   const split = createMemo(() => {
     const name = props.name;
-    if (name.length <= 16) return undefined;
+    if (name.length <= 16) {
+      return undefined;
+    }
     const tail = segments.segment(name).containing(name.length - 12)?.index ?? 0;
     const separator = Math.max(
       name.lastIndexOf(" ", tail),
