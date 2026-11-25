@@ -146,9 +146,9 @@ describe("createAgentCommandLifecycle", () => {
     "publishes actionable startup guidance through %s errors",
     (source) => {
       emitAgentEvent.mockClear();
-      const lifecycle = createLifecycle("startup-failure");
+      const lifecycle = createLifecycle({ runId: "startup-failure" });
       const error = new Error("thread not loaded: synthetic-thread");
-      const terminal = {
+      const completion = {
         metadata: {},
         outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
       };
@@ -161,7 +161,7 @@ describe("createAgentCommandLifecycle", () => {
             meta: { durationMs: 0, error: { kind: "compaction_failure", message: error.message } },
           },
           false,
-          terminal,
+          completion,
         );
       }
       const published = emitAgentEvent.mock.calls[0]?.[0].data.error;
