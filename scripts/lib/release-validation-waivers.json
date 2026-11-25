@@ -917,6 +917,70 @@
           ]
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-12 (node)",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: worker task-channel loss timing assertion in unchanged code; one failure in the shard.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-21 (node)",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: nested Git branch refresh exceeded the default wait on a loaded runner; one failure in the shard.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (node)",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: private subagent completion admission test timeout; one failure in the shard.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "normalCi",
+      "jobName": "macos-swift (tests)",
+      "step": "Swift test",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: Swift test step cancelled at the 30-minute job limit after a slower test build; no Swift changes in the candidate."
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "normalCi",
+      "jobName": "openclaw/ci-gate",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: CI gate aggregates only the four waived normalCi lanes.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: decision-index live tests skipped for four unavailable provider credentials; all executed harness tests passed.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / UI and plugin E2E / Repo E2E (UI 2/4)",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: new-session revisit reload timeout in an unchanged test; one failure in the shard.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "targetSha": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Verify release checks",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.10 FRV run 45507591892: release-checks verifier aggregates only the two waived releaseChecksIndependent jobs.",
+      "aggregates": []
     }
   ]
 }
