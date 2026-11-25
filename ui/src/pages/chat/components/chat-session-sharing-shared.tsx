@@ -40,6 +40,8 @@ type ChatSessionSharingAction =
 
 export type ChatSessionSharingState = {
   loading: boolean;
+  /** Session generation that produced `result`. */
+  sessionId?: string;
   /** Completes after the pane publishes or retires its admitted membership read. */
   read?: Promise<void>;
   result?: SessionMembersListEvidenceResult;

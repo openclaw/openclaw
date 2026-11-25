@@ -67,7 +67,10 @@ export async function setSessionPublicShare(
   callbacks.setState({
     loading: false,
     ...(previous?.result
-      ? { result: { ...previous.result, publicShare: result.publicShare } }
+      ? {
+          sessionId: previous.sessionId,
+          result: { ...previous.result, publicShare: result.publicShare },
+        }
       : {}),
   });
   showToast({
