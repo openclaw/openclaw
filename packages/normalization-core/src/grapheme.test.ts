@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createGraphemeChunkEndFinder,
   findGraphemeChunkEnd,
   skipWhitespaceGraphemes,
   trimEndWhitespaceGraphemes,
@@ -36,4 +37,38 @@ describe("long text work volume", () => {
     expect(skipWhitespaceGraphemes(text, 10)).toBe(609);
     expect(trimEndWhitespaceGraphemes(`${"x".repeat(10)}${" ".repeat(600)}`)).toBe("x".repeat(10));
   });
+});
+
+it("resolves arbitrary and backwards cuts against the original regional indicators", () => {
+  const text = "🇬🇭".repeat(2_500);
+  const findEnd = createGraphemeChunkEndFinder(text);
+  expect(findEnd(8_002, 8_006)).toBe(8_004);
+  expect(findEnd(2, 6)).toBe(4);
+  expect(findGraphemeChunkEnd("👩‍👩‍👦", 2, 5, 5, false)).toBe(2);
+  const acrossWords = createGraphemeChunkEndFinder("α".repeat(31) + "β" + "\u0301".repeat(100));
+  expect(acrossWords(100, 105, 105, false)).toBe(100);
+  expect(acrossWords(0, 30.75)).toBe(30);
+  expect(acrossWords(0, 31)).toBe(31);
+  expect(acrossWords(0, 95)).toBe(31);
+});
+
+it("keeps supplementary marks and prepend characters whole at whitespace window edges", () => {
+  expect(skipWhitespaceGraphemes(" ".repeat(255) + "\u{E0100}x")).toBe(254);
+  expect(trimEndWhitespaceGraphemes("\u{110BD}" + " ".repeat(255))).toBe("\u{110BD} ");
+});
+
+it("does bounded total segmentation work across repeated partial cuts", () => {
+  const text = ("a" + "\u0301".repeat(3_999)).repeat(4);
+  const findEnd = createGraphemeChunkEndFinder(text);
+  const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+  try {
+    let start = 0;
+    while (start < text.length) {
+      start = findEnd(start, start + 16);
+    }
+    const volume = segment.mock.calls.reduce((sum, [input]) => sum + String(input).length, 0);
+    expect(volume).toBeLessThan(text.length * 2);
+  } finally {
+    segment.mockRestore();
+  }
 });

@@ -1,4 +1,5 @@
 import {
+  createGraphemeChunkEndFinder,
   findGraphemeChunkEnd,
   firstGraphemeClusterLength,
   skipWhitespaceGraphemes,
@@ -314,6 +315,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
   }
 
   const chunks: string[] = [];
+  const findEnd = createGraphemeChunkEndFinder(text);
   const spans = parseFenceSpans(text);
   let start = 0;
   let reopenFence: FenceSpan | undefined;
@@ -334,7 +336,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     reopenFence = undefined;
     const windowEnd = Math.min(text.length, start + contentLimit);
     const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans);
-    let breakIdx = findGraphemeChunkEnd(text, start, windowEnd, softBreak);
+    let breakIdx = findEnd(start, windowEnd, softBreak);
 
     const initialFence = findFenceSpanAt(spans, breakIdx);
 
@@ -342,7 +344,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     if (initialFence) {
       const closeLine = `${initialFence.indent}${initialFence.marker}`;
       if (!resolveFenceReopenLine(initialFence, normalizedLimit)) {
-        breakIdx = findGraphemeChunkEnd(text, start, windowEnd);
+        breakIdx = findEnd(start, windowEnd);
         fenceToSplit = undefined;
       } else {
         const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
@@ -372,12 +374,11 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         }
 
         if (!pickedNewline && minProgressIdx >= maxIdxIfAlreadyNewline) {
-          breakIdx = findGraphemeChunkEnd(text, start, windowEnd);
+          breakIdx = findEnd(start, windowEnd);
           fenceToSplit = undefined;
           reopenFence = initialFence;
         } else {
-          breakIdx = findGraphemeChunkEnd(
-            text,
+          breakIdx = findEnd(
             start,
             pickedNewline ? maxIdxIfAlreadyNewline : maxIdxIfNeedNewline,
             pickedNewline ? breakIdx : maxIdxIfNeedNewline,

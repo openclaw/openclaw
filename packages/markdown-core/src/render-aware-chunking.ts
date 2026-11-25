@@ -1,4 +1,7 @@
-import { findGraphemeChunkEnd } from "@openclaw/normalization-core/grapheme";
+import {
+  createGraphemeChunkEndFinder,
+  findGraphemeChunkEnd,
+} from "@openclaw/normalization-core/grapheme";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
 import { sliceMarkdownIRRanges } from "./ir-slice.js";
@@ -273,6 +276,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
     return [ir];
   }
 
+  const findEnd = createGraphemeChunkEndFinder(ir.text);
   const codeSpans = ir.styles
     .filter((span) => span.style === "code" || span.style === "code_block")
     .toSorted((left, right) => left.start - right.start);
@@ -295,21 +299,18 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
       ) {
         codeEnd -= 1;
       }
-      codeEnd = findGraphemeChunkEnd(ir.text, cursor, codeEnd, codeEnd, false);
+      codeEnd = findEnd(cursor, codeEnd, codeEnd, false);
       let nextContent = maxEnd;
       const nextMaxEnd = Math.min(ir.text.length, codeEnd + limit);
       while (nextContent < nextMaxEnd && /\s/u.test(ir.text[nextContent] ?? "")) {
         nextContent += 1;
       }
       // Keep the existing progress rule when whitespace and its context cannot fit.
-      if (
-        codeEnd > cursor &&
-        findGraphemeChunkEnd(ir.text, codeEnd, nextMaxEnd, undefined, false) > nextContent
-      ) {
+      if (codeEnd > cursor && findEnd(codeEnd, nextMaxEnd, undefined, false) > nextContent) {
         preferredEnd = codeEnd;
       }
     }
-    const end = findGraphemeChunkEnd(ir.text, cursor, maxEnd, preferredEnd);
+    const end = findEnd(cursor, maxEnd, preferredEnd);
     ranges.push({ start: cursor, end });
     cursor = end;
   }
