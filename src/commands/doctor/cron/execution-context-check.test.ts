@@ -125,6 +125,15 @@ it.each([
   );
 });
 
+it("checks a transferred job's requester by its own role, not its creator's", async () => {
+  mocks.jobs = [jobRow("transferred", { createdActor: profileActor, ownerProfileId: "profile-2" })];
+  mocks.profiles = new Map([
+    ["profile-1", "admin"],
+    ["profile-2", null],
+  ]);
+  expect(await noteText(roleConfig)).toEqual(expect.stringContaining(ownerTools));
+});
+
 it("accepts a configured channel owner", async () => {
   mocks.jobs = [
     jobRow("channel", {

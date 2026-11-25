@@ -214,7 +214,7 @@ async function reviewJob(
   if (!agentId) {
     return;
   }
-  // The creator's profile decides both the role sandbox and a profile requester's owner check.
+  // The creator's profile decides the role sandbox; a profile requester's owner check reads its own.
   const actor = job.createdActor;
   const profile =
     actor?.type === "human" && actor.id ? await readCreatorProfile(env, actor.id) : undefined;
@@ -227,7 +227,13 @@ async function reviewJob(
     entry = await readParentEntry(cfg, agentId, parentKey);
     const worktreePath = entry?.worktree ? entry.spawnedCwd : undefined;
     parentRow = parentRowFactsFromEntry(entry, worktreePath ? await exists(worktreePath) : false);
-    owner = checkRequesterOwnerReadOnly(cfg, agentId, resolveScheduledRequester(job), profile);
+    const requester = resolveScheduledRequester(job);
+    const requesterProfile =
+      requester.kind === "profile" &&
+      requester.profileId !== (actor?.type === "human" ? actor.id : undefined)
+        ? await readCreatorProfile(env, requester.profileId)
+        : profile;
+    owner = checkRequesterOwnerReadOnly(cfg, agentId, requester, requesterProfile);
   }
   const runSessionKey =
     job.sessionTarget === "main"
