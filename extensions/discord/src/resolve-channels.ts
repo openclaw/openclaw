@@ -53,7 +53,7 @@ type FetchChannelResult =
   | { status: "forbidden" }
   | { status: "invalid" };
 
-async function fetchChannel(
+export async function fetchChannel(
   token: string,
   fetcher: typeof fetch,
   channelId: string,
