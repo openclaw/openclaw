@@ -39,7 +39,9 @@ export function resolveSessionStartupErrorPresentation(error: string) {
     newConversation,
   } of STARTUP_FAILURES) {
     const message = `${title} ${recovery}`;
-    const channelMessage = message;
+    const channelMessage = newConversation
+      ? `${title} Send /new to start a new conversation, then send your request again.`
+      : message;
     // Fresh errors and already normalized persisted summaries render identically.
     if (normalized === message || normalized.startsWith(`${message}\n\n`)) {
       return {
