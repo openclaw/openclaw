@@ -1,3 +1,4 @@
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as hostMemory from "../infra/host-memory.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -15,6 +16,10 @@ import {
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import {
+  LEAN_POST_READY_FIRST_CHECK_MS,
+  schedulePostReadyWorkRelease,
+} from "./server-post-ready-release.js";
+import {
   createLog,
   createTestCronState,
   createMaintenanceHandles,
@@ -31,12 +36,56 @@ vi.mock("./server-startup-plugins.js", () => ({
 const { scheduleGatewayPostReadyMaintenance } = await import("./server-runtime-services.js");
 
 beforeEach(() => {
+  vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+  vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
   resetGatewayWorkAdmission();
   resetRuntimeServiceMocks();
 });
-afterEach(resetGatewayWorkAdmission);
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetGatewayWorkAdmission();
+});
 
 describe("post-ready maintenance scheduling", () => {
+  it("waits for post-ready work before admitting maintenance, so lean releases when idle", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const gate = createDeferredCore();
+    const start = vi.fn(async () => {});
+    const startMaintenance = vi.fn(async () => null);
+    try {
+      scheduleGatewayPostReadyMaintenance(
+        createPostReadyMaintenanceScheduleParams({
+          scheduler,
+          waitForPostReadyWork: () => gate.promise,
+          startMaintenance,
+          cronState: createTestCronState({ start }),
+        }),
+      );
+      // Maintenance waits for the barrier inside this wake without holding root work.
+      const maintenanceWake = clock.advanceBy(1);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const release = vi.fn(gate.resolve);
+      schedulePostReadyWorkRelease({
+        scheduler,
+        profile: "lean",
+        release,
+        isClosing: () => false,
+      });
+      await clock.advanceBy(LEAN_POST_READY_FIRST_CHECK_MS);
+      expect(release).toHaveBeenCalledOnce();
+      await maintenanceWake;
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      expect(startMaintenance).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await scheduler.stop();
+    }
+  });
+
   it("sweeps exec cgroups after admission, repeats at idle cadence, and stops watches on close", async () => {
     const platform = mockProcessPlatform("linux");
     const sweep = vi.spyOn(execCgroup, "sweepAgentExecCgroups").mockResolvedValue();
@@ -97,7 +146,7 @@ describe("post-ready maintenance scheduling", () => {
     const platform = mockProcessPlatform("linux");
     const sweep = vi.spyOn(execCgroup, "sweepAgentExecCgroups").mockResolvedValue();
     const lowMemory = vi
-      .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
+      .spyOn(hostMemory, "isMemoryPressureHigh")
       .mockReturnValue(cause === "memory pressure");
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);

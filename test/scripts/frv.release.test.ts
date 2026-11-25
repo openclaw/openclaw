@@ -717,6 +717,31 @@ else process.stdout.write(JSON.stringify(value));
 }
 
 describe("publication status real CLI", () => {
+  it.each([false, true])(
+    "keeps verified qualification separate from publication inputs without changing JSON (json=%s)",
+    async (json) => {
+      const result = await runPublicationCli(publicationFixture(), [
+        "verify",
+        "--run",
+        "77",
+        ...(json ? ["--json"] : []),
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      if (json) {
+        expect(JSON.parse(result.stdout)).toEqual({ valid: true });
+      } else {
+        expect(result.stdout).toContain("VERIFIED: Full Release Validation run 77");
+        expect(result.stdout).toContain(`Qualification tooling (Q): ${SHA}`);
+        expect(result.stdout.split("\n").find((line) => line.startsWith("Candidate inputs:"))).toBe(
+          `Candidate inputs: --target-sha ${TARGET_SHA} --full-release-validation-run-id 77 --release-profile beta --skip-dispatch`,
+        );
+        expect(result.stdout).toContain(
+          "Supply independently pinned publication tooling (P) via --workflow-sha <P> or --publish-workflow-ref <tag>",
+        );
+      }
+    },
+  );
+
   it.each(["current grant", "removed grant", "missing ledger", "forbidden"])(
     "joins publication status with authenticated Q policy: %s",
     async (mode) => {
@@ -779,8 +804,6 @@ describe("publication status real CLI", () => {
                           childRole: "normalCi",
                           jobName: failedJob.name,
                           reason: "Synthetic joined status grant",
-                          evidence: { runId: "101", runAttempt: 1 },
-                          aggregates: [],
                         },
                       ]
                     : [],
@@ -1928,6 +1951,7 @@ describe("publication status real CLI", () => {
       expect(result.stdout).toContain("qualification: blocked; evidence: pending");
       expect(result.stdout).toContain("drain: in_progress");
       expect(result.stdout).toContain("actual test blocker");
+      expect(result.stdout).toContain("Release Decision snapshot: blocked_diagnostics_running");
       expect(result.stdout).toContain("Diagnostic Drain is still collecting");
       expect(result.stdout).toContain(
         'blocker: parent job "Prepare release npm artifacts" failure (attempt 2)',
@@ -1935,6 +1959,30 @@ describe("publication status real CLI", () => {
       expect(result.stdout).toContain("next: pnpm frv watch --run 77");
     },
   );
+
+  it("keeps an early Decision snapshot separate from a terminal Drain", async () => {
+    const fixture = publicationFixture();
+    fixture.root.conclusion = "failure";
+    const result = await runPublicationCli(
+      fixture,
+      ["status", "--run", "77"],
+      (responses) => {
+        responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
+          jobs: [{ ...job("Diagnostic Drain"), run_attempt: 2 }],
+        };
+      },
+      false,
+      0,
+      "accepted",
+      "blocked_diagnostics_running",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("qualification: blocked; evidence: not-accepted");
+    expect(result.stdout).toContain("drain: completed success; active children: none");
+    expect(result.stdout).toContain("Release Decision snapshot: blocked_diagnostics_running");
+    expect(result.stdout).toContain("actual test blocker");
+    expect(result.stdout).not.toContain("still collecting");
+  });
 
   it("stops the shipped watcher on a current artifact blocker without mutating GitHub", async () => {
     const fixture = publicationFixture();
@@ -1999,8 +2047,6 @@ describe("publication status real CLI", () => {
                   childRole: "normalCi",
                   jobName: "synthetic failure",
                   reason: "Synthetic Q status grant",
-                  aggregates: [],
-                  evidence: { runId: "101", runAttempt: 1 },
                 },
               ]
             : [],

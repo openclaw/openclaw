@@ -22,18 +22,11 @@ import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
   type ModelSetupWizardResult,
+  type ModelSetupWizardStartMethod,
   type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
-
-export type ModelSetupWizardStartMethod =
-  | "mcp.authLogin"
-  | "models.authLogin"
-  | "openclaw.setup.auth.start"
-  | "openclaw.setup.prepare.start"
-  | "openclaw.setup.activate.start"
-  | "openclaw.setup.runtime.start";
 
 export type ModelSetupWizardCompletion = {
   startMethod: ModelSetupWizardStartMethod;
@@ -45,12 +38,14 @@ export type ModelSetupWizardCompletion = {
 
 type WizardTerminalObserver = (result: ModelSetupWizardResult) => (() => boolean) | void;
 
-type WizardRunnerOptions = {
+export type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
   onSessionMissing?: () => void;
+  /** Settles a failed `wizard.next`, such as a sign-in the Gateway lost; rejects to keep the failure. */
+  readLostSession?: (error: unknown) => Promise<WizardNextResult>;
   onStart?: (
     method: ModelSetupWizardStartMethod,
     activation?: Parameters<FirstRunSetup["beginActivation"]>[0],
@@ -123,6 +118,10 @@ export class ModelSetupWizardRunner {
     return this.session?.admitted === true;
   }
 
+  get isSuspended(): boolean {
+    return this.session?.suspended === true;
+  }
+
   suspend(notice?: string): void {
     const session = this.session;
     if (!session) {
@@ -141,18 +140,25 @@ export class ModelSetupWizardRunner {
     });
   }
 
-  restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
+  restore(
+    recovery: ModelSetupWizardRecovery,
+    onTerminalResult: WizardTerminalObserver,
+    startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
+    presentation: { label?: string; brandId?: string } = {},
+  ): void {
     const client = this.options.getClient();
     if (!client || this.session) {
       return;
     }
+    this.authLabel = presentation.label;
+    this.authBrandId = presentation.brandId;
     this.session = {
       ...recovery,
       client,
       admitted: true,
       retirementGeneration: this.retirementGeneration,
       abortController: new AbortController(),
-      startMethod: "openclaw.setup.auth.start",
+      startMethod,
       onTerminalResult,
     };
     this.setState({ phase: "starting", authChoice: recovery.authChoice });
@@ -198,9 +204,7 @@ export class ModelSetupWizardRunner {
       ModelSetupWizardStartMethod,
       "openclaw.setup.activate.start" | "openclaw.setup.runtime.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
-    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> & {
-      selectModel?: true;
-    } = {},
+    preferences: { selectModel?: true } = {},
     modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
     return this.startSession(authChoice, startMethod, {
@@ -250,6 +254,7 @@ export class ModelSetupWizardRunner {
       return null;
     }
     const sessionId = generateUUID();
+    const wizard = { sessionId, authChoice, authKind: this.pendingSignIn?.kind };
     const session: WizardSession = {
       client,
       sessionId,
@@ -265,12 +270,10 @@ export class ModelSetupWizardRunner {
         "kind" in params
           ? params
           : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
-            ? {
-                ...params,
-                kind: "provider-auth",
-                wizard: { sessionId, authChoice, authKind: this.pendingSignIn?.kind },
-              }
-            : undefined,
+            ? { ...params, kind: "provider-auth", wizard }
+            : startMethod === "models.authLogin"
+              ? { kind: "provider-login", wizard }
+              : undefined,
       ),
     };
     this.pendingSignIn = undefined;
@@ -484,11 +487,18 @@ export class ModelSetupWizardRunner {
     let nextAnswer = answer;
     let acceptsFirstResult = acceptResult;
     while (true) {
-      const result = await client.request<WizardNextResult>(
-        "wizard.next",
-        { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
-        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
-      );
+      const result = await client
+        .request<WizardNextResult>(
+          "wizard.next",
+          { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
+          { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+        )
+        .catch(async (error: unknown) => {
+          if (!this.options.readLostSession) {
+            throw error;
+          }
+          return await this.options.readLostSession(error);
+        });
       if (acceptsFirstResult && !acceptsFirstResult() && !result.done) {
         return null;
       }

@@ -10,11 +10,7 @@ import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gat
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
 import { prepareNativeDelegatedToolPolicy } from "../../delegated-tool-policy.js";
-import {
-  runSpawnPipeline,
-  summarizeSpawnError,
-  type SpawnBackendAdapter,
-} from "../../spawn-pipeline.js";
+import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline.js";
 import { withGatewayToolOperatorContinuation } from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -39,6 +35,7 @@ import {
   rollbackPreparedContextEngine,
   type PreparedContextEngineSubagentSpawn,
 } from "./subagent-spawn-context.js";
+import { buildSubagentSpawnFailureResult } from "./subagent-spawn-contract.js";
 import type {
   SpawnSubagentContext,
   SpawnSubagentParams,
@@ -49,8 +46,8 @@ import {
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
 import {
+  bindSubagentSpawnOperatorAuthority,
   callNativeSubagentGateway,
-  captureSubagentSpawnGatewayContext,
   readGatewayRunId,
 } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
@@ -84,12 +81,15 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
-    captureSubagentSpawnGatewayContext();
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
   }
+  const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
+    requestResolution.resolved.gateway;
+  const withOperatorAuthority = bindSubagentSpawnOperatorAuthority(
+    requestResolution.resolved.gateway,
+  );
   const {
     taskName,
     spawnMode,
@@ -150,22 +150,24 @@ export async function spawnSubagentDirect(
       throw new Error("Operator subagent spawn requires its current Gateway binding");
     }
     if (params.collect && operatorAuthority) {
-      operatorAuthority.assertCurrent();
       preparationHold.retainAuthority(operatorAuthority.retain?.());
     }
-    const childPlan = await resolveSubagentChildPlan({
-      request: { ...params, context: contextMode },
-      ctx: { ...ctx, assertActive },
-      cfg,
-      requesterInternalKey,
-      requesterAgentId,
-      targetAgentId,
-      requesterEntry: requestResolution.resolved.requesterEntry,
-      sandboxMode,
-      swarmEnabled: swarmConfig.enabled,
-      requesterSandboxed: ctx.sandboxed,
-      spawnedBy: { profileId: creatorProfileId, operatorScopes: operatorAuthority?.scopes },
-    });
+    const childPlan =
+      requestResolution.resolved.participationChildPlan ??
+      (await resolveSubagentChildPlan({
+        request: { ...params, context: contextMode },
+        ctx: { ...ctx, assertActive },
+        operatorAuthority,
+        cfg,
+        requesterInternalKey,
+        requesterAgentId,
+        targetAgentId,
+        requesterEntry: requestResolution.resolved.requesterEntry,
+        sandboxMode,
+        swarmEnabled: swarmConfig.enabled,
+        requesterSandboxed: ctx.sandboxed,
+        spawnedBy: { profileId: creatorProfileId, operatorAuthority },
+      }));
     if (!childPlan.ok) {
       return childPlan.result;
     }
@@ -243,6 +245,7 @@ export async function spawnSubagentDirect(
         spawnedWorkspaceDir,
         spawnedCwd,
         sessionPermissionPolicy: ctx.sessionPermissionPolicy,
+        operatorAuthority,
         worktree: params.worktree ? params : undefined,
         admissionPatch: admission.childSessionPatch,
         inheritedToolAllowlist: ctx.inheritedToolAllowlist,
@@ -393,38 +396,40 @@ export async function spawnSubagentDirect(
     });
     let acceptedChildRunId: string | undefined;
     const launchChildRun = async (assertDispatchCurrent?: () => void) => {
-      const launch = await runWithAgentToolSourceExecutionScope(assertDispatchCurrent, () =>
-        callNativeSubagentGateway(
-          withSubagentGatewayExecutionIdentity(
+      const launch = await withOperatorAuthority(() =>
+        runWithAgentToolSourceExecutionScope(assertDispatchCurrent, () =>
+          callNativeSubagentGateway(
+            withSubagentGatewayExecutionIdentity(
+              {
+                method: "agent",
+                assertDispatchCurrent,
+                params: childLaunch.request,
+                timeoutMs: childLaunch.timeoutMs,
+              },
+              {
+                sessionSpawnContext: buildSubagentExecutionSessionSpawnContext({
+                  enabled: isExecutionIdentityCollectionEnabled(cfg),
+                  backend: "subagent",
+                  parentAgentId: requesterAgentId,
+                  requesterRef: requesterInternalKey,
+                  controllerRef: ownership.controllerSessionKey,
+                  depth: childDepth,
+                  maxDepth: maxSpawnDepth,
+                  targetAgentId,
+                  sandbox: sandboxMode,
+                  inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+                  inheritedToolDenylist: ctx.inheritedToolDenylist,
+                }),
+                parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
+              },
+            ),
             {
-              method: "agent",
-              assertDispatchCurrent,
-              params: childLaunch.request,
-              timeoutMs: childLaunch.timeoutMs,
-            },
-            {
-              sessionSpawnContext: buildSubagentExecutionSessionSpawnContext({
-                enabled: isExecutionIdentityCollectionEnabled(cfg),
-                backend: "subagent",
-                parentAgentId: requesterAgentId,
-                requesterRef: requesterInternalKey,
-                controllerRef: ownership.controllerSessionKey,
-                depth: childDepth,
-                maxDepth: maxSpawnDepth,
-                targetAgentId,
-                sandbox: sandboxMode,
-                inheritedToolAllowlist: ctx.inheritedToolAllowlist,
-                inheritedToolDenylist: ctx.inheritedToolDenylist,
-              }),
-              parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
+              authorization: childLaunch.authorization,
+              gatewayContextResolver,
+              requester,
+              preparedLaunch: launchContext.preparedLaunch,
             },
           ),
-          {
-            authorization: childLaunch.authorization,
-            gatewayContextResolver,
-            requester,
-            preparedLaunch: launchContext.preparedLaunch,
-          },
         ),
       );
       acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
@@ -533,83 +538,74 @@ export async function spawnSubagentDirect(
     };
     // The pipeline now owns initialization, dispatch and registration failures.
     cleanupUnlaunchedSession = undefined;
-    const pipelineResult = await runSpawnPipeline({
-      ...withExecRequestOwners({}, readExecRequestOwners(ctx)),
-      adapter,
-      assertActive,
-      admissionReservation,
-      progressOrigin,
-      progressSessionKey: requesterInternalKey,
-      buildRegistration: (_state, runId) => {
-        if (params.collect) {
-          const latestAdmission = resolveAdmission();
-          if (!latestAdmission.ok) {
-            throw Object.assign(new Error(latestAdmission.error), {
-              spawnStatus: "forbidden" as const,
-            });
+    const runPipeline = () =>
+      runSpawnPipeline({
+        ...withExecRequestOwners({}, readExecRequestOwners(ctx)),
+        adapter,
+        assertActive,
+        admissionReservation,
+        progressOrigin,
+        progressSessionKey: requesterInternalKey,
+        buildRegistration: (_state, runId) => {
+          if (params.collect) {
+            const latestAdmission = resolveAdmission();
+            if (!latestAdmission.ok) {
+              throw Object.assign(new Error(latestAdmission.error), {
+                spawnStatus: "forbidden" as const,
+              });
+            }
           }
-        }
-        return {
-          runId,
-          requesterTurnRunId: ctx.requesterTurnRunId,
-          nativePluginOwner: params.collect ? ctx.nativePluginOwner : undefined,
-          subagentProfile: profileReceipt,
-          ...childTarget,
-          controllerSessionKey: ownership.controllerSessionKey,
-          sessionEntry: childEntry,
-          requesterSessionKey: ownership.completionRequesterSessionKey,
-          requesterOrigin,
-          progressOrigin,
-          requesterDisplayKey: ownership.completionRequesterDisplayKey,
-          task: params.task,
-          taskName,
-          requesterAgentId,
-          cleanup,
-          label: label || undefined,
-          model: plan.resolvedModel,
-          agentDir: targetAgentDir,
-          workspaceDir: spawnedMetadata.workspaceDir,
-          runTimeoutSeconds,
-          expectsCompletionMessage: completionMode === "announce",
-          completionTarget: params.completionTarget,
-          completionRequesterSessionId,
-          completionRequesterLifecycleRevision,
-          spawnMode,
-          collect: params.collect === true,
-          swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
-          swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
-          swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
-          swarmLaunchRequestFingerprint: params.collect
-            ? params.swarmLaunchRequestFingerprint
-            : undefined,
-          outputSchema: params.outputSchema,
-          groupId: swarmGroupId,
-          queued: params.collect === true,
-          ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
-          attachmentId,
-          retainAttachmentsOnKeep: materializedAttachments?.retainOnSessionKeep ?? false,
-        };
-      },
-    });
+          return {
+            runId,
+            requesterTurnRunId: ctx.requesterTurnRunId,
+            nativePluginOwner: params.collect ? ctx.nativePluginOwner : undefined,
+            subagentProfile: profileReceipt,
+            ...childTarget,
+            controllerSessionKey: ownership.controllerSessionKey,
+            sessionEntry: childEntry,
+            requiresCompletionAuthority: childEntry?.delegatedOperatorSource ? true : undefined,
+            requesterSessionKey: ownership.completionRequesterSessionKey,
+            requesterOrigin,
+            progressOrigin,
+            requesterDisplayKey: ownership.completionRequesterDisplayKey,
+            task: params.task,
+            taskName,
+            requesterAgentId,
+            cleanup,
+            label: label || undefined,
+            model: plan.resolvedModel,
+            agentDir: targetAgentDir,
+            workspaceDir: spawnedMetadata.workspaceDir,
+            runTimeoutSeconds,
+            expectsCompletionMessage: completionMode === "announce",
+            completionTarget: params.completionTarget,
+            completionRequesterSessionId,
+            completionRequesterLifecycleRevision,
+            spawnMode,
+            collect: params.collect === true,
+            swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
+            swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
+            swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
+            swarmLaunchRequestFingerprint: params.collect
+              ? params.swarmLaunchRequestFingerprint
+              : undefined,
+            outputSchema: params.outputSchema,
+            groupId: swarmGroupId,
+            queued: params.collect === true,
+            ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
+            attachmentId,
+            retainAttachmentsOnKeep: materializedAttachments?.retainOnSessionKeep ?? false,
+          };
+        },
+      });
+    const pipelineResult = await withOperatorAuthority(runPipeline);
     if (!pipelineResult.ok) {
-      const { phase, error } = pipelineResult;
-      const spawnStatus =
-        error && typeof error === "object" && "spawnStatus" in error
-          ? error.spawnStatus
-          : undefined;
-      return {
-        status: spawnStatus === "forbidden" ? "forbidden" : "error",
-        error: [
-          phase === "register" && spawnStatus !== "forbidden"
-            ? `Failed to register subagent run: ${summarizeSpawnError(error)}`
-            : summarizeSpawnError(error),
-          acceptedRunCleanupError,
-        ]
-          .filter(Boolean)
-          .join(" "),
+      return buildSubagentSpawnFailureResult({
+        failure: pipelineResult,
         childSessionKey,
-        ...(phase === "initialize" ? {} : { runId: pipelineResult.runId ?? childIdem }),
-      };
+        childIdem,
+        acceptedRunCleanupError,
+      });
     }
     const childRunId = pipelineResult.runId;
     let collectorSessionKey: string | undefined;

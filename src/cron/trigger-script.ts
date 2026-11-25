@@ -72,6 +72,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { CronOperatorSourceError } from "./operator-source-error.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import {
   resolveCronScheduledToolPolicy,
@@ -286,7 +287,8 @@ async function prepareTriggerRuntime(
               messageActionTurnCapability,
               abortSignal: signal,
               prepareHostFileMutation: assertSource?.prepareSessionSourceStorageEffect,
-              exec: { config },
+              // No conversation collects a backgrounded command, so exec waits for its result.
+              exec: { config, allowBackground: false },
               sandbox,
               sessionKey,
               trigger: "cron",
@@ -661,7 +663,8 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         return { kind: "completed" as const, result };
       });
     } catch (error) {
-      if (isOperatorAuthorityUnavailable(error)) {
+      // A refused or unavailable operator source is not a script failure; the caller owns it.
+      if (isOperatorAuthorityUnavailable(error) || error instanceof CronOperatorSourceError) {
         throw error;
       }
       return scriptFailure(

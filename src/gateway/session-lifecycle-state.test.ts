@@ -478,20 +478,16 @@ describe("session lifecycle state", () => {
     expect(next.goal).toEqual(persisted.goal);
   });
 
-  it.each([
-    { name: "visible run", controlUiVisible: true, lastActivityAt: 1_800 },
-    { name: "hidden run", controlUiVisible: false, lastActivityAt: 1_000 },
-  ])(
-    "records unread-worthy completion activity for a $name",
-    async ({ controlUiVisible, lastActivityAt }) => {
-      const persisted = await persistLifecycle(
-        { ...runningEntry, lastActivityAt: 1_000 },
-        lifecycleEvent({ phase: "end", endedAt: 1_800 }, { controlUiVisible }),
-      );
+  it("leaves unread activity alone when a visible run ends without a new visible reply", async () => {
+    // A run that ended in NO_REPLY added nothing to read; its transcript has no visible reply.
+    const visibleRun = { ts: 2_000, controlUiVisible: true };
+    const persisted = await persistLifecycle(
+      { ...runningEntry, lastActivityAt: 1_000 },
+      lifecycleEvent({ phase: "end", endedAt: 1_800 }, visibleRun),
+    );
 
-      expect(persisted.lastActivityAt).toBe(lastActivityAt);
-    },
-  );
+    expect(persisted.lastActivityAt).toBe(1_000);
+  });
 
   it("retains yielded continuation custody without recording a terminal outcome", async () => {
     const yielded = await persistLifecycle(

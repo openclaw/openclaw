@@ -11,10 +11,15 @@ import {
 import { getRuntimeConfig } from "../config/io.runtime.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 
+// The first write validates and reenters config.get inside the write hook;
+// fixture restoration separately joins config.apply and waits for the reload.
+const CONFIG_WRITE_TIMEOUT_MS = 45_000;
+
 describe("gateway config canonical rereads", () => {
   installSharedConfigWriteGatewayHooks({
     watchConfigFiles: false,
     fixturePaths: ["logging.json"],
+    restoreApplyTimeoutMs: CONFIG_WRITE_TIMEOUT_MS,
   });
 
   it.each(["config.set", "config.patch"] as const)(
@@ -49,13 +54,18 @@ describe("gateway config canonical rereads", () => {
           },
         };
       });
-      const result = await rpcReq(requireClient(), method, {
-        raw: JSON.stringify({
-          ...(method === "config.set" ? draft.config : {}),
-          ui: { prefs: { locale: "fr" } },
-        }),
-        baseHash: draft.hash,
-      });
+      const result = await rpcReq(
+        requireClient(),
+        method,
+        {
+          raw: JSON.stringify({
+            ...(method === "config.set" ? draft.config : {}),
+            ui: { prefs: { locale: "fr" } },
+          }),
+          baseHash: draft.hash,
+        },
+        CONFIG_WRITE_TIMEOUT_MS,
+      );
       expect(result.ok, result.error?.message).toBe(method === "config.set");
       expect(committed?.config).toMatchObject({ logging: { level: "info" } });
       const receipt = { config: committed?.config, hash: committed?.hash };

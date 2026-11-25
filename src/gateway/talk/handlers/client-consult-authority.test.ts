@@ -245,7 +245,10 @@ describe("voice consult registration authority", () => {
         session: { store: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId }) },
       };
       const context = consultContext(config);
-      const client = { connId: `${origin}-${wait}-delegation-source` };
+      const client = {
+        connId: `${origin}-${wait}-delegation-source`,
+        connect: { scopes: ["operator.talk"] },
+      };
       const sessionTarget = await prepareTalkSessionTarget(config, scope.sessionKey);
       const created =
         origin === "relay"
@@ -343,7 +346,7 @@ describe("voice consult registration authority", () => {
     async (successor, { signal }) => {
       const context = createGatewayRequestContext(makeContextParams());
       context.getRuntimeConfig = () => ({});
-      const client = { connId: "replacement-registration" };
+      const client = { connId: "replacement-registration", connect: { scopes: ["operator.talk"] } };
       const sessionTarget = await prepareTalkSessionTarget({}, scope.sessionKey);
       const created = createTalkRealtimeRelaySession({
         context,

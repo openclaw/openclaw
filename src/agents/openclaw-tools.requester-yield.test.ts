@@ -25,6 +25,7 @@ import { addSession, markExited, type ProcessSession } from "./bash-process-regi
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
 import { settleRequesterRun } from "./requester-run-settlement.js";
 import * as persistence from "./subagents/registry/subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
@@ -614,6 +615,12 @@ describe("requester yield ownership", () => {
       // Only an accepted yield arms the exit to resume this run.
       expect(onYield).toHaveBeenCalledTimes(expected === "yielded" ? 1 : 0);
       expect(process.resumesYieldedRun).toBe(expected === "yielded" ? true : undefined);
+      if (expected === "yielded") {
+        // The runner counts the armed exit wake as this turn's continuation source.
+        expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined, {
+          execWakeArmed: true,
+        });
+      }
     },
   );
 
@@ -630,6 +637,8 @@ describe("requester yield ownership", () => {
 
     await expectYield(tool, "yielded");
     expect(onYield).toHaveBeenCalledOnce();
+    // An unarmed background exec is not an exit wake for this yield.
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined);
   });
 
   it("checks background exec after an awaited runtime completion claim", async () => {
@@ -812,34 +821,52 @@ describe("requester yield ownership", () => {
     expect(getSubagentRunByRunId(child.runId)).toEqual(beforeContinuation);
   });
 
-  it.each([false, true])("reports earlier-turn children (native: %s)", async (native) => {
-    const requesterSessionKey = "agent:main:main";
-    await seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
-    const nativeChild = {
-      runId: "codex-thread:native-child",
-      childSessionKey: "codex-thread:native-child",
-      state: "running" as const,
-      wakeArmed: false,
-    };
-    const onYield = vi.fn();
-    const tool = createYieldToolForTurn({
-      requesterSessionKey,
-      requesterTurnRunId: "run-turn-2",
-      ...(native ? { claimYieldCompletion: () => ({ pendingChildren: [nativeChild] }) } : {}),
-      onYield,
-    });
-    expect((await tool.execute("yield-turn-2", {})).details).toMatchObject({
-      status: "already_pending",
-      message: expect.stringContaining(
-        `already spawned ${native ? "2 child sessions" : "1 child session"}`,
-      ),
-      pendingChildren: [
-        ...(native ? [nativeChild] : []),
-        { runId: "run-child", state: "running", ...(!native ? { wakeArmed: false } : {}) },
-      ],
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
+  it.each(["registry", "native", "participant"] as const)(
+    "bounds earlier-turn children for %s",
+    async (source) => {
+      const native = source === "native";
+      const requesterSessionKey = "agent:main:main";
+      await seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
+      const nativeChild = {
+        runId: "codex-thread:native-child",
+        childSessionKey: "codex-thread:native-child",
+        state: "running" as const,
+        wakeArmed: false,
+      };
+      const onYield = vi.fn();
+      const tool = createYieldToolForTurn({
+        requesterSessionKey,
+        requesterTurnRunId: "run-turn-2",
+        ...(source === "participant"
+          ? {
+              ...prepareParticipationTestRun({
+                kind: "send" as const,
+                profileId: "invited",
+                sessionKey: requesterSessionKey,
+              }),
+            }
+          : {}),
+        ...(native ? { claimYieldCompletion: () => ({ pendingChildren: [nativeChild] }) } : {}),
+        onYield,
+      });
+      const result = (await tool.execute("yield-turn-2", {})).details;
+      expect(result).toMatchObject(
+        source === "participant"
+          ? { status: "nothing_pending" }
+          : {
+              status: "already_pending",
+              message: expect.stringContaining(
+                `already spawned ${native ? "2 child sessions" : "1 child session"}`,
+              ),
+              pendingChildren: [
+                ...(native ? [nativeChild] : []),
+                { runId: "run-child", state: "running", ...(!native ? { wakeArmed: false } : {}) },
+              ],
+            },
+      );
+      expect(onYield).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not persist or yield after a runtime claim failure", async () => {
     await seedRequiredChild("agent:main:main");

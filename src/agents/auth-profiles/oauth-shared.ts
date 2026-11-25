@@ -1,3 +1,4 @@
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
@@ -111,7 +112,8 @@ export function overlayRuntimeExternalOAuthProfiles(
       : undefined;
   next.runtimeExternalProfileIdsAuthoritative =
     options?.runtimeExternalProfileIdsAuthoritative === true ? true : undefined;
-  return next;
+  // Match the stored JSON shape so an unchanged scoped lookup skips snapshot publication.
+  return omitUndefinedFields(next);
 }
 
 export function shouldPersistRuntimeExternalOAuthProfile(params: {

@@ -279,6 +279,7 @@ describe("ModelSetupPage catalog icons", () => {
     });
     authButton(page, "provider-auth")?.click();
     await vi.waitFor(() => expect(releaseProgress).toBeTypeOf("function"));
+    await waitForText(page, "Downloading");
 
     const competingMutation = runtimeConfig.runExternalMutation(async () => {
       order.push("competing-mutation");
@@ -378,6 +379,7 @@ describe("ModelSetupPage catalog icons", () => {
             return { ok: false as const, reason: "error" as const, error: String(error) };
           }
         }),
+        subscribe: () => () => {},
       } as unknown as ApplicationContext["runtimeConfig"],
     } as ApplicationContext;
     const { page } = await mountSettings(context, client, {
@@ -628,7 +630,7 @@ describe("Model setup account connections", () => {
         expect(verificationRuns).toBe(operation === "connect" ? 0 : 1);
         expect(page.textContent).not.toContain("Approve this account in your browser.");
         expect(page.textContent).not.toContain(url);
-        expect(setupButton.textContent?.trim()).toBe("Set up & verify");
+        expect(setupButton.textContent?.trim()).toBe("Setup-only account");
         if (operation === "connect") {
           expect(request).toHaveBeenCalledWith(
             "models.authLogin",

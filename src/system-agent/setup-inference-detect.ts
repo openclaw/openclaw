@@ -195,22 +195,26 @@ async function prepareSetupInferenceOptions(agentId?: string) {
   };
 }
 
-/** Manual setup options use only config and manifests, never machine or credential probes. */
-export async function listManualSetupInferenceOptions(
+/**
+ * Known setup choices from config and manifests, never machine or credential probes.
+ * Clients show these while discovery runs; install suggestions need a scan, so none are offered.
+ */
+export async function listManualSetupInferenceDetection(
   agentId?: string,
-): Promise<
-  Pick<
-    SetupInferenceDetection,
-    | "manualProviders"
-    | "authOptions"
-    | "prepareOptions"
-    | "workspace"
-    | "setupComplete"
-    | "setupModel"
-    | "utilityModel"
-  >
-> {
-  return (await prepareSetupInferenceOptions(agentId)).manual;
+): Promise<SetupInferenceDetection> {
+  const { cfg, targetAgentId, manual } = await prepareSetupInferenceOptions(agentId);
+  const { resolveConfiguredModelCandidate } = await import("../commands/onboard-inference.js");
+  const configuredModel = resolveConfiguredModelCandidate({
+    config: cfg,
+    agentId: targetAgentId,
+  })?.modelRef;
+  return {
+    ...manual,
+    candidates: [],
+    unavailableCandidates: [],
+    recommendedInstalls: [],
+    ...(configuredModel ? { configuredModel } : {}),
+  };
 }
 
 export async function detectSetupInference(agentId?: string): Promise<SetupInferenceDetection> {

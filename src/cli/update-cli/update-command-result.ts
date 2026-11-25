@@ -36,12 +36,10 @@ import {
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { resolveUpdateRunVerifiedServingVersion } from "../../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import {
-  resolveUpdateRunVerifiedServingVersion,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";

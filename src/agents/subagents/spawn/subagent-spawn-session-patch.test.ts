@@ -22,6 +22,7 @@ import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
+import { createParticipationTestAuthority } from "../../participation-ceiling.test-support.js";
 import { prepareSubagentSessionContext } from "./subagent-spawn-context.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import * as spawnRuntime from "./subagent-spawn.runtime.js";
@@ -63,6 +64,7 @@ it.each([
   { source: "an explicit private projectId", refusal: "unknown project id: org-private" },
   { source: "an inherited private project checkout", refusal: INHERIT_REFUSAL },
   { source: "an inherited agent-workspace worktree", refusal: undefined },
+  { source: "an inherited role-granted private project checkout", refusal: undefined },
 ] as const)("bounds a guest background spawn of $source", async ({ source, refusal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const repo = await initializeRepository(
@@ -97,7 +99,11 @@ it.each([
     vi.stubGlobal("fetch", fetchImpl);
     try {
       const result = await spawn({
-        projectRequester: { kind: "operator", scopes: ["operator.sessions.write"] },
+        projectRequester: {
+          kind: "operator",
+          scopes: ["operator.sessions.write"],
+          ...(source.includes("role-granted") ? { projects: [project.id] } : {}),
+        },
         worktree: {
           task: "Read README.md",
           ...(source.includes("explicit") ? { projectId: project.id } : {}),
@@ -472,5 +478,45 @@ it("commits group and delivery facts with creation for one host-bound admission"
     expect(takeInProcessFreshChildSession({ ...request })).toBeUndefined();
     expect(takeInProcessFreshChildSession(request)).toEqual(result.freshChild);
     expect(takeInProcessFreshChildSession(request)).toBeUndefined();
+  });
+});
+
+it("persists the entire admitted delegated source and keeps ordinary children unbound", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const participationCeiling = {
+      kind: "send" as const,
+      profileId: "participant",
+      sessionKey,
+      permission: "guarded" as const,
+      tools: ["read", "exec"],
+      toolConstraints: [["read"]],
+      execPolicy: {
+        security: "allowlist" as const,
+        ask: "always" as const,
+        denyMisses: true as const,
+      },
+      source: {
+        agentId: "main",
+        sessionId: "parent",
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: "/synthetic/root",
+      },
+    };
+    const operatorAuthority = createParticipationTestAuthority(participationCeiling);
+    const snapshot = operatorAuthority.recoverySnapshot;
+    const constrained = await spawn({
+      operatorAuthority,
+      sessionPermissionPolicy: { root: "/synthetic/root", mode: "guarded" },
+    });
+    expect(constrained).toMatchObject({ status: "ok" });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    expect(readEntry(storePath, childSessionKey)?.delegatedOperatorSource).toEqual({
+      kind: "gateway",
+      snapshot,
+    });
+    const ordinaryKey = "agent:main:subagent:ordinary";
+    expect(await spawn({ childSessionKey: ordinaryKey })).toMatchObject({ status: "ok" });
+    expect(readEntry(storePath, ordinaryKey)?.delegatedOperatorSource).toBeUndefined();
   });
 });

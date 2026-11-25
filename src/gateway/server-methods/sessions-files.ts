@@ -122,6 +122,7 @@ async function handleSessionFilesRead(
         agentId,
         readEntry: read?.prepared.readRetainedEntry ?? readEntry,
         assertSourceCurrent: read?.assertCurrent ?? assertSourceCurrent,
+        isInvitedWorkspaceTarget: read?.isInvitedWorkspaceTarget,
       });
       readAuthority = hostRead;
       const authority = readGatewayRequestMutationAuthority(options);

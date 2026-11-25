@@ -504,9 +504,18 @@ export class ChatComposerPersistence {
           signature: this.#currentContentSignature(state),
           onCurrentWins: (storedRevision) => {
             this.#forceDurableOwnerRestore = false;
+            // A local write has a newer revision than the one it replaced.
+            // An empty snapshot adopted on startup or restore has no edit to retry.
+            const last = this.#lastPersisted;
+            const retryLocalEdit =
+              last?.draftRevision === baseline.draftRevision &&
+              last.draftRevision > last.expectedDraftRevision &&
+              isChatComposerOwnerCurrent(state, last.owner) &&
+              this.#isUnchanged(state);
             if (
               baseline.durable &&
-              (state.chatMessage ||
+              (retryLocalEdit ||
+                state.chatMessage ||
                 state.chatGoalDraftMode ||
                 state.chatReplyTarget ||
                 (state.chatAttachments?.length ?? 0) > 0)

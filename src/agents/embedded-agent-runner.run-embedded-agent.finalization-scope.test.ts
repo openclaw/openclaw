@@ -231,7 +231,7 @@ it.each(
       const result =
         finalization === "closed"
           ? await expect(child)
-              .rejects.toThrow("admitted run authority is no longer active")
+              .rejects.toThrow("This agent run is no longer active. Start a new turn to retry.")
               .then(() => undefined)
           : await child;
       expect(toolRuns).toBe(1);

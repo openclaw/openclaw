@@ -331,7 +331,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     const error = await runPlugin(context, execute, { liveSession: true }).catch(
       (failure: unknown) => failure,
     );
-    expect(error).toMatchObject({ reason: "rate_limit", code: "cli_live_session_host_memory" });
+    expect(error).toMatchObject({ reason: "overloaded", code: "cli_live_session_host_memory" });
     expect(execute).not.toHaveBeenCalled();
     expect(busy.close).not.toHaveBeenCalled();
     expect(

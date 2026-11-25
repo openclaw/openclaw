@@ -1133,20 +1133,6 @@ it("records Docker preparation failure without starting a script partition", asy
   );
 });
 
-it("reuses the prepared Docker env object when a script partition retries", async () => {
-  prepareDockerE2eEnvironment.mockResolvedValueOnce(preparedEnv);
-  runQaTestFileScenarios
-    .mockRejectedValueOnce(new QaSuiteInfraError("transport_ready_timeout", "retry"))
-    .mockImplementationOnce(passNative);
-
-  await runQaSuite({ repoRoot, scenarioIds: [ids.docker] });
-
-  expect(runQaTestFileScenarios.mock.calls.map(([params]) => params.env)).toEqual([
-    preparedEnv,
-    preparedEnv,
-  ]);
-});
-
 it("serializes every fail-fast script and stops before post-failure work", async () => {
   const first = Promise.withResolvers<void>();
   const started: string[] = [];

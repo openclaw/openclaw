@@ -1,9 +1,5 @@
 import { getRuntimeConfig } from "../../config/config.js";
-import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
-import {
-  resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForAssignment,
-} from "../../gateway/operator-role-policy.js";
+import { resolveGatewayOperatorRoleActor } from "../../gateway/operator-role-policy.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
@@ -12,10 +8,7 @@ import { assertionSucceeds } from "../../shared/assertion.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { captureRequesterFollowupAuthority } from "../subagents/requester-cron-authority.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 class FollowupAccessChangedError extends Error {}
 
@@ -33,15 +26,15 @@ export async function prepareSessionsSendFollowup(params: {
   if (!caller) {
     return undefined;
   }
-  const assertInvocation = captureGatewayToolCallerAssertion();
-  assertInvocation?.();
   if (
     caller.agentId !== params.requesterAgentId ||
     caller.sessionKey !== params.requesterSessionKey
   ) {
     throw new Error("Followup result requester differs from its admitted tool caller.");
   }
-  const captured = await captureOperatorToolGatewayContinuationContext();
+  const captured = await captureOperatorToolGatewayContinuationContext(undefined, {
+    retainRequester: true,
+  });
   if (!captured) {
     throw new Error("Followup completion requires in-process caller custody.");
   }
@@ -70,7 +63,6 @@ export async function prepareSessionsSendFollowup(params: {
     releaseResources();
   };
   try {
-    assertInvocation?.();
     const cfg = getRuntimeConfig();
     const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
     const actor = resolveGatewayOperatorRoleActor(client ?? null);
@@ -89,7 +81,6 @@ export async function prepareSessionsSendFollowup(params: {
     if (actor.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
       throw new FollowupAccessChangedError("Followup requester profile is unavailable.");
     }
-    assertInvocation?.();
     for (const target of [
       {
         agentId: params.requesterAgentId,
@@ -99,7 +90,6 @@ export async function prepareSessionsSendFollowup(params: {
       { agentId: params.targetAgentId, sessionKey: params.targetSessionKey },
     ]) {
       facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
-      assertInvocation?.();
       captured.assertCurrent();
     }
     const assertCurrent = () => {
@@ -129,16 +119,11 @@ export async function prepareSessionsSendFollowup(params: {
           },
           currentFacts,
           {
+            // The role the sending turn was admitted with; a role change applies to its next turn.
             policy:
               actor.kind === "system"
                 ? undefined
-                : resolveOperatorRolePolicyForAssignment(
-                    actor.profileId,
-                    profile?.role ?? null,
-                    currentConfig,
-                    profile?.githubLogin ?? null,
-                    operatorRoleSubject(profile),
-                  ),
+                : client.internal?.operatorRunAuthority?.readCurrentRoleFacts?.().policy,
             aliases: new Set(profile?.aliases ?? []),
           },
         );
@@ -185,6 +170,12 @@ export async function prepareSessionsSendFollowup(params: {
         run<T>(work: () => T): T {
           assertCurrent();
           return captured.run(work);
+        },
+        runWithRequester<T>(work: () => Promise<T>): Promise<T> {
+          assertCurrent();
+          return captured.requesterOrigin
+            ? captured.runWithRequester(work, params.requesterAgentId)
+            : captured.run(work);
         },
       },
     };

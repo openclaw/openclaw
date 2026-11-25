@@ -28,6 +28,7 @@ export type CapturedOutputBuffers = {
   decoder: StringDecoder;
   pendingLine: string;
 };
+export type CapturedBytes = Pick<CapturedOutputBuffers, "chunks" | "bytes" | "truncatedBytes">;
 
 const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 export const MAX_PRESERVED_PENDING_LINE_BYTES = 8 * 1024;
@@ -69,7 +70,7 @@ export function shouldTerminateOnOutput(
 }
 
 export function appendCapturedOutput(
-  capture: CapturedOutputBuffers,
+  capture: CapturedBytes,
   chunk: Buffer | string,
   maxBytes: number,
   mode: CommandOutputCaptureMode,
@@ -82,9 +83,10 @@ export function appendCapturedOutput(
   if (mode === "head") {
     const remaining = Math.max(0, maxBytes - capture.bytes);
     if (remaining > 0) {
-      const kept = buffer.subarray(0, remaining);
       // A clipped prefix must not retain the discarded backing bytes.
-      capture.chunks.push(kept.byteLength < buffer.byteLength ? copyOwnedBuffer(kept) : kept);
+      const kept =
+        buffer.byteLength > remaining ? copyOwnedBuffer(buffer.subarray(0, remaining)) : buffer;
+      capture.chunks.push(kept);
       capture.bytes += kept.byteLength;
     }
     capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);

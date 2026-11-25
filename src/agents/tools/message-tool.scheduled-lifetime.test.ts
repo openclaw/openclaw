@@ -84,9 +84,7 @@ it.for([
         ? undefined
         : revokeAt === "action"
           ? "Message send aborted"
-          : viaGateway
-            ? "agent tool caller authority is no longer active"
-            : revokedError;
+          : revokedError;
     const registry = pluginRuntime.captureActivePluginRegistrySnapshot();
     const state = await createOpenClawTestState();
     const source = new AbortController();

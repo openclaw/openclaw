@@ -30,7 +30,7 @@ import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveDeferredLifecycleTerminal } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
-import type { CliSessionBinding } from "../../config/sessions.js";
+import { hasCliSessionReuseMetadata } from "../../config/sessions/cli-session-binding.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {
@@ -79,10 +79,6 @@ type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
-
-function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
-  return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
-}
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
 export function createCronPromptExecutor(
@@ -208,6 +204,7 @@ export function createCronPromptExecutor(
       operatorAuthority: params.operatorAuthority,
     });
     const cronAdmission = prepareCronRunAdmission({
+      storeAdmission: params.preRunSessionPersisted ? params.cronSession : undefined,
       scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,

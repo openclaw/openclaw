@@ -264,6 +264,45 @@ describe("WizardSession", () => {
     await expectTerminal(session);
   });
 
+  test("retires the device code once the approved sign-in starts saving", async () => {
+    const approved = createDeferredCore();
+    const locked = createDeferredCore();
+    const saving = createDeferredCore();
+    const session = new WizardSession(async (prompter, _signal, owner) => {
+      await prompter.openUrl?.("https://provider.example/device");
+      await prompter.deviceCode?.({ title: "Provider sign-in", code: "ABCD-1234" });
+      const waiting = prompter.progress("Waiting for approval");
+      await approved.promise;
+      waiting.stop("Sign-in complete");
+      owner.lockCancellationForPreparation();
+      locked.resolve();
+      await saving.promise;
+      owner.finishPreparation();
+      prompter.progress("Testing your AI connection…");
+    });
+    cleanupSession(session, () => {
+      approved.resolve();
+      saving.resolve();
+    });
+    const device = {
+      externalUrl: "https://provider.example/device",
+      deviceCode: { code: "ABCD-1234" },
+    };
+    await nextStep(session, device);
+    await nextStep(session, { ...device, progressMessage: "Waiting for approval" });
+    approved.resolve();
+    await locked.promise;
+    await nextStep(session, { ...device, progressMessage: "Sign-in complete" });
+    for (const message of ["Signed in. Finishing setup…", "Testing your AI connection…"]) {
+      const step = await nextProgress(session, message);
+      expect(step).not.toHaveProperty("deviceCode");
+      expect(step).not.toHaveProperty("externalUrl");
+      saving.resolve();
+    }
+    await session.whenSettled();
+    await expectTerminal(session);
+  });
+
   test.each([
     ["banana", "18789", "Enter the expected port"],
     [["token"], "token", "wizard: text answer must be a scalar value"],

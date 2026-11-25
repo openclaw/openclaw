@@ -12,11 +12,13 @@ import { renderSessionOwnerChip } from "../../../components/solid/session-presen
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../components/tooltip.ts";
+import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
+import { projectSessionPeople } from "../chat-mobile-people.ts";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { ChatDetails } from "./chat-details.tsx";
 import {
@@ -150,6 +152,16 @@ function ChatPaneHeaderChrome(
     props.session?.placement?.state === "active" &&
     props.session.placement.runner?.kind === "device" &&
     props.session.placement.runner.status === "offline";
+  const headerPeople = () =>
+    projectSessionPeople(
+      props.session,
+      (props.mobileSharing ?? props.sharingControl)?.state?.result,
+    ).filter(
+      (person) =>
+        !props.session?.owner?.actor.identity ||
+        sessionParticipantIdentityKey(person.identity) !==
+          sessionParticipantIdentityKey(props.session.owner.actor.identity),
+    );
   const hasSharingControl = () =>
     props.sharingControl !== undefined || (!props.narrow && props.sharingPlaceholder !== undefined);
   const incognito = () =>
@@ -247,11 +259,11 @@ function ChatPaneHeaderChrome(
         {!props.mergedChrome &&
         !props.detailsControl &&
         props.showOwnerChip &&
-        props.session?.participants?.length ? (
+        headerPeople().length ? (
           <openclaw-viewer-facepile
             class="chat-pane__participants"
-            prop:staticParticipants={props.session.participants}
-            prop:totalCount={props.session.participantCount}
+            prop:staticParticipants={headerPeople()}
+            prop:totalCount={Math.max(props.session?.participantCount ?? 0, headerPeople().length)}
             prop:maxVisible={4}
             prop:personActivity={props.personActivity}
           />

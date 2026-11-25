@@ -426,6 +426,13 @@ export class WizardSession {
   lockCancellationForPreparation() {
     this.signal.throwIfAborted();
     this.preparationCancellationLocked = true;
+    // Saving starts only after the browser sign-in returned. Retire its code and tab so the
+    // remaining setup never asks the user to enter a code they already approved.
+    if (this.pendingExternalUrl || this.devicePresentation.deviceCode) {
+      this.consumeExternalUrl();
+      const message = "Signed in. Finishing setup…";
+      this.pushProgress(message, undefined, message);
+    }
   }
 
   /** Resume cancellation after preparation, before more input or verification. */

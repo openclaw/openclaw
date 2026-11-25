@@ -35,7 +35,7 @@ type SessionBoundaryAttempt = Pick<
   | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
   | "userTurnTranscriptRecorder"
->;
+> & { model?: Pick<EmbeddedRunAttemptParams["model"], "api" | "baseUrl"> };
 
 export type EmbeddedAttemptSessionBoundaryInput = {
   abortSignal?: AbortSignal;

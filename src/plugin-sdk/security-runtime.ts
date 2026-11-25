@@ -81,7 +81,11 @@ export const replaceFileAtomic: (
       };
     };
   },
-) => ReturnType<typeof replaceFsSafeFileAtomic> = replaceFsSafeFileAtomic;
+) => ReturnType<typeof replaceFsSafeFileAtomic> = async (options) =>
+  replaceFsSafeFileAtomic({
+    ...options,
+    allowDrvfsRenameRecovery: options.allowDrvfsRenameRecovery ?? true,
+  });
 
 export { ensurePortAvailable } from "../infra/ports.js";
 

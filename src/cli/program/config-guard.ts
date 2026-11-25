@@ -1,4 +1,4 @@
-import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
+import { withSuppressedNotes } from "../../../packages/terminal-core/src/note-output.js";
 import type {
   StartupConfigPreflightOptions,
   StartupConfigPreflightResult,

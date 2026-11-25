@@ -21,7 +21,7 @@ import {
   productProvider,
 } from "./server.chat-product.test-support.js";
 import * as restartResume from "./session-restart-resume.js";
-import * as systemTurnAuthority from "./session-system-turn-authority.js";
+import * as systemTurnAuthority from "./session-sharing-authorization-async.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 

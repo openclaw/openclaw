@@ -172,6 +172,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login-first-model.real-gateway.e2e.test.ts",
+  "ui/src/e2e/provider-browser-login-leave.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/required-human-action.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",

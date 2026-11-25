@@ -31,6 +31,7 @@ import {
 } from "../admitted-run-context.js";
 import { runEmbeddedAttemptWithBackend } from "../embedded-agent-runner/run/backend.js";
 import { prepareEmbeddedAttemptPromptExecution } from "../embedded-agent-runner/run/prompt-image-preparation.js";
+import { prepareParticipationTestRun } from "../participation-ceiling.test-support.js";
 import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
@@ -688,4 +689,17 @@ describe("registered harness input attachment preparation", () => {
       openSpy?.mockRestore();
     }
   });
+});
+
+it("refuses a participating native turn even with remembered unrestricted consent", async () => {
+  const { attempt, nativeStart } = await prepareRememberedOwnerConsent();
+  attempt.admittedRunContext = await prepareParticipationTestRun({
+    kind: "send",
+    profileId: "guest",
+    sessionKey: attempt.sessionKey!,
+  }).preparedRunAdmission.admit("embedded");
+  await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(
+    "Participating inputs require the OpenClaw runtime",
+  );
+  expect(nativeStart).not.toHaveBeenCalled();
 });

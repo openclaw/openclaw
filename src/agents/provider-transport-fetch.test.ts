@@ -7,8 +7,7 @@ import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-
 import { withinTest } from "../../test/helpers/promise.js";
 import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import { setLoggerOverride } from "../logging/logger.js";
-import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
@@ -328,7 +327,7 @@ describe("buildGuardedModelFetch", () => {
         try {
           const response = await request({ headers: { "X-Proxy-Auth": credential } });
           await expect(response.json()).resolves.toEqual(payload);
-          await loggerTestApi.flushFileLogQueueForTests();
+          await flushLogger();
           const message = await readFile(logFile, "utf8");
           expect(message).toContain("status=400");
           expect(message).toContain("Unsupported thinking field");
@@ -560,7 +559,7 @@ describe("buildGuardedModelFetch headers", () => {
         const response = await buildGuardedModelFetch(headerModel)(`${url}?key=${sentinel}`);
         await expect(response.json()).resolves.toEqual(payload);
         expect(latestGuardedFetchParams().url).toBe(`${url}?key=${encoded}`);
-        await loggerTestApi.flushFileLogQueueForTests();
+        await flushLogger();
         const message = await readFile(logFile, "utf8");
         expect(message).toContain("Upstream rejected");
         expect(message).not.toContain(credential);

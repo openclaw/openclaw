@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -102,6 +102,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
   let stopped = false;
+  // A delayed warmup can outlive its initial headroom. Leave the remaining handlers cold.
+  const shouldStop = () => stopped || isMemoryPressureHigh();
   const startedAt = params.scheduler.now();
   // Warm code and local facts without executing requests or acquiring live provider catalogs.
   const items = gatewayPrewarmItems(params.getConfig);
@@ -110,15 +112,12 @@ export function scheduleGatewayHandlerPrewarm(params: {
   let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
-    if (stopped) {
-      return;
-    }
-    if (nextIndex >= items.length) {
+    if (stopped || nextIndex >= items.length) {
       return;
     }
     void (async () => {
       await params.waitForPostReadyWork?.();
-      if (stopped) {
+      if (shouldStop()) {
         return;
       }
       const item = items[nextIndex++];
@@ -128,13 +127,13 @@ export function scheduleGatewayHandlerPrewarm(params: {
       currentItemName = item.name;
       const isBusy = () =>
         item.waitForIdle !== false && getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
-      const load = () => item.load(() => stopped || isBusy());
+      const load = () => item.load(() => shouldStop() || isBusy());
       idleTask = scheduleGatewayIdleTask({
         id: "startup:handler-prewarm",
         scheduler: params.scheduler,
         delayMs: Math.max(0, (item.notBeforeMs ?? 0) - (params.scheduler.now() - startedAt)),
         retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
-        isClosing: () => stopped,
+        isClosing: shouldStop,
         isBusy,
         run: async () => {
           try {
@@ -173,11 +172,13 @@ export function scheduleGatewayHandlerPrewarm(params: {
 export function scheduleGatewayPrewarm(
   params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
 ): GatewayIdleTaskHandle[] {
-  // Leave scarce cgroup memory to requests; every warmup has a request-time loader.
-  if (isConstrainedProcessLowOnMemory()) {
+  // Leave scarce memory to requests; every warmup has a request-time loader.
+  if (isMemoryPressureHigh()) {
     return [];
   }
   const hasIoPressure = createHostIoPressureProbe();
+  const shouldDeferTemplates = () =>
+    isMemoryPressureHigh() || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
   return [
     scheduleGatewayHandlerPrewarm(params),
     scheduleGatewayIdleTask({
@@ -187,7 +188,7 @@ export function scheduleGatewayPrewarm(
       retryDelayMs: 60_000,
       repeatDelayMs: 60_000,
       isClosing: () => false,
-      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      isBusy: shouldDeferTemplates,
       waitForReady: params.waitForPostReadyWork,
       run: async (signal) => {
         const { prewarmLocalWorkspaceTemplates } =
@@ -196,8 +197,7 @@ export function scheduleGatewayPrewarm(
         await prewarmLocalWorkspaceTemplates({
           getConfig: params.getConfig,
           signal,
-          shouldDefer: async () =>
-            getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0 || (await hasIoPressure()),
+          shouldDefer: async () => shouldDeferTemplates() || (await hasIoPressure()),
         });
       },
       log: params.log,

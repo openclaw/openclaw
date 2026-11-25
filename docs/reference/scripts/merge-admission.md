@@ -30,3 +30,11 @@ check count, unique check identities, matching head and app, no required context
 and unchanged status, conclusion, update time, and count. Missing or contradictory
 pages and changed inventories refuse admission. The limit is suites, not check
 runs; many skipped or empty suites do not require per-suite API subprocesses.
+
+## Retaining merge resources
+
+Use `scripts/pr merge-run <PR> --retain-resources` for an ordinary immediate exact-head squash when the original head branch, native checkout, local PR branches, and workflow binding must remain. All review, signature, source, authority, and required-check gates still apply. The default version-1 cleanup path is unchanged. Retention does not support admin admission, auto-merge, queues, replacement-head recovery, or switching an existing cleanup intent into retention; these combinations refuse before dispatch.
+
+Before recording a version-2 intent and again before dispatch, the workflow checks the exact head repository and branch. Automatic branch deletion must be disabled there, or that branch must have effective no-deletion protection: enforced classic protection including administrators, or an active repository deletion ruleset with no bypass actors and explicit no-bypass authority. Missing, ambiguous, inherited-only, or inaccessible policy evidence refuses. A base repository setting does not establish fork-head retention. The command never changes repository settings or protection.
+
+GitHub can change policy between a check and the merge. These checks cannot eliminate that race. Post-merge verification detects a missing or changed branch and leaves completion unresolved; it never recreates resources. An unexpected queued/auto acknowledgement also remains unresolved without another dispatch. This mode must be available in the admitted canonical workflow; an unlanded implementation cannot authorize its own landing or replace a held workflow binding.
