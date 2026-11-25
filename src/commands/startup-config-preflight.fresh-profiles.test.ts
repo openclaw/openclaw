@@ -104,19 +104,18 @@ it.each(producers)("preserves legacy runtime pin handoff through %s", async (cre
     );
     await createProfile(creation, state);
     await runStartupConfigPreflight({ gateway: true, observe: false });
-    const pending = creation === "gateway";
-    expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(pending);
+    expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
     const owner = await acquireGatewayLock({ allowInTests: true, env: state.env, timeoutMs: 0 });
     try {
-      expect((await migrateDaemonRuntimePins(state.env)).warnings).toEqual(
-        pending ? [expect.stringContaining("Stop the Gateway")] : [],
-      );
+      expect((await migrateDaemonRuntimePins(state.env)).warnings).toEqual([
+        expect.stringContaining("Stop the Gateway"),
+      ]);
     } finally {
       await owner?.release();
     }
-    expect((await migrateDaemonRuntimePins(state.env)).changes).toEqual(
-      pending ? ["Moved 1 daemon runtime pin(s) to local service intent."] : [],
-    );
+    expect((await migrateDaemonRuntimePins(state.env)).changes).toEqual([
+      "Moved 1 daemon runtime pin(s) to local service intent.",
+    ]);
     expect(readConfigMachineState("daemon-runtime-pin:legacy", { env: state.env })).toBeUndefined();
     expect(
       withDaemonRuntimePinStore(state.env, false, (db) =>
