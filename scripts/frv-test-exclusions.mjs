@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 
 const includeFileKey = "OPENCLAW_VITEST_INCLUDE_FILE";
 
@@ -132,6 +132,13 @@ export async function validateTestExclusions({ paths, configs, cwd = process.cwd
   }
 }
 
+function hasNoPluginOptions(plugins) {
+  return (
+    Array.isArray(plugins) &&
+    plugins.every((plugin) => !plugin || (Array.isArray(plugin) && hasNoPluginOptions(plugin)))
+  );
+}
+
 /** Absolute exclusions preserve exact identity across differently scoped inline projects. */
 export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -139,22 +146,58 @@ export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
   }
   const exclusions = paths.map((file) => path.resolve(cwd, file).split(path.sep).join("/"));
   const test = config.test ?? {};
-  const projects = test.projects?.map((project) => {
+  const overlayProject = (project) => {
     if (!project || typeof project !== "object" || Array.isArray(project) || project.config) {
       throw new Error(
         "Frozen-target exclusions require inline project configs or selected leaf configs",
       );
     }
     return applyTestExclusions(project, paths, cwd, defaultExcludes);
+  };
+  const projects = test.projects?.map((project) => {
+    // Vitest owns invoking factories with its ConfigEnv; overlay only their resolved value.
+    if (typeof project === "function") {
+      return async (env) => overlayProject(await project(env));
+    }
+    if (project && typeof project.then === "function") {
+      const mapped = Promise.resolve(project).then(overlayProject);
+      // Native project resolution may await an earlier factory before this promise.
+      void mapped.catch(() => {});
+      return mapped;
+    }
+    return overlayProject(project);
   });
-  return {
+  const result = {
     ...config,
     test: {
       ...test,
-      exclude: [...(test.exclude ?? defaultExcludes), ...exclusions],
       ...(projects ? { projects } : {}),
     },
   };
+  const appendExclusions = (testConfig) => {
+    testConfig.exclude = [...(testConfig.exclude ?? defaultExcludes), ...exclusions];
+  };
+  // Plain inline projects use Vitest's captured raw config and share its server.
+  // Adding a plugin would change that ownership. Existing plugin owners instead
+  // finish their deferred selection before this additive overlay is applied.
+  if (config.plugins === undefined || hasNoPluginOptions(config.plugins)) {
+    appendExclusions(result.test);
+  } else {
+    result.plugins = [
+      ...config.plugins,
+      {
+        name: "openclaw:frv-test-exclusions",
+        enforce: "post",
+        config: {
+          order: "post",
+          handler(resolvedConfig) {
+            appendExclusions((resolvedConfig.test ??= {}));
+          },
+        },
+      },
+    ];
+  }
+  return result;
 }
 
 /** Keep canonical config names: the candidate's native runners use them for preparation. */
@@ -210,6 +253,15 @@ async function withTestExclusions({ paths, configs, cwd = process.cwd() }, callb
   } catch (error) {
     outcome = { ok: false, error };
   }
+  // An unjoined command may still read these paths; retain both installed and original bytes.
+  if (!outcome.ok && hasUnjoinedWork(outcome.error)) {
+    throw new AggregateError(
+      [outcome.error],
+      `Frozen-target command cleanup is unjoined; overlays and backups retained: ${overlays
+        .map(({ absolute, backup }) => `${absolute} (${backup})`)
+        .join(", ")}`,
+    );
+  }
   const errors = [];
   for (const overlay of overlays.toReversed()) {
     try {
@@ -248,48 +300,17 @@ async function runCommand(command, args) {
   if (!command) {
     throw new Error("Expected run -- <command> [args...]");
   }
-  const child = spawn(command, args, {
+  return runManagedCommand({
+    bin: command,
+    args,
+    shell: false,
     stdio: ["inherit", "pipe", "pipe"],
-    detached: process.platform !== "win32",
+    requireProcessTreeExit: process.platform !== "win32",
+    onReady(child) {
+      child.stdout.pipe(process.stdout);
+      child.stderr.pipe(process.stderr);
+    },
   });
-  child.stdout.pipe(process.stdout);
-  child.stderr.pipe(process.stderr);
-  let interrupted;
-  const forward = (signal) => {
-    interrupted ??= signal;
-    if (child.pid) {
-      try {
-        if (process.platform === "win32") {
-          child.kill(signal);
-        } else {
-          process.kill(-child.pid, signal);
-        }
-      } catch (error) {
-        if (error.code !== "ESRCH") {
-          throw error;
-        }
-      }
-    }
-  };
-  const onInterrupt = () => forward("SIGINT");
-  const onTerminate = () => forward("SIGTERM");
-  process.on("SIGINT", onInterrupt);
-  process.on("SIGTERM", onTerminate);
-  try {
-    return await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) =>
-        resolve(
-          interrupted
-            ? 128 + os.constants.signals[interrupted]
-            : (code ?? 128 + (os.constants.signals[signal] ?? 1)),
-        ),
-      );
-    });
-  } finally {
-    process.off("SIGINT", onInterrupt);
-    process.off("SIGTERM", onTerminate);
-  }
 }
 
 async function main() {
