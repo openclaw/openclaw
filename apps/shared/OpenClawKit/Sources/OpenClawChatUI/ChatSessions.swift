@@ -676,6 +676,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var endedAt: Double?
     public var runtimeMs: Double?
     public var agentRuntime: OpenClawChatAgentRuntime?
+    /// The chat's Goal; an explicit null in a change clears it.
+    public var goal: OpenClawChatSessionGoal?
 
     public var systemSent: Bool?
     public var abortedLastRun: Bool?
