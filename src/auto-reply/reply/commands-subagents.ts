@@ -22,7 +22,6 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
         ? null
         : { action: "agents", restTokens: [] };
     },
-    silentUnauthorized: true,
   },
   async (params, { action, restTokens }) => {
     if (action === "help") {

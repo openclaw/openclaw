@@ -279,10 +279,6 @@ function createOAuthHandler(region: MiniMaxRegion) {
             defaults: {
               models: {
                 [`${PORTAL_PROVIDER_ID}/MiniMax-M3`]: { alias: "minimax-m3" },
-                [`${PORTAL_PROVIDER_ID}/MiniMax-M2.7`]: { alias: "minimax-m2.7" },
-                [`${PORTAL_PROVIDER_ID}/MiniMax-M2.7-highspeed`]: {
-                  alias: "minimax-m2.7-highspeed",
-                },
               },
             },
           },
@@ -397,7 +393,7 @@ export default definePluginEntry({
       id: "minimax",
       capabilities: ["image"],
       defaultModels: { image: "MiniMax-VL-01" },
-      documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      documentModels: { pdf: { textExtraction: "MiniMax-M3", image: false } },
       autoPriority: { image: 40 },
       describeImage: undefined,
       describeImages: undefined,
@@ -406,7 +402,7 @@ export default definePluginEntry({
       id: "minimax-portal",
       capabilities: ["image"],
       defaultModels: { image: "MiniMax-VL-01" },
-      documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      documentModels: { pdf: { textExtraction: "MiniMax-M3", image: false } },
       autoPriority: { image: 50 },
       describeImage: undefined,
       describeImages: undefined,

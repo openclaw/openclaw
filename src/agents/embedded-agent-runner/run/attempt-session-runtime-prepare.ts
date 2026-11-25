@@ -165,6 +165,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // prepareSessionSystemPrompt for the closed set of rebuild points.
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
+  const toolSurface = codeModeControlsEnabledForRun
+    ? "code-mode"
+    : toolBase.toolSearchControlsEnabledForRun
+      ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
+      : "direct";
+  // A move ends the default-workspace series, retiring its guidance and tool pin.
+  const offersProjectMove = effectiveTools.some((tool) => tool.name === "session_project");
   const promptRouteKey = buildSystemPromptRouteKey({
     provider: attempt.provider,
     model: attempt.modelId,
@@ -174,11 +181,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     // The session's selected human, never the current turn's sender classification.
     personalProfile: attempt.sessionUserProfileId,
     harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
-    surface: codeModeControlsEnabledForRun
-      ? "code-mode"
-      : toolBase.toolSearchControlsEnabledForRun
-        ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
-        : "direct",
+    surface: offersProjectMove ? `${toolSurface}:project-move` : toolSurface,
   });
   const rankingEnabled =
     usesSystemPromptSeries &&
@@ -328,8 +331,16 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (prepared.restart && resources.session) {
             await retireSystemPromptUpdates();
             restartRecorded = true;
-            resources.session.agent.state.messages = resources.session.messages.filter(
-              (message) => getOpenClawSystemUpdateKind(message) !== "prompt-update",
+            const messages = resources.session.messages;
+            const retired = (message: (typeof messages)[number]) =>
+              getOpenClawSystemUpdateKind(message) === "prompt-update";
+            // Retiring history rows moves this turn's first message; the fence follows it,
+            // or its readers would file the current user message under accepted history.
+            state.prePromptMessageCount -= messages
+              .slice(0, state.prePromptMessageCount)
+              .filter(retired).length;
+            resources.session.agent.state.messages = messages.filter(
+              (message) => !retired(message),
             );
           }
           if (resources.session) {

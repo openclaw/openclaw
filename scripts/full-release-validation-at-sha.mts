@@ -51,7 +51,10 @@ import {
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import { validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
+import {
+  resolveQualificationBaselines,
+  validateQualificationBaselines,
+} from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { validateActiveExtendedStableLine } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
@@ -105,6 +108,7 @@ const TRUSTED_WORKFLOW_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-[1-9][0-9
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RERUN_GROUPS = new Set([
   "all",
+  "build-only",
   "ci",
   "plugin-prerelease",
   "install-smoke",
@@ -248,7 +252,10 @@ A numeric correction branch also accepts the base package only when its
 published base tag resolves to the exact Validation SHA.
 The release profile defaults to beta for beta candidates and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
-one controller rerun_group; the removed release-checks aggregate and the direct
+one controller rerun_group. For explicitly human-approved fast-track preparation,
+use -f rerun_group=build-only to build and seal publication artifacts without
+running validation. This is not validated evidence and cannot publish without
+an exact fast-track request and npm-release environment approval. The removed release-checks aggregate and the direct
 child's manual qa aggregate are not accepted.`);
 }
 
@@ -547,15 +554,33 @@ export function parseArgs(argv: string[]) {
   if (!RERUN_GROUPS.has(args.inputs.rerun_group)) {
     throw new Error(`rerun_group must be one of: ${[...RERUN_GROUPS].join(", ")}`);
   }
+  // Build-only admission rejects reused evidence; do not inherit the reuse default.
+  if (args.inputs.rerun_group === "build-only") {
+    if (args.specifiedInputs.includes("reuse_evidence") && args.inputs.reuse_evidence !== "false") {
+      throw new Error("rerun_group=build-only requires fresh qualification; omit reuse_evidence");
+    }
+    args.inputs.reuse_evidence = "false";
+  }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
   }
   if (Object.hasOwn(args.inputs, "expected_sha")) {
     throw new Error("SHA-pinned release validation reserves expected_sha for the resolved --sha");
   }
-  if (Object.hasOwn(args.inputs, "qualification_baselines_json")) {
+  if (
+    Object.hasOwn(args.inputs, "qualification_baselines_json") &&
+    args.trustedWorkflowRef !== "candidate"
+  ) {
+    throw new Error("Explicit qualification baselines require candidate admission");
+  }
+  if (
+    Object.hasOwn(args.inputs, "publication_artifact_source_json") &&
+    (args.trustedWorkflowRef !== "candidate" ||
+      args.inputs.rerun_group !== "all" ||
+      args.inputs.reuse_evidence !== "true")
+  ) {
     throw new Error(
-      "SHA-pinned qualification resolves its candidate-owned baselines before admission; qualification_baselines_json is reserved",
+      "Explicit publication artifacts require candidate admission, rerun_group=all, and reuse_evidence=true",
     );
   }
   if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
@@ -1081,17 +1106,23 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     publication_selection_json,
     extension_test_exclude_patterns_json,
     qualification_baselines_json,
+    publication_artifact_source_json,
     known_flaky_jobs_json,
     ...wireOverrides
   } = overrides;
   const laneInputs =
-    extension_test_exclude_patterns_json === undefined && qualification_baselines_json === undefined
+    extension_test_exclude_patterns_json === undefined &&
+    qualification_baselines_json === undefined &&
+    publication_artifact_source_json === undefined
       ? undefined
       : {
           ...(extension_test_exclude_patterns_json === undefined
             ? {}
             : { extension_test_exclude_patterns_json }),
           ...(qualification_baselines_json === undefined ? {} : { qualification_baselines_json }),
+          ...(publication_artifact_source_json === undefined
+            ? {}
+            : { publication_artifact_source_json }),
         };
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
@@ -1964,6 +1995,7 @@ export function releaseEvidenceVerificationArgs(
   verifierSourceSha: string,
   verifierSourceFile: string,
   trustedWorkflowRef = "main",
+  buildOnly = false,
 ) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
@@ -1978,7 +2010,7 @@ export function releaseEvidenceVerificationArgs(
     throw new Error("trusted workflow ref must be main or a protected release-publish tag");
   }
   return [
-    "--validate-run",
+    buildOnly ? "--verify-build-only" : "--validate-run",
     String(parentRunId),
     "--trusted-workflow-ref",
     trustedWorkflowRef,
@@ -2079,6 +2111,7 @@ function verifyReleaseEvidence(
   parentRunId: string,
   workflowSha: string,
   trustedWorkflowRef: string,
+  buildOnly = false,
 ) {
   const verifierWorktree = mkdtempSync(join(tmpdir(), "openclaw-release-verifier-"));
   try {
@@ -2089,15 +2122,32 @@ function verifyReleaseEvidence(
     const evidence: unknown = JSON.parse(
       run(process.execPath, [
         verifier,
-        ...releaseEvidenceVerificationArgs(parentRunId, workflowSha, verifier, trustedWorkflowRef),
+        ...releaseEvidenceVerificationArgs(
+          parentRunId,
+          workflowSha,
+          verifier,
+          trustedWorkflowRef,
+          buildOnly,
+        ),
       ]),
     );
-    if (
-      !isJsonRecord(evidence) ||
-      evidence.valid !== true ||
-      !isJsonRecord(evidence.current) ||
-      !isJsonRecord(evidence.root)
-    ) {
+    if (!isJsonRecord(evidence) || !isJsonRecord(evidence.current)) {
+      throw new Error(`Release evidence has invalid identity for run ${parentRunId}.`);
+    }
+    if (buildOnly) {
+      if (
+        evidence.prepared !== true ||
+        evidence.valid !== false ||
+        evidence.publicationAuthorized !== false
+      ) {
+        throw new Error(`Build-only preparation evidence is invalid for run ${parentRunId}.`);
+      }
+      console.log(
+        `Build-only preparation verified for run ${displayValue(evidence.current.runId)}. Validation was skipped; npm-release environment approval is still required before publishing.`,
+      );
+      return;
+    }
+    if (evidence.valid !== true || !isJsonRecord(evidence.root)) {
       throw new Error(`Full Release Validation evidence is invalid for run ${parentRunId}.`);
     }
     console.log(
@@ -2259,14 +2309,26 @@ async function main() {
         publishedVersions.every((entry) => typeof entry === "string"),
       "npm did not return the published baseline version inventory",
     );
-    args.inputs.qualification_baselines_json = JSON.stringify(
-      resolveQualificationBaselines({
-        candidateVersion: targetVersion,
-        targetContextRef,
-        publishedVersions,
-        oldestSupportedVersion: baselinePolicy.oldestSupportedBaseline,
-      }),
+    const selectedBaselines =
+      args.inputs.qualification_baselines_json === undefined
+        ? resolveQualificationBaselines({
+            candidateVersion: targetVersion,
+            targetContextRef,
+            publishedVersions,
+            oldestSupportedVersion: baselinePolicy.oldestSupportedBaseline,
+          })
+        : validateQualificationBaselines(JSON.parse(args.inputs.qualification_baselines_json), {
+            candidateVersion: targetVersion,
+            targetContextRef,
+          });
+    requireDispatch(
+      selectedBaselines.upgradeSurvivorBaselines.every((spec: string) =>
+        publishedVersions.includes(spec.slice("openclaw@".length)),
+      ),
+      "Selected qualification baselines must be published stable predecessors",
     );
+    // Freeze explicit selections before admission, just like freshly resolved tuples.
+    args.inputs.qualification_baselines_json = JSON.stringify(selectedBaselines);
   }
   const candidateAuthorityActor =
     args.inputs.validation_purpose === "publish"
@@ -2595,6 +2657,7 @@ async function executeFrozenDispatch(options: {
           // Admission may have advanced P with main before its POST.
           record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
           candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
+          args.inputs.rerun_group === "build-only",
         );
         evidenceVerified = true;
       }

@@ -25,6 +25,7 @@ import {
   linkCanonicalUserProfileEmail,
 } from "../state/user-profile-writes.js";
 import { createRequesterPolicyFixture } from "./github-publication-requester.test-support.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -129,17 +130,26 @@ async function fixture(
       return result as T;
     };
     const input = { action: "inspect_pr", pullRequestUrl: pr.html_url, ...args };
-    return await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: SESSION_KEY },
-      async () =>
-        raw
-          ? await callGateway("sessions.github.action", { sessionKey: SESSION_KEY, ...input })
-          : (
-              await withPublicationToolTransport(callGateway, () =>
-                createGitHubPublishTool().execute("inspect", input),
-              )
-            ).details,
-    );
+    // The guest's own turn: its admitted authority is the tool caller's grant.
+    const operator = await prepareGatewayOperatorRunAuthority({
+      client: f.guestSource.client,
+      context: f.guestSource.context,
+    });
+    try {
+      return await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: SESSION_KEY, operatorAuthority: operator?.authority },
+        async () =>
+          raw
+            ? await callGateway("sessions.github.action", { sessionKey: SESSION_KEY, ...input })
+            : (
+                await withPublicationToolTransport(callGateway, () =>
+                  createGitHubPublishTool().execute("inspect", input),
+                )
+              ).details,
+      );
+    } finally {
+      operator?.release();
+    }
   };
   return {
     ...f,
@@ -412,7 +422,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
 
   it("rejects an unlinked requester before reading PR data", async () => {
     const f = await fixture({ linked: false });
-    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    await expect(f.invoke()).rejects.toThrow("Link your GitHub account once");
     expect(f.requests).toEqual([]);
   });
 
@@ -540,7 +550,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     });
     await expect(
       f.invoke({ pullRequestUrl: "https://other.example.test/example/repository/pull/7" }),
-    ).rejects.toThrow("Link a verified");
+    ).rejects.toThrow("Link your GitHub account once");
   });
 
   it("refuses Enterprise aliases without a current proof-validated identity", async () => {
@@ -548,12 +558,12 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     const f = await fixture({ host, linked: false });
     // Generic admission can bind a principal-shaped alias without Enterprise verification.
     await linkCanonicalUserProfileEmail(`github:${host}:101`, f.guestProfile);
-    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    await expect(f.invoke()).rejects.toThrow("Link your GitHub account once");
     // Verification recorded on another profile does not travel with a transferred alias.
     await verifyEnterprise(host, 202, "other", "Other");
     await linkCanonicalUserProfileEmail(`github:${host}:202`, f.guestProfile);
     f.pr.user = { id: 202, login: "other" };
-    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    await expect(f.invoke()).rejects.toThrow("Link your GitHub account once");
     expect(f.requests).toEqual([]);
     // Current verification of the guest's own binding admits exactly that account.
     await verifyEnterprise(host);

@@ -21,6 +21,7 @@ import {
   publishedAtMs,
   skillExcerpt,
   soulExcerpt,
+  weeklyAutomations,
   workflowOperator,
 } from "./templates-catalog-gateway.test-support.ts";
 
@@ -187,6 +188,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await detail
         .getByRole("heading", { level: 1, name: inspection.catalog.plugin.catalog.name })
         .waitFor();
+      await detail.getByRole("heading", { level: 2, name: /^readme$/iu }).waitFor();
       await checkInsets("plugin-phone");
       for (const width of [820, 1400]) {
         await page.setViewportSize({ width, height: 1000 });
@@ -501,6 +503,40 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
+  it("keeps long Template names and publishers readable beside Add on a phone", async () => {
+    const entry = {
+      ...workflowOperator,
+      packageName: "@international-travel-ops/departures",
+      displayName: "International Travel Operations · Departures",
+      ownerHandle: "international-travel-ops",
+      channel: "community" as const,
+      official: false,
+    };
+    const { page } = await fixture({ width: 390, height: 844 }, entry);
+    const card = page.locator("[data-templates-featured] [data-templates-entry]").first();
+    await card.waitFor();
+    await page.evaluate(() => document.fonts.ready.then(() => {}));
+    const readable = await card.evaluate((row) => {
+      const add = row.querySelector(".agents-home__template-add")!.getBoundingClientRect();
+      return [...row.querySelectorAll("h3, .plugin-card-author")].every((label) => {
+        const bounds = label.getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(label);
+        const lines = [...text.getClientRects()];
+        return (
+          lines.length > 0 &&
+          lines.every(
+            (line) =>
+              line.left >= bounds.left - 1 &&
+              line.right <= bounds.right + 1 &&
+              line.right <= add.left,
+          )
+        );
+      });
+    });
+    expect(readable, "the name and publisher both fit before Add").toBe(true);
+  });
+
   it("reads and collapses the full SOUL.md when its excerpt already fits", async () => {
     const { page, gateway } = await fixture();
     await gateway.setMethodResponse("templates.catalog.detail", {
@@ -539,7 +575,13 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
   });
 
   it("opens automation instructions from the template row and describes the schedule in both views", async () => {
-    const { page, gateway } = await fixture(undefined, undefined, undefined, false, "dark");
+    const { page, gateway } = await fixture(
+      { width: 1440, height: 900, timezoneId: "America/Los_Angeles" },
+      undefined,
+      undefined,
+      false,
+      "dark",
+    );
     await gateway.setMethodResponse("templates.catalog.detail", {
       detail: {
         ...workflowOperator,
@@ -549,29 +591,18 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
           skills: [],
           integrations: [],
-          automations: [
-            {
-              name: "Weekly brief",
-              schedule: "0 9 * * 1",
-              timezone: "UTC",
-              enabled: false,
-              message: "Summarize last week's work.\n\nList anything still waiting on a decision.",
-            },
-            {
-              name: "Midweek nudge",
-              schedule: "0 21 * * 3",
-              timezone: "UTC",
-              enabled: false,
-              message: "Remind me of anything due before Friday.",
-            },
-          ],
+          automations: weeklyAutomations,
         },
       },
     });
+    const weeklySchedule = "Monday at 9:00 AM · America/Los_Angeles · Disabled";
     const detail = await openDetail(page);
+    expect((await gateway.getRequests("connect")).at(-1)).toMatchObject({
+      params: { client: { timeZone: "America/Los_Angeles" } },
+    });
     const automations = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
     const row = automations.locator("summary").filter({ hasText: "Weekly brief" });
-    await row.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await row.getByText(weeklySchedule, { exact: true }).waitFor();
     await capture(page, "paused-automation-detail", automations);
     await row.click();
     const prompt = automations.getByText(
@@ -580,11 +611,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     );
     await prompt.waitFor();
     expect(await page.getByRole("dialog").count()).toBe(0);
+    const title = await row.getByText("Weekly brief", { exact: true }).boundingBox();
+    const schedule = await row.getByText(weeklySchedule, { exact: true }).boundingBox();
+    expect(title).not.toBeNull();
+    expect(schedule?.x).toBe(title!.x);
     await capture(page, "paused-automation-inline", automations);
     await row.click();
     await prompt.waitFor({ state: "hidden" });
     const midweek = automations.locator("summary").filter({ hasText: "Midweek nudge" });
-    await midweek.getByText("Wednesday at 9:00 PM · UTC · Disabled", { exact: true }).waitFor();
+    await midweek
+      .getByText("Wednesday at 9:00 PM · America/Los_Angeles · Disabled", { exact: true })
+      .waitFor();
     await midweek.click();
     await automations
       .getByText("Remind me of anything due before Friday.", { exact: true })
@@ -594,9 +631,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     const shell = page.getByRole("dialog", { name: "Template details", exact: true });
     await shell.getByRole("button", { name: /Automations/ }).click();
     const previewRow = shell.getByRole("button", { name: /Weekly brief/ });
-    await previewRow.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await previewRow.getByText(weeklySchedule, { exact: true }).waitFor();
     await previewRow.click();
-    await shell.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await shell.getByText(weeklySchedule, { exact: true }).waitFor();
     await capture(page, "paused-automation-preview", shell);
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
@@ -732,6 +769,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         ...workflowOperator,
         packageName: "@maker/workflow-operator",
         channel: "community",
+        iconUrl: "/apple-touch-icon.png",
       };
       const { page, gateway } = await fixture({ width, height: 900 }, community, {
         ownerHandle: "maker",
@@ -812,6 +850,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
       const pending = page.locator("openclaw-pending-session-create");
       await pending.getByText("Creating new agent", { exact: true }).waitFor();
+      if (width >= 1200) {
+        // The agent being created wears its Template's catalog image, not a generated face.
+        const avatar = page.locator(".sidebar-agent-card__avatar img").first();
+        await avatar.waitFor();
+        expect(await avatar.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
+      }
       expect(await pending.locator("textarea").isEnabled()).toBe(true);
       await pending.locator("textarea").fill("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

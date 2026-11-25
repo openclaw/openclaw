@@ -443,6 +443,7 @@ describe("createChatSendReplyDispatch", () => {
       isAgentRunStarted: () => agentRunStarted,
       isRunCurrent: () => current,
       onCommandBlock,
+      commandTurn: true,
     });
     const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
     dispatcher.sendBlockReply({ text: "[[reply_to_current]] First" });
@@ -472,6 +473,19 @@ describe("createChatSendReplyDispatch", () => {
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
     expect(onCommandBlock).not.toHaveBeenCalled();
+  });
+
+  it("publishes only compaction notices before an ordinary turn's run starts", async () => {
+    const onCommandBlock = vi.fn();
+    const dispatch = createReplyDispatch("run-ordinary", {
+      isAgentRunStarted: () => false,
+      onCommandBlock,
+    });
+    const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+    dispatcher.sendBlockReply({ text: "inline status", isStatusNotice: true });
+    dispatcher.sendBlockReply({ text: "🧹 Compacting context...", isCompactionNotice: true });
+    await dispatcher.waitForIdle();
+    expect(onCommandBlock.mock.calls).toEqual([["🧹 Compacting context..."]]);
   });
 
   it("keeps every capture and media side effect behind beforeDeliver cancellation", async () => {

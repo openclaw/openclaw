@@ -54,7 +54,7 @@ describe("provider login choices", () => {
     ];
     const options = listProviderLoginOptions(choices);
     expect(options).toMatchObject([
-      { id: "demo/demo-device" },
+      { id: "demo/demo-device", pluginId: "demo", label: "Demo Device", groupLabel: "Demo" },
       { id: "meta/muse-code", brandId: "meta", kind: "device-code", requiresSetup: true },
     ]);
     expect(options[0]).not.toHaveProperty("requiresSetup");

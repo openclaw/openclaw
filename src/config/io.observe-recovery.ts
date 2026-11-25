@@ -3,6 +3,7 @@ import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
+import { resolveFutureConfigActionBlock } from "./future-version-guard.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -91,6 +92,7 @@ function createRecoveryCommitEffect(params: {
   const options = {
     filePath: publicationPath,
     content: params.raw,
+    allowDrvfsRenameRecovery: true,
     dirMode:
       stateRootDirectoryMode(
         path.dirname(publicationPath),
@@ -363,6 +365,18 @@ function* planSuspiciousConfigRead(
     if (
       !prepared.ok ||
       (promotedFallback && collectPollutedSecretPlaceholders(prepared.candidate.parsed).length > 0)
+    ) {
+      continue;
+    }
+    // Every entry starts from valid current config. A newer backup must not
+    // displace an intentional rollback's restored config pre-image.
+    if (
+      prepared.candidate.config &&
+      resolveFutureConfigActionBlock({
+        action: "recover config",
+        config: prepared.candidate.config,
+        env: deps.env,
+      })
     ) {
       continue;
     }

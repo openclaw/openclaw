@@ -11,7 +11,7 @@ import {
   formatDayLabel,
   formatFullDate,
 } from "./metrics.ts";
-import type { ProviderSeries } from "./provider-series.ts";
+import { type ProviderSeries, UNASSIGNED_SERIES_COLOR } from "./provider-series.ts";
 import type { CostDailyEntry, UsageProps, UsageTotals } from "./types.ts";
 
 function tokenCategory<Key extends "output" | "input" | "cacheWrite" | "cacheRead">(
@@ -140,7 +140,7 @@ export function DailyChartCompact(props: {
         providers.push({
           id: "other",
           label: t("usage.daily.other"),
-          color: "var(--oc-border-strong)",
+          color: UNASSIGNED_SERIES_COLOR,
           values: other,
         });
       }

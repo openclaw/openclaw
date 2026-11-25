@@ -90,7 +90,6 @@ export async function runCronSessionTurn(
   let operatorAdmissionFailure: CronRunErrorClassification | undefined;
   const assertCurrent = () => {
     params.assertCurrent();
-    operator?.authority.assertCurrent();
     if (!noticesStarted) {
       notices.assertCurrent();
     }

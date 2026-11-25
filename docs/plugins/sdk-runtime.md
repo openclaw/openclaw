@@ -185,17 +185,19 @@ the session's cached prefix:
   the session's pinned system prompt and tool definitions.
 - The fork sends its rebuilt request instead of the replay when the parent sent
   an item the rebuilt context lacks, the parent request is a continuation that
-  carries only its delta, the fork may run a tool the parent request never
-  listed, or the fork may run tools and the parent request lists a
-  provider-hosted tool.
+  carries only its delta, or the fork may run a tool the parent request never
+  listed.
 
-Every tool the session lists stays in the request; the fork runs only the tools
-it was given. A call to any other tool returns a normal result such as
-`exec is not available in this background run.` A tool-free fork also sets tool
-choice to `none` on OpenAI Responses (including native ChatGPT), Chat
-Completions and Anthropic Messages, so provider-hosted tools cannot run. Other
-APIs keep the parent's tool choice; a tool-free fork whose request carries a
-provider-hosted tool on those APIs fails before it is sent.
+Every tool the session lists stays in the request, including provider-hosted
+tools such as web search, so the fork shares the session's cached tool list. The
+fork runs only the client tools it was given; a call to any other client tool
+returns a normal result such as `exec is not available in this background
+run.` A fork that runs tools may also use the session's provider-hosted tools,
+because the provider runs those before the fork's tool gate. A tool-free fork
+sets tool choice to `none` on OpenAI Responses (including native ChatGPT), Chat
+Completions and Anthropic Messages, so no tool runs. Other APIs keep the
+parent's tool choice; a tool-free fork whose request carries a provider-hosted
+tool on those APIs fails before it is sent.
 
 A fork uses the session's full model context with the model's own context
 window and compaction, not an excerpt. Thinking follows the session, because
@@ -287,10 +289,19 @@ if (result.status === "refused") {
   a denied tool returns `{ status: "refused", reason: "tool_policy" }` before any
   model call. `read`, `ls` and `exec` are never added to that policy: the session
   must already allow them. Pass `[]` for a tool-free fork.
-- `exec` runs only when the anchored turn came from the owner. A fork never asks
-  for approval: a command the agent's exec approvals would ask about is denied,
-  and nothing is queued for approval. Allowlist entries and full-permission exec
-  apply as they do for the session's own turns.
+- Called from a Gateway method that declares
+  [`sessionAccess`](/plugins/sdk-runtime/gateway-and-nodes#session-resource-methods),
+  the fork runs as a run of the session that request admitted, so a caller
+  with only `operator.sessions.write` can fork their own session. `sessionKey`
+  must name that same session. Without `sessionAccess`, the fork needs the
+  caller's permission to run the agent.
+- A request for `exec` returns `{ status: "refused", reason: "tool_policy" }`
+  unless the anchored turn came from the owner. Through a `sessionAccess`
+  method with a signed-in caller, the anchored turn must also come from that
+  caller. When the turn may come from someone else, request only `read` and
+  `ls`. A fork never asks for approval: a command the agent's exec approvals
+  would ask about is denied, and nothing is queued for approval. Allowlist
+  entries and full-permission exec apply as they do for the session's own turns.
 - A manifest's `contracts.tools` may claim a core catalog id only when the
   catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
   `exec`, `read` or another core-built tool grants nothing.
