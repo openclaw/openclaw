@@ -10,10 +10,15 @@ export function createProcessSessionId(): string {
 }
 
 export function missingProcessMessage(id: string): string {
-  const previousBoot = /:([a-f0-9]{12})$/.exec(id)?.[1];
-  if (previousBoot && previousBoot !== bootId) {
+  const bootSuffix = /:([a-f0-9]{12})$/.exec(id)?.[1];
+  if (!bootSuffix) {
+    // A readable slug is not a lookup key; point at the tracked ID instead of
+    // implying a restart or recommending a rerun.
+    return `Process ${id} is not a tracked session ID. Session IDs include a boot suffix; run process list to see tracked IDs.`;
+  }
+  if (bootSuffix !== bootId) {
     return `Process ${id} was started before the Gateway restarted and is no longer tracked; rerun it if still needed. Check saved output and side effects before repeating work.`;
   }
-  // Older handles have no boot identity, and retained results can also expire or be removed.
-  return `Process ${id} is no longer tracked or is outside this session's scope. Handles are lost when the Gateway restarts; rerun it if still needed after checking saved output and side effects.`;
+  // A current-boot handle can still be missing after removal or expiry.
+  return `Process ${id} is no longer tracked or is outside this session's scope. Rerun it if still needed after checking saved output and side effects.`;
 }
