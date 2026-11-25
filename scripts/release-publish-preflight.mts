@@ -308,7 +308,7 @@ export async function runReleasePublishPreflight(
         );
         if (
           selectedRun.status !== "completed" ||
-          (!options.fastTrackApproval && selectedRun.conclusion !== "success") ||
+          (!options.fastTrackRequest && selectedRun.conclusion !== "success") ||
           !POSITIVE_ID.test(String(selectedRun.run_attempt))
         ) {
           throw new Error("Validation run is not completed/success with an exact attempt.");
@@ -390,7 +390,7 @@ export async function runReleasePublishPreflight(
             }
             const validationOptions = {
               run,
-              fastTrackApproval: options.fastTrackApproval,
+              fastTrackRequest: options.fastTrackRequest,
               manifest: fullManifest,
               expectedRepository: options.repo,
               expectedRunId: options.fullReleaseValidationRunId,
@@ -551,7 +551,7 @@ export async function runReleasePublishPreflight(
                 fullReleaseValidationRunId: options.fullReleaseValidationRunId,
                 fullReleaseValidationRunAttempt: attempt,
                 fullManifest: manifest,
-                fastTrackApproval: options.fastTrackApproval,
+                fastTrackRequest: options.fastTrackRequest,
                 pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement ?? "",
                 currentSelectorRef: `v${version}`,
                 currentSelectorSha: resolvePreflightTag(runGh, options.repo, `v${version}`),
@@ -575,6 +575,8 @@ export async function runReleasePublishPreflight(
             sourceSha,
             toolingSha,
             retiredLineReason: options.retiredLinePublicationReason,
+            // Only successful full-evidence npm admission can report build-only.
+            dependencyEvidenceRequired: npmEvidence?.buildOnly !== true,
             runGh,
           }),
       );
@@ -667,7 +669,7 @@ export async function runReleasePublishPreflight(
 }
 
 export async function runReleasePublishPreflightCommand(args = process.argv.slice(2)) {
-  if (args[0] === "approval") {
+  if (args[0] === "fast-track") {
     const { values, positionals } = parseArgs({
       args: args.slice(1),
       allowPositionals: true,
@@ -675,7 +677,7 @@ export async function runReleasePublishPreflightCommand(args = process.argv.slic
     });
     if (positionals.length !== 1 || positionals[0] !== "request" || !values.request) {
       throw new Error(
-        "Usage: pnpm release:publish-preflight approval request --request <immutable-request.json>. Preparation only; no machine approval or custom status operation.",
+        "Usage: pnpm release:publish-preflight fast-track request --request <immutable-request.json>. Preparation only; no machine approval or custom status operation.",
       );
     }
     const request = parseFastTrackRequest(JSON.parse(readFileSync(values.request, "utf8")));
@@ -687,9 +689,9 @@ export async function runReleasePublishPreflightCommand(args = process.argv.slic
         requestId: request.requestId,
         digest: fastTrackRequestDigest(request),
         payload: serializeFastTrackRequest(request),
-        state: "awaiting-explicit-maintainer-approval",
+        state: "awaiting-npm-release-environment-approval",
         instructions:
-          "Share this exact request and digest in the release-managers group. Obtain explicit approval from a human release manager, which may be the requester, before taking any fast-track action. Agents must never approve using available tokens. Preserve the approval permalink with release evidence and use the normal npm-release environment approval and existing release receipt.",
+          "Supply the exact request packet to the publisher. A release manager approves publication only through the GitHub Actions npm-release environment. No chat decision, approval URL or external approval service is required. Agents must not approve the environment using available tokens.",
         publicationAuthorized: false,
       })}\n`,
     );
@@ -699,8 +701,8 @@ export async function runReleasePublishPreflightCommand(args = process.argv.slic
   if (!parsed) {
     return;
   }
-  if (parsed.options.fastTrackApproval) {
-    parsed.options.fastTrackApproval = readFileSync(parsed.options.fastTrackApproval, "utf8");
+  if (parsed.options.fastTrackRequest) {
+    parsed.options.fastTrackRequest = readFileSync(parsed.options.fastTrackRequest, "utf8");
   }
   const report = await runReleasePublishPreflight(parsed.options);
   console.log(

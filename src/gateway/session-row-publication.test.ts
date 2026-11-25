@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { create as createRow } from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
 import { prepareSessionRowPublicationView } from "./session-row-publication.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -10,8 +9,9 @@ it("retires only affected row vectors, preserves witnesses, and releases selecti
   const projection = {
     state: { cfg: {}, revision: {}, rowContext: {} },
     onSelectionChange: revisions.onSelectionChange,
+    onMembershipChange() {},
     onFactsChange: revisions.onFactsChange,
-  } as SessionRowProjection;
+  };
   const read = prepareSessionRowPublicationView(projection);
   const { lists } = read();
   const row = (key: string): GatewaySessionRow => ({ key, kind: "direct", updatedAt: 1 });

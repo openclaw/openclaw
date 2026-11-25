@@ -44,7 +44,11 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import type { SessionEntryMetadataFact } from "./session-entry-metadata-receipt.js";
-import type { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import type {
+  addSessionMember,
+  removeSessionMember,
+  setSessionMemberAccess,
+} from "./session-sharing-store.native.js";
 import { readSessionCollaborationCandidate } from "./session-sharing-store.receipt.js";
 import type {
   MembershipPublication,
@@ -187,6 +191,7 @@ export async function runSessionCollaborationWrite<
           const authorityCommand: SqliteWorkerCommand<SessionSharingWorkerOperations> = command;
           const sharingAuthorityChanged =
             authorityCommand.type === "add" ||
+            authorityCommand.type === "set-access" ||
             authorityCommand.type === "remove" ||
             authorityCommand.type === "owner.assign" ||
             (authorityCommand.type === "involvement" &&
@@ -498,6 +503,28 @@ export function addSessionMemberInWorker(
     { type: "add", input: { scope, params: capturedParams } },
     (result, location, database, currentKeys) => {
       if (result.value.inserted && (!currentKeys || currentKeys.has(location.sessionKey))) {
+        publishSessionMembership(result, location, database);
+      }
+      return result.value;
+    },
+    assertCurrent,
+  );
+}
+
+export function setSessionMemberAccessInWorker(
+  scope: SessionCollaborationScope,
+  params: Parameters<typeof setSessionMemberAccess>[1],
+  assertCurrent?: () => void,
+): Promise<ReturnType<typeof setSessionMemberAccess>> {
+  if (!params.identityId.trim()) {
+    return Promise.resolve(undefined);
+  }
+  const capturedParams = structuredClone(params);
+  return runSessionCollaborationWrite(
+    scope,
+    { type: "set-access", input: { scope, params: capturedParams } },
+    (result, location, database, currentKeys) => {
+      if (result.value?.changed && (!currentKeys || currentKeys.has(location.sessionKey))) {
         publishSessionMembership(result, location, database);
       }
       return result.value;

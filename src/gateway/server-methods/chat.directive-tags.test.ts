@@ -95,6 +95,7 @@ import { createChatSendLateReplyFinalizer } from "./chat-send-source-finalizatio
 import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media.suite.js";
 import {
   ChatDirectiveDedupe,
+  createAdmittedAcpClient,
   createChatDirectiveReplyBackend,
   createExpectedAcpUserTurn,
   createGlobalChatDirectiveConfig,
@@ -4188,11 +4189,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await send({
       idempotencyKey: "idem-system-provenance-acp",
       message: "bench update",
-      client: createScopedCliClient(["operator.admin"], {
-        id: "cli",
-        displayName: "ACP",
-        version: "acp",
-      }),
+      client: createAdmittedAcpClient(),
       requestParams: {
         systemInputProvenance: provenance,
         systemProvenanceReceipt:
@@ -4212,6 +4209,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         content: "bench update",
         idempotencyKey: "idem-system-provenance-acp:user",
         senderIsOwner: true,
+        operatorProfileId: "acp-owner",
         provenance,
       }),
     );

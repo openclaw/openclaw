@@ -327,6 +327,7 @@ src/agents/glob-pattern.ts
 src/agents/github-host-runtime.ts
 src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
+src/agents/mcp-connect-action.ts
 src/agents/mcp-oauth-store-error.ts
 src/agents/model-auth-policy.ts
 src/agents/model-catalog-entry.ts
@@ -769,6 +770,7 @@ src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/main-session-key.ts
 src/config/sessions/main-session.ts
+src/config/sessions/session-member-access-facts.ts
 src/config/sessions/session-worker-execution-source.ts
 src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
@@ -1125,6 +1127,7 @@ src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-service-installation-context.ts
+src/infra/gateway-state-owner-cold-admission.ts
 src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
@@ -2201,6 +2204,7 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-active-event-facts-schema.ts
+src/state/openclaw-agent-member-access-schema.ts
 src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts

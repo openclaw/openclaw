@@ -17,7 +17,7 @@ export function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapab
           [MCP_APPS_CLIENT_EXTENSION]: { mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE] },
         },
       }
-    : {};
+    : { elicitation: { url: {} } };
 }
 
 function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | undefined {

@@ -342,6 +342,7 @@ export function renderChatPaneComposerControls(params: {
             }),
         sessionKey: state.sessionKey,
         selectedSession,
+        sessionRowCurrent: !cachedSessionStatePending && !snapshot,
         sessionsResult: state.sessionsResult,
         get stream() {
           return state.chatStream;

@@ -84,6 +84,25 @@ describe("buildCompactionFloor", () => {
     expect(commit(undefined, 2)).toBe("SUMMARY");
     expect(commit(undefined, undefined, true)).toBe("SUMMARY");
   });
+
+  it("drops the floor rather than fill the headroom a full summary leaves", () => {
+    const messages = Array.from({ length: 200 }, (_, index) =>
+      user(`request ${index} ${"detail ".repeat(60)}`),
+    );
+    // A summary already at half of a 4,000-token budget: the other half belongs to the next turn.
+    const summary = "Summary detail. ".repeat(500);
+    const committed = commitCompactionSummary(
+      { summary },
+      {
+        messagesToSummarize: messages,
+        turnPrefixMessages: [],
+        summaryTokenBudget: 4_000,
+        settings: {},
+      },
+      false,
+    );
+    expect(committed).toBe(summary);
+  });
 });
 
 describe("prepared compaction floor", () => {

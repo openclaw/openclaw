@@ -2,6 +2,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { GatewayAuthPolicyFacts } from "../gateway/auth-policy.types.js";
 import type { RemoteIngressPrincipalIdentity } from "../gateway/server/client-identity-types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 export type AdmittedRunOperatorRoleFacts = Readonly<{
@@ -9,6 +10,14 @@ export type AdmittedRunOperatorRoleFacts = Readonly<{
   assignedRole: string | null;
   githubLogin?: string | null;
   policy?: GatewayOperatorRoleDefinition;
+}>;
+
+/** What a turn may do; only `decideTurnGrant` produces it. In memory only; replays re-admit. */
+export type TurnGrant = Readonly<{
+  owner: boolean;
+  skillAuthoring: boolean;
+  questionReplace: boolean;
+  commands: "none" | "all";
 }>;
 
 export type AdmittedRunOperatorAuthority = Readonly<{
@@ -39,9 +48,13 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
     modelPolicy?: PreparedOperatorModelPolicy;
   }>;
+  /** Verified configured-owner sender; admission re-checks `commands.ownerAllowFrom` per start. */
+  channelOwner?: Readonly<UserChannelIdentity>;
   scopes: readonly string[];
   /** Command-owner decision fixed at this run's start. */
   requesterOwner?: boolean;
+  /** The only answer to what this turn may do; scopes above are its operator ceiling. */
+  grant: TurnGrant;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   signal?: AbortSignal;

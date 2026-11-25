@@ -27,6 +27,11 @@ import {
   buildReleaseValidationManifest,
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  classifyBetaPromotionComparison,
+  isBetaPromotionPath,
+} from "./lib/release-beta-promotion.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
@@ -178,7 +183,29 @@ export function isSplitChangelogEvidenceDelta(paths, version) {
   }
 }
 
-export function classifyReleaseChangelogEvidenceComparison(comparison, { baseSha, version }) {
+export function classifyReleaseEvidenceComparison(
+  comparison,
+  {
+    baseSha,
+    targetSha,
+    version,
+    readSourceFile,
+    readSourceFiles,
+    rootManifest,
+    targetCoveragePolicy,
+  },
+) {
+  if (comparison?.files?.some((file) => file.filename === "package.json")) {
+    return classifyBetaPromotionComparison(comparison, {
+      baseSha,
+      targetSha,
+      version,
+      readSourceFile,
+      readSourceFiles,
+      rootManifest,
+      targetCoveragePolicy,
+    });
+  }
   const files = Array.isArray(comparison?.files) ? comparison.files : [];
   const changedPaths = files.map((file) => file.filename);
   const legacy = changedPaths.length === 1 && changedPaths[0] === "CHANGELOG.md";
@@ -1035,6 +1062,10 @@ export function buildReleaseExecutionPlan(input) {
     throw new Error("release execution plan identity is invalid");
   }
   const reused = booleanValue(input.evidenceReuse);
+  const buildOnly = rerunGroup === "build-only";
+  if (buildOnly && (reused || !input.qualificationCoverage)) {
+    throw new Error("Build-only requires direct admitted qualification, not reused evidence");
+  }
   const childInputs =
     input.children && typeof input.children === "object" && !Array.isArray(input.children)
       ? input.children
@@ -1057,9 +1088,9 @@ export function buildReleaseExecutionPlan(input) {
       : UNPHASED_CHILD_SPECS;
   const children = childSpecs.map((spec) => {
     const raw = childInputs[spec.key] ?? {};
-    const required = frozenCoverage
-      ? true
-      : releaseExecutionChildRequired(spec, input, npmTelegramForAll);
+    const required =
+      !buildOnly &&
+      (frozenCoverage ? true : releaseExecutionChildRequired(spec, input, npmTelegramForAll));
     const dispatchId = `full-release-validation-${parentRunId}-${parentRunAttempt}${spec.suffix}`;
     return {
       dispatchName: spec.dispatchName,
@@ -1086,29 +1117,33 @@ export function buildReleaseExecutionPlan(input) {
     },
     {
       name: "Prepare release npm artifacts",
-      required: rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
+      required:
+        buildOnly || rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
       result: stringValue(input.npmPreparationResult, "skipped"),
     },
     {
       name: "Qualify release npm artifacts",
-      required: rerunGroup === "all",
+      required: buildOnly || rerunGroup === "all",
       result: stringValue(input.npmQualificationResult, "skipped"),
     },
     {
       name: "Prepare exact plugin npm artifacts",
-      required: rerunGroup === "all" && booleanValue(input.pluginNpmPreflightRequired),
+      required:
+        (buildOnly || rerunGroup === "all") && booleanValue(input.pluginNpmPreflightRequired),
       result: stringValue(input.pluginNpmPreparationResult, "skipped"),
     },
     {
       name: "Prepare release Docker artifacts",
-      required: rerunGroup === "all",
+      required: buildOnly || rerunGroup === "all",
       result: stringValue(input.dockerPreparationResult, "skipped"),
     },
     {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
-      required: phasedChildren
-        ? !reused && booleanValue(input.candidateRequired)
-        : candidatePreparationRequired(input),
+      required:
+        buildOnly ||
+        (phasedChildren
+          ? !reused && booleanValue(input.candidateRequired)
+          : candidatePreparationRequired(input)),
       result: stringValue(
         phasedChildren ? input.candidateAcquisitionResult : input.candidateBindingResult,
         "skipped",
@@ -1196,6 +1231,9 @@ function validEvidenceReuseIdentity(evidenceReuse, targetVersion, allowPendingAr
     return true;
   }
   const validChangedPaths =
+    (evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY &&
+      evidenceReuse.changedPaths.includes("package.json") &&
+      evidenceReuse.changedPaths.every((path) => isBetaPromotionPath(path, targetVersion))) ||
     (evidenceReuse.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
       evidenceReuse.changedPaths.length === 0) ||
     (evidenceReuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&
@@ -2136,6 +2174,15 @@ function validatePlan(value, options = {}) {
 }
 
 function validateExecutionPlanChildBindings(children, payload, expectedCoverage) {
+  const buildOnly = payload.rerunGroup === "build-only";
+  if (
+    buildOnly &&
+    (!payload.qualificationCoverage ||
+      payload.evidenceReuse?.requested ||
+      payload.coveragePolicy !== undefined)
+  ) {
+    throw new Error("Build-only requires direct admitted qualification, not reused evidence");
+  }
   if (payload.qualificationCoverage !== undefined) {
     const coverage = validateQualificationCoverage(payload.qualificationCoverage);
     if (
@@ -2147,7 +2194,7 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     if (
       payload.attemptEvidenceVersion !== 3 ||
       payload.releaseProfile !== coverage.profile ||
-      payload.rerunGroup !== "all" ||
+      !["all", "build-only"].includes(payload.rerunGroup) ||
       !payload.sourceAdmission?.qualificationAdmission ||
       !payload.qualificationInputs ||
       typeof payload.qualificationInputs !== "object" ||
@@ -2180,8 +2227,15 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
           ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)
           : payload;
       if (
-        !child.required ||
-        !child.selected ||
+        (buildOnly
+          ? child.required ||
+            child.selected ||
+            child.runId ||
+            child.runAttempt ||
+            child.url ||
+            child.result !== "skipped" ||
+            child.source !== "fresh"
+          : !child.required || !child.selected) ||
         child.dispatchName !== spec.dispatchName ||
         child.workflow !== spec.workflow ||
         child.workflowSha !== (producer.sha ?? producer.workflowSha) ||
