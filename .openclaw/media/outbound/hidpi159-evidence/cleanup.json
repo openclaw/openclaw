@@ -1,0 +1,59 @@
+{
+  "activeTaskProcesses": [],
+  "ports": [
+    {
+      "port": 34103,
+      "closed": true
+    },
+    {
+      "port": 9024,
+      "closed": true
+    },
+    {
+      "port": 37965,
+      "closed": true
+    },
+    {
+      "port": 9032,
+      "closed": true
+    },
+    {
+      "port": 42083,
+      "closed": true
+    },
+    {
+      "port": 4024,
+      "closed": true
+    },
+    {
+      "port": 44351,
+      "closed": true
+    },
+    {
+      "port": 4032,
+      "closed": true
+    },
+    {
+      "port": 41253,
+      "closed": true
+    },
+    {
+      "port": 24024,
+      "closed": true
+    }
+  ],
+  "removed": [
+    "beta worktree",
+    "stable worktree",
+    "temporary test registrations and scripts",
+    "isolated Gateway/workspace/browser state",
+    "downloaded Chrome 159 and task-local libraries",
+    "task-created build outputs and crash-report settings"
+  ],
+  "retained": [
+    "delivery proof",
+    "shared dependency caches",
+    "fetched Git objects"
+  ],
+  "trackedSourceDiffEmpty": true
+}

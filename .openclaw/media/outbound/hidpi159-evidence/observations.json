@@ -1,0 +1,652 @@
+{
+  "beta": [
+    {
+      "build": "beta-3d2d379-chrome159-qualified",
+      "attempt": 1,
+      "architecture": "x64",
+      "browserVersion": "159.0.8154.6",
+      "directUrlScheme": "http",
+      "sequence": [
+        "start -> open direct file in target tab",
+        "set Desktop Chrome HiDPI before any chat navigation",
+        "direct click 96,131 opened details",
+        "navigate the same target tab to the real chat",
+        "snapshot ref -> Open the orchard report -> Files preview",
+        "click 896,216 returned exit 0; inspected state and native pointer events"
+      ],
+      "directMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "directScreenshot": {
+        "file": "beta-3d2d379-chrome159-qualified-1-direct-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10872,
+        "pixelBounds": {
+          "left": 14,
+          "top": 172,
+          "right": 285,
+          "bottom": 220
+        },
+        "cssBounds": {
+          "left": 8.96,
+          "top": 110.08,
+          "right": 183.04,
+          "bottom": 141.44
+        }
+      },
+      "directControl": true,
+      "previewMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "browserIdentity": "Chrome/159.0.8154.6",
+      "previewBefore": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewBeforeScreenshot": {
+        "file": "beta-3d2d379-chrome159-qualified-1-preview-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10746,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "previewAfter": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewAfterMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "previewAfterScreenshot": {
+        "file": "beta-3d2d379-chrome159-qualified-1-preview-after.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10746,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "reproduced": true,
+      "keyboardControl": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "error": "AssertionError: expected false to be true // Object.is equality"
+    },
+    {
+      "build": "beta-3d2d379-chrome159-qualified",
+      "attempt": 2,
+      "architecture": "x64",
+      "browserVersion": "159.0.8154.6",
+      "directUrlScheme": "http",
+      "sequence": [
+        "start -> open direct file in target tab",
+        "set Desktop Chrome HiDPI before any chat navigation",
+        "direct click 96,131 opened details",
+        "navigate the same target tab to the real chat",
+        "snapshot ref -> Open the orchard report -> Files preview",
+        "click 896,216 returned exit 0; inspected state and native pointer events"
+      ],
+      "directMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "directScreenshot": {
+        "file": "beta-3d2d379-chrome159-qualified-2-direct-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10872,
+        "pixelBounds": {
+          "left": 14,
+          "top": 172,
+          "right": 285,
+          "bottom": 220
+        },
+        "cssBounds": {
+          "left": 8.96,
+          "top": 110.08,
+          "right": 183.04,
+          "bottom": 141.44
+        }
+      },
+      "directControl": true,
+      "previewMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "browserIdentity": "Chrome/159.0.8154.6",
+      "previewBefore": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewBeforeScreenshot": {
+        "file": "beta-3d2d379-chrome159-qualified-2-preview-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10746,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "previewAfter": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewAfterMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "previewAfterScreenshot": {
+        "file": "beta-3d2d379-chrome159-qualified-2-preview-after.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10746,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "reproduced": true,
+      "keyboardControl": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "error": "AssertionError: expected false to be true // Object.is equality"
+    }
+  ],
+  "stable": [
+    {
+      "build": "stable-e31bbf0-chrome159",
+      "attempt": 1,
+      "architecture": "x64",
+      "browserVersion": "159.0.8154.6",
+      "directUrlScheme": "http",
+      "sequence": [
+        "start -> open direct file in target tab",
+        "set Desktop Chrome HiDPI before any chat navigation",
+        "direct click 96,131 opened details",
+        "navigate the same target tab to the real chat",
+        "snapshot ref -> Open the orchard report -> Files preview",
+        "click 896,216 returned exit 0; inspected state and native pointer events"
+      ],
+      "directMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "directScreenshot": {
+        "file": "stable-e31bbf0-chrome159-1-direct-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10872,
+        "pixelBounds": {
+          "left": 14,
+          "top": 172,
+          "right": 285,
+          "bottom": 220
+        },
+        "cssBounds": {
+          "left": 8.96,
+          "top": 110.08,
+          "right": 183.04,
+          "bottom": 141.44
+        }
+      },
+      "directControl": true,
+      "previewMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "browserIdentity": "Chrome/159.0.8154.6",
+      "previewBefore": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewBeforeScreenshot": {
+        "file": "stable-e31bbf0-chrome159-1-preview-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10746,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "previewAfter": {
+        "open": true,
+        "events": [
+          {
+            "type": "pointerdown",
+            "x": 96,
+            "y": 132,
+            "target": "SUMMARY",
+            "trusted": true
+          },
+          {
+            "type": "pointerup",
+            "x": 96,
+            "y": 132,
+            "target": "SUMMARY",
+            "trusted": true
+          },
+          {
+            "type": "click",
+            "x": 96,
+            "y": 132,
+            "target": "SUMMARY",
+            "trusted": true
+          }
+        ],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewAfterMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "previewAfterScreenshot": {
+        "file": "stable-e31bbf0-chrome159-1-preview-after.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10772,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "reproduced": false
+    },
+    {
+      "build": "stable-e31bbf0-chrome159",
+      "attempt": 2,
+      "architecture": "x64",
+      "browserVersion": "159.0.8154.6",
+      "directUrlScheme": "http",
+      "sequence": [
+        "start -> open direct file in target tab",
+        "set Desktop Chrome HiDPI before any chat navigation",
+        "direct click 96,131 opened details",
+        "navigate the same target tab to the real chat",
+        "snapshot ref -> Open the orchard report -> Files preview",
+        "click 896,216 returned exit 0; inspected state and native pointer events"
+      ],
+      "directMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "directScreenshot": {
+        "file": "stable-e31bbf0-chrome159-2-direct-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10872,
+        "pixelBounds": {
+          "left": 14,
+          "top": 172,
+          "right": 285,
+          "bottom": 220
+        },
+        "cssBounds": {
+          "left": 8.96,
+          "top": 110.08,
+          "right": 183.04,
+          "bottom": 141.44
+        }
+      },
+      "directControl": true,
+      "previewMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "browserIdentity": "Chrome/159.0.8154.6",
+      "previewBefore": {
+        "open": false,
+        "events": [],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewBeforeScreenshot": {
+        "file": "stable-e31bbf0-chrome159-2-preview-before.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10746,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "previewAfter": {
+        "open": true,
+        "events": [
+          {
+            "type": "pointerdown",
+            "x": 96,
+            "y": 132,
+            "target": "SUMMARY",
+            "trusted": true
+          },
+          {
+            "type": "pointerup",
+            "x": 96,
+            "y": 132,
+            "target": "SUMMARY",
+            "trusted": true
+          },
+          {
+            "type": "click",
+            "x": 96,
+            "y": 132,
+            "target": "SUMMARY",
+            "trusted": true
+          }
+        ],
+        "dpr": 2,
+        "localBounds": {
+          "x": 8,
+          "y": 125.875,
+          "width": 176,
+          "height": 32
+        }
+      },
+      "previewAfterMetrics": [
+        1280,
+        720,
+        2
+      ],
+      "previewAfterScreenshot": {
+        "file": "stable-e31bbf0-chrome159-2-preview-after.png",
+        "width": 2000,
+        "height": 1125,
+        "orangePixels": 10772,
+        "pixelBounds": {
+          "left": 1263,
+          "top": 328,
+          "right": 1536,
+          "bottom": 377
+        },
+        "cssBounds": {
+          "left": 808.32,
+          "top": 209.92,
+          "right": 983.68,
+          "bottom": 241.92
+        }
+      },
+      "reproduced": false
+    }
+  ],
+  "routingControl": {
+    "build": "beta-input-routing-control",
+    "attempt": 1,
+    "architecture": "x64",
+    "browserVersion": "159.0.8154.6",
+    "directUrlScheme": "http",
+    "sequence": [
+      "start -> open direct file in target tab",
+      "set Desktop Chrome HiDPI before any chat navigation",
+      "direct click 96,131 opened details",
+      "navigate the same target tab to the real chat",
+      "snapshot ref -> Open the orchard report -> Files preview",
+      "click 896,216 returned exit 0; inspected state and native pointer events"
+    ],
+    "directMetrics": [
+      1280,
+      720,
+      2
+    ],
+    "directScreenshot": {
+      "file": "beta-input-routing-control-1-direct-before.png",
+      "width": 2000,
+      "height": 1125,
+      "orangePixels": 10872,
+      "pixelBounds": {
+        "left": 14,
+        "top": 172,
+        "right": 285,
+        "bottom": 220
+      },
+      "cssBounds": {
+        "left": 8.96,
+        "top": 110.08,
+        "right": 183.04,
+        "bottom": 141.44
+      }
+    },
+    "directControl": true,
+    "previewMetrics": [
+      1280,
+      720,
+      2
+    ],
+    "browserIdentity": "Chrome/159.0.8154.6",
+    "previewBefore": {
+      "open": false,
+      "events": [],
+      "dpr": 2,
+      "localBounds": {
+        "x": 8,
+        "y": 125.875,
+        "width": 176,
+        "height": 32
+      }
+    },
+    "previewBeforeScreenshot": {
+      "file": "beta-input-routing-control-1-preview-before.png",
+      "width": 2000,
+      "height": 1125,
+      "orangePixels": 10746,
+      "pixelBounds": {
+        "left": 1263,
+        "top": 328,
+        "right": 1536,
+        "bottom": 377
+      },
+      "cssBounds": {
+        "left": 808.32,
+        "top": 209.92,
+        "right": 983.68,
+        "bottom": 241.92
+      }
+    },
+    "previewAfter": {
+      "open": false,
+      "events": [],
+      "dpr": 2,
+      "localBounds": {
+        "x": 8,
+        "y": 125.875,
+        "width": 176,
+        "height": 32
+      }
+    },
+    "previewAfterMetrics": [
+      1280,
+      720,
+      2
+    ],
+    "previewAfterScreenshot": {
+      "file": "beta-input-routing-control-1-preview-after.png",
+      "width": 2000,
+      "height": 1125,
+      "orangePixels": 10746,
+      "pixelBounds": {
+        "left": 1263,
+        "top": 328,
+        "right": 1536,
+        "bottom": 377
+      },
+      "cssBounds": {
+        "left": 808.32,
+        "top": 209.92,
+        "right": 983.68,
+        "bottom": 241.92
+      }
+    },
+    "reproduced": true,
+    "focusControl": {
+      "open": false,
+      "events": [],
+      "dpr": 2,
+      "localBounds": {
+        "x": 8,
+        "y": 125.875,
+        "width": 176,
+        "height": 32
+      }
+    },
+    "afterTargetRefresh": {
+      "open": false,
+      "events": [],
+      "dpr": 2,
+      "localBounds": {
+        "x": 8,
+        "y": 125.875,
+        "width": 176,
+        "height": 32
+      }
+    },
+    "targetRefreshControl": {
+      "open": false,
+      "events": [],
+      "dpr": 2,
+      "localBounds": {
+        "x": 8,
+        "y": 125.875,
+        "width": 176,
+        "height": 32
+      }
+    }
+  }
+}

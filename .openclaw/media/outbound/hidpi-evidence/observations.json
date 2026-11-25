@@ -1,0 +1,1270 @@
+{
+  "browser": "Chromium 156.0.8078.4",
+  "playwright": "1.64.1",
+  "builds": [
+    {
+      "label": "main-719f016",
+      "commit": "719f016a155267610250bd64310a9b7f9d502bd2",
+      "observations": [
+        {
+          "label": "main-719f016",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome",
+          "trial": 1,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824.015625,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome",
+          "trial": 2,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "csp-preview",
+          "device": "Desktop Chrome",
+          "trial": 1,
+          "coordinates": {
+            "x": 878,
+            "y": 256
+          },
+          "box": {
+            "x": 808,
+            "y": 248.0625,
+            "width": 464,
+            "height": 16
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "csp-preview",
+          "device": "Desktop Chrome",
+          "trial": 2,
+          "coordinates": {
+            "x": 878,
+            "y": 256
+          },
+          "box": {
+            "x": 808,
+            "y": 248.0625,
+            "width": 464,
+            "height": 16
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "csp-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 878,
+            "y": 256
+          },
+          "box": {
+            "x": 808,
+            "y": 248.0625,
+            "width": 464,
+            "height": 16
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "csp-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 878,
+            "y": 256
+          },
+          "box": {
+            "x": 808,
+            "y": 248.0625,
+            "width": 464,
+            "height": 16
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 78,
+                "y": 117,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "CLI-only-plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2
+          },
+          "after": {
+            "dpr": 2
+          },
+          "inner": {
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "CLI-only-plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2
+          },
+          "after": {
+            "dpr": 2
+          },
+          "inner": {
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "direct-html",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 94,
+            "y": 134
+          },
+          "box": {
+            "x": 24,
+            "y": 113.671875,
+            "width": 1232,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 2,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "main-719f016",
+          "scenario": "direct-html",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 94,
+            "y": 134
+          },
+          "box": {
+            "x": 24,
+            "y": 113.671875,
+            "width": 1232,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 2,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "label": "beta-qualified-3d2d379",
+      "commit": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "observations": [
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome",
+          "trial": 1,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824.09375,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome",
+          "trial": 2,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "supported-csp-preview",
+          "device": "Desktop Chrome",
+          "trial": 1,
+          "coordinates": {
+            "x": 894,
+            "y": 218
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "supported-csp-preview",
+          "device": "Desktop Chrome",
+          "trial": 2,
+          "coordinates": {
+            "x": 894,
+            "y": 218
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 1,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "supported-csp-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 894,
+            "y": 218
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "supported-csp-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 894,
+            "y": 218
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 1,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "CLI-only-plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2
+          },
+          "after": {
+            "dpr": 2
+          },
+          "inner": {
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "CLI-only-plain-preview",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 896,
+            "y": 216
+          },
+          "box": {
+            "x": 824,
+            "y": 197.671875,
+            "width": 432,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2
+          },
+          "after": {
+            "dpr": 2
+          },
+          "inner": {
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 96,
+                "y": 132,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "direct-html",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 1,
+          "coordinates": {
+            "x": 94,
+            "y": 134
+          },
+          "box": {
+            "x": 24,
+            "y": 113.671875,
+            "width": 1232,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 2,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        },
+        {
+          "label": "beta-qualified-3d2d379",
+          "scenario": "direct-html",
+          "device": "Desktop Chrome HiDPI",
+          "trial": 2,
+          "coordinates": {
+            "x": 94,
+            "y": 134
+          },
+          "box": {
+            "x": 24,
+            "y": 113.671875,
+            "width": 1232,
+            "height": 40
+          },
+          "before": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "after": {
+            "dpr": 2,
+            "width": 1280,
+            "height": 720
+          },
+          "inner": {
+            "dpr": 2,
+            "open": true,
+            "events": [
+              {
+                "type": "mousedown",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "mouseup",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              },
+              {
+                "type": "click",
+                "x": 94,
+                "y": 134,
+                "target": "SUMMARY",
+                "trusted": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
