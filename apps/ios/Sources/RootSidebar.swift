@@ -75,7 +75,10 @@ struct RootSidebar: View {
             }
         }
         .safeAreaBar(edge: .bottom, spacing: 0) {
-            self.footer.padding(.bottom, self.drawerFooterBottomInset)
+            // Search owns the screen while it is open; the footer would otherwise ride up with the keyboard.
+            if !self.isSearchActive {
+                self.footer.padding(.bottom, self.drawerFooterBottomInset)
+            }
         }
         .task(id: self.appModel.chatViewModelIdentityID) {
             await self.appModel.sessionGroups.refresh(appModel: self.appModel)
