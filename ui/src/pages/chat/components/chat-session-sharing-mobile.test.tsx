@@ -6,7 +6,7 @@ import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "../chat-pane-mounted.test-support.ts";
-import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
+import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.ts";
 import {
   ChatSessionAccessMobile,
   ChatSessionSharingMobile,
@@ -308,6 +308,31 @@ it("hides members in Shared and restores them when authoritative visibility chan
   expect(initial.onMemberChange).not.toHaveBeenCalled();
   expect(initial.onVisibilityChange).not.toHaveBeenCalled();
   expect(initial.onPublicShareChange).not.toHaveBeenCalled();
+});
+
+it("keeps invited level changes separate from membership without narrating queue cancellation", async () => {
+  const onMemberAccessChange = vi.fn(async () => ({ status: "success" as const }));
+  const initial = prepared({ onMemberAccessChange });
+  initial.session.visibility = "read-only";
+  initial.state!.result!.members = [
+    { identityId: "member", addedBy: "owner", addedAt: 1, access: "send" },
+  ];
+  initial.state!.result!.permissions = [
+    {
+      identityId: "member",
+      level: "send",
+      options: ["read", "suggest", "send"],
+      invitation: "member",
+    },
+  ];
+  const view = sharingFixture(initial);
+  const permission = view.person("send");
+  permission.click();
+  await waitForSolid(() => expect(permission.getAttribute("aria-expanded")).toBe("true"));
+  expect(view.container.textContent).not.toContain("queued messages");
+  view.getByRole("menuitemradio", { name: "Can suggest" }).click();
+  expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("member", "suggest");
+  expect(initial.onMemberChange).not.toHaveBeenCalled();
 });
 
 it("keeps Public confirmed until its owner publishes and preserves membership focus while pending", async () => {

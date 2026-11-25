@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type { SessionMemberPermissionLevel } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import { PersonName, PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import {
@@ -27,13 +28,13 @@ import { SettingsToggleRow } from "../../../components/solid/settings-ui.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
 import "../../../styles/settings.css";
 import "../../../styles/chat/sharing-mobile.css";
 import {
-  ChatSessionSharingError,
   chatSessionPermissionLabel,
   type ChatSessionSharingRosterRow,
-} from "./chat-session-sharing-shared.tsx";
+} from "./chat-session-sharing-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionSharingEnglish);
 
@@ -228,10 +229,12 @@ function SharingPermissions(props: {
   let input: HTMLInputElement | undefined;
   let trigger: HTMLButtonElement | undefined;
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
+    const terms = foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC").split(/\s+/u);
     return props.data.rows.filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id].join(" ").toLocaleLowerCase().normalize("NFC").includes(term),
+        foldSearchCase([identity.label, identity.id].join(" ").toLocaleLowerCase())
+          .normalize("NFC")
+          .includes(term),
       ),
     );
   };

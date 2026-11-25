@@ -10,9 +10,9 @@ import type * as SessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
@@ -43,7 +43,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importActual) => {
 const DAY_MS = 24 * 60 * 60_000;
 // The fixed wording: no requester, grant, or result content.
 const NOTICE =
-  "A background task's result couldn't be delivered because the access it ran under has ended.";
+  "I did not deliver a background task's result. The access of the person who started it has ended. Ask them or a Gateway admin to restore that access, then start the task again.";
 const target = () => ({
   agentId: "main",
   physicalAgentId: "main",
@@ -51,7 +51,7 @@ const target = () => ({
 });
 const refusal = (cause: GatewayOperatorAccessDeniedError["accessCause"]) => {
   const denied = new GatewayOperatorAccessDeniedError(cause);
-  return new GatewayOperatorRecoveryAuthorizationError(denied.message, { cause: denied });
+  return new OperatorRefusalError("access-ended", { cause: denied });
 };
 
 const created: string[] = [];
@@ -239,7 +239,7 @@ it("notifies for an old row whose result was captured recently", () =>
 it.for([
   ["thrown policy error", () => refusal("policy-check-failed")],
   // A refusal without an ended-grant or deleted-profile cause, such as admission's refuse().
-  ["refusal without an ended-access cause", () => new GatewayOperatorRecoveryAuthorizationError()],
+  ["refusal without an ended-access cause", () => new OperatorRefusalError("sign-in-ended")],
   ["unavailable owner", () => new GatewayOperatorAccessUnavailableError()],
   ["database error", () => new Error("database is locked")],
 ] as const)("keeps a child pending after a %s", ([, failure]) =>
