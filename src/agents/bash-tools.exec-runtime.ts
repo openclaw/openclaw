@@ -24,7 +24,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
-import type { SpawnInput, TerminationReason } from "../process/supervisor/types.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
@@ -530,7 +530,6 @@ export async function runExecProcess({
   };
 
   let managedRun: ManagedRun | null = null;
-  let cancelReason: TerminationReason | undefined;
   const onRequestCancelled = () => {
     session.requestCancelled = true;
     markCancellationRequested(session);
@@ -605,8 +604,7 @@ export async function runExecProcess({
           supervisor.spawn({
             ...input,
             env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
-            onCancel: (reason) => {
-              cancelReason ??= reason;
+            onCancel: () => {
               beginSandboxTermination();
               grant?.revoke();
             },
@@ -717,11 +715,12 @@ export async function runExecProcess({
         const exit = await startedRun.wait().catch((error: unknown) => {
           // OpenClaw stopped the command (timeout, memory bound) and its cleanup then failed:
           // the stop stays the result, and finalization reports the cleanup failure after it.
-          if (!cancelReason || cancelReason === "manual-cancel") {
+          const stopReason = startedRun.activity.terminationReason;
+          if (!stopReason || stopReason === "manual-cancel") {
             throw error;
           }
           stopFailure = error;
-          return buildStoppedRunExit(cancelReason, Date.now() - startedAt);
+          return buildStoppedRunExit(stopReason, Date.now() - startedAt);
         });
         outcome = buildExecExitOutcome({
           exit,

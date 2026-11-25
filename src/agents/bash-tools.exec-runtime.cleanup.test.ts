@@ -387,6 +387,7 @@ it.each(["rejects", "succeeds", "absent"] as const)(
   async (extinctionJoin) => {
     const expired = new Error(descendantCleanupFailure);
     queueRun(undefined, "@1\n", (input) => ({
+      activity: { resultSettled: true, lastOutputAtMs: 0, terminationReason: "overall-timeout" },
       wait: async () => {
         input.onCancel?.("overall-timeout");
         throw expired;

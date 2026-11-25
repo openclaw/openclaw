@@ -648,6 +648,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
           get lastOutputAtMs() {
             return lastOutputAtMs;
           },
+          get terminationReason() {
+            return forcedReason ?? undefined;
+          },
         }),
         runId,
         pid: adapter.pid,
