@@ -109,6 +109,9 @@ export function projectDesktopPanelView(facts: DesktopViewFacts, actions: Deskto
       availability: sessionSource.desktopAvailability,
       picker: {
         automatic: automaticPicker,
+        // A presenter that names the desktop connects to it while it loads, until the
+        // source is reported unavailable; Retry then checks the source again.
+        knownTarget: host.requestedSource !== null && noticeText === null && errorText === null,
         notice: checkingSource ? (errorText ?? noticeText) : null,
         onDisconnect: actions.onDisconnect,
         environments,

@@ -224,7 +224,9 @@ function DesktopPresentation(props: {
         props.view.content.loading &&
         props.view.content.automaticSource &&
         props.view.content.hasTarget &&
-        (!props.view.content.picker.automatic || Boolean(props.view.startup))
+        (!props.view.content.picker.automatic ||
+          props.view.content.picker.knownTarget ||
+          Boolean(props.view.startup))
         ? "connecting"
         : props.view.content.state;
     },

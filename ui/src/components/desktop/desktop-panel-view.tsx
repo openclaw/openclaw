@@ -271,7 +271,7 @@ export function DesktopPicker(props: {
               <PanelEmptyState
                 presentation={props.presentation}
                 icon={<Icon name="monitor" />}
-                heading=""
+                heading={t("desktop.title")}
                 description={props.loading ? t("desktop.loading") : (props.notice ?? "")}
                 action={
                   <button
