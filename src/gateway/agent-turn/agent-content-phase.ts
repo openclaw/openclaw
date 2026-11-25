@@ -199,7 +199,7 @@ export async function prepareAgentContentPhase(params: {
       params.assertAdmissionCurrent?.();
       catalogAgentId = target.agentId;
       // A request naming both provider and model never consults the session's selection.
-      if (!params.providerOverride || !params.modelOverride) {
+      if (!params.providerOverride?.trim() || !params.modelOverride?.trim()) {
         baseModel = await resolveGatewaySessionTurnModelRef({
           cfg: session?.cfg ?? params.cfg,
           agentId: target.agentId,

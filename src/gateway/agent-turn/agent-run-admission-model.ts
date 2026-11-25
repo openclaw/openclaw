@@ -33,7 +33,7 @@ export async function resolveAgentRunAdmissionModel(
   const runtimeConfig = params.cfgForAgent ?? params.cfg;
   // A request naming both provider and model never consults the session's selection.
   const sessionModel =
-    effectiveProviderOverride && effectiveModelOverride
+    effectiveProviderOverride?.trim() && effectiveModelOverride?.trim()
       ? undefined
       : await resolveGatewaySessionTurnModelRef({
           cfg: runtimeConfig,
