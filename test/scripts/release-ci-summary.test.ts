@@ -276,7 +276,7 @@ function publicationSourceFixture(
       ...request,
       coverage: {
         ...request.coverage,
-        ...(legacyArtifactInput && { publication_artifact_source_json: "" }),
+        ...(legacyArtifactInput && { publication_artifact_source_json: "", telegram_waiver: "" }),
       },
     },
     { packages: [], platforms: [] },
@@ -356,6 +356,7 @@ describe("original publication admission reader", () => {
     "cached",
     "artifact",
     "legacy-empty-operand",
+    "nonempty-retired-operand",
     "wrong-producer",
     "wrong-attempt",
   ] as const)(
@@ -366,7 +367,11 @@ describe("original publication admission reader", () => {
         "normal",
         planSource === "legacy-empty-operand",
       );
-      const { publication_artifact_source_json: _retired, ...coverage } = fixture.request.coverage;
+      const {
+        publication_artifact_source_json: _retired,
+        telegram_waiver: _telegram,
+        ...coverage
+      } = fixture.request.coverage;
       fixture.plan.sealParentRunAttempt = planSource === "wrong-attempt" ? 3 : 2;
       fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
       const parent = publicationParent(fixture);
@@ -403,7 +408,13 @@ describe("original publication admission reader", () => {
         }),
       };
       const operation = restoreOriginalPublicationAdmission({
-        request: { ...fixture.request, coverage },
+        request: {
+          ...fixture.request,
+          coverage:
+            planSource === "nonempty-retired-operand"
+              ? { ...coverage, telegram_waiver: "changed" }
+              : coverage,
+        },
         client,
         cachedPlan: planSource === "cached" ? fixture.plan : undefined,
       });
@@ -413,6 +424,12 @@ describe("original publication admission reader", () => {
       }
       if (planSource === "wrong-attempt") {
         await expect(operation).rejects.toThrow("sealer/upload did not succeed");
+        return;
+      }
+      if (planSource === "nonempty-retired-operand") {
+        await expect(operation).rejects.toThrow(
+          "publication original admission operands differ from this attempt",
+        );
         return;
       }
       const restored = await operation;
