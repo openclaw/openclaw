@@ -2,7 +2,10 @@ import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/trans
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
@@ -250,7 +253,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (usesSystemPromptSeries) {
     beginSessionSystemPrompt(sessionPromptState);
   }
-  const toolPolicyDigest = resolveSessionToolPolicyDigest(attempt.config, sessionAgentId);
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(
+    attempt.config,
+    sessionAgentId,
+    readRunOperatorAuthority(attempt)?.participationCeiling,
+  );
   if (usesSystemPromptSeries) {
     const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
       prepareSessionPublicationToolListing({

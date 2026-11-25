@@ -116,3 +116,30 @@ export type SpawnSubagentResult = {
 export function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
   return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
 }
+
+/** Report both the launch boundary and any still-owed accepted-run cleanup. */
+export function buildSubagentSpawnFailureResult(params: {
+  failure: { phase: "initialize" | "dispatch" | "register"; error: unknown; runId?: string };
+  childSessionKey: string;
+  childIdem: string;
+  acceptedRunCleanupError?: string;
+}): SpawnSubagentResult {
+  const { phase, error, runId } = params.failure;
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "error";
+  const spawnStatus =
+    error && typeof error === "object" && "spawnStatus" in error ? error.spawnStatus : undefined;
+  return {
+    status: spawnStatus === "forbidden" ? "forbidden" : "error",
+    error: [
+      phase === "register" && spawnStatus !== "forbidden"
+        ? `Failed to register subagent run: ${message}`
+        : message,
+      params.acceptedRunCleanupError,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    childSessionKey: params.childSessionKey,
+    ...(phase === "initialize" ? {} : { runId: runId ?? params.childIdem }),
+  };
+}

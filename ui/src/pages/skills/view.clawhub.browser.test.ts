@@ -165,6 +165,29 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
     });
   };
   await expectEndVisible();
+
+  // A late text reflow must not hide the last skill after the user reaches the end.
+  // Do not scroll again after the rows grow: that would hide a lost end anchor.
+  const lastRow = card(999).parentElement!;
+  const initialRowHeight = lastRow.getBoundingClientRect().height;
+  const contentHeight = card(999)
+    .querySelector(".plugin-catalog-card__content")!
+    .getBoundingClientRect().height;
+  const enlargedRows = document.createElement("style");
+  enlargedRows.textContent = `openclaw-skills-page .plugin-catalog-row__main { min-height: ${Math.ceil(contentHeight) + 24}px; }`;
+  container.scrollTop = container.scrollHeight;
+  container.append(enlargedRows);
+  try {
+    await waitForSolid(() => {
+      expect(lastRow.getBoundingClientRect().height).toBeGreaterThan(initialRowHeight);
+      expect(card(999).getBoundingClientRect().top).toBeLessThan(
+        container.getBoundingClientRect().bottom,
+      );
+    });
+  } finally {
+    enlargedRows.remove();
+  }
+
   setNotice({
     ref: "other",
     kind: "error",

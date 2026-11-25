@@ -340,11 +340,16 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     )) &&
     record
   ) {
+    const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
     record = await followRun(
       record.runId,
       opts.json,
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
+    // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
+    if (record && releaseAdmission) {
+      record = { ...record, origin: { ...record.origin, releaseAdmission } };
+    }
   }
   report(record, opts.json);
   process.exitCode =

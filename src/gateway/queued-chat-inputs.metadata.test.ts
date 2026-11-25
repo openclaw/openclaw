@@ -66,11 +66,12 @@ function expectStarted(response: Awaited<ReturnType<Fixture["send"]>>) {
   );
 }
 
-async function createFixture() {
+async function createFixture(sessionKey?: string) {
   const profile = ensureProfileForEmail("queued-metadata-author@example.test");
   setDisplayName(profile.id, "Queued author");
   const fixture = await createBrowserFollowupFixture({
     preserveContent: true,
+    sessionKey,
     createdActor: { type: "human", source: "profile", id: profile.id },
   });
   setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Queued author");

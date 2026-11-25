@@ -7,10 +7,35 @@ const text = (container: ParentNode, selector: string) =>
   container.querySelector(selector)?.textContent;
 
 it.each([
+  [{ live: true }, "Checking goal"],
+  [{ completed: true }, "Checked goal"],
+  [{ completed: true, isError: true }, "Check goal"],
+  [{}, "Check goal"],
+] as const)(
+  "describes a goal lookup without implying pursuit or completion: %j",
+  async (state, label) => {
+    const container = await mountCard(
+      { id: "goal-lookup", name: "mcp__openclaw__get_goal", args: {}, ...state },
+      { messageKey: "goal-lookup", expanded: false, runActive: true },
+    );
+    expect(text(container, ".chat-tool-row__title")).toBe(label);
+  },
+);
+
+it.each([
   ["wait", { runId: "cm_test" }, "Wait"],
   ["ask_user", { questions: [{ question: "Do not repeat this prompt" }] }, "Asked you a question"],
   ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Wait"],
   ["custom_tool", { text: "Inspect the workspace" }, "Custom Tool"],
+  [
+    "ToolSearch",
+    { query: "select:mcp__openclaw__exec,mcp__openclaw__sessions_send" },
+    "Selected tools",
+  ],
+  ["ToolSearch", { query: "find session tools" }, "Searched tools"],
+  ["mcp__openclaw__tool_search", { query: "session tools" }, "Searched tools"],
+  ["mcp__openclaw__sessions_list", { limit: 200 }, "Listed chats"],
+  ["sessions_list", { search: "00000000-0000-4000-8000-000000007ef3" }, "Listed chats"],
 ] as const)(
   "keeps %s factual while retaining its input for inspection",
   async (name, args, label) => {
@@ -22,12 +47,33 @@ it.each([
         container,
       );
       expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe(label);
-      if (expanded && "text" in args) {
-        expect(text(container, ".chat-tool-msg-body")).toContain(args.text);
+      if (expanded) {
+        for (const field of ["text", "query", "search", "limit"] as const) {
+          if (field in args) {
+            expect(text(container, ".chat-tool-msg-body")).toContain(
+              String(args[field as keyof typeof args]),
+            );
+          }
+        }
       }
     }
   },
 );
+
+it.each([
+  [
+    "kill",
+    { status: "completed", cancellationRequested: true, terminationConfirmed: false },
+    "Requested process stop",
+  ],
+  ["clear", { status: "completed" }, "Removed finished process record"],
+] as const)("describes what a completed process %s call did", async (action, details, label) => {
+  const container = await mountCard(
+    { id: action, name: "process", args: { action, sessionId: "job" }, completed: true, details },
+    { expanded: false },
+  );
+  expect(text(container, ".chat-tool-row__title")).toBe(label);
+});
 
 it.each([
   { code: "await tools.read({ path: 'README.md' })" },
@@ -98,11 +144,18 @@ it("uses names already available to chat rows without exposing unresolved routin
   const session = { key, kind: "direct" as const, label: "Research", updatedAt: 1, activeRunIds };
   for (const [name, args, known, unresolved] of [
     ["sessions_history", { sessionKey: key }, "Read chat Research", "Read chat"],
+    [
+      "sessions_send",
+      { sessionKey: key },
+      "Delivery unconfirmed · Research",
+      "Delivery unconfirmed",
+    ],
     ["agents_wait", { ids: ["run"] }, "Waited for Research", "Waited for agents"],
   ] as const) {
     for (const [subagentSessions, expected] of [
       [[session], known],
       [[], unresolved],
+      [[{ ...session, label: undefined }], unresolved],
     ] as const) {
       const container = await mountCard(
         { id: name, name, completed: true, args },
@@ -112,6 +165,111 @@ it("uses names already available to chat rows without exposing unresolved routin
     }
   }
 });
+
+it.each([
+  [undefined, "Delivery unconfirmed · Release review"],
+  [{ status: "other" }, "Delivery unconfirmed · Release review"],
+  [{ status: "accepted", targetDisposition: "queued" }, "Message accepted for Release review"],
+  [{ status: "queued", runStarted: false }, "Queued message to Release review"],
+  [
+    { status: "started", retained: { acceptance: "not_accepted" } },
+    "Message to Release review deferred",
+  ],
+  [{ status: "ok", reply: "Received" }, "Sent message to Release review"],
+  [{ status: "no_reply" }, "Sent message to Release review"],
+] as const)("does not equate a completed send call with delivery: %j", async (receipt, label) => {
+  const args = { label: "Release review", message: "Please review the change" };
+  const container = await mountCard(
+    {
+      id: "send",
+      name: "mcp__openclaw__sessions_send",
+      args,
+      completed: true,
+      outputText: receipt && JSON.stringify(receipt),
+    },
+    { expanded: false },
+  );
+  expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
+});
+
+it.each([
+  [
+    { name: "ToolSearch", args: { query: "select:mcp__openclaw__exec" }, live: true },
+    "Selecting tools",
+  ],
+  [{ name: "sessions_list", args: { limit: 200 }, isError: true }, "List chats"],
+  [{ name: "sessions_send", args: { sessionKey: "unknown" }, live: true }, "Sending message"],
+  [{ name: "sessions_send", isError: true, details: { status: "ok" } }, "Send message"],
+  [
+    {
+      name: "sessions_send",
+      args: { label: "Review" },
+      isError: true,
+      details: { status: "timeout", error: "agent run timed out", sentBeforeError: true },
+    },
+    "Sent to Review · reply timed out",
+  ],
+  [
+    {
+      name: "sessions_send",
+      isError: true,
+      outputText: JSON.stringify({
+        status: "error",
+        error: "Gateway admission is still pending; inspect this run before retrying.",
+        sentBeforeError: true,
+      }),
+    },
+    "Delivery unconfirmed",
+  ],
+  [{ name: "sessions_send", isError: true, details: { status: "timeout" } }, "Send message"],
+  [
+    {
+      name: "tool_call",
+      args: { id: "openclaw:core:sessions_send", args: { label: "Review", message: "Check this" } },
+      completed: true,
+      outputText: JSON.stringify({
+        tool: { name: "sessions_send" },
+        result: { content: [{ type: "text", text: JSON.stringify({ status: "accepted" }) }] },
+      }),
+    },
+    "Message accepted for Review",
+  ],
+] as const)(
+  "keeps the actual phase and receipt through display normalization: %j",
+  async (card, label) => {
+    const container = await mountCard(
+      { id: "phase", ...card },
+      { expanded: false, runActive: true },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
+  },
+);
+
+it.each([
+  ["conversations_send", { details: { status: "sent" } }, "Sent to conversation"],
+  ["conversations_send", { outputText: '{"status":"queued"}' }, "Message queued"],
+  ["conversations_send", { details: { status: "suppressed" } }, "Message not sent"],
+  ["conversations_send", { details: { status: "unknown" } }, "Delivery unconfirmed"],
+  ["conversations_send", {}, "Delivery unconfirmed"],
+  ["conversations_turn", { live: true, completed: false }, "Sending and waiting for a reply"],
+  ["conversations_turn", { details: { status: "replied" } }, "Sent · reply received"],
+  ["conversations_turn", { details: { status: "timeout" } }, "Sent · reply timed out"],
+  [
+    "conversations_turn",
+    { details: { status: "sent", error: "No reply correlation" } },
+    "Sent to conversation",
+  ],
+  ["conversations_turn", { details: { status: "queued" } }, "Message queued"],
+] as const)(
+  "shows the conversation delivery receipt for %s: %j",
+  async (name, result, expected) => {
+    const container = await mountCard(
+      { id: "conversation", name, args: { message: "Hello" }, completed: true, ...result },
+      { expanded: false, runActive: true },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(expected);
+  },
+);
 
 const stop = (details: object, args: object = {}) => ({
   name: "sessions",

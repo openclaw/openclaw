@@ -116,7 +116,6 @@ export function transcriptContextDependencies(
     ChatThreadProps,
     | "onRetryRun"
     | "onStartNewSession"
-    | "failedMessageEditSource"
     | "failureActionsRunId"
     | "modelCatalog"
     | "displayFacts"
@@ -128,7 +127,6 @@ export function transcriptContextDependencies(
     return [
       props.onRetryRun,
       props.onStartNewSession,
-      props.failedMessageEditSource,
       props.failureActionsRunId,
       // Model names and the failure heading's provider name come from the catalog.
       item.modelChange || item.runError?.cause ? props.modelCatalog : undefined,
