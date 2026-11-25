@@ -513,6 +513,50 @@ Uncertain child settlement retains scratch and prevents inspecting the workload.
 The receipt is `disabled-only`, with `timingAdmission: false`. It does not install
 or prepare dependencies, run empty/seeded controls, or admit paired measurements.
 
+#### Prepared workload cache controls
+
+Use `--mode node-cache-workload-qualification` with the same arguments to run
+exactly one disabled, empty, then seeded control under one aggregate deadline.
+Each control must pass the same twenty-case oracle and full input inventory.
+The empty control must report a missing launcher cache and uninitialized V8 cache.
+Only then does the runner copy its cache to `seed/`, record every file's bytes and
+hash, and seal files to `0400` and directories to `0500`.
+
+The seeded control restores a fresh writable copy. Its launcher must report a
+cache hit accepted by V8, with that cache file present in the sealed seed. The
+runner checks the original seed's bytes and permissions before and after the
+settled child. The first failure stops the sequence; each attempted control's
+receipt, log and available report remain in the output. `qualification.json`
+summarizes the result, and the sealed seed remains available for inspection.
+Expired deadlines and uncertain child settlement retain explicit unavailable
+checks; uncertain children retain scratch.
+
+These controls qualify launcher cache behavior for the supplied workload only.
+They do not prove descendant-module acceptance or provide timing admission;
+`timingAdmission` remains `false`, and the runner produces no paired analysis.
+
+The OpenClaw Performance workflow exposes this as the manual-only
+`node-cache-workload-qualification` mode. It uses the event SHA as the harness
+and the fixed workload commit `8cfbac51a27a1195176a3564f6d7cfd7d6994c85`.
+Leave `target_ref` empty or set it to the event SHA; dispatch a fresh run instead
+of rerunning an attempt. Other performance, release and publishing jobs stay
+excluded, regardless of their input flags.
+
+The job prepares dependencies online with the workload's pinned pnpm installer,
+frozen lockfile and isolated store. It generates Kysely types before the control
+runner snapshots the prepared tree. Node is pinned to `24.22.1`; the committed
+public definition also binds its executable hash, the five workload sources and
+twenty expected cases. The observed runtime fingerprint is retained before the
+fixed-runtime comparison, including its executable SHA-256. Preparation has a
+40-minute install timeout, controls have
+one 30-minute deadline, and the job has a 75-minute limit. Controls disable
+package downloads and reject persistent changes to prepared inputs.
+
+The `node-cache-workload-<run-id>-<attempt>` artifact retains preparation logs,
+per-control receipts, the sealed seed when available, and terminal evidence on
+failure. It is qualification evidence only; it does not enable timing admission
+or publish a report.
+
 ## Security Review reconciler
 
 Every ten minutes, Security Review reconciles CI completions

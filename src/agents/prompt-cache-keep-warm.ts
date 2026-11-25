@@ -15,7 +15,7 @@ import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import type { AssistantHistoryMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -457,7 +457,7 @@ export async function runPromptCacheKeepWarm(signal: AbortSignal): Promise<numbe
     state.candidates.clear();
     return Infinity;
   }
-  if (isConstrainedProcessLowOnMemory()) {
+  if (isMemoryPressureHigh()) {
     return Date.now() + 60_000;
   }
   if (!state.recovered) {

@@ -6,7 +6,7 @@ import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcri
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("gateway");
@@ -18,7 +18,7 @@ export async function prewarmGatewaySessionHistory(
   } = {},
 ): Promise<void> {
   // Operator attach can also request this warmup independently of the startup scheduler.
-  const shouldStop = () => options.isCancelled?.() || isConstrainedProcessLowOnMemory();
+  const shouldStop = () => options.isCancelled?.() || isMemoryPressureHigh();
   try {
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
       if (shouldStop()) {

@@ -63,11 +63,10 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/gateway/server-methods/tools-invoke.ts",
   "src/gateway/session-resource-tool-policy.ts",
   "src/gateway/talk/client-tool-authority.ts",
-  // Channel command owner: `commands.ownerAllowFrom` match and command-owner authority.
+  // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
+  // and pre-turn senders have no grant yet, so this fact still sets the bit.
   "src/auto-reply/command-auth.ts",
-  "src/auto-reply/reply/get-reply-run-execute.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
-  "src/channels/plugins/message-action-dispatch.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
   // Scheduled and requester-owner continuations (cron creator authority).
   "src/agents/openclaw-plugin-tools.ts",
@@ -75,6 +74,7 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/agents/scheduled-message-invocation.ts",
   "src/auto-reply/reply/session-event-context.ts",
   "src/auto-reply/reply/session-event-target.ts",
+  "src/channels/plugins/message-action-dispatch.ts", // scheduled write: the job's operator
   "src/cron/execution-context-admission.ts",
   "src/cron/execution-context-registry.ts",
   "src/gateway/cron-job-turn-target.ts",
