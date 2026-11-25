@@ -303,4 +303,34 @@ describe("GitHub publication discovery", () => {
     expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
     expect(readGitHubPublicationFact(session)).toEqual({ available: false });
   });
+
+  it("prepares a refresh wave one session at a time without waiting on replaced work", async () => {
+    owner = startGitHubPublicationDiscovery({ scheduler });
+    const wave = Array.from({ length: 200 }, (_, index) => ({
+      agentId: "main",
+      sessionKey: `agent:main:wave-${index}`,
+      sessionId: `wave-${index}`,
+    }));
+    for (const remembered of wave) {
+      readGitHubPublicationFact(remembered);
+    }
+    await clock.wake();
+    vi.mocked(prepareGitHubPublicationFact).mockClear();
+    const stale = holdPreparation();
+    const next = holdPreparation();
+    sessionChanges.emit({ all: true, scope: "config" });
+    const refreshing = clock.wake();
+    expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
+    // Demand replaces the preparing session; the wave continues before the stale result settles.
+    const replaced = { ...wave[0]!, sessionId: "wave-0-next" };
+    readGitHubPublicationFact(replaced);
+    await vi.waitFor(() => expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(prepareGitHubPublicationFact).mock.calls[1]![0].sessionId).toBe("wave-1");
+    next.resolve(published);
+    stale.resolve({ ...published, github: { ...published.github, branch: "openclaw/stale" } });
+    await refreshing;
+    await clock.wake();
+    expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(201);
+    expect(readGitHubPublicationFact(replaced)).toEqual(published);
+  });
 });

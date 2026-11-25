@@ -6,7 +6,11 @@ import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
-import { normalizeChatSendRequest, type NormalizedChatSendRequest } from "./chat-send-request.js";
+import {
+  applyChatSendParticipation,
+  normalizeChatSendRequest,
+  type NormalizedChatSendRequest,
+} from "./chat-send-request.js";
 import {
   prepareChatSendNativeRuntimeRestriction,
   prepareChatSendSession,
@@ -36,6 +40,7 @@ export async function prepareAndAdmitChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
+    activeSteer?: { runId: string; profileId: string };
     isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
@@ -44,21 +49,14 @@ export async function prepareAndAdmitChatSend(
   releaseSessionStorage?: () => void,
 ) {
   const phase = diagnostics?.scope("admission");
-  const assertCurrent =
-    sessionMutationAuthorization || hasCurrentClientAuthority
-      ? () => {
-          sessionMutationAuthorization?.assertCurrent();
-          if (hasCurrentClientAuthority?.() === false) {
-            throw new Error("Gateway caller authority is no longer active.");
-          }
-        }
-      : undefined;
+  const assertCurrent = sessionMutationAuthorization?.assertCurrent;
   const withCurrent = sessionMutationAuthorization?.withCurrent;
   const assertCurrentAsync = async () =>
     withCurrent ? withCurrent(() => assertCurrent?.()) : assertCurrent?.();
   const normalization = normalizeChatSendRequest({
     params,
     client,
+    ...(options?.activeSteer ? { activeSteer: options.activeSteer } : {}),
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
     ...(options?.providerReviewAcknowledgment
@@ -83,6 +81,13 @@ export async function prepareAndAdmitChatSend(
       assertCurrent?.();
     } catch (error) {
       respondChatSendAdmissionError(error, respond);
+      return undefined;
+    }
+  }
+  if (sessionMutationAuthorization?.participationCeiling) {
+    const attached = applyChatSendParticipation(normalizedRequest.value);
+    if (!attached.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, attached.error));
       return undefined;
     }
   }

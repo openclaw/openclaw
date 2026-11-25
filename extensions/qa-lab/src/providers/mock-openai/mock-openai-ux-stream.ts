@@ -1,11 +1,32 @@
-import type { StreamEvent } from "./mock-openai-contracts.js";
+import type { MockToolCallItem, ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
+import { hasToolErrorOutput } from "./mock-openai-directives.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import {
+  countCurrentToolOutputs,
+  extractToolOutput,
+  extractToolOutputStructuredError,
+  parseToolOutputJson,
+} from "./mock-openai-input.js";
+import { MockResponseStream } from "./mock-openai-stream.js";
+import {
+  buildScenarioToolCallEvents,
+  resolveCodeModeExecSurface,
+} from "./mock-openai-tool-routing.js";
 
 // Paced markdown reply for client UX harnesses (iOS `ios:behavior`). The prompt picks the
 // shape: `UXSTREAM chunks=400 interval=50` streams 400 deltas, 50 ms apart. The token is one
 // capitalized word because phone keyboards autocorrect lowercase phrases typed by UI drivers.
+// `UXAGENT steps=4 chunks=150 interval=20` is an agent turn instead: `steps` rounds of commentary
+// plus a tool call (progress card updates alternating with `exec`), then the same final reply.
+// Plain replies never showed tool rows or a progress card, and the iOS transcript only went
+// blank after a keyboard-up send in a turn shaped like this (#191478). Tool calls go through the
+// request's declared tool surface (direct, dispatcher or code mode), and a failed step ends the
+// turn with `UX-AGENT-TOOL-FAILED` instead of the reply, so a harness never passes on error rows.
+const QA_UX_AGENT_TOOL_FAILED = "UX-AGENT-TOOL-FAILED";
 const QA_UX_STREAM_PROMPT_RE = /\bUXSTREAM\b/;
+const QA_UX_AGENT_PROMPT_RE = /\bUXAGENT\b/;
 const QA_UX_STREAM_END_MARKER = "UX-STREAM-END";
+const MAX_AGENT_STEPS = 8;
 
 const DEFAULT_CHUNKS = 200;
 const MAX_CHUNKS = 2_000;
@@ -37,8 +58,17 @@ export type QaUxStream = {
   deltaIntervalMs: number;
 };
 
-export function resolveQaUxStream(prompt: string): QaUxStream | undefined {
-  if (!QA_UX_STREAM_PROMPT_RE.test(prompt)) {
+/**
+ * `input`: the request's items, for how far the current agent turn has got and whether its last
+ * tool step failed. `toolBody`: the request's tool declaration surface, to route tool calls.
+ */
+export function resolveQaUxStream(
+  prompt: string,
+  input: ResponsesInputItem[],
+  toolBody: Record<string, unknown>,
+): QaUxStream | undefined {
+  const agent = QA_UX_AGENT_PROMPT_RE.test(prompt);
+  if (!agent && !QA_UX_STREAM_PROMPT_RE.test(prompt)) {
     return undefined;
   }
   const chunkCount = readIntOption(prompt, "chunks", DEFAULT_CHUNKS, 1, MAX_CHUNKS);
@@ -49,6 +79,23 @@ export function resolveQaUxStream(prompt: string): QaUxStream | undefined {
     0,
     MAX_INTERVAL_MS,
   );
+  const steps = agent ? readIntOption(prompt, "steps", 4, 1, MAX_AGENT_STEPS) : 0;
+  const completed = agent ? countCurrentToolOutputs(input) : 0;
+  if (completed > 0) {
+    const output = extractToolOutput(input);
+    const failed =
+      extractToolOutputStructuredError(input) ??
+      hasToolErrorOutput(parseToolOutputJson(output), output);
+    if (failed) {
+      return { events: buildAssistantEvents(QA_UX_AGENT_TOOL_FAILED), deltaIntervalMs: 0 };
+    }
+  }
+  if (completed < steps) {
+    // `label=<word>` names this turn's plan steps, so a client can tell its card from an earlier
+    // turn's card in the same chat.
+    const label = /\blabel=([A-Za-z]+)/.exec(prompt)?.[1] ?? "Check";
+    return { events: buildAgentStepEvents(completed, steps, label, toolBody), deltaIntervalMs: 0 };
+  }
   const text = buildUxStreamText(chunkCount * CHARS_PER_CHUNK);
   return {
     events: buildAssistantEvents([
@@ -61,6 +108,52 @@ export function resolveQaUxStream(prompt: string): QaUxStream | undefined {
     ]),
     deltaIntervalMs,
   };
+}
+
+function buildAgentStepEvents(
+  step: number,
+  steps: number,
+  label: string,
+  toolBody: Record<string, unknown>,
+) {
+  const commentary = {
+    id: `msg_mock_ux_agent_${step}`,
+    phase: "commentary" as const,
+    text: `Step ${step + 1} of ${steps}: checking the ${WORDS[step % WORDS.length]} before the next ${WORDS[(step + 5) % WORDS.length]}.`,
+  };
+  // The last step always updates the card with every step done: the runtime asks the model to
+  // reconcile a plan left unfinished, which would add a turn after the reply.
+  const last = step === steps - 1;
+  const plan = Array.from({ length: steps }, (_, index) => ({
+    step: `${label} ${WORDS[index % WORDS.length]} ${index + 1}`,
+    status: last || index < step ? "completed" : index === step ? "in_progress" : "pending",
+  }));
+  const marker = `ux-agent-step-${step + 1}`;
+  // Code mode's `exec` runs a script, not a shell command.
+  const surface = resolveCodeModeExecSurface(toolBody);
+  const execArgs =
+    surface === "native"
+      ? { input: `text(${JSON.stringify(marker)});` }
+      : surface === "guest"
+        ? { code: `return ${JSON.stringify(marker)};` }
+        : { command: `echo ${marker}` };
+  const toolEvents =
+    step % 2 === 1 && !last
+      ? buildScenarioToolCallEvents(toolBody, "exec", execArgs)
+      : buildScenarioToolCallEvents(toolBody, "progress_card", { plan });
+  // The routed call, after the step's commentary in the same response.
+  const stream = new MockResponseStream(`resp_mock_ux_agent_${step}`);
+  stream.message(commentary);
+  for (const event of toolEvents) {
+    if (
+      event.type === "response.output_item.done" &&
+      (event.item.type === "function_call" || event.item.type === "custom_tool_call")
+    ) {
+      // SAFETY: The routing adapter emits these items through MockResponseStream.tool(MockToolCallItem).
+      stream.tool(event.item as MockToolCallItem);
+    }
+  }
+  return stream.complete(32);
 }
 
 function readIntOption(prompt: string, name: string, fallback: number, min: number, max: number) {

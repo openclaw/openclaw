@@ -1,4 +1,4 @@
-import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.types.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
 import {
   restoreEmbeddedRunTimeoutAbandonment,
   type EmbeddedRunTimeoutRecoveryMarker,
@@ -19,6 +19,7 @@ export function createEmbeddedRunContextRecoveryState() {
     overflowCompactionAttempts: 0,
     timeoutCompactionAttempts: 0,
     toolResultTruncationAttempted: false,
+    itemConflictRecoveryAttempted: false,
     observeContextAccounting(event: EmbeddedContextAccountingEvent) {
       // Producer order, not terminal usage copies, determines the current context.
       const tokens = event.kind === "compaction" ? event.tokensAfter : event.contextTokens;

@@ -1,9 +1,10 @@
 // Test Hotspots tests cover hotspot report evidence validation.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const tempRoots: string[] = [];
 
@@ -21,9 +22,7 @@ function runTestHotspots(args: string[]) {
 }
 
 afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
+  cleanupTempDirs(tempRoots);
 });
 
 describe("test-hotspots script", () => {

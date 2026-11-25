@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -14,6 +15,93 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it.each([1280, 820, 400])(
+    "keeps failed-reply text on one line without resending or losing the draft at %ipx",
+    async (width) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const diagnostic =
+          "The model provider interrupted the connection before the reply finished. The example gateway returned upstream status 502.\nRequest ID: example-7942.";
+        const draft = "Can you also pull out the action items?";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [
+            {
+              key: sessionKey,
+              status: "failed",
+              hasActiveRun: false,
+              lastRunId: "failed-run",
+              lastRunError: diagnostic,
+            },
+          ],
+          historyMessages: [{ role: "user", content: "Check the example operation." }],
+        });
+        await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
+        const notice = page.locator(".chat-error.chat-error--reply");
+        const message = notice.locator(".app-toast__message");
+        const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
+        const dismiss = notice.getByRole("button", { name: "Dismiss error", exact: true });
+        await waitForControlUiProofSurface(notice, [message, refresh, dismiss]);
+        const input = page.locator(".agent-chat__input textarea");
+        await input.fill(draft);
+        expect(await message.textContent()).toBe(diagnostic);
+        expect(await message.getAttribute("role")).toBe("alert");
+        expect(await notice.evaluate((element) => element.classList.contains("app-toast"))).toBe(
+          false,
+        );
+        expect(
+          await notice
+            .locator(
+              "details, summary, [aria-expanded], .lazy-view-error__chevron, .lazy-view-error__detail, .app-toast__description, .report-issue-link",
+            )
+            .count(),
+        ).toBe(0);
+        expect(await notice.getByRole("button").count()).toBe(2);
+        const layout = await notice.evaluate((element) => {
+          const messageNode = element.querySelector<HTMLElement>(".app-toast__message")!;
+          const refreshNode = element.querySelector(".chat-error__refresh")!;
+          const dismissNode = element.querySelector(".chat-error__dismiss.app-toast__dismiss")!;
+          const style = getComputedStyle(messageNode);
+          const bounds = [messageNode, refreshNode, dismissNode].map((node) =>
+            node.getBoundingClientRect(),
+          );
+          const centers = bounds.map((rect) => rect.y + rect.height / 2);
+          return {
+            whiteSpace: style.whiteSpace,
+            overflow: style.overflowX,
+            textOverflow: style.textOverflow,
+            textHeight: bounds[0]!.height,
+            lineHeight: Number.parseFloat(style.lineHeight),
+            clipped: messageNode.scrollWidth > messageNode.clientWidth,
+            sameRow: Math.max(...centers) - Math.min(...centers),
+            ordered: bounds[0]!.right <= bounds[1]!.left && bounds[1]!.right <= bounds[2]!.left,
+            contained:
+              element.scrollWidth <= element.clientWidth &&
+              bounds[2]!.right <= element.getBoundingClientRect().right,
+          };
+        });
+        expect(layout).toMatchObject({
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          clipped: true,
+          ordered: true,
+          contained: true,
+        });
+        expect(layout.textHeight).toBeLessThanOrEqual(layout.lineHeight + 1);
+        expect(layout.sameRow).toBeLessThanOrEqual(1);
+        const reads = (await gateway.getRequests("chat.history")).length;
+        await refresh.click();
+        await gateway.waitForRequest("chat.history", { after: reads });
+        expect(await input.inputValue()).toBe(draft);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await dismiss.click();
+        await notice.waitFor({ state: "hidden" });
+        expect(await input.inputValue()).toBe(draft);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      });
+    },
+  );
   it("opens the appropriate public issue template without attaching runtime data", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

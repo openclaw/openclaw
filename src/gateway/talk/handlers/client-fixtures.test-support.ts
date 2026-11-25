@@ -75,7 +75,10 @@ export function createDelegatedBrowserProviderFixture(
   Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
     value: { isBrowserSessionConfigured: () => true, cancelBrowserSession },
   });
-  const client = { connId: "conn-close" };
+  const client: { connId: string; connect: { scopes?: string[] } } = {
+    connId: "conn-close",
+    connect: { scopes: ["operator.talk"] },
+  };
   const clients = new Set([client]);
   return {
     provider,

@@ -264,7 +264,9 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
     const warnings: string[] = [];
     const outcome = await (await launch({ usePty: true, beforeSpawn, warnings })).promise;
     expect(outcome.exitCode).toBe(1);
-    expect(outcome.aggregated).toBe(`${safeMessage}\n\n(Command exited with code 1)`);
+    expect(outcome.aggregated.replace(/\r\n/g, "\n")).toBe(
+      `${safeMessage}\nGitHub Identity stage: credential-read\n\n(Command exited with code 1)`,
+    );
     expect(warnings).toEqual([]);
     expect(beforeSpawn).toHaveBeenCalledOnce();
     expect(boundary.spawn).toHaveBeenCalledOnce();

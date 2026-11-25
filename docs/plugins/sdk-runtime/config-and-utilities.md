@@ -178,11 +178,14 @@ endpoints outside that path. Unknown identities are rejected on supported hosts;
 hosts without native birth-identity support and other platforms leave existing
 processes untouched. PID 1 can itself be a live owner on Linux.
 
-For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
+For a subprocess that requires Node.js, await `resolveNodeRuntimeExecutableAsync` from
 the same subpath. It reuses the current Node executable when supported by OpenClaw,
 or finds a supported Node binary, skipping older Node versions and Bun's `node`
 shim. An unavailable supported Node runtime returns `undefined`; the caller
 reports the missing requirement.
+Cold discovery creates and removes its probe script and waits for the child asynchronously.
+The synchronous `resolveNodeRuntimeExecutable` remains available for CLI tooling;
+Gateway request paths should use the async form.
 
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation. On macOS and Linux, Bun uses its
@@ -350,11 +353,16 @@ CLI logs render these diagnostics automatically; successful runs remain quiet.
 Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
-Channel plugins must admit authenticated agent turns through their injected
-`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
-accepts owner authority only from the exact active, trusted plugin registered for
-`options.messageChannel`; guest turns retain their non-owner identity. The public
-`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
+Channel plugins run agent turns for their senders through the injected
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. Only the
+active plugin registered for `options.messageChannel` can call it. Pass the
+sender as `runContext.senderId` and the channel account as `accountId`: the host
+makes the turn an owner turn exactly when `commands.ownerAllowFrom` lists that
+sender, the same rule as a text message from that channel. Any other sender runs
+as a non-owner.
+`options.senderIsOwner` is deprecated and ignored; passing `true` logs one
+deprecation warning per plugin. The public `agentCommandFromIngress` SDK helper
+never makes a turn an owner turn.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from

@@ -159,7 +159,7 @@ describe("queued chat input withdrawal", () => {
       expect(page.items).toMatchObject([
         {
           state: "cancelled",
-          cancelledByUser: true,
+          endCause: "user-stop",
           message: { content: fixture.approvedContent },
         },
       ]);
@@ -167,7 +167,7 @@ describe("queued chat input withdrawal", () => {
     },
   );
 
-  it("keeps refused browser input revoked after its session access returns", async () => {
+  it("finishes admitted browser input but refuses the next start after session access changes", async () => {
     await using fixture = await createBrowserFollowupFixture({
       preserveContent: true,
       persistDuringDispatch: true,
@@ -177,32 +177,25 @@ describe("queued chat input withdrawal", () => {
     fixture.client.connect.scopes = ["operator.read", "operator.write"];
     const ack = await fixture.send(undefined, { expectedProfileId: profile.id });
     const recorder = await fixture.dispatchedRecorder;
-    const check = () =>
-      recorder.withPendingInputCurrent
-        ? recorder.withPendingInputCurrent(() => {})
-        : Promise.resolve().then(() => recorder.withPendingInput?.(() => {}));
     await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
-    await expect(check()).rejects.toMatchObject({
-      message: "Message injection authority is no longer current",
-      cause: {
-        message: expect.stringContaining("session is draft for this connection"),
-      },
-    });
-    await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));
-    await expect(check()).rejects.toThrow("Message injection authority is no longer current");
+    const refused = await fixture.send(
+      undefined,
+      { expectedProfileId: profile.id },
+      { ...fixture.params, idempotencyKey: "browser-follow-up-after-revocation" },
+    );
+    expect(refused.mock.calls[0]).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("session is draft for this connection") },
+    ]);
     await fixture.finishDispatch();
     expect(ack).toHaveBeenCalledOnce();
     expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-      total: 1,
-      items: [{ state: "cancelled" }],
-    });
-    expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
+    expect(recorder.getAdmissionReceipt()).toBeDefined();
+    expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+    expect(loadTranscriptEventsSync(fixture.scope)).toContainEqual(
       expect.objectContaining({
-        message: expect.objectContaining({
-          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-        }),
+        message: expect.objectContaining({ content: fixture.params.message }),
       }),
     );
   });
@@ -255,6 +248,8 @@ describe("queued chat input withdrawal", () => {
       }
       await fixture.finishDispatch();
       const disposition = "cancelled";
+      // Accepted input stays queued for replay after a graceful restart.
+      const pendingState = stopReason === "restart" ? "queued" : disposition;
       const prefix = "chat pending input aborted:";
       const logs = vi
         .mocked(context.logGateway.info)
@@ -263,12 +258,15 @@ describe("queued chat input withdrawal", () => {
       const details = { runId, sessionKey, sessionId, agentId: "main", disposition, reason };
       expect(logs).toEqual(reason ? [[`${prefix} ${reason} (${disposition})`, details]] : []);
       expect(await listSessionPendingInputs(scope)).toMatchObject(
-        reason ? { items: [{ state: disposition }], total: 1 } : { items: [], total: 0 },
+        reason ? { items: [{ state: pendingState }], total: 1 } : { items: [], total: 0 },
       );
       if (reason) {
         const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 1000 });
         expect(page.items).toHaveLength(1);
-        expect(page.items[0]?.cancelledByUser).toBeUndefined();
+        expect(page.items[0]?.endCause).not.toBe("user-stop");
+        if (pendingState === "queued") {
+          expect(page.items[0]?.endCause).toBeUndefined();
+        }
         if (discardPendingInput) {
           expect(page.items[0]?.message).toMatchObject({ display: false, content: [] });
           expect(JSON.stringify(page)).not.toContain(fixture.approvedContent);
@@ -279,7 +277,7 @@ describe("queued chat input withdrawal", () => {
           {
             runId,
             state: "pending",
-            cancelled: true,
+            ...(pendingState === "cancelled" ? { cancelled: true } : {}),
           },
         ]);
         expect(loadTranscriptEventsSync(scope)).toEqual(fixture.activeTranscript);

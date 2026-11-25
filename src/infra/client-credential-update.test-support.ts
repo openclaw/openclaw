@@ -65,7 +65,10 @@ export function seedCredentials(
   );
 }
 
-export function assertMigratedCredentials(f: { env: NodeJS.ProcessEnv; native: boolean }) {
+export function assertMigratedCredentials(
+  f: { env: NodeJS.ProcessEnv; native: boolean },
+  token = "synthetic-original-token",
+) {
   using local = openClientCredentialCustody(f.env, { migration: true })!;
   expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
   expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual({
@@ -77,7 +80,7 @@ export function assertMigratedCredentials(f: { env: NodeJS.ProcessEnv; native: b
     updated_at_ms: 99,
   });
   expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
-    token: "synthetic-original-token",
+    token,
   });
   if (!f.native) {
     expect(

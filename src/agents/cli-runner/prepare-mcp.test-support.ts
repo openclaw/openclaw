@@ -50,7 +50,6 @@ const processToken = "stable-loopback-token";
 const loopbackRuntime = () => ({
   port: 31783,
   ownerToken: runtimeOwnerToken,
-  nonOwnerToken: "loopback-non-owner-token",
 });
 
 export function createCliMcpTool(name: string, label: string, description: string) {
@@ -208,7 +207,6 @@ export function registerCliMcpPreparationTests({
       getActiveMcpLoopbackRuntime: () => ({
         port: 31783,
         ownerToken: turnOwnerToken,
-        nonOwnerToken: "fixture-reader",
       }),
       ensureMcpLoopbackServer: createTestMcpLoopbackServer,
       createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
@@ -480,7 +478,11 @@ export function registerCliMcpPreparationTests({
         workspaceDir,
         modelId: "test-model",
         messageProvider: "telegram",
-        requester: { channel: "telegram", senderId: "canonical-sender" },
+        requester: {
+          channel: "telegram",
+          senderId: "canonical-sender",
+          deviceId: "reviewer-device",
+        },
         accountId: undefined,
         inboundEventKind: "room_event",
         senderIsOwner: false,

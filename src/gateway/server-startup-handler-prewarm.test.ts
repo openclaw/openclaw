@@ -1,7 +1,10 @@
+import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostIo from "../infra/host-io-pressure.js";
+import * as hostMemory from "../infra/host-memory.js";
 import {
   resetGatewayWorkAdmission,
   markGatewayRestartDraining,
@@ -117,6 +120,8 @@ beforeEach(() => {
   mocks.getMemoryCapabilityRegistration.mockReset();
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
   vi.spyOn(process, "availableMemory").mockReturnValue(0);
+  vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+  vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
 });
 
 afterEach(async () => {
@@ -367,21 +372,35 @@ it("refreshes dependency templates between sessions without overlapping preparat
   }
 });
 
-it.each([
-  [0, 0, false],
-  [1000, 201, false],
-  [1000, 200, true],
-] as const)(
-  "reserves constrained memory for requests (limit: %i, available: %i)",
-  async (limit, available, skipped) => {
-    vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
-    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+it.each([false, true])(
+  "reserves constrained memory for requests (low memory: %s)",
+  async (skipped) => {
+    vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(skipped);
     const handles = scheduleGatewayPrewarm(prewarmOptions());
     sidecars.push(...handles);
     expect(handles).toHaveLength(skipped ? 0 : 2);
     await vi.waitFor(() => {
       expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(skipped ? 0 : 1);
       expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledTimes(skipped ? 0 : 1);
+    });
+  },
+);
+
+it.skipIf(Boolean(process.versions.bun))(
+  "leaves host memory to requests until a later prewarm starts with enough headroom",
+  async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const free = vi.mocked(os.freemem).mockReturnValue(128 * 1024 ** 2);
+    expect(scheduleGatewayPrewarm(prewarmOptions())).toEqual([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.prewarmLocalWorkspaceTemplates).not.toHaveBeenCalled();
+    expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+
+    free.mockReturnValue(1024 ** 3);
+    sidecars.push(...scheduleGatewayPrewarm(prewarmOptions()));
+    await vi.waitFor(() => {
+      expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+      expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
     });
   },
 );
@@ -420,3 +439,53 @@ it.each(["close", "restart"] as const)(
     }
   },
 );
+
+it("skips handler warmups when readiness arrives under pressure and retries templates after recovery", async () => {
+  const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
+  const ready = createDeferred();
+  scheduleDependencyPreparation({ waitForPostReadyWork: () => ready.promise });
+  await vi.advanceTimersByTimeAsync(0);
+  lowMemory.mockReturnValue(true);
+  ready.resolve();
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.dynamicImportSettled();
+  expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+  expect(mocks.prewarmLocalWorkspaceTemplates).not.toHaveBeenCalled();
+
+  lowMemory.mockReturnValue(false);
+  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.dynamicImportSettled();
+  expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+  expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+});
+
+it("skips delayed context preparation when memory falls after history was warmed", async () => {
+  const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
+  schedule();
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  lowMemory.mockReturnValue(true);
+  await drainPrewarm();
+  expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+  expect(mocks.listManagedPlugins).not.toHaveBeenCalled();
+});
+
+it("checks memory between dependency template preparations", async () => {
+  const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
+  vi.spyOn(hostIo, "createHostIoPressureProbe").mockReturnValue(async () => false);
+  let deferred: boolean | undefined;
+  mocks.prewarmLocalWorkspaceTemplates.mockImplementationOnce(async ({ shouldDefer }) => {
+    lowMemory.mockReturnValue(true);
+    deferred = await shouldDefer?.();
+  });
+  const handles = scheduleGatewayPrewarm(prewarmOptions());
+  sidecars.push(...handles);
+  // A concurrent handler warmup also defers templates, masking the pressure transition.
+  await expectDefined(
+    handles.find((handle) => handle.name === "handler-prewarm"),
+    "handler warmup",
+  ).stop();
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.dynamicImportSettled();
+  expect(deferred).toBe(true);
+});

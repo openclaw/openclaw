@@ -1,5 +1,5 @@
 import { zstdDecompressSync } from "node:zlib";
-import { getAiTransportHost } from "@openclaw/ai";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -189,6 +189,8 @@ function completedResponse(model: string): Response {
   });
 }
 
+const originalTransportHost = getAiTransportHost();
+
 beforeEach(bindSessionMcpRuntimeTestScheduler);
 
 afterEach(async () => {
@@ -196,6 +198,8 @@ afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   vi.restoreAllMocks();
+  // Native module loading can copy the spied host; restore the process-wide fixture too.
+  configureAiTransportHost(originalTransportHost);
 });
 
 it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
@@ -471,6 +475,7 @@ it.each([
       await writeConfig(state, cfg);
       const { CronService } = await import("./service.js");
       const { createNoopLogger } = await import("./service.test-harness.js");
+      const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
       const { createTestGatewayScheduler } =
         await import("../test-utils/gateway-scheduler-clock.js");
       const { createDirectChatContext } =
@@ -489,6 +494,8 @@ it.each([
           defaultAgentId: "main",
           log: createNoopLogger(),
           enqueueSystemEvent() {},
+          admitScheduledOccurrence: ({ job }) =>
+            admitScheduledOccurrence({ cfg, job, agentId: "main", trigger: "cron" }),
           onEvent(event) {
             if (event.action === "finished") {
               finished.push(event);

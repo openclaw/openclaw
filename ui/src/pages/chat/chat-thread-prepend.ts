@@ -50,14 +50,11 @@ function countSourceKeys(history: readonly unknown[], counts = new Map<string | 
 
 /**
  * Builds recreate display-only messages (canvas cards, bundled tool calls), so
- * equal rows need not share objects. Retained groups and compaction dividers
+ * equal rows need not share objects. Retained groups
  * keep the key stabilization gave them.
  */
 function sameSeamItem(previous: RenderChatItem, next: RenderChatItem, same: SameChatItem): boolean {
-  const rekeyed =
-    next.kind === "group" || (next.kind === "divider" && next.compactionId)
-      ? { ...next, key: previous.key }
-      : next;
+  const rekeyed = next.kind === "group" ? { ...next, key: previous.key } : next;
   return same(previous, rekeyed) || JSON.stringify(previous) === JSON.stringify(rekeyed);
 }
 
@@ -173,6 +170,9 @@ export function prependOlderChatItems(
         !sameSeamItem(retainedItems[turn.index + index]!, item, same),
     ) ||
     pageFacts.modelBefore !== seamFacts.modelBefore ||
+    [...(pageFacts.completionIds ?? [])].some(
+      (id) => facts.completionIds?.has(id) && !seamFacts.completionIds?.has(id),
+    ) ||
     [...pageFacts.firsts].some(
       ([key, message]) => pageMessages.has(message) && facts.firsts.has(key),
     ) ||
@@ -217,6 +217,7 @@ export function prependOlderChatItems(
     facts: {
       ...facts,
       history,
+      completionIds: new Set([...(facts.completionIds ?? []), ...(pageFacts.completionIds ?? [])]),
       hasContentBeforeProgress:
         pageFacts.hasContentBeforeProgress === true || facts.hasContentBeforeProgress === true,
       indexedDividers: [

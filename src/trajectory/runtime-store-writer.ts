@@ -30,7 +30,7 @@ import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
@@ -325,7 +325,7 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
   assertCommitAllowed: (() => void) | undefined,
   settle: (outcome: "committed" | "unknown") => void,
 ): Promise<void> {
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   const assertCurrent = () => {
     execution.assertCurrent();
     assertCommitAllowed?.();

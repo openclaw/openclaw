@@ -8,17 +8,19 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { MessagePresentation } from "../../../interactive/payload.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { closeDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import type { ReplyToolAuthorityPreparation } from "../../../sessions/session-controller.contracts.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { readRunOperatorAuthority } from "../../admitted-run-context.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
+import type { QuestionInputAuthority as InputAuthority } from "../../harness/host-private-capabilities.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
@@ -28,9 +30,8 @@ import {
   createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
-import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
-import { readPreparedProviderRequest } from "../provider-prompt-state.js";
+import { readSessionForkContext } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -42,10 +43,6 @@ import {
   attachActiveEmbeddedRun,
 } from "../runs.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
-import {
-  requiresCompletionRequiredAsyncTaskWait,
-  type AsyncStartedToolMeta,
-} from "./attempt-async-tasks.js";
 import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
@@ -84,13 +81,13 @@ function prepareStream(
   input: PrepareEmbeddedAttemptStreamInput,
   admission: EmbeddedAttemptSteeringAdmission,
 ) {
-  const { attempt, agentSession, recoverStalledModelCall } = input;
+  const { attempt, agentSession, recoverStalledModelCall, applyPermissionMode } = input;
   const { activeSession, hookRunner } = agentSession;
   let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let finalPresentationCandidate:
-    | { assistant: AssistantMessage; presentation: MessagePresentation }
+    | { assistant: AssistantHistoryMessage; presentation: MessagePresentation }
     | undefined;
   let activeQueueAdmissions = 0;
   const isSteeringAdmissionOpen = () => {
@@ -128,7 +125,8 @@ function prepareStream(
           ) {
             return;
           }
-          const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
+          const lastAssistant =
+            event.lastAssistant?.role === "assistant" ? event.lastAssistant : undefined;
           const lastAssistantMessage =
             normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
             normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
@@ -325,7 +323,6 @@ function prepareStream(
       undefined,
       registration,
     );
-  let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
@@ -400,27 +397,10 @@ function prepareStream(
         ? AGENT_RUN_RESTART_ABORT_STOP_REASON
         : undefined,
     onBeforeLifecycleTerminal: async () => {
-      if (deferredLifecycleOwner) {
-        return;
-      }
-      let requiresTaskWait = false;
-      try {
-        requiresTaskWait = requiresCompletionRequiredAsyncTaskWait({
-          sessionKey: attempt.sessionKey,
-          toolMetas: toolMetasForTerminal,
-          abortSignal: input.runAbortController.signal,
-        });
-      } catch (error) {
-        if (!input.runAbortController.signal.aborted || !isRunnerAbortError(error)) {
-          throw error;
-        }
-        // Cancelling this observation must not defer cleanup past the terminal event.
-      }
-      if (deferredLifecycleOwner || requiresTaskWait) {
-        return;
-      }
       // Clear active-run state before terminal events and post-completion cleanup.
-      clearActiveRun();
+      if (!deferredLifecycleOwner) {
+        clearActiveRun();
+      }
     },
     providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
     currentAccountId: attempt.agentAccountId,
@@ -442,7 +422,6 @@ function prepareStream(
     return streamSubscription.unsubscribe();
   });
   const subscription = { ...streamSubscription, unsubscribe };
-  toolMetasForTerminal = subscription.toolMetas;
 
   const toolSearchCatalogExecutor = createSubscribedToolSearchExecutor({
     attempt,
@@ -483,7 +462,8 @@ function prepareStream(
     registration?.toolAuthority?.assertActive();
     return isCurrentRegistration();
   };
-  const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
+  const ceiling = readRunOperatorAuthority(attempt)?.participationCeiling;
+  const canInject = () => !ceiling && isSteeringAdmissionOpen() && hasCurrentRegistration();
   const instance = attempt.admittedRunContext?.operationalRunInstance;
   const runContext = getAgentRunContext(attempt.runId);
   const supportsUserReplyPromotion =
@@ -507,9 +487,6 @@ function prepareStream(
           : "required",
     };
   };
-  type InputAuthority = NonNullable<
-    Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"]
-  >;
   const composeInjectionGuard = (assertCurrent?: () => void) => () => {
     assertCurrent?.();
     return canInject();
@@ -592,11 +569,8 @@ function prepareStream(
     });
   const messageInjection = {
     version: 2 as const,
-    isAvailable: isSteeringAdmissionOpen,
-    steerNow: createPendingSteerToolControl(
-      activeSession,
-      () => isSteeringAdmissionOpen() && isCurrentRegistration(),
-    ),
+    isAvailable: canInject,
+    steerNow: createPendingSteerToolControl(activeSession, canInject),
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
@@ -616,7 +590,6 @@ function prepareStream(
   } satisfies NonNullable<AttemptStreamQueueHandle["messageInjectionV2"]>;
   const canApplyPermissionMode = () =>
     admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
-  const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
@@ -651,23 +624,8 @@ function prepareStream(
     messageInjection,
     messageInjectionV2: messageInjection,
     isStreaming: () => activeSession.isStreaming,
-    readSessionForkContext: () => {
-      if (!isCurrentRegistration()) {
-        return undefined;
-      }
-      return {
-        model: attempt.model,
-        promptCacheKey: attempt.promptCacheKey,
-        systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools,
-        messages: activeSession.messages,
-        projectMessages: input.projectSessionForkMessages,
-        sessionVersion: activeSession.sessionManager.getHeader()?.version,
-        boundary: input.readSessionForkBoundary?.(),
-        blockImages: activeSession.settingsManager.getBlockImages(),
-        preparedRequest: readPreparedProviderRequest(attempt.runId),
-      };
-    },
+    readSessionForkContext: () =>
+      isCurrentRegistration() ? readSessionForkContext(attempt) : undefined,
     isAborted: () => input.getRunState().aborted,
     isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),
@@ -749,7 +707,7 @@ function prepareStream(
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
-    getFinalPresentation: (assistant: AssistantMessage | undefined) =>
+    getFinalPresentation: (assistant: AssistantHistoryMessage | undefined) =>
       assistant && finalPresentationCandidate?.assistant === assistant
         ? finalPresentationCandidate.presentation
         : undefined,

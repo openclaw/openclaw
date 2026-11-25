@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { agentControlText } from "../interactive/agent-control.js";
 import * as conversationBinding from "./conversation-binding.js";
 import type {
   DiscordInteractiveHandlerContext,
@@ -267,6 +268,26 @@ describe("plugin interactive handlers", () => {
       ok: false,
       error: 'Interactive handler namespace "codex" already registered by plugin "plugin-a"',
     });
+  });
+
+  it("matches an agent-authored control by its value, never by its mark", async () => {
+    const handler = vi.fn(async (_ctx: unknown) => ({ handled: true }));
+    register(handler);
+
+    await expect(dispatchTelegram("::codex:resume", "cb-agent")).resolves.toEqual(handled);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      callback: { data: "codex:resume", namespace: "codex", payload: "resume" },
+    });
+    await expect(dispatchTelegram("::other:resume", "cb-agent-unclaimed")).resolves.toEqual({
+      matched: false,
+      handled: false,
+      duplicate: false,
+    });
+    expect(agentControlText("::other:resume")).toBe("callback_data: other:resume");
+    expect(agentControlText("other:resume")).toBeUndefined();
+    // Exactly one mark is removed, so authored colons and marks round-trip.
+    expect(agentControlText(":::other")).toBe("callback_data: :other");
+    expect(agentControlText("::::pick:a")).toBe("callback_data: ::pick:a");
   });
 
   it.each(["telegram", "discord", "slack"] as const)(

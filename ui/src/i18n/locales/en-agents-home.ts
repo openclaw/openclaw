@@ -9,17 +9,16 @@ const enAgentsHome = {
     viewSessions: "Sessions",
     deleteAgentConfirm: "Delete {agent}?",
     deleteAgentDetails:
-      "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
+      "Its workspace, agent state, and chat history move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
     working: "Working now",
   },
   templatesDraft: {
     title: "Create template",
     reviewDisabled:
-      "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+      "Your private draft is saved. Templates is disabled in Gateway configuration; ask an administrator to enable it to review your draft.",
     reviewUnavailable:
       "Your private draft is saved. Template review requires a connected administrator session with Template creation and chat access.",
-    openLabs: "Open Labs",
   },
 } satisfies TranslationMap;
 

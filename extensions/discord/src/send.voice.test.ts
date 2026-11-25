@@ -44,6 +44,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   })),
 }));
 
+function mockWaveformPcm(pcm: Buffer) {
+  mediaMocks.ffmpeg.mockReset().mockImplementation(async (args) => {
+    const output = args.at(-1);
+    if (!output) {
+      throw new Error("Missing waveform output");
+    }
+    await fs.writeFile(output, pcm);
+  });
+}
+
 function makeVoiceRest() {
   const rest = new RequestClient("t", {
     baseUrl: "https://discord.test/api/v10",
@@ -86,13 +96,7 @@ describe("sendVoiceMessageDiscord", () => {
       .mockImplementation(async (args) =>
         args.includes("stream=codec_name,sample_rate") ? "opus,48000\n" : "1\n",
       );
-    mediaMocks.ffmpeg.mockReset().mockImplementation(async (args) => {
-      const output = args.at(-1);
-      if (!output) {
-        throw new Error("Missing waveform output");
-      }
-      await fs.writeFile(output, Buffer.alloc(512));
-    });
+    mockWaveformPcm(Buffer.alloc(512));
   });
 
   it("cleans materialized voice media when pre-send conversion fails", async () => {
@@ -140,6 +144,35 @@ describe("sendVoiceMessageDiscord", () => {
     expect(result.receipt.replyToId).toBe("reply-1");
     expect(result.receipt.parts[0]?.replyToId).toBe("reply-1");
   });
+
+  it.each([
+    { frames: 511, firstBin: 255 },
+    { frames: 512, firstBin: 128 },
+  ])(
+    "includes early and final samples in a $frames-frame voice preview",
+    async ({ frames, firstBin }) => {
+      const pcm = Buffer.alloc(frames * 2);
+      pcm.writeInt16LE(-32768, 0);
+      pcm.writeInt16LE(16384, 4);
+      pcm.writeInt16LE(-32768, pcm.length - 2);
+      mockWaveformPcm(pcm);
+      const { rest, postMock } = makeVoiceRest();
+
+      await sendVoiceMessageDiscord("273512430271856640", "https://example.com/voice.ogg", {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+      });
+
+      const expected = Buffer.alloc(256);
+      expected[0] = firstBin;
+      expected[1] = 64;
+      expected[255] = 128;
+      expect(postMock.mock.calls[0]?.[1]?.body).toMatchObject({
+        attachments: [{ waveform: expected.toString("base64") }],
+      });
+    },
+  );
 
   it("rechecks live authority after the awaited dispatch callback before creating a message", async () => {
     const { rest, postMock } = makeVoiceRest();

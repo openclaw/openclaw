@@ -431,7 +431,7 @@ suite.define(() => {
 
       await gateway.resolveDeferred("chat.startup");
       const working = page.locator('.chat-working-indicator[role="status"]');
-      await pollLocatorText(working).toContain("Preparing workspace…");
+      await pollLocatorText(working).toContain("Preparing workspace");
       await pollCount(page.locator(".chat-group.user")).toBe(1);
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
       expect(await page.locator(".chat-notice").count()).toBe(0);
@@ -441,9 +441,9 @@ suite.define(() => {
       if (worktree) {
         let seq = 1;
         for (const [phase, label] of [
-          ["naming_worktree", "Naming worktree…"],
-          ["creating_worktree", "Creating worktree…"],
-          ["running_setup", "Running setup…"],
+          ["naming_worktree", "Naming worktree"],
+          ["creating_worktree", "Creating worktree"],
+          ["running_setup", "Running setup"],
         ] as const) {
           await gateway.emitGatewayEvent("chat", {
             runId,
@@ -475,7 +475,7 @@ suite.define(() => {
         state: "error",
         errorMessage: failure,
       });
-      const alert = page.locator('.chat-error[role="alert"]');
+      const alert = page.locator('.chat-error--reply .app-toast__message[role="alert"]');
       await pollLocatorText(alert).toContain(failure);
       expect(await gateway.getSessionRow(sessionKey)).toMatchObject({
         activeRunIds: [],

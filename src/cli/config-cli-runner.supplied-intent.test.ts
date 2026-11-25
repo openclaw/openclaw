@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { restoreEnvVarRefsFromResolved } from "../config/env-preserve.js";
+import type { ConfigReplaceResult } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { runConfigOperations } from "./config-cli-runner.js";
@@ -9,7 +10,12 @@ import { runConfigOperations } from "./config-cli-runner.js";
 const state = vi.hoisted(() => ({
   snapshot: {} as Record<string, unknown>,
   prepare: vi.fn(),
-  replace: vi.fn(),
+  replace: vi.fn(
+    async (params: Parameters<typeof import("../config/mutate.js").replaceConfigFile>[0]) =>
+      ({
+        nextConfig: params.sourceConfig ?? params.nextConfig,
+      }) satisfies Pick<ConfigReplaceResult, "nextConfig">,
+  ),
   unexpected: (operation: string): never => {
     throw new Error(`Unexpected ${operation}`);
   },
@@ -164,7 +170,7 @@ async function apply(
   return {
     paths: prepared.explicitSetPaths as string[][],
     config: replaced.sourceConfig as OpenClawConfig,
-    policyPaths: replaced.writeOptions.explicitSetPaths as string[][],
+    policyPaths: replaced.writeOptions?.explicitSetPaths as string[][],
   };
 }
 beforeEach(() => {

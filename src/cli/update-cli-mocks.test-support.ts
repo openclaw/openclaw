@@ -81,7 +81,7 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   transfer: vi.fn(),
   cancel: vi.fn(),
 }));
-const candidateValidation = vi.hoisted(() => vi.fn());
+const candidateCheck = vi.hoisted(() => vi.fn());
 const retainUpdateRuntime = vi.hoisted(() => vi.fn<RetainUpdateRuntime>());
 const systemdPolicy = vi.hoisted(() =>
   vi.fn<typeof import("../daemon/systemd-maintenance.js").prepareSystemdGatewayMaintenance>(),
@@ -193,10 +193,11 @@ vi.mock("../infra/update-managed-service-handoff-current.js", async (importOrigi
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: inferenceRepair,
 }));
-vi.mock("../infra/update-candidate-canary.js", () => ({
-  validateUpdateCandidateCanary: candidateValidation,
+// mock-isolation: the candidate check spawns a staged package worker these fixtures do not build.
+vi.mock("../infra/update-candidate-check.js", () => ({
+  checkUpdateCandidate: candidateCheck,
 }));
-// The activated-release boot is a process boundary like the canary above.
+// The activated-release boot is a process boundary like the candidate check above.
 vi.mock(import("../infra/update-activated-gateway-check.js"), async (original) => ({
   ...(await original()),
   checkActivatedGatewayStartup: async ({ result }) => result,
@@ -245,9 +246,9 @@ vi.mock("../infra/update-triage.js", async (importOriginal) => {
   };
 });
 
-// Keep CLI orchestration on the canonical Git updater boundary.
-vi.mock("../infra/update-runner-git.js", () => ({
-  updateGitCheckout: vi.fn(),
+// mock-isolation: the real runner builds Git worktrees; CLI orchestration tests own only its result.
+vi.mock("../infra/update-runner-git-release.js", () => ({
+  updateGitRelease: vi.fn(),
 }));
 
 vi.mock("../state/openclaw-database-preflight.js", () => ({
@@ -333,9 +334,7 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<
-    typeof import("node:child_process") & { default: typeof import("node:child_process") }
-  >("node:child_process");
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
   const { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
   const { resolveRuntimeWorkerArgv } = await import("../infra/runtime-worker-url.js");
@@ -368,7 +367,8 @@ vi.mock("node:child_process", async () => {
     args[1] = sqliteHostArgv(args[1]);
     return true;
   };
-  const overrides = {
+  const mocked = {
+    ...actual,
     // SQLite and directory-watch helpers need real IPC; updater/service children stay simulated.
     spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
       remapSqliteChild(args);
@@ -412,7 +412,7 @@ vi.mock("node:child_process", async () => {
         : spawn(...args);
     },
   };
-  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+  return { ...mocked, default: mocked };
 });
 
 // Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
@@ -580,6 +580,19 @@ vi.mock("../daemon/service.js", async () => {
   };
 });
 
+// Service fixtures model the Gateway; no node service is installed beside it.
+vi.mock("../daemon/node-service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/node-service.js")>();
+  return {
+    ...actual,
+    resolveNodeService: () => ({
+      ...actual.resolveNodeService(),
+      readCommand: async () => null,
+      readRuntime: async () => ({ status: "stopped" }),
+    }),
+  };
+});
+
 vi.mock("./update-cli/update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
     await stop(),
@@ -687,7 +700,7 @@ vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 export {
   commandTransport,
   managedUpdateHandoff,
-  candidateValidation,
+  candidateCheck,
   retainUpdateRuntime,
   systemdPolicy,
   sourceRuntimeCompletion,

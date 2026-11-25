@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   isSessionEntryDataSql,
@@ -57,6 +57,7 @@ import {
   type ManagedImageRecord,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import * as managedSessionRead from "./managed-image-session-read.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import {
   readSessionMessageCountAsync,
@@ -75,10 +76,10 @@ function message(id: string, parentId: string | null, content: unknown) {
   return { type: "message", id, parentId, timestamp, message: { role: "assistant", content } };
 }
 
-async function fixture(messageId = "attached") {
+async function fixture(messageId = "attached", key?: string) {
   const agentId = "main";
   const sessionId = `managed-visibility-${randomUUID()}`;
-  const sessionKey = `agent:${agentId}:${sessionId}`;
+  const sessionKey = key ?? `agent:${agentId}:${sessionId}`;
   const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   const scope = { agentId, sessionId, sessionKey, storePath };
   // This fixture owns the competing writer; background entry maintenance must not join it.
@@ -169,9 +170,7 @@ describe("managed attachment SQLite visibility", () => {
     savedEnv.restore();
   });
 
-  it("loads original IDs only when a regular file is old enough for orphan cleanup", async ({
-    onTestFinished,
-  }) => {
+  it("loads original IDs only when a regular file is old enough for orphan cleanup", async () => {
     const nowMs = 2_000_000;
     const originals = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
     const { originalPath: kept } = await createFixture(stateDir, {
@@ -225,6 +224,12 @@ describe("managed attachment SQLite visibility", () => {
     "refuses a %s ownership source",
     async (source) => {
       const f = await fixture();
+      const orphan = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey: f.scope.sessionKey,
+        agentId: "main",
+        messageId: "missing",
+      });
       await seed(f, [message(f.messageId, null, [f.block])]);
       if (source === "missing") {
         setRuntimeConfigSnapshot({ session: { store: path.join(stateDir, "missing.sqlite") } });
@@ -247,10 +252,63 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
+      const reads = vi.spyOn(managedSessionRead, "withManagedImageSessionRead");
+      onTestFinished(() => reads.mockRestore());
       await cleanup({ sessionKey: f.scope.sessionKey });
       await expectRetained(f);
+      await expectRetained(orphan);
+      expect(reads).toHaveBeenCalledTimes(1);
+      // The unavailable result belongs only to this pass; recovery must be retried.
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
+      if (source === "invalid-row") {
+        await expectRetained(orphan);
+      } else {
+        expect(await readManagedImageRecord(orphan.attachmentId, stateDir)).toBeNull();
+        expect(fs.existsSync(orphan.originalPath)).toBe(false);
+      }
+      expect(reads).toHaveBeenCalledTimes(2);
     },
   );
+
+  it("groups cleanup by session and owner without discarding a qualified global session's media", async () => {
+    const global = await fixture("attached", "global");
+    const qualified = await fixture("attached", "agent:main:global");
+    const other = await fixture();
+    const legacy = await createFixture(stateDir, {
+      sessionKey: global.scope.sessionKey,
+      attachmentId: randomUUID(),
+      messageId: global.messageId,
+    });
+    const legacyUrl = `/api/chat/media/outgoing/global/${legacy.attachmentId}/full`;
+    const orphans = [];
+    for (const f of [global, qualified, other]) {
+      const content = f === global ? [f.block, { type: "image", url: legacyUrl }] : [f.block];
+      await seed(f, [message(f.messageId, null, content)]);
+      orphans.push(
+        await createFixture(stateDir, {
+          sessionKey: f.scope.sessionKey,
+          agentId: "main",
+          attachmentId: randomUUID(),
+          messageId: f.messageId,
+        }),
+      );
+    }
+    const reads = vi.spyOn(managedSessionRead, "withManagedImageSessionRead");
+    onTestFinished(() => reads.mockRestore());
+
+    await cleanup();
+
+    for (const retained of [global, qualified, other, legacy]) {
+      await expectRetained(retained);
+    }
+    for (const orphan of orphans) {
+      expect(await readManagedImageRecord(orphan.attachmentId, stateDir)).toBeNull();
+      expect(fs.existsSync(orphan.originalPath)).toBe(false);
+    }
+    expect(reads).toHaveBeenCalledTimes(3);
+  });
 
   it.each(["sqlite", "archive"] as const)(
     "retains media owned by oversized %s history while cleaning other sessions",

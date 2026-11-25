@@ -14,6 +14,7 @@ import {
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { pendingInputAudienceEligibility } from "./session-pending-input-audience.js";
 import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
@@ -22,18 +23,12 @@ import { resolvePendingInputHistoryLimit } from "./session-pending-input-value.j
 
 function pendingInputHistoryEligibility(query: PendingInputHistoryQuery) {
   const eb = expressionBuilder<Pick<DB, "session_pending_inputs">, "session_pending_inputs">();
-  return query.queuedInputIds
+  return query.queuedOnly
     ? eb.and([
         eb("state", "=", "queued"),
-        eb("input_id", "in", [...query.queuedInputIds]),
         ...(query.liveInputIds?.length ? [eb("input_id", "not in", [...query.liveInputIds])] : []),
       ])
-    : eb.or([
-        eb("state", "=", "cancelled"),
-        ...(query.liveInputIds?.length
-          ? [eb.and([eb("state", "=", "queued"), eb("input_id", "in", [...query.liveInputIds])])]
-          : []),
-      ]);
+    : eb("state", "in", ["cancelled", "queued"]);
 }
 
 /** The admitted reader owns the snapshot; process-held incognito uses the same kernel. */
@@ -48,9 +43,6 @@ export function readPendingInputHistoryInDatabase(
   if (!hasSessionPendingInputsSchema(database.db)) {
     return { rows: [], total: 0 };
   }
-  if (query.queuedInputIds?.length === 0) {
-    return { rows: [], total: 0 };
-  }
   const hasConsumption = hasPendingInputConsumptionColumn(database.db);
   if (query.includeTotal === false || query.id !== undefined) {
     return readPendingInputPageInDatabase(database, query, hasConsumption);
@@ -61,7 +53,10 @@ export function readPendingInputHistoryInDatabase(
       .selectFrom("session_pending_inputs")
       .where("session_key", "=", query.sessionKey)
       .where("session_id", "=", query.sessionId)
-      .where(pendingInputHistoryEligibility(query));
+      .where(pendingInputHistoryEligibility(query))
+      .$if(Boolean(query.audience), (selection) =>
+        selection.where(pendingInputAudienceEligibility(database, query.audience!)),
+      );
     if (hasConsumption) {
       base = base.where("consumed_event_id", "is", null);
     }
@@ -97,6 +92,9 @@ function readPendingInputPageInDatabase(
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
           .where(pendingInputHistoryEligibility(query))
+          .$if(Boolean(query.audience), (selection) =>
+            selection.where(pendingInputAudienceEligibility(database, query.audience!)),
+          )
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),
           )
@@ -132,6 +130,8 @@ function readPendingInputPageInDatabase(
         "input.lifecycle_generation",
         "input.state",
         "input.accepted_at",
+        "input.end_cause",
+        "input.origin_source_json",
       ])
       .select((eb) => [
         (hasConsumption ? eb.ref("input.consumed_event_id") : eb.val(null)).as("consumed_event_id"),

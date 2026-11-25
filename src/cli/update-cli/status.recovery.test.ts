@@ -521,11 +521,16 @@ it.each(["committed", "restored", "never-activated", "superseded"] as const)(
     }
     mocks.readRun.mockImplementation(async (id) => (id === firstId ? failedRun : olderRun));
     const sets = (await inspect()).recoverySets;
-    expect(sets.find((set: { runId: string }) => set.runId === firstId)).toMatchObject({
-      status: "unresolved",
-      nextAction: expect.stringContaining(failed.manifestPath),
-      message: expect.stringContaining("Retained original state requires manual inspection"),
-    });
+    // A later verified successful update also supersedes the failed run's source.
+    expect(sets.find((set: { runId: string }) => set.runId === firstId)).toMatchObject(
+      outcome === "superseded"
+        ? { status: "warning", nextAction: "openclaw update cleanup --dry-run" }
+        : {
+            status: "unresolved",
+            nextAction: expect.stringContaining(failed.manifestPath),
+            message: expect.stringContaining("Retained original state requires manual inspection"),
+          },
+    );
     expect(sets.find((set: { runId: string }) => set.runId === secondId).status).toBe(
       outcome === "superseded" ? "warning" : "stale",
     );

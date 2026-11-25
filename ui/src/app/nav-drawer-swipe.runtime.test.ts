@@ -11,9 +11,17 @@ afterEach(() => {
   document.openClawModalLayers = previousLayers;
 });
 
-it.each(["none", "before", "during", "connecting"])(
-  "opens the drawer only when navigation is available (%s)",
-  (modal) => {
+it.each([
+  { modal: "none", startX: 24 },
+  { modal: "before", startX: 24 },
+  { modal: "during", startX: 24 },
+  { modal: "connecting", startX: 24 },
+  { modal: "none", startX: 32 },
+  { modal: "none", startX: 33 },
+  { modal: "none", startX: 160 },
+])(
+  "opens only from the left edge when navigation is available ($modal, x=$startX)",
+  ({ modal, startX }) => {
     document.openClawModalLayers = new Set();
     const element = document.createElement("div");
     host = element;
@@ -43,17 +51,20 @@ it.each(["none", "before", "during", "connecting"])(
         changedTouches: { value: points },
       });
       element.querySelector("video")!.dispatchEvent(event);
+      return event;
     };
     if (modal === "before") {
       document.openClawModalLayers.add(document.createElement("div"));
     }
-    touch("touchstart", 100);
+    touch("touchstart", startX);
     if (modal === "during") {
       document.openClawModalLayers.add(document.createElement("div"));
     }
-    touch("touchmove", 200);
-    touch("touchend", 200);
-    expect(open).toHaveBeenCalledTimes(modal === "none" ? 1 : 0);
+    const move = touch("touchmove", startX + 100);
+    touch("touchend", startX + 100);
+    const shouldOpen = modal === "none" && startX <= 32;
+    expect(move.defaultPrevented).toBe(shouldOpen);
+    expect(open).toHaveBeenCalledTimes(shouldOpen ? 1 : 0);
   },
 );
 

@@ -15,6 +15,7 @@ import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.j
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
@@ -128,16 +129,16 @@ class AgentDatabaseStartupAdmission {
       headers: new Map(),
     };
     this.preparedSchemaHeaders = prepared;
-    return (pathname: string) =>
-      ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
-        if (
-          !this.stopped &&
-          this.preparedSchemaHeaders === prepared &&
-          version === OPENCLAW_AGENT_SCHEMA_VERSION
-        ) {
-          prepared.headers.set(pathname, { version, writerAppVersion, agentSchemaMeta });
-        }
-      };
+    return (pathname: string) => (header: PreparedSchemaHeader) => {
+      if (
+        !this.stopped &&
+        this.preparedSchemaHeaders === prepared &&
+        header.version >= OPENCLAW_AGENT_SCHEMA_VERSION &&
+        (header.minReader ?? header.version) <= OPENCLAW_AGENT_SCHEMA_VERSION
+      ) {
+        prepared.headers.set(pathname, header);
+      }
+    };
   }
 
   takePreparedSchemaHeaders(env: NodeJS.ProcessEnv) {
@@ -147,7 +148,9 @@ class AgentDatabaseStartupAdmission {
       const header = prepared?.headers.get(pathname);
       return !this.stopped &&
         prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
-        header?.version === supportedVersion
+        header !== undefined &&
+        header.version >= supportedVersion &&
+        (header.minReader ?? header.version) <= supportedVersion
         ? header
         : undefined;
     };
@@ -189,12 +192,7 @@ class AgentDatabaseStartupAdmission {
         throw new Error("Prepared startup state schema changed before source inspection");
       }
     };
-    try {
-      assertCurrent();
-      return assertCurrent;
-    } catch {
-      return undefined;
-    }
+    return assertionSucceeds(assertCurrent) ? assertCurrent : undefined;
   }
 
   /** Joins startup work already scheduled before a background consumer begins. */
@@ -588,6 +586,7 @@ class AgentDatabaseStartupAdmission {
                     if (preparation.recoverInputs) {
                       this.observation.registerInputRecovery(agentId, {
                         sessions: preparation.recoverInputs.sessions,
+                        deferred: preparation.recoverInputs.deferred,
                         completion: inputReady.promise,
                       });
                     }
@@ -662,6 +661,8 @@ class AgentDatabaseStartupAdmission {
             });
           }
         } finally {
+          // Published admission callbacks can retain this scope after recovery completes.
+          preparation.recoverInputs = undefined;
           finishInputs();
         }
         // End the admission borrow and publication turn before advisory repair.

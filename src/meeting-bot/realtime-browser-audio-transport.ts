@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { captureCurrentPluginBackgroundRunner } from "../plugins/plugin-instance-invocation.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
-import { convertPcmToMulaw8k } from "../talk/audio-codec.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import type { MeetingBrowserAudioCaptureRequest } from "./browser-audio-capture-source.js";
 import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
-import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+import {
+  createMeetingCaptureMulawEncoder,
+  type MeetingRealtimeAudioFormat,
+} from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 export async function createBrowserMeetingRealtimeAudioTransport(params: {
@@ -29,12 +32,17 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
     throw new Error("Meeting browser audio capture requires its tracked tab.");
   }
   const captureId = randomUUID();
+  const inputEncoder =
+    params.audioFormat === "g711-ulaw-8khz" ? createMeetingCaptureMulawEncoder() : undefined;
   let stopped = false;
   let inputStarted = false;
   let fatal = false;
   let fatalHandler: (() => void) | undefined;
   let stopPromise: Promise<void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Pulls and cleanup outlive the request that joined the meeting; only "start" runs
+  // under the joining request's authority.
+  const runInBackground = captureCurrentPluginBackgroundRunner();
   const callCapture = (action: MeetingBrowserAudioCaptureRequest["action"]) =>
     runMeetingBrowserAct({
       deadline: performance.now() + 5_000,
@@ -72,7 +80,7 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
       clearTimeout(timer);
       await Promise.all([
         params.nativeTransport.stop(),
-        callCapture("stop").catch((error: unknown) => {
+        runInBackground(() => callCapture("stop")).catch((error: unknown) => {
           params.logger.warn(`Meeting browser audio cleanup failed: ${formatErrorMessage(error)}`);
         }),
       ]);
@@ -106,6 +114,7 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
   }
   return {
     inputAudioIsolated: true,
+    drainInput: () => (stopped ? undefined : inputEncoder?.drain()),
     onFatal(handler) {
       fatalHandler = handler;
       if (fatal) {
@@ -124,7 +133,7 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
           return;
         }
         try {
-          const result = await callCapture("pull");
+          const result = await runInBackground(() => callCapture("pull"));
           if (stopped) {
             return;
           }
@@ -140,9 +149,10 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
             if (pcm.length % 2 !== 0) {
               throw new Error("Meeting browser returned incomplete PCM samples.");
             }
-            const audio =
-              params.audioFormat === "pcm16-24khz" ? pcm : convertPcmToMulaw8k(pcm, 24_000);
-            onAudio(audio);
+            const audio = inputEncoder?.process(pcm) ?? pcm;
+            if (audio.length > 0) {
+              onAudio(audio);
+            }
           }
           if (!stopped) {
             timer = setTimeout(() => void pull(), 50);

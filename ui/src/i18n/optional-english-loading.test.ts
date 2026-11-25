@@ -86,6 +86,28 @@ beforeEach(() => {
 });
 afterEach(() => restoreElementRegistration?.());
 
+it.each([false, true])(
+  "loads invitation copy only with its controls and retains composer copy (invites first=%s)",
+  async (invitesFirst) => {
+    const { en, manager } = await loadI18n({ chat: { composer: { inviteSend: "Darf senden" } } });
+    await manager.setLocale("de");
+    const { registerChatComposerEnglish } = await import("./locales/en-chat-composer.ts");
+    if (!invitesFirst) {
+      registerChatComposerEnglish();
+      expect(manager.t("chat.composer.inviteAs")).toBe("chat.composer.inviteAs");
+    }
+    await import("../pages/chat/components/chat-invite-access.tsx");
+    const composer = en.chat.composer;
+    registerChatComposerEnglish();
+    expect(manager.t("chat.composer.inviteAs", { name: "Pat" })).toBe("Invite Pat");
+    expect(manager.t("chat.composer.inviteRead")).toBe("Can read");
+    expect(manager.t("chat.composer.inviteSend")).toBe("Darf senden");
+    expect(manager.t("chat.composer.composerInput")).toBe("Chat composer");
+    expect(en.chat.composer).toBe(composer);
+    expect(manager.getLocale()).toBe("de");
+  },
+);
+
 it("loads picker auth copy without loading Settings and preserves later Settings copy", async () => {
   const { manager } = await loadI18n({
     channels: { hub: { setUp: "Einrichten" } },
@@ -143,7 +165,44 @@ it.each([false, true])(
   },
 );
 
+it("keeps roster copy deferred until the sharing presentation loads", async () => {
+  const { manager } = await loadI18n();
+  await import("../pages/chat/components/chat-session-sharing.solid.tsx");
+  await import("../pages/chat/components/chat-session-sharing-options.tsx");
+  expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
+  expect(manager.t("chat.sessionSharing.canRead")).toBe("chat.sessionSharing.canRead");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("sessionsView.noPeopleMatch");
+  await import("../pages/chat/components/chat-session-sharing-mobile-adapter.ts");
+  expect(manager.t("chat.sessionSharing.canRead")).toBe("Can read");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No people or agents match your search.");
+});
+
 it.each([
+  [
+    "chat.sessionSuggestions.state.accepted",
+    "Accepted",
+    () => import("../pages/chat/components/chat-session-suggestions.solid.tsx"),
+  ],
+  [
+    "chat.sessionSuggestions.pausedDraftState",
+    "Draft",
+    () => import("../pages/chat/components/chat-typing-indicator.tsx"),
+  ],
+  [
+    "chat.sessionSharing.sharedDescription",
+    "Everyone with access can send",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.searchPeople",
+    "Search people…",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.canRead",
+    "Can read",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
   [
     "chat.sessionSharing.copyPublicLink",
     "Copy public link",
@@ -203,7 +262,7 @@ it.each([
   await load();
 
   expect(manager.t(key)).toBe(copy);
-  if (key.startsWith("chat.sessionSharing.")) {
+  if (key.startsWith("chat.sessionSharing.") || key.startsWith("chat.sessionSuggestions.")) {
     expect(manager.t("chat.sessionDetails.contextProject")).toBe(
       "chat.sessionDetails.contextProject",
     );
@@ -338,7 +397,7 @@ it.each([false, true])(
   },
 );
 
-it("keeps sidebar and chat actions readable until the session management dialog loads", async () => {
+it("keeps sidebar and chat actions readable before and after the Sessions page loads", async () => {
   const { en, manager } = await loadI18n({ sessionsView: { goal: "Ziel" } });
   const sessionsView = en.sessionsView;
   await manager.setLocale("de");
@@ -358,8 +417,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
   expect(manager.t("sessionsView.all")).toBe("All");
   expect(manager.t("sessionsView.snoozed")).toBe("Snoozed");
-  expect(manager.t("sessionsView.personalGroupNew")).toBe("New section");
-  expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
+  expect(manager.t("sessionsView.searchPlaceholder")).toBe("sessionsView.searchPlaceholder");
   expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
   expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Build" })).toBe(
     "Stop this cloud device?",
@@ -379,10 +437,10 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(manager.t("sessionsView.snoozeThreeHours")).toBe("In 3 hours");
   expect(manager.t("sessionsView.communication.receive")).toBe("Receive messages");
   expect(manager.t("sessionsView.colors.blue")).toBe("Blue");
-  expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
+  expect(manager.t("sessionsView.searchPlaceholder")).toBe("sessionsView.searchPlaceholder");
 
-  await import("../components/personal-session-group-dialog-view.tsx");
-  expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
+  await import("../pages/sessions/view.tsx");
+  expect(manager.t("sessionsView.searchPlaceholder")).toBe("Search sessions…");
   expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(manager.getLocale()).toBe("de");
@@ -416,16 +474,6 @@ it("loads workspace actions with the session menu before session management", as
   expect(manager.t("sessionsView.groupDefaultsTitle")).toBe("sessionsView.groupDefaultsTitle");
 });
 
-it("loads the new-section title with its dialog before any session menu", async () => {
-  const { manager } = await loadI18n();
-
-  await import("../components/personal-session-group-dialog-view.tsx");
-
-  expect(manager.t("sessionsView.personalGroupNew")).toBe("New section");
-  expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
-  expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
-});
-
 it.each([false, true])(
   "keeps menu and management copy after both load (menu first=%s)",
   async (menuFirst) => {
@@ -444,7 +492,7 @@ it.each([false, true])(
     expect(manager.t("sessionsView.snooze")).toBe("Schlummern");
     expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
     expect(manager.t("sessionsView.communication.send")).toBe("Send messages");
-    expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
+    expect(manager.t("sessionsView.searchPlaceholder")).toBe("Search sessions…");
     expect(manager.t("sessionsView.groupDefaultsTitle", { group: "Build" })).toBe(
       "New session defaults for “Build”",
     );

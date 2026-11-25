@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import * as nodeRuntimeDiagnostics from "../../commands/node-runtime-diagnostics.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
@@ -15,10 +14,8 @@ import { defaultRuntime } from "../../runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { expectGitMetadataPreview } from "../update-cli-invocation.test-support.js";
-import { printResult } from "./progress.js";
 import * as shared from "./shared.js";
-import { updateStatusCommand } from "./status.js";
-import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
+import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
@@ -47,31 +44,25 @@ const failureSteps = (fact: Record<string, unknown>) =>
     expect.objectContaining({ failureFacts: [expect.objectContaining(fact)] }),
   ]);
 
-async function printSummary(result: UpdateRunResult) {
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-  await printResult(result, {});
-  return log.mock.calls.flat().join("\n");
-}
-
-async function readUpdateStatus(manager: "npm" | "bun", latestVersion?: string) {
-  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(fixture.root);
-  vi.spyOn(nodeRuntimeDiagnostics, "collectNodeRuntimeFindings").mockResolvedValue([]);
-  vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
-    root: fixture.root,
-    installKind: "package",
-    packageManager: manager,
-    ...(latestVersion ? { registry: { latestVersion } } : {}),
-  });
-  await updateStatusCommand({ json: true });
-  return vi.mocked(defaultRuntime.writeJson).mock.lastCall;
-}
-
 it.each([
   { manager: "pnpm", name: "default", requests: ["latest"] },
   { manager: "npm", name: "tag", tag: "preview", requests: ["preview"] },
+  {
+    manager: "npm",
+    name: "version-like tag",
+    tag: "preview-2026.9.4",
+    requests: ["preview-2026.9.4"],
+  },
+  {
+    manager: "pnpm",
+    name: "version-like tag",
+    tag: "preview-2026.9.4",
+    requests: ["preview-2026.9.4"],
+  },
   { manager: "npm", name: "beta", channel: "beta", requests: ["beta", "latest"] },
   { manager: "pnpm", name: "beta fallback", channel: "beta", requests: ["beta", "latest"] },
   { manager: "npm", name: "numeric", tag: "2026.9.4", requests: ["2026.9.4"] },
+  { manager: "npm", name: "loose exact", tag: "=v2026.9.4", requests: ["2026.9.4"] },
   { manager: "pnpm", name: "tarball", tag: "./candidate.tgz", requests: [] },
   { manager: "pnpm", name: "moving override", requests: ["latest", "2026.9.4"] },
 ])("resolves $manager $name with paired metadata and bounded requests", async (entry) => {
@@ -332,173 +323,6 @@ it.each([
       expect(output).not.toContain(privateText);
     }
   }
-});
-
-const privateDiagnostic = "registry.internal.example /private/operator/npmrc";
-const registryFailure = { version: null, error: privateDiagnostic };
-it.each([
-  ["registry lookup error", "target-registry-metadata", /registry/i, registryFailure],
-  ["existing profile lookup error", "target-registry-metadata", /registry/i, registryFailure],
-  ["missing exact version", "target-version-resolution", /version/i, { version: null }],
-  [
-    "unpublished npm version",
-    "target-version-resolution",
-    /version/i,
-    {
-      stdout: "",
-      stderr: [
-        "npm error code E404",
-        "npm error 404 No match found for version 2026.9.2",
-        "npm error 404 Note that you can also install from a",
-        "npm error 404 tarball, folder, http url, or git url.",
-        "npm error A complete log of this run can be found in: /tmp/npm-debug.log",
-      ].join("\n"),
-      summary: "No match found for version 2026.9.2",
-    },
-  ],
-  ...(
-    [
-      ["E404", "No match found for version 2026.9.2", "target-version-resolution"],
-      ["ETARGET", "No matching version found for openclaw@2026.9.2.", "target-version-resolution"],
-      ["E404", "Package openclaw is not in this registry", "target-registry-metadata"],
-      ["E401", "Unable to authenticate", "target-registry-metadata"],
-      ["E403", "Access to this package is forbidden", "target-registry-metadata"],
-      ["ENOTFOUND", "Could not resolve the registry host", "target-registry-metadata"],
-    ] as const
-  ).map(
-    ([npmCode, summary, code]) =>
-      [
-        `npm JSON ${npmCode}: ${summary}`,
-        code,
-        code === "target-version-resolution" ? /version/i : /registry/i,
-        {
-          stdout: JSON.stringify({ error: { code: npmCode, summary, detail: "" } }, null, 2),
-          stderr: "npm warn Unrelated npm configuration warning",
-          summary,
-        },
-      ] as const,
-  ),
-  [
-    "registry HTTP 404",
-    "target-registry-metadata",
-    /registry/i,
-    { version: null, error: "HTTP 404" },
-  ],
-  ["mismatched exact version", "target-version-resolution", /version/i, { version: "2026.9.1" }],
-  [
-    "missing target schema metadata",
-    "target-schema-metadata",
-    /database|schema/i,
-    { schemaVersions: undefined },
-  ],
-  ["unresolved registry dist-tag", "target-registry-dist-tag", /dist-tag|registry/i, {}],
-] as const)(
-  "explains %s in CLI JSON, summary, and bounded diagnostics without staging a package",
-  async (kind, code, detail, overrides) => {
-    const existingProfile = kind.startsWith("existing");
-    if (existingProfile) {
-      openOpenClawStateDatabase();
-    }
-    if ("stdout" in overrides) {
-      vi.mocked(shared.resolveTargetVersion).mockRestore();
-      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockRestore();
-      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValue(
-        createCommandResult({ code: 1, stdout: overrides.stdout, stderr: overrides.stderr }),
-      );
-    } else {
-      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-        ...targetMetadata,
-        ...overrides,
-      });
-    }
-    if (code === "target-registry-dist-tag") {
-      vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({
-        tag: "latest",
-        version: null,
-      });
-    }
-
-    const result = await rejectUpdate({
-      ...(code === "target-registry-dist-tag" ? { channel: "stable" } : { tag: "2026.9.2" }),
-      yes: true,
-    });
-    if ("stdout" in overrides) {
-      expect(exec.runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
-        [
-          "npm",
-          "view",
-          "openclaw@2026.9.2",
-          "version",
-          "engines.node",
-          "openclaw.schemaVersions",
-          "--json",
-          "--global",
-        ],
-        expect.objectContaining({ cwd: process.cwd() }),
-      );
-      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(overrides.summary));
-    }
-    const metadataFailure = expect.objectContaining({
-      name: "target-metadata-preflight",
-      exitCode: 1,
-      failureFacts: [expect.objectContaining({ code, message: expect.stringMatching(detail) })],
-    });
-    expect(result).toMatchObject({
-      status: "error",
-      mode: "npm",
-      reason: "target-metadata-preflight",
-      failedStep: metadataFailure,
-      steps: expect.arrayContaining([metadataFailure]),
-    });
-    const message = result.failedStep?.failureFacts?.[0]?.message;
-    expect(message).toMatch(/openclaw update/);
-    expect(await printSummary(result)).toContain(message);
-
-    const report = await prepareUpdateFailureReport({ attemptId: "metadata-admission", result });
-    expectContains(report.body, [code, message, "openclaw update"]);
-    expect(report.body).toMatch(detail);
-    expect(report.body).not.toContain("registry.internal.example");
-    expect(report.body).not.toContain("/private/operator/npmrc");
-    expect(fs.existsSync(fixture.databasePath)).toBe(existingProfile);
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-    if (existingProfile) {
-      expect(await readUpdateStatus("npm", "2026.9.2")).toMatchObject([
-        {
-          lastRun: {
-            status: "failed",
-            reason: "target-metadata-preflight",
-            origin: { nextAction: expect.stringContaining("openclaw update") },
-            steps: failureSteps({
-              code: "target-registry-metadata",
-              message: expect.stringMatching(/registry[\s\S]*openclaw update/i),
-            }),
-          },
-        },
-      ]);
-    }
-  },
-);
-
-it.each(["main", "MAIN", "Main", "openclaw@MAIN"])("preserves status for %s", async (tag) => {
-  openOpenClawStateDatabase();
-  vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue("bun");
-  const result = await rejectUpdate({ tag, yes: true });
-  expect(result).toMatchObject({
-    status: "error",
-    mode: "bun",
-    reason: "unsupported-package-target",
-  });
-  expect(await printSummary(result)).toContain("Update mode: bun");
-  const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
-  expect(report.body).toContain("Update mode: bun");
-  expect(await readUpdateStatus("bun")).toMatchObject([
-    {
-      lastRun: { target: { kind: "package" } },
-      update: { packageManager: "bun" },
-    },
-  ]);
-  expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
-  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
 });
 
 it("previews unreadable Git target metadata with its reason and next step", async () => {

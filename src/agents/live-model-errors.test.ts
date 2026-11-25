@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+import { isListedModelChatRejection, isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 function expectMessages(expected: boolean, messages: string[]) {
   for (const message of messages) {
@@ -54,4 +54,16 @@ it("treats a hard model deprecation as model-unavailable, not deprecation warnin
     "Parameter top_k is deprecated for this model.",
     "Warning: model gpt-4o-2024-05-13 is deprecated and will be removed on 2026-12-01.",
   ]);
+});
+
+it("limits listed-model chat rejections to deterministic 400, 403 and 404 responses", () => {
+  const message =
+    "The model `fixture-listed-model` does not exist or you do not have access to it.";
+  for (const status of [400, 403, 404]) {
+    expect(isListedModelChatRejection(status, message), String(status)).toBe(true);
+  }
+  for (const status of [undefined, 200, 401, 402, 408, 429, 500, 503]) {
+    expect(isListedModelChatRejection(status, message), String(status)).toBe(false);
+  }
+  expect(isListedModelChatRejection(400, "Invalid value for 'temperature'.")).toBe(false);
 });

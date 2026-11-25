@@ -22,7 +22,7 @@ describe("chat gateway state contention", () => {
       });
       expect(state.chatRunError).toEqual({
         runId: "run-1",
-        summary: errorKind === "state_contention" ? diagnostic : "Error: " + diagnostic,
+        summary: diagnostic,
         ...(errorKind === "state_contention" ? { kind: errorKind } : {}),
       });
       expect(getChatSessionProjection(state).runs["run-1"]?.errorKind).toBe(errorKind);
@@ -42,7 +42,7 @@ describe("chat gateway state contention", () => {
       phase: "waiting_for_state",
     });
     expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
-      "Temporarily busy—retrying…",
+      "Temporarily busy—retrying",
     );
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatMessage).toBe("Unsent draft");

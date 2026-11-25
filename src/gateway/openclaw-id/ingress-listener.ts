@@ -9,7 +9,7 @@
 // Gateway sees them, so they can never count as direct loopback. Requests for
 // the OpenClaw ID tunnel API (`/_openclaw-id/v1/`) go to `handleApi` instead.
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server as HttpServer } from "node:http";
 import type { Duplex } from "node:stream";
 import {
@@ -117,7 +117,6 @@ export async function startOpenClawIdIngressListener(params: {
       new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();
-        fs.rmSync(params.socketPath, { force: true });
       }),
   };
 }
@@ -147,10 +146,10 @@ function stripContractHeaders(req: IncomingMessage): void {
 async function listenPrivateSocket(server: HttpServer, socketPath: string): Promise<void> {
   if (process.platform !== "win32") {
     const dir = socketPath.slice(0, socketPath.lastIndexOf("/"));
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.chmodSync(dir, 0o700);
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    await fs.chmod(dir, 0o700);
     // A socket left by a crashed Gateway would make listen fail with EADDRINUSE.
-    fs.rmSync(socketPath, { force: true });
+    await fs.rm(socketPath, { force: true });
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -160,6 +159,6 @@ async function listenPrivateSocket(server: HttpServer, socketPath: string): Prom
     });
   });
   if (process.platform !== "win32") {
-    fs.chmodSync(socketPath, 0o600);
+    await fs.chmod(socketPath, 0o600);
   }
 }

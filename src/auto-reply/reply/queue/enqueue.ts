@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
-import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import {
   diagnosticLogger,
   logMessageQueuedWithBacklogPolicy,
@@ -76,7 +75,7 @@ function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
-  settings: QueueSettings,
+  requestedSettings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
@@ -84,6 +83,13 @@ export function enqueueFollowupRun(
 ): boolean {
   if (isFollowupRunAborted(run)) {
     return false;
+  }
+  const settings = run.operatorAuthority?.participationCeiling
+    ? { ...requestedSettings, mode: "followup" as const }
+    : requestedSettings;
+  if (run.operatorAuthority?.participationCeiling) {
+    run.disableCollectBatching = true;
+    run.protectFromQueueOverflow = true;
   }
   if (options.position === "front") {
     run.protectFromQueueOverflow = true;
@@ -277,6 +283,9 @@ function settleFollowupQueueRefusal(
   // That is retryable backpressure under every policy, including drop:new.
   const reason =
     queue.dropPolicy === "new" && protectedPendingCount < queue.cap ? "queue-cap-new" : "queue-cap";
+  if (reason === "queue-cap-new") {
+    run.userTurnTranscriptRecorder?.finishPendingInput?.("cancelled", "overflow");
+  }
   run.onQueueDisposition?.(reason);
   completeFollowupRunLifecycle(
     run,
@@ -303,6 +312,7 @@ function discardOverflowRoomEvent(
   if (run.controllerInput) {
     run.controllerInput.payload = "unbound";
   }
+  run.userTurnTranscriptRecorder?.finishPendingInput?.("cancelled", "overflow");
   run.onQueueDisposition?.(disposition);
   diagnosticLogger.info("followup queue discarded ambient room event at capacity", {
     sessionId: run.run.sessionId,
@@ -389,6 +399,7 @@ function applyFollowupQueueOverflow(
         if (item.controllerInput) {
           item.controllerInput.payload = "unbound";
         }
+        item.userTurnTranscriptRecorder?.finishPendingInput?.("cancelled", "overflow");
         item.onQueueDisposition?.("queue-cap-old");
         completeFollowupRunLifecycle(item, { kind: "dropped", reason: "queue-cap-old" });
       }
@@ -456,6 +467,8 @@ export function claimNextQueuedFollowupRequestFrom(
   );
   if (
     !next ||
+    source.operatorAuthority?.participationCeiling ||
+    next.operatorAuthority?.participationCeiling ||
     followupMessageRouteIdentityKey(next) !== followupMessageRouteIdentityKey(source) ||
     resolveFollowupAuthorizationKey(next) !== resolveFollowupAuthorizationKey(source)
   ) {
@@ -573,12 +586,11 @@ export function reserveSteerCandidate(
           finish(true);
           return "cancelled";
         }
-        run.operatorAuthority?.assertCurrent();
         return "steer";
       } catch (error) {
         const cancelled = isFollowupRunAborted(run) || input.abortSignal.aborted;
-        // No native handoff occurred; an unavailable policy keeps queued custody.
-        finish(cancelled || !isOperatorAuthorityUnavailable(error));
+        // No native handoff occurred; only recorded cancellation ends queued custody.
+        finish(cancelled);
         if (cancelled) {
           return "cancelled";
         }

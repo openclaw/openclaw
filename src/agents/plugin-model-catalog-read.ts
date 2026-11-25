@@ -1,7 +1,7 @@
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
-import { readSqliteInspectionBudget } from "../infra/sqlite-readonly-worker.js";
+import { readSqliteInspectionBudgetAsync } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerTransferCollector } from "../infra/sqlite-worker-transfer.js";
 import { createOwnedWorkerTaskPool, WorkerTaskError } from "../infra/worker-task-pool.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
@@ -69,7 +69,7 @@ export async function readPluginModelCatalogsInWorker(
   input: PluginModelCatalogReadInput,
   signal: AbortSignal,
 ): Promise<PersistedPluginModelCatalog[]> {
-  const { timeoutMs } = readSqliteInspectionBudget("plugin catalog read", input.path);
+  const { timeoutMs } = await readSqliteInspectionBudgetAsync("plugin catalog read", input.path);
   let catalogs: PersistedPluginModelCatalog[] = [];
   const transfer = createSqliteWorkerTransferCollector("catalogs", (value) => {
     // SAFETY: The private catalog worker serializes this typed result; framing validates transport.

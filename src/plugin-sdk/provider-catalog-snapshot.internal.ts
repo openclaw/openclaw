@@ -68,13 +68,10 @@ export function projectProviderCatalogSnapshotRows(
     const entry = snapshot.get(id);
     if (entry && !entry.status) {
       const chat = readLiveModelChatCapability(row);
+      // The account row's declaration replaces a metadata guess about chat.
+      const { chatEvidence: _guess, ...inference } = entry.model.inference ?? {};
       models.push(
-        chat === undefined
-          ? entry.model
-          : {
-              ...entry.model,
-              inference: { ...entry.model.inference, chat },
-            },
+        chat === undefined ? entry.model : { ...entry.model, inference: { ...inference, chat } },
       );
     }
   }

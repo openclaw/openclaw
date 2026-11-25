@@ -1,10 +1,11 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { bindCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import {
-  bindCommandOwnerAuthority,
-  CommandOwnerRevokedError,
-} from "../../auto-reply/command-owner-authority.js";
-import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
+  bindRequesterProfile,
+  bindUnlinkedChannelRequester,
+} from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { decideChannelOwnerPrincipal } from "../../gateway/operator-admission.js";
 import { captureChannelOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
@@ -87,9 +88,9 @@ export function createHostChannelInboundEventContextBuilder<
               prepareSessionParticipantInput(built, input.identity, input.promptedAt);
             }
           }
-          // Public intent is stricter than ordinary attribution: no mixed/batched context.
+          // Publication remains single-source; ordinary ingress can renew without a public audience.
           const publication = batch.length === 1 ? batch[0]?.childSessionPublication : undefined;
-          if (publication?.audience === "public" && binding.inboundEventKind === "user_request") {
+          if (publication) {
             const gateway = owner.resolveGatewayContext?.();
             const ownerIsCurrent = () =>
               owner.isLive() && Boolean(gateway) && owner.resolveGatewayContext?.() === gateway;
@@ -121,6 +122,7 @@ export function createHostChannelInboundEventContextBuilder<
                     };
                   }
                 : undefined,
+              publication.audience === "public" && binding.inboundEventKind === "user_request",
             );
           }
           const principal = batch.at(-1)?.verifiedPrincipal;
@@ -130,20 +132,39 @@ export function createHostChannelInboundEventContextBuilder<
             return;
           }
           const requester = batch.at(-1)?.requesterProfile;
-          let operatorAuthority: ReturnType<typeof captureChannelOperatorRunAuthority> | undefined;
+          // Retain an actual absent linkage result, not the later absence of a live grant.
+          // Mixed/batched ingress keeps ordinary explicit-user validation.
           if (
+            batch.length === 1 &&
             principal &&
-            requester &&
+            !requester &&
+            !batch[0]?.operatorAuthority &&
+            binding.inboundEventKind === "user_request" &&
+            built.SenderId === principal.senderId &&
+            (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
+            built.OriginatingChannel === principal.channelId
+          ) {
+            bindUnlinkedChannelRequester(
+              built,
+              () => owner.isLive() && owner.resolveGatewayContext?.() === gateway,
+            );
+          }
+          const sender =
+            principal &&
             built.SenderId === principal.senderId &&
             (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
             built.OriginatingChannel === principal.channelId &&
+            batch.every((input) => JSON.stringify(input?.verifiedPrincipal) === principalKey)
+              ? principal
+              : undefined;
+          const linked =
+            sender &&
+            requester &&
             batch.every(
               (input) =>
-                JSON.stringify(input?.verifiedPrincipal) === principalKey &&
-                input?.requesterProfile?.id === requester.id &&
-                input.requesterProfile.isCurrent(),
-            )
-          ) {
+                input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
+            );
+          if (linked && requester) {
             // Retain the remote provenance and record the attested human contribution too.
             for (const input of batch) {
               if (input) {
@@ -154,28 +175,26 @@ export function createHostChannelInboundEventContextBuilder<
                 );
               }
             }
-            const prepared = batch.at(-1)?.operatorAuthority;
-            const operatorIsCurrent = () =>
-              owner.isLive() &&
-              owner.resolveGatewayContext?.() === gateway &&
-              batch.every((input) =>
-                input?.operatorAuthority?.isCurrent(gateway.getRuntimeConfig()),
-              );
-            if (prepared && operatorIsCurrent()) {
-              operatorAuthority = captureChannelOperatorRunAuthority({
-                ...prepared.operatorProfile,
-                recoveryReference: prepared.recoveryReference,
-                getRuntimeConfig: () => gateway.getRuntimeConfig(),
-                signal: prepared.signal,
-                assertCurrent: () => {
-                  if (!operatorIsCurrent()) {
-                    throw new CommandOwnerRevokedError(
-                      "Channel operator authority changed; send a new request.",
-                    );
-                  }
-                },
-              });
-            }
+          }
+          const prepared = batch.at(-1)?.operatorAuthority;
+          const config = gateway.getRuntimeConfig();
+          // The operator decision is fixed here, when the message is admitted. A linked operator
+          // profile keeps its own grant and recoverable source.
+          const admitted =
+            sender && owner.isLive() && owner.resolveGatewayContext?.() === gateway
+              ? linked && prepared
+                ? batch.every((input) => input?.operatorAuthority?.isCurrent(config))
+                  ? { ...prepared.operatorProfile, recoveryReference: prepared.recoveryReference }
+                  : undefined
+                : decideChannelOwnerPrincipal(config, sender)
+              : undefined;
+          const operatorAuthority =
+            admitted &&
+            captureChannelOperatorRunAuthority({
+              ...admitted,
+              getRuntimeConfig: () => gateway.getRuntimeConfig(),
+            });
+          if (linked && requester) {
             bindRequesterProfile(built, {
               ...requester,
               operatorAuthority,
@@ -202,12 +221,11 @@ export function createHostChannelInboundEventContextBuilder<
             return;
           }
           bindCommandOwnerAuthority(built, {
+            channelPrincipal: ownerPrincipal,
             recoveryReference: authority.recoveryReference,
             operatorAuthority,
-            isCurrent: () =>
-              owner.isLive() &&
-              owner.resolveGatewayContext?.() === gateway &&
-              authority.isCurrent(gateway.getRuntimeConfig()),
+            // The owner decision above is fixed at admission; only the ingress lifetime ends it.
+            isCurrent: () => owner.isLive() && owner.resolveGatewayContext?.() === gateway,
           });
         };
         bindParticipants();

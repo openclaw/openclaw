@@ -167,6 +167,7 @@ export function createSessionRowMembershipReadAccess(params: {
       : null;
   };
   return {
+    onMembershipChange: membership.onMembershipChange,
     readMembership(query: records.Lookup) {
       if (!params.isActive()) {
         return undefined;
@@ -236,6 +237,7 @@ export function createSessionRowMembershipReadAccess(params: {
       }
       return { status: "ready" as const, target };
     },
+    memberAccess: membership.access,
     hasMembership: (storePath: string, key: string, identity: string) =>
       membership.membership(storePath, key)?.includes(identity) ?? false,
     needsExactMembershipPreparation(

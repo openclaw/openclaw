@@ -1,5 +1,9 @@
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isTranscriptArtifactProvider } from "../../../../packages/agent-core/src/harness/session/transcript-model.js";
+import { isLegacyCodexProviderId } from "../../../../src/config/legacy-codex-provider.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
@@ -8,7 +12,6 @@ import {
   normalizeRoleForGrouping,
   resolveMessageRole,
 } from "../../lib/chat/message-normalizer.ts";
-import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
@@ -19,6 +22,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
+import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,
   chatItemStartsUserTurn,
@@ -41,13 +45,14 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
+  // Keep one activity owner as the first call gains live facts or more calls.
+  // Its renderer can simplify a settled singleton without replacing the owner.
   return (
+    Boolean(group.compaction) ||
     bubbleMode ||
     group.messages.length > 1 ||
-    cards.length > 1 ||
-    (cards.length === 0 &&
-      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
-    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+    cards.length > 0 ||
+    group.messages.some(({ message }) => hasVisiblePreparedActivity(message))
   );
 }
 
@@ -125,6 +130,7 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     (item.role === "assistant" || item.role === "tool") &&
+    !(item.compaction && !item.runId) &&
     !assistantGroupIsIndependentBoundary(item)
   );
 }
@@ -132,6 +138,7 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (
     item.kind !== "group" ||
+    (item.compaction && !item.runId) ||
     item.isStreaming ||
     groupHasVisibleReplyContent(item, false) ||
     item.messages.some(({ message }) => isProviderVoiceTranscript(message))
@@ -175,6 +182,65 @@ function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
     assistantGroupCanOwnActiveRunStatus(item) &&
     assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "commentary"
   );
+}
+
+// The saved response, not the current picker or the (possibly OpenAI-compatible) API,
+// identifies which model answered. Imported native history names only its provider.
+function isRecordedOpenAIModel(record: Record<string, unknown>): boolean {
+  const model = normalizeLowercaseStringOrEmpty(record.model);
+  const provider = normalizeLowercaseStringOrEmpty(record.provider);
+  if (!provider || !model) {
+    return false;
+  }
+  const served = normalizeLowercaseStringOrEmpty(record.responseModel);
+  const direct = provider === "openai" || isLegacyCodexProviderId(provider);
+  const upstream = (id: string) =>
+    parseProviderModelRef(
+      !direct && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id,
+    );
+  const requested = upstream(model);
+  const actual = upstream(served);
+  if (actual) {
+    return actual.provider === "openai";
+  }
+  if (direct) {
+    return !requested || requested.provider === "openai";
+  }
+  // A router can return a bare upstream ID. It confirms the requested vendor only
+  // when it matches the qualified route; an unrelated bare reroute is unknown.
+  return (
+    requested?.provider === "openai" &&
+    (!served ||
+      served === requested.model ||
+      served.replace(/-\d{4}-\d{2}-\d{2}$/, "") === requested.model)
+  );
+}
+
+// A single Worked row can cover several runs: don't put another model's output inside it.
+function isOpenAIWorkSegment(turn: TurnRenderItem[], start: number, end: number): boolean {
+  let foundAuthor = false;
+  for (let index = start; index <= end; index++) {
+    const item = turn[index]!;
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const { message } of item.messages) {
+      const record = asRecord(message);
+      if (
+        record?.role !== "assistant" ||
+        isTranscriptArtifactProvider(record.provider) ||
+        isKeyedAssistantStreamFallbackMessage(record) ||
+        messageSubagentCompletions(record).length > 0
+      ) {
+        continue;
+      }
+      if (!isRecordedOpenAIModel(record)) {
+        return false;
+      }
+      foundAuthor = true;
+    }
+  }
+  return foundAuthor;
 }
 
 function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
@@ -393,6 +459,10 @@ export function collapseCompletedTurnWork(
       }
       segmentEnd += 1;
     }
+    if (!isOpenAIWorkSegment(turn, segmentStart, segmentEnd)) {
+      result.push(...turn);
+      continue;
+    }
     // The last-visible-reply policy applies per run. A later run in the same
     // turn, such as a subagent completion the agent answered without new user
     // input, must not demote an earlier run's reply to work. A run that ended
@@ -496,6 +566,11 @@ export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
 // new run IDs. Visible content, not other output elsewhere in those runs,
 // bounds the log. Reuse prepared visibility and cached cards in this pass.
 function isActivityGroup(group: MessageGroup): boolean {
+  // Manual/legacy compactions have no agent-run owner; do not assign them to
+  // an earlier answer or turn merely because that work is nearby.
+  if (group.compaction && !group.runId) {
+    return false;
+  }
   if (group.isStreaming || group.visibleContent === "non-text" || hasForwardedSource(group)) {
     return false;
   }
@@ -544,7 +619,9 @@ export function joinActivityRuns(
         : undefined;
   const before = groupsOf(first);
   const after = groupsOf(next);
-  return before && after ? activityRun([...before, ...after]) : undefined;
+  return before && after && !after[0]?.startsActivityGroup
+    ? activityRun([...before, ...after])
+    : undefined;
 }
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
@@ -562,11 +639,14 @@ export function coalesceActivityRuns(
     if (!first) {
       return;
     }
-    result.push(groups.length === 1 ? first : activityRun(groups));
+    result.push(activityRun(groups));
     groups = [];
   };
   for (const item of items) {
     if (item.kind === "group" && isActivityGroup(item)) {
+      if (item.startsActivityGroup) {
+        flush();
+      }
       groups.push(item);
       continue;
     }

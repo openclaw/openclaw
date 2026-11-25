@@ -112,6 +112,18 @@ describe("handleBashChatCommand", () => {
     createExecToolMock.mockReset();
   });
 
+  it.each([
+    "[example] /bash stop session-1",
+    "Ada: /bash stop session-1",
+    "[example] !stop session-1",
+  ])("does not promote wrapped text into a bash request: %j", async (body) => {
+    getSessionMock.mockReturnValue(buildRunningSession());
+    const result = await handleBashChatCommand(buildParams(body));
+    expect(result.text).toContain("Unrecognized bash request");
+    expect(cancelBackgroundExecSessionMock).not.toHaveBeenCalled();
+    expect(createExecToolMock).not.toHaveBeenCalled();
+  });
+
   it("logs the background session without logging its command", async () => {
     using log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
     const execute = vi.fn().mockResolvedValue(backgroundExecResult("private-job"));
@@ -244,7 +256,12 @@ describe("handleBashChatCommand", () => {
     createExecToolMock.mockReturnValue({
       execute: vi.fn().mockResolvedValue({
         content: [],
-        details: { status: "completed", exitCode: 0, aggregated: "done" },
+        details: {
+          status: "completed",
+          exitCode: 0,
+          aggregated: "done",
+          warningText: "pid 7 keeps running",
+        },
       }),
     });
     const params = buildParams("/bash echo done");
@@ -259,6 +276,8 @@ describe("handleBashChatCommand", () => {
     });
 
     expect(result.text).toContain("Exit: code 0");
+    // The reply shows the output and what OpenClaw reported about the run.
+    expect(result.text).toContain("pid 7 keeps running\n\ndone");
     expect(createExecToolMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "target", sessionKey: "global" }),
     );

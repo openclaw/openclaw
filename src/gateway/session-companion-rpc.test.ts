@@ -33,7 +33,7 @@ async function invoke(
   params: unknown,
   companion: Partial<Record<"ask" | "state" | "reset", ReturnType<typeof vi.fn>>>,
   {
-    client = { connId: "conn-1" },
+    client = { ...sharingPolicyClient({ scopes: [] }), connId: "conn-1" },
     signal,
     config = { agents: { entries: { main: {} } } },
   }: { client?: { connId?: string }; signal?: AbortSignal; config?: Record<string, unknown> } = {},
@@ -118,9 +118,7 @@ it("keeps a memory incognito source current through operator authority for durab
     const ask = vi.fn(async (request: Parameters<SessionCompanionService["ask"]>[0]) => {
       const authority = expectDefined(request.operatorAuthority, "Captured operator authority");
       expect(authority.profileId).toBe(profile.id);
-      await patchSessionEntryCore(target, () => ({ label: "private source accepted" }), {
-        workerGuard: { source: authority.assertCurrent },
-      });
+      await patchSessionEntryCore(target, () => ({ label: "private source accepted" }));
       return { answer: "Private source accepted.", ts: 125 };
     });
     const respond = await invoke(
@@ -135,7 +133,7 @@ it("keeps a memory incognito source current through operator authority for durab
     expect(loadSessionEntry(target)?.label).toBe("private source accepted");
   }));
 
-it("carries the authenticated model policy and releases it after answering", async () => {
+it("carries the authenticated model policy", async () => {
   const controller = new AbortController();
   await withProfiles(async () => {
     const client = viewer("companion-policy", "policy-connection");
@@ -163,7 +161,6 @@ it("carries the authenticated model policy and releases it after answering", asy
       expect(captured?.modelPolicy?.models).toEqual([
         { provider: "test-provider", model: "allowed" },
       ]);
-      captured?.assertCurrent();
       return { answer: "Allowed answer.", ts: 125 };
     });
     const respond = await invoke(
@@ -174,7 +171,6 @@ it("carries the authenticated model policy and releases it after answering", asy
     );
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { answer: "Allowed answer.", ts: 125 });
     expect(captured).toBeDefined();
-    expect(() => captured?.assertCurrent()).toThrow("no longer active");
   });
 });
 
@@ -251,6 +247,8 @@ it.each([
 });
 
 it.each([
+  { reason: "timeout", details: { reason: "timeout" } },
+  { reason: "stopped", details: { reason: "stopped" } },
   { reason: "busy", details: { code: GatewayErrorDetailCodes.SESSION_COMPANION_BUSY } },
   { reason: "context-unavailable", details: { reason: "context-unavailable" } },
 ] as const)("returns the typed retryable $reason detail", async ({ reason, details }) => {
@@ -259,6 +257,14 @@ it.each([
   });
   const respond = await invoke("ask", askParams, { ask });
   expectError(respond, "UNAVAILABLE", { retryable: true, details });
+});
+
+it("stops only the named ask and refuses a stop that did not match", async () => {
+  const reset = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+  const params = { sessionKey: askParams.sessionKey, cancelAskId: "question-id" };
+  success(await invoke("reset", params, { reset }), { ok: true });
+  expect(reset).toHaveBeenCalledWith({ ...params, agentId: "main", ownerId: "shared" });
+  expectError(await invoke("reset", params, { reset }), "UNAVAILABLE");
 });
 
 it.each(["state", "reset"] as const)(

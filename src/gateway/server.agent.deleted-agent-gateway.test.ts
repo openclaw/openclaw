@@ -48,6 +48,7 @@ test("agent RPC rejects archived session keys before dispatch", async () => {
       code: ErrorCodes.INVALID_REQUEST,
       message:
         'Session "agent:main:subagent:archived" is archived. Restore it before starting new work.',
+      retryable: false,
     });
     expect(agentCommandMock).not.toHaveBeenCalled();
   } finally {

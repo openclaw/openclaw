@@ -32,7 +32,7 @@ it("ranks only current-chat speakers by sent recency, then silent members and st
     const silent = ensureProfileForEmail("silent@mentions.example.test");
     const global = ensureProfileForEmail("global@mentions.example.test");
     setDisplayName(silent.id, "Aaron silent member");
-    setDisplayName(global.id, "Aardvark global");
+    setDisplayName(global.id, "Aardvark global ΕΛΕΓΧΟΣ");
     await addSessionMemberInWorker(scope, { identityId: silent.id, addedBy: f.alice.id });
     await recordSessionParticipant(scope, {
       identity: { type: "profile", id: f.alice.id },
@@ -68,6 +68,12 @@ it("ranks only current-chat speakers by sent recency, then silent members and st
         (user) => user.profileId,
       ),
     ).toEqual([global.id]);
+    for (const query of ["Σ", "σ", "ς"]) {
+      const { users } = await read({ sessionKey: SESSION_KEY, query });
+      expect(users).toMatchObject([
+        { profileId: global.id, displayName: "Aardvark global ΕΛΕΓΧΟΣ" },
+      ]);
+    }
     await recordSessionParticipant(scope, {
       identity: { type: "profile", id: f.alice.id },
       promptedAt: 30,
@@ -302,7 +308,7 @@ it("includes offline people without leaking administrative profile fields or bin
       [offline.id, false],
     ]);
     expect(new Set(users.map((user) => user.displayName)).size).toBe(2);
-    const fields = ["avatarUrl", "displayName", "online", "profileId"];
+    const fields = ["avatarUrl", "displayName", "inviteAccessOptions", "online", "profileId"];
     for (const user of users) {
       expect(Object.keys(user).toSorted()).toEqual(fields);
     }

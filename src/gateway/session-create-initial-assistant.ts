@@ -1,6 +1,6 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import type { SessionEntry } from "../config/sessions.js";
 import { prepareInitialAssistantTranscript } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -90,13 +90,29 @@ export function validateFreshSessionConstraints(input: FreshSessionConstraints) 
   return undefined;
 }
 
-/** Keep the first assistant message in the same transcript transaction as the new row. */
-export function withInitialAssistantTranscript<T extends object>(
+/** Commit initial transcript content and its known context with the session row. */
+export function withInitialSessionTranscript<T extends object>(
   result: T,
   entry: SessionEntry,
-  message: CreateGatewaySessionParams["initialAssistantMessage"],
-  cwd: string | undefined,
+  params: Pick<
+    CreateGatewaySessionParams,
+    "initialEntry" | "initialAssistantMessage" | "initialCatalogContinuation"
+  >,
+  options: { cwd: string | undefined; isNew: boolean },
 ) {
+  const message = params.initialAssistantMessage;
+  // Seeded histories and pending initializers own their accounting; adopted rows keep theirs.
+  if (
+    options.isNew &&
+    !entry.initializationPending &&
+    !params.initialEntry &&
+    !message &&
+    !params.initialCatalogContinuation
+  ) {
+    entry.totalTokens = 0;
+    entry.totalTokensFresh = true;
+    entry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
+  }
   return {
     ...result,
     entry,
@@ -105,7 +121,7 @@ export function withInitialAssistantTranscript<T extends object>(
           transcriptEvents: prepareInitialAssistantTranscript({
             ...message,
             sessionId: entry.sessionId,
-            cwd,
+            cwd: options.cwd,
           }),
         }
       : {}),

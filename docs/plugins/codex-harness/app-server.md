@@ -12,6 +12,11 @@ How OpenClaw starts and authenticates the Codex app-server, and what it isolates
 
 ## App-server policy
 
+The plugin checks for a managed Codex executable when it activates. After
+installing or removing Codex on the Gateway host, run `openclaw plugins reload
+codex` or restart the Gateway to refresh automatic runtime selection. App-server
+startup checks the selected executable and its handshake separately.
+
 By default, the plugin starts OpenClaw's managed Codex binary locally with
 stdio transport. Set `appServer.command` only to intentionally run a
 different executable. Verified setup accepts a native Codex executable or the
@@ -289,7 +294,7 @@ the native configured model provider; select the model with the standard
 OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
 route compatibility and subscription/API-key account checks still apply.
 
-Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
+Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). The client acquisition owner applies these defaults before choosing a shared process, including catalog, resume, fork, and turn requests, so those paths do not start competing writers merely because one prepared Git settings first. OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
 
 If a deployment needs additional environment isolation, add those
 variables to `appServer.clearEnv`:

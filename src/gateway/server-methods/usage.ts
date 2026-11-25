@@ -129,7 +129,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const profileId = gatewayClientSessionCreator(client ?? null)?.id;
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
-    const dayBucket = resolveDayBucket(dateInterpretation);
+    const dayBucket = resolveDayBucket(dateInterpretation, range.civilDays);
     const limit = p.projection === "overview" ? 50 : (p.limit ?? 50);
     const hasOverviewOptions =
       p.projection === "overview" ||
@@ -638,7 +638,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       respondError(
         respond,
         ErrorCodes.INVALID_REQUEST,
-        `No transcript found for session: ${resolved.key}`,
+        `No chat history found for session: ${resolved.key}`,
       );
       return;
     }

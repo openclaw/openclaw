@@ -8,6 +8,16 @@ const migration = {
   migrateLegacyState: () => ({ changes: [], warnings: [] }),
 };
 
+it("keeps recovery registration separate from automatic migrations", () => {
+  const registerRecoveryCli = () => {};
+  const contract = coercePluginDoctorContractModule({ registerRecoveryCli });
+  expect(contract.registerRecoveryCli).toBe(registerRecoveryCli);
+  expect(contract.summary.recoveryCli).toBe(true);
+  expect(contract.stateMigrations).toEqual([]);
+  expect(contract.summary.stateMigrations).toBe(false);
+  expect(() => coercePluginDoctorContractModule({ registerRecoveryCli: true })).toThrow();
+});
+
 describe("SQLite-only Doctor declarations", () => {
   it("retains and normalizes the declared family and PostgreSQL notice", () => {
     const contract = coercePluginDoctorContractModule({

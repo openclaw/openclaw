@@ -4,40 +4,93 @@ import { listWholeConfigSplitFiles } from "../../scripts/lib/ci-node-test-invent
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
-  isRuntimeTestFileIncluded,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
 
 const options = {
+  compact: true,
   compactMode: "push",
+  mainValidation: false,
   runnerBackend: "github",
+  includeProofTests: true,
   includeReleaseOnlyPluginShards: false,
   includeReleaseOnlyToolingShards: false,
   includeReleaseOnlyRuntimeTests: false,
+  includePrExemptRuntimeTests: true,
 } as const;
 
 afterEach(() => vi.unstubAllEnvs());
 
-it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainValidation) => {
+it.each(["push", "main", "full"] as const)("bounds hosted groups (%s)", (mode) => {
+  const mainValidation = mode === "main";
+  const full = mode === "full";
   vi.stubEnv("CI", "true");
   vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "1");
-  if (mainValidation) {
-    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
-  }
-  const selectedOptions = mainValidation
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", full ? "dual-all" : "bun-all");
+  const selectedOptions = full
     ? {
         ...options,
         compactMode: "pull-request" as const,
-        includeProofTests: true,
         includeReleaseOnlyToolingShards: true,
-        includePrExemptRuntimeTests: true,
-        mainValidation: true,
+        includeReleaseOnlyRuntimeTests: true,
       }
-    : options;
-  const jobCap = mainValidation ? 77 - createNodeWorkerE2eTestShards().length : 70;
+    : mainValidation
+      ? {
+          ...options,
+          compactMode: "pull-request" as const,
+          includeProofTests: true,
+          includeReleaseOnlyToolingShards: true,
+          includePrExemptRuntimeTests: true,
+          mainValidation: true,
+        }
+      : options;
+  const workerRows = createNodeWorkerE2eTestShards();
+  expect(workerRows).toHaveLength(2);
+  expect(workerRows.every((row) => !row.requiresDist && row.planConcurrency === 1)).toBe(true);
+  const totalJobCap = full ? 98 : mainValidation ? 77 : 70;
+  const jobCap = full ? undefined : totalJobCap - workerRows.length;
   const owners = createNodeTestShards(selectedOptions);
   const jobs = createNodeTestShardBundles({ ...selectedOptions, compactNodeJobCap: jobCap });
-  expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(jobCap);
-  expect(jobs.length).toBeLessThanOrEqual(90);
+  expect(jobs.filter((job) => !job.requiresDist).length + workerRows.length).toBeLessThanOrEqual(
+    totalJobCap,
+  );
+  expect(jobs.length).toBeLessThanOrEqual(full ? 96 : mainValidation ? 90 : 69);
+
+  if (!mainValidation && !full) {
+    const reducedOwners = owners.filter(
+      (owner) =>
+        /^core-tooling-\d+$/u.test(owner.shardName) || owner.shardName === "agentic-cli-process",
+    );
+    const expectedFiles = reducedOwners.flatMap((owner) =>
+      (owner.includePatterns ?? listWholeConfigSplitFiles(owner.shardName)!).map((file) =>
+        JSON.stringify([owner.configs, file]),
+      ),
+    );
+    const actualFiles: string[] = [];
+    for (const job of jobs) {
+      for (const group of job.groups) {
+        if (
+          !/^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name) &&
+          !/^agentic-cli-process(?:-hosted-\d+)?$/u.test(group.shard_name)
+        ) {
+          continue;
+        }
+        expect(group.includePatterns?.length).toBeGreaterThan(0);
+        actualFiles.push(
+          ...group.includePatterns!.map((file) => JSON.stringify([group.configs, file])),
+        );
+        expect(job.planConcurrency).toBe(1);
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+        expect([undefined, "2"]).toContain(job.env?.OPENCLAW_VITEST_MAX_WORKERS);
+        if (!group.requiresDist && group.pretestBuildMode === undefined) {
+          expect(group.fallbackMaxWorkers).toBeUndefined();
+          expect(group.minTotalMemoryBytes).toBeUndefined();
+        }
+      }
+    }
+    // Compare multisets: a duplicate must not hide a missing retained file.
+    expect(actualFiles.toSorted()).toEqual(expectedFiles.toSorted());
+  }
 
   for (const [ownerName, maxFiles] of [
     ["agentic-control-plane-agent-chat", 30],
@@ -77,6 +130,7 @@ it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainV
         }
         if (
           !mainValidation &&
+          !full &&
           (ownerName === "agentic-control-plane-agent-chat" ||
             (ownerName === "agentic-gateway-methods" && files.length > 32))
         ) {
@@ -100,8 +154,14 @@ it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainV
     group.includePatterns?.includes("src/cli/update-cli.test.ts"),
   );
   expect(updateGroups).toHaveLength(1);
-  expect(updateGroups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);
-  if (!mainValidation) {
+  if (full) {
+    // Ordinary updater tests do not inherit packaged-runtime consumers' build.
+    expect(updateGroups[0]!.pretestBuildMode).toBeUndefined();
+    expect(updateGroups[0]!.includePatterns!.length).toBeGreaterThan(1);
+  } else {
+    expect(updateGroups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);
+  }
+  if (!mainValidation && !full) {
     expect(updateJobs[0]!.groups).toHaveLength(1);
   }
 });

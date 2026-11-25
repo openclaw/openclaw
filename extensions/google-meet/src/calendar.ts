@@ -114,7 +114,7 @@ export function buildGoogleMeetCalendarDayWindow(now = new Date()) {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   const end = new Date(start);
-  end.setDate(start.getDate() + 1);
+  end.setHours(24, 0, 0, 0);
   return { timeMin: start.toISOString(), timeMax: end.toISOString() };
 }
 
@@ -123,7 +123,7 @@ function rankCalendarEvent(event: GoogleMeetCalendarEvent, nowMs: number): numbe
     parseDateStringTimestampMs(event.start?.dateTime ?? event.start?.date) ??
     Number.POSITIVE_INFINITY;
   const endMs = parseDateStringTimestampMs(event.end?.dateTime ?? event.end?.date) ?? startMs;
-  if (startMs <= nowMs && endMs >= nowMs) {
+  if (startMs <= nowMs && endMs > nowMs) {
     return 0;
   }
   if (startMs > nowMs) {

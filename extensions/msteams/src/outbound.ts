@@ -26,7 +26,6 @@ import {
 } from "../runtime-api.js";
 import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
 import { msteamsOutboundConfig, resolveMSTeamsEffectiveTextChunkLimit } from "./outbound-config.js";
-import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
@@ -293,7 +292,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         accountId ?? resolveDefaultMSTeamsAccountId(cfg),
       );
       const maxSelections = poll.maxSelections ?? 1;
-      const result = await sendPollMSTeams({
+      return await sendPollMSTeams({
         cfg,
         accountId: effectiveAccountId,
         to: resolveMSTeamsThreadTarget(to, threadId),
@@ -303,17 +302,6 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         assertDirectAdapterHandoff,
         onPlatformSendDispatch,
       });
-      const pollStore = createMSTeamsPollStoreState({ accountId: effectiveAccountId });
-      await pollStore.createPoll({
-        id: result.pollId,
-        question: poll.question,
-        options: poll.options,
-        maxSelections,
-        createdAt: new Date().toISOString(),
-        conversationId: result.conversationId,
-        messageId: result.messageId,
-      });
-      return result;
     },
   }),
 };

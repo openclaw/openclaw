@@ -13,7 +13,10 @@ import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { WORKTREE_CREATE_LEASE_SCOPE, WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
-import { listRegistryWorktreesInDatabase } from "./registry-read.kernel.js";
+import {
+  getRegistryWorktreeInDatabase,
+  listRegistryWorktreesInDatabase,
+} from "./registry-read.kernel.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const PENDING_SCOPE = "core:managed-worktrees:pending-slots";
@@ -127,13 +130,16 @@ export function reservePendingWorktreeInDatabase(
       state: "pending",
     })),
   ];
+  // Explicit restores may revive older checkouts alongside their owner's current one.
+  const restoring = getRegistryWorktreeInDatabase(db, record.id)?.removedAt !== undefined;
   if (
     slots.some(
       ({ record: current, state }) =>
         current.id === record.id ||
         current.path === record.path ||
         (current.repoFingerprint === record.repoFingerprint && current.name === record.name) ||
-        (state !== "recovering" &&
+        (!restoring &&
+          state !== "recovering" &&
           record.ownerId !== undefined &&
           current.ownerKind === record.ownerKind &&
           current.ownerId === record.ownerId),

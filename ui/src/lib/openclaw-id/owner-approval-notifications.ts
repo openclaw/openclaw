@@ -43,10 +43,12 @@ export function bindOwnerApprovalNotifications(gateway: ApplicationGateway) {
       }
       stop = bindOwnerApproval(
         gateway,
-        (client) =>
+        (client, request) =>
           showToast({
             severity: "info",
-            message: t("openclawId.approvalNotice"),
+            message: request.member
+              ? t("openclawId.approvalMemberClaim", { member: request.member.name })
+              : t("openclawId.approvalNotice"),
             actionLabel: t("openclawId.approveNewDevice"),
             durationMs: 30_000,
             onAction: () => openApproval(client),
@@ -63,11 +65,15 @@ export function bindOwnerApprovalNotifications(gateway: ApplicationGateway) {
             durationMs: 30_000,
             onAction: () => openDevices(client),
           }),
-        () =>
+        (use) =>
           showToast({
             severity: "info",
-            message: t("openclawId.memberDeviceAddedNotice"),
-            description: t("openclawId.memberDeviceAddedNoticeBody"),
+            message: use
+              ? t("openclawId.memberKitUsedNotice", { name: use.memberName })
+              : t("openclawId.memberDeviceAddedNotice"),
+            description: use
+              ? t("openclawId.memberKitUsedNoticeBody", { device: use.deviceLabel })
+              : t("openclawId.memberDeviceAddedNoticeBody"),
             durationMs: 30_000,
           }),
       );

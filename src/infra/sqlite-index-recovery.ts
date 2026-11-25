@@ -21,10 +21,8 @@ import {
   createPrivateSqliteTempDirectorySync,
 } from "./sqlite-private-directory.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
-import {
-  resolveSqliteInspectionSignal,
-  runSqliteReadOnlyWorker,
-} from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
+import { runSqliteReadOnlyWorker } from "./sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,

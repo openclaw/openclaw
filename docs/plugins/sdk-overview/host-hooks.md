@@ -228,7 +228,10 @@ normal session navigation. This message grants no session access, accepts no
 arbitrary URL, and returns no credentials or session content. Standalone pages
 should retain an ordinary Control UI link as their non-embedded path. Use
 `buildControlUiSessionPath` from `openclaw/plugin-sdk/session-discussion` to build
-that path.
+that path. For stored sessions, await `prepareStoredSessionControlUiPathResolver()`
+once, then use its synchronous resolver with the current config at disclosure. It
+returns a path only when normal read routing preserves the stored agent and key.
+`parseControlUiSessionPath` validates a received path without choosing an origin.
 
 ```typescript
 api.session.controls.registerControlUiDescriptor({
@@ -432,7 +435,12 @@ after completion or failure; optional `formatFailure(stderr, exitCode)` customiz
 command failure messages. Remote PTY requests affect the command built by the
 adapter; the local transport still runs with piped input.
 
-Pass the reserved `assertRuntimeCurrent` as the session's `assertCurrent`. The
+Pass the reserved `assertRuntimeCurrent` as the session's `assertCurrent`. Optional
+`prepareCurrent` performs asynchronous physical selection checks before the final
+synchronous assertion; supply it on both the session and returned
+`SandboxBackendExecSpec` when deferred execution needs that preparation. Core
+exec consumers await it at process admission, after approval and transport setup.
+The assertion still owns immediate in-process revocation. The
 shared owner checks it around asynchronous preparation, and uploads recheck after
 local traversal immediately before spawning. Provider authority remains with the
 transport command: preparing local argv or retaining connection credentials does

@@ -13,6 +13,7 @@ import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gatewa
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
@@ -23,6 +24,7 @@ import { enqueueRun } from "../service/ops-run.js";
 import { onTimer } from "../service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { cronJobNeedsCreatorReauthorization } from "../tools-allow.js";
 import type { CronEvent, CronStoredJob } from "../types.js";
 import {
   getChannelPluginMock,
@@ -74,6 +76,7 @@ it.each<AccountCase>([
   ["intentional no-tool job", "work", [], false],
   ["configured DM account without delivery", "work", ["read"], false, { channel: "whatsapp" }],
   ["DM account with malformed creator origin", "work", ["read"], true, { channel: "" }],
+  ["DM no-tool job with malformed creator origin", "work", [], true, { channel: "" }],
 ])(
   "records %s through scheduler and history",
   async (name, accountId, toolsAllow, fails, options = {}) => {
@@ -123,6 +126,8 @@ it.each<AccountCase>([
       defaultAgentId: "main",
       onEvent: (event) => events.push(structuredClone(event)),
       runSchedulerOwned: createScheduledGatewayRunner(),
+      admitScheduledOccurrence: ({ job: stored }) =>
+        admitScheduledOccurrence({ cfg, job: stored, agentId: "main", trigger: "cron" }),
       runIsolatedAgentJob: async (params) => {
         await continuePayload.promise;
         return await runCronIsolatedAgentTurn({
@@ -159,6 +164,9 @@ it.each<AccountCase>([
       const expectedStatus = fails ? "error" : "ok";
       const completionStatus = fails ? "failed" : "succeeded";
       expect(persisted?.state.lastRunStatus).toBe(expectedStatus);
+      expect(cronJobNeedsCreatorReauthorization({ job })).toBe(
+        persisted?.state.lastError?.includes("no recorded creator channel") === true,
+      );
       expect(history.entries).toMatchObject([{ status: expectedStatus, completionStatus }]);
       expect(tasks).toMatchObject([{ status: completionStatus }]);
       expect(events.filter((event) => event.action === "finished")).toEqual([

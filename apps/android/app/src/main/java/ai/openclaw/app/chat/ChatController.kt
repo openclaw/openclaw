@@ -7756,6 +7756,7 @@ class ChatController internal constructor(
       hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
       hasActiveRunIdsMetadata = "activeRunIds" in obj,
       parentSessionKey = obj["parentSessionKey"].asStringOrNull()?.trim(),
+      sidebarRoot = obj["sidebarRoot"].asBooleanOrNull(),
       worktreeId = obj["worktree"].asObjectOrNull()?.nonBlankString("id"),
       hasWorktreeMetadata = "worktree" in obj,
       spawnDepth = obj["spawnDepth"].asLongOrNull()?.toInt(),
@@ -9164,6 +9165,7 @@ internal fun mergeChatSessionEntry(
         existing.hasActiveRunIdsMetadata || next.hasActiveRunIdsMetadata
       },
     parentSessionKey = next.parentSessionKey ?: existing.parentSessionKey,
+    sidebarRoot = next.sidebarRoot ?: existing.sidebarRoot,
     worktreeId = if (next.hasWorktreeMetadata) next.worktreeId else existing.worktreeId,
     hasWorktreeMetadata = next.hasWorktreeMetadata || existing.hasWorktreeMetadata,
     spawnDepth = next.spawnDepth ?: existing.spawnDepth,

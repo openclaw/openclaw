@@ -12,7 +12,6 @@ import {
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { forgetReleasedProcesses } from "../process/supervisor/released-processes.js";
 import type { ReleasedProcess } from "../process/supervisor/types.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import {
   removeNotifyOnExit,
   getSession,
@@ -61,7 +60,7 @@ export function registerOneShotExecScopeCleanup(
     // before their local artifacts or the invocation state can be released.
     const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
     // The run ends here, so everything it left running keeps running without OpenClaw.
-    const handedOff = [...services, ...forgetReleasedProcesses(scopeKey)];
+    const handedOff = [...services, ...(await forgetReleasedProcesses(scopeKey))];
     if (handedOff.length > 0) {
       process.stderr.write(
         `[openclaw] Left running after this run (OpenClaw no longer tracks them; stop with kill <pid>):\n${handedOff
@@ -109,7 +108,7 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
     return true;
   }
   if (session.durable) {
-    session.durable.cancel(captureAgentToolSourceExecutionGuard());
+    session.durable.cancel();
   } else {
     getProcessSupervisor().cancel(sessionId, "manual-cancel");
   }
@@ -186,11 +185,13 @@ export async function drainAgentExecProcesses(
 /**
  * Session reset and delete end everything the session still runs: in-flight
  * commands, `background: true` services and adopted survivors. After a reset
- * nothing would manage them. Durable processes deliberately survive.
+ * nothing would manage them. Durable processes deliberately survive. `startedBy`
+ * leaves processes a later incarnation of the same key started after that time.
  */
 export async function stopSessionExecProcesses(
   scopeKeys: Iterable<string>,
   assertCurrent: () => void,
+  startedBy = Number.POSITIVE_INFINITY,
 ): Promise<void> {
   const keys = new Set(scopeKeys);
   await drainExecSessions(
@@ -198,6 +199,7 @@ export async function stopSessionExecProcesses(
       (session) =>
         session.scopeKey !== undefined &&
         keys.has(session.scopeKey) &&
+        session.startedAt <= startedBy &&
         !session.durable &&
         (!session.exited || session.finalizing),
     ),

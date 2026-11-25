@@ -278,7 +278,7 @@ export function createLegacyStateMigrationPlan(params: {
     refusal: {
       code: "candidate-artifact-digest-required" as const,
       message:
-        "Candidate artifact content identity must be supplied by the staged-candidate owner.",
+        "Diagnostic plan only: this planner cannot verify the candidate package, so it never authorizes migration. `openclaw update` verifies the staged candidate and checks config and database compatibility before activation.",
     },
   };
   const candidate = {

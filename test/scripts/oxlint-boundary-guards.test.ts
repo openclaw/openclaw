@@ -1,8 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { posix } from "node:path";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, posix, resolve } from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import noForcedProcessExit from "../../scripts/lib/no-forced-process-exit.mjs";
+import { ADMISSION_FILES } from "../../scripts/lib/no-operator-permission-read.mjs";
+import { REFUSAL_FILES } from "../../scripts/lib/no-operator-refusal-construction.mjs";
 import noRecursiveReaddir from "../../scripts/lib/no-recursive-readdir.mjs";
+import {
+  CAPABILITY_PROVENANCE_FILES,
+  OWNER_PRODUCER_FILES,
+  TURN_FLAG_FILES,
+} from "../../scripts/lib/no-turn-authority-derivation.mjs";
 
 const FIXTURES = "test/fixtures/oxlint-boundary-guards";
 const forcedExit = "no-forced-process-exit";
@@ -15,6 +24,8 @@ const cases = [
   ],
   [forcedExit, "forced-process-exit-violation.cjs", 6, [3, 4, 5, 6, 7, 9]],
   [forcedExit, "forced-process-exit-violation.mjs", 2, [2, 4]],
+  [forcedExit, "forced-process-escaped.ts", 5, [2, 4, 5, 6, 8]],
+  [forcedExit, "forced-process-uppercase.ts", 1, [1]],
   [forcedExit, "../forced-process-exit.test-support.cjs", 0],
   ["no-register-http-handler-call", "register-http-handler-violation.ts", 3],
   ["no-raw-window-open-call", "raw-window-open-violation.ts", 5],
@@ -23,8 +34,85 @@ const cases = [
   ["no-raw-window-open-call", "boundary-calls.test-harness.tsx", 0],
   ["no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0],
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
+  ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
+  // A refusal built at tool time (line 4) and a subclass (line 7); instanceof reads are fine.
+  ["no-operator-refusal-construction", "operator-refusal-construction-violation.ts", 2, [4, 7]],
+  // Planted divergence: a resumed turn reads its start kind; owner status comes from
+  // destructuring defaults (source and aliased destination), from scopes, from defaults to
+  // owner and from function values. Pass-throughs (lines 9-10) and narrowing forms (lines
+  // 23-30) are not reported.
+  [
+    "no-turn-authority-derivation",
+    "turn-authority-derivation-violation.ts",
+    9,
+    [11, 12, 13, 13, 18, 32, 33, 36, 41],
+  ],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
+
+// Shrink only. When a file leaves a list, lower its ceiling in the same change; never raise one.
+const allowlists = [
+  ["no-operator-permission-read", "", ADMISSION_FILES, 58],
+  ["no-operator-refusal-construction", "", REFUSAL_FILES, 9],
+  ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 18],
+  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 18],
+  ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 3],
+] as const;
+
+it.each(allowlists)(
+  "keeps the %s %s allowlist at or below its ceiling",
+  (_rule, _kind, files, ceiling) => {
+    expect(files.size).toBeLessThanOrEqual(ceiling);
+  },
+);
+
+it("drops every allowlist entry that no longer trips its check", () => {
+  const config = join(mkdtempSync(join(tmpdir(), "turn-authority-allowlists-")), "oxlint.json");
+  writeFileSync(
+    config,
+    JSON.stringify({
+      plugins: [],
+      jsPlugins: [resolve("scripts/oxlint-boundary-guards.mjs")],
+      categories: { correctness: "off" },
+      rules: Object.fromEntries(
+        allowlists.map(([rule]) => [
+          `openclaw-boundaries/${rule}`,
+          ["error", { ignoreAllowlists: true }],
+        ]),
+      ),
+    }),
+  );
+  const files = [...new Set(allowlists.flatMap((allowlist) => [...allowlist[2]]))];
+  const run = spawnSync(
+    process.execPath,
+    [
+      "scripts/run-oxlint.mjs",
+      "--openclaw-focused-config",
+      "--config",
+      config,
+      "--format",
+      "json",
+      ...files,
+    ],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  expect(run.error).toBeUndefined();
+  const found = (JSON.parse(run.stdout) as { diagnostics: typeof diagnostics }).diagnostics;
+  const stale = allowlists.flatMap(([rule, kind, list]) =>
+    [...list]
+      .filter(
+        (file) =>
+          !found.some(
+            (diagnostic) =>
+              diagnostic.filename.replaceAll("\\", "/") === file &&
+              diagnostic.code === `openclaw-boundaries(${rule})` &&
+              diagnostic.message.startsWith(kind),
+          ),
+      )
+      .map((file) => `${rule} ${kind} ${file}`),
+  );
+  expect(stale, "Remove these entries and lower the ceiling").toEqual([]);
+});
 
 const recursiveKinds = {
   unsafe: expect.stringMatching(/^Recursive readdir /),
@@ -60,6 +148,7 @@ it.each([
   const listeners = noForcedProcessExit.create({
     cwd: process.cwd(),
     physicalFilename: `${process.cwd()}/${file}`,
+    sourceCode: { text: "process.exit(1);", scopeManager: { scopes: [] } },
     report() {
       reported = true;
     },
@@ -73,6 +162,36 @@ it.each([
   });
   expect(reported).toBe(expected);
 });
+
+it("does not analyze scopes for unrelated destructuring", () => {
+  let scopeReads = 0;
+  const listeners = noForcedProcessExit.create({
+    cwd: process.cwd(),
+    physicalFilename: `${process.cwd()}/src/runtime.ts`,
+    sourceCode: {
+      text: 'const { pid } = process; process.on("exit", cleanup);',
+      scopeManager: {
+        get scopes() {
+          scopeReads += 1;
+          return [];
+        },
+      },
+    },
+    report() {
+      throw new Error("Unrelated destructuring must not be reported");
+    },
+  });
+  expect(typeof listeners.VariableDeclarator).toBe("function");
+  listeners.VariableDeclarator?.({
+    init: { type: "Identifier", name: "process", start: 16 },
+    id: {
+      type: "ObjectPattern",
+      properties: [{ type: "Property", key: { type: "Identifier", name: "pid" }, computed: false }],
+    },
+  });
+  expect(scopeReads).toBe(0);
+});
+
 let diagnostics: Array<{
   filename: string;
   code: string;

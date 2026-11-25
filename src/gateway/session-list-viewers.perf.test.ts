@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import {
   bindEmbeddedSessionRowProjection,
@@ -10,10 +9,12 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import type { SessionEntry } from "../config/sessions.js";
 import {
   deleteSessionEntryLifecycle,
+  persistSessionTranscriptTurn,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -81,6 +82,85 @@ function patchEntry(
 ) {
   writeListEntry(key, { ...store[key]!, ...patch });
 }
+
+test("reuses invited pages until committed membership changes their visible roster", async () => {
+  await withStateDirEnv("openclaw-list-invited-", async () => {
+    const scopes = ["operator.read", "operator.write"] as const;
+    const cfg = initialize({
+      agents: { entries: { main: {}, work: {} } },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { agents: "*", scopes: [...scopes], sessions: { others: "invited" } },
+          },
+        },
+      },
+    });
+    const guest = viewer("guest");
+    const other = viewer("other");
+    const guestId = guest.authenticatedUserProfile!.profileId;
+    const otherId = other.authenticatedUserProfile!.profileId;
+    const granted = { agentId: "work", sessionKey: "agent:work:granted", sessionId: "granted" };
+    const later = { agentId: "main", sessionKey: "agent:main:later", sessionId: "later" };
+    writeResidentEntries({
+      ...Object.fromEntries(
+        Array.from({ length: 256 }, (_, i) => [
+          `agent:main:uninvited-${i}`,
+          { sessionId: `uninvited-${i}`, updatedAt: 100 + i, createdActor: profileActor(otherId) },
+        ]),
+      ),
+      [granted.sessionKey]: {
+        sessionId: granted.sessionId,
+        updatedAt: 5,
+        createdActor: profileActor(otherId),
+      },
+      [later.sessionKey]: {
+        sessionId: later.sessionId,
+        updatedAt: 4,
+        createdActor: profileActor("another-owner"),
+      },
+      "agent:main:own": { sessionId: "own", updatedAt: 3, createdActor: profileActor(guestId) },
+    });
+    await addSessionMember(granted, { identityId: guestId, addedBy: otherId });
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using checkMembership = vi.spyOn(projection, "hasMembership");
+    const read = (offset = 0) =>
+      listProjectedSessions({
+        projection,
+        client: guest,
+        opts: { limit: 1, ownerFirst: true, offset },
+      });
+    try {
+      await projection.ensureMaterialized();
+      const warm = await read();
+      expectPage(warm, ["own", "granted"], 2);
+      expect(warm).toMatchObject({ hasMore: true, nextOffset: 1 });
+      const owners = warm.owners;
+      expectPage(await read(1), ["own"], 2);
+      checkMembership.mockClear();
+      expectPage(await read(), ["own", "granted"], 2);
+      expect(checkMembership).not.toHaveBeenCalled();
+
+      await addSessionMember(later, { identityId: guestId, addedBy: otherId });
+      checkMembership.mockClear();
+      const extended = await read(1);
+      expectPage(extended, ["later"], 3);
+      expect(extended).toMatchObject({ hasMore: true, nextOffset: 2 });
+      expect(checkMembership.mock.calls.length).toBeLessThan(32);
+
+      await removeSessionMember(granted, guestId);
+      const revoked = await read();
+      expectPage(revoked, ["own", "later"], 2);
+      expect(revoked.owners).not.toEqual(owners);
+      expectPage(await read(1), ["own"], 2);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 test("preserves viewer pages across publications while bounding shared predicate work", async () => {
   await withStateDirEnv("openclaw-list-viewer-golden-", async () => {
@@ -439,7 +519,7 @@ test.each([true, false])("shares unchanged list selection (wire=%s)", async (wir
   });
 });
 
-test("search discovery preserves visibility through retained selections", async () => {
+test("indexed recall preserves pinned visibility without inventory paging", async () => {
   await withStateDirEnv("openclaw-search-selection-", async () => {
     const cfg = initialize({ agents: { entries: { main: {}, work: {} } } });
     const requester = "agent:main:dashboard:requester";
@@ -468,69 +548,68 @@ test("search discovery preserves visibility through retained selections", async 
       { agentId: "main", sessionKey: "agent:main:dashboard:incognito-hidden" },
       { sessionId: "private", updatedAt: 7, incognito: true, archivedAt: 10 },
     );
+    for (const [agentId, sessionKey, sessionId] of [
+      ["main", requester, "requester"],
+      ["main", archived, "archived"],
+      ["main", child, "child"],
+      ["work", foreign, "foreign"],
+      ["work", foreignChild, "foreign-child"],
+      ["main", "global", "main-global"],
+      ["work", "global", "work-global"],
+      ["main", "agent:main:dashboard:incognito-hidden", "private"],
+    ] as const) {
+      await persistSessionTranscriptTurn(
+        { agentId, sessionKey, sessionId },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: "synthetic" }, now: Date.now() }],
+        },
+      );
+    }
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
     const gateway = createEmbeddedCallGateway();
     const own = [requester, archived, child, "global"];
     try {
-      for (const scope of ["all", "self", "tree", "agent", "all"] as const) {
+      for (const scope of ["all", "self", "tree", "agent"] as const) {
         for (const enabled of [true, false]) {
           for (const sandboxed of [false, true]) {
-            let uncached: string | undefined;
-            for (const live of [true, false]) {
-              const keys: string[] = [];
-              const tool = createSessionsSearchTool({
-                config: {
-                  ...cfg,
-                  tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
-                  agents: {
-                    ...cfg.agents,
-                    defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
-                  },
+            const tool = createSessionsSearchTool({
+              // The Gateway remains permissive; the tool's pinned restrictions must survive RPC.
+              config: {
+                ...cfg,
+                tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
+                agents: {
+                  ...cfg.agents,
+                  defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
                 },
-                agentId: "main",
-                agentSessionKey: requester,
-                sandboxed,
-                callGateway: async <T>(request: Parameters<typeof gateway>[0]): Promise<T> => {
-                  // Whitespace is an empty filter but takes the uncached selection path on main.
-                  if (live && request.method === "sessions.list") {
-                    return gateway<T>({
-                      ...request,
-                      params: { ...(request.params as SessionsListParams), search: " " },
-                    });
-                  }
-                  if (request.method !== "sessions.search") {
-                    return gateway<T>(request);
-                  }
-                  const params = request.params as { agentId: string; sessionKeys: string[] };
-                  keys.push(...params.sessionKeys.map((key) => `${params.agentId}/${key}`));
-                  return { results: [] } as T;
-                },
-              });
-              await tool.execute("visibility", { query: "synthetic" });
-              const expected = sandboxed
-                ? [requester, child, foreignChild]
-                : scope === "self"
-                  ? [requester]
-                  : scope === "tree"
-                    ? [requester, child, foreignChild]
-                    : scope === "agent"
-                      ? own
-                      : [...own, foreignChild, ...(enabled ? [foreign] : [])];
-              expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
-                expected
-                  .map((key) => `${key.startsWith("agent:work:") ? "work" : "main"}/${key}`)
-                  .toSorted(),
-              );
-              expect(keys.some((key) => key.startsWith("work/global"))).toBe(false);
-              const bytes = JSON.stringify(keys.toSorted());
-              if (live) {
-                uncached = bytes;
-              } else {
-                expect(bytes).toBe(uncached);
-              }
-            }
+              },
+              agentId: "main",
+              agentSessionKey: requester,
+              sandboxed,
+              callGateway: async (request) => {
+                expect(request.method).not.toBe("sessions.list");
+                return gateway(request);
+              },
+            });
+            const result = await tool.execute("visibility", { query: "synthetic", limit: 25 });
+            const expected = sandboxed
+              ? [requester, child, foreignChild]
+              : scope === "self"
+                ? [requester]
+                : scope === "tree"
+                  ? [requester, child, foreignChild]
+                  : scope === "agent"
+                    ? own
+                    : [...own, foreignChild, ...(enabled ? [foreign] : [])];
+            const keys = (result.details as { results: { sessionKey: string }[] }).results.map(
+              (hit) => hit.sessionKey,
+            );
+            expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
+              expected.toSorted(),
+            );
           }
         }
       }

@@ -1,5 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import { hasToolOutput } from "./mock-openai-input.js";
 
 const QA_OWNER_COMPLETION_START_RE = /Owner completion QA check: job=([a-z0-9-]+)/;
 const QA_OWNER_COMPLETION_OUTPUT_RE = /QA-OWNER-COMPLETION-OUTPUT-([a-z0-9-]+)/;
@@ -34,8 +35,7 @@ export function planOwnerCompletionTurn(params: {
     }
     return undefined;
   };
-  const answeredAfter = (index: number) =>
-    params.input.slice(index + 1).some((item) => item.type === "function_call_output");
+  const answeredAfter = (index: number) => hasToolOutput(params.input.slice(index + 1));
   const start = latest(QA_OWNER_COMPLETION_START_RE);
   const completion = latest(QA_OWNER_COMPLETION_OUTPUT_RE);
   if (completion && (!start || completion.index > start.index)) {

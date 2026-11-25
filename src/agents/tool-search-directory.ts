@@ -8,10 +8,10 @@ import {
   collectUniqueCatalogToolNames,
   isDirectVisibleCatalogTool,
   resolveCatalog,
-  toolSchemaDirectoryPromptCache,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
+import { getToolSearchCatalogDescriptors } from "./tool-search-prepared-catalog.js";
 import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -98,25 +98,28 @@ export function buildToolSchemaDirectoryPrompt(
     ? options.usageRanking
     : undefined;
   const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}:${descriptionMaxChars}:${usageRanking ? JSON.stringify(usageRanking) : ""}`;
-  let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
+  const { prompts: cachedPrompts } = getToolSearchCatalogDescriptors(catalog.entries);
   // Caller-owned filters may change in place; cached text must not bypass them.
   const cachedPrompt = options?.allowedIds ? undefined : cachedPrompts?.get(cacheKey);
   if (cachedPrompt !== undefined) {
     return cachedPrompt;
   }
-  const prompt = formatToolSearchCatalogDirectory(
+  const native = formatToolSearchCatalogDirectory(
     visibleCatalogEntries(catalog, options),
     config.mode,
     maxChars,
     descriptionMaxChars,
     usageRanking,
   );
+  // The prompt owner pins this text and sends later inventory changes as appended prompt
+  // updates, so a server that connects mid-session never changes a tool definition.
+  const mcp =
+    config.mode === "tools" && options?.includeMcp !== false && !options?.allowedIds
+      ? buildMcpToolSearchDirectory(catalog, usageRanking)
+      : "";
+  const prompt = mcp ? `${native}\n\n${mcp}` : native;
   if (options?.allowedIds) {
     return prompt;
-  }
-  if (!cachedPrompts) {
-    cachedPrompts = new Map<string, string>();
-    toolSchemaDirectoryPromptCache.set(catalog.entries, cachedPrompts);
   }
   cachedPrompts.set(cacheKey, prompt);
   pruneMapToMaxSize(cachedPrompts, 12);
@@ -266,11 +269,7 @@ function formatToolSearchCatalogDirectory(
   const renderRows = () => rows.map((row) => formatToolDirectoryRow(row, descriptionMaxChars));
   let lines = renderRows();
   const heading = "Available deferred-schema tools:";
-  // Static per mode: external inventory must not change these cached prompt bytes.
-  const notice =
-    mode === "tools"
-      ? "Deferred MCP tools are listed in the tool_search description. Policy-approved client tools may also be discoverable through search."
-      : "Policy-approved MCP and client tools may also be discoverable through search.";
+  const notice = "Policy-approved MCP and client tools may also be discoverable through search.";
   const omittedLabel = " additional tools omitted. ";
   // Each line includes its newline; three fixed separators remain outside the rows.
   let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
@@ -551,11 +550,10 @@ function formatUsageRankedMcpToolDirectory(
 }
 
 /**
- * Bounded directory of deferred MCP tools for the tool_search description. It is
- * rendered from the immutable catalog snapshot only, so unchanged inventory keeps
- * identical bytes and the provider's prompt prefix stays reusable.
+ * Bounded directory of deferred MCP tools for the system prompt. It is rendered from
+ * the immutable catalog snapshot only, so unchanged inventory keeps identical bytes.
  */
-export function buildMcpToolSearchDirectory(
+function buildMcpToolSearchDirectory(
   catalog: ToolSearchCatalogSession,
   usageRanking?: ToolUsageRankingSnapshot,
 ): string {
@@ -563,16 +561,12 @@ export function buildMcpToolSearchDirectory(
   const cacheKey = ranking
     ? `${MCP_TOOL_DIRECTORY_CACHE_KEY}:${JSON.stringify(ranking)}`
     : MCP_TOOL_DIRECTORY_CACHE_KEY;
-  let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
+  const { prompts: cachedPrompts } = getToolSearchCatalogDescriptors(catalog.entries);
   const cached = cachedPrompts?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
   const directory = formatMcpToolDirectory(catalog.entries, ranking);
-  if (!cachedPrompts) {
-    cachedPrompts = new Map<string, string>();
-    toolSchemaDirectoryPromptCache.set(catalog.entries, cachedPrompts);
-  }
   cachedPrompts.set(cacheKey, directory);
   pruneMapToMaxSize(cachedPrompts, 12);
   return directory;

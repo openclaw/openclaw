@@ -29,6 +29,25 @@ import { SessionManager } from "../sessions/session-manager.js";
 import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
 import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 
+const timeoutClock = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock("./compaction-safety-timeout.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./compaction-safety-timeout.js")>();
+  return {
+    ...actual,
+    compactContextEngineWithSafetyTimeout: (
+      ...args: Parameters<typeof actual.compactContextEngineWithSafetyTimeout>
+    ) => {
+      // Runtime startup needs real timers. Control only the timeout case once
+      // the watchdog starts, so cold writer reads cannot outrun backend entry.
+      if (timeoutClock.enabled) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      return actual.compactContextEngineWithSafetyTimeout(...args);
+    },
+  };
+});
+
 // Exercise the existing managed producer without enabling RUN resource disposal.
 vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../prepared-model-runtime.js")>();
@@ -278,6 +297,7 @@ it.for([
             },
             { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
           );
+        timeoutClock.enabled = mode === "timeout";
         const completion = parent ? parent.run(start) : start();
         pending = completion;
         if (deferred) {
@@ -293,15 +313,23 @@ it.for([
         } else {
           await Promise.race([
             entered.promise,
-            completion.then(() => {
-              throw new Error("Compaction ended before the backend entered");
+            completion.then((result) => {
+              throw new Error(
+                `Compaction ended before the backend entered: ${JSON.stringify(result)}`,
+              );
             }),
           ]);
         }
         if (mode === "caller-abort") {
           caller.abort(callerReason);
         }
+        if (mode === "timeout") {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
         const result = await completion;
+        if (mode === "timeout") {
+          vi.useRealTimers();
+        }
         expect(result).toMatchObject({
           ok: mode === "success-tail" || factory !== "none",
           compacted: false,
@@ -373,6 +401,8 @@ it.for([
           reopened.close();
         }
       } finally {
+        timeoutClock.enabled = false;
+        vi.useRealTimers();
         resume.resolve();
         finishDisposal.resolve();
         stopFactory.resolve();

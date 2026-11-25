@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 

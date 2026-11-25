@@ -284,7 +284,7 @@ const mockedExtractObservedOverflowTokenCount = vi.fn(extractObservedOverflowTok
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
 const mockedIsAuthAssistantError = vi.fn(() => false);
 const mockedIsBillingAssistantError = vi.fn(() => false);
-export const mockedIsCompactionFailureError = vi.fn(() => false);
+const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
 function matchesCanonicalOverflowFixture(msg?: string): boolean {
   const raw = msg ?? "";
@@ -294,7 +294,7 @@ function matchesCanonicalOverflowFixture(msg?: string): boolean {
     matchesContextOverflowMessage(raw, "failover-hint")
   );
 }
-export const mockedIsLikelyContextOverflowError = vi.fn(matchesCanonicalOverflowFixture);
+const mockedIsLikelyContextOverflowError = vi.fn(matchesCanonicalOverflowFixture);
 const mockedParseImageSizeError = vi.fn(() => null);
 const mockedParseImageDimensionError = vi.fn(() => null);
 export const mockedIsRateLimitAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);

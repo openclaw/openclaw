@@ -3,6 +3,7 @@ import { en } from "./en.ts";
 
 const enPortals = {
   portalsPage: {
+    readPermissionDenied: "You don’t have permission to view portals.",
     listLabel: "Active portals",
     portLabel: "Port {port}",
     openNewTab: "Open in new tab",
@@ -13,7 +14,10 @@ const enPortals = {
     unavailable: "This portal is no longer available. Ask the agent to reopen the app.",
     environmentStarting: "Starting your device…",
     waitingForApp: "Device ready. Waiting for your app…",
-    environmentUnavailable: "Couldn’t start this device. Ask the agent to check it or try again.",
+    environmentUnavailable: "This device is unavailable. Ask the agent to check it.",
+    environmentStatusFailed: "Couldn’t check this device’s status.",
+    environmentStopping: "This device is stopping.",
+    checkAgain: "Check again",
     promptShow: "Show me in a portal.",
     promptStart: "Start the application in a portal.",
     promptMakeAvailable: "Make the server available in a portal.",

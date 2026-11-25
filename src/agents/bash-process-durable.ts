@@ -9,6 +9,7 @@ import { readCgroupMemoryUsage, watchHostExecMemory } from "../process/child-mem
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type {
   ManagedRun,
+  ReleasedProcess,
   RunExit,
   SpawnInput,
   TerminationReason,
@@ -34,7 +35,8 @@ import {
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { systemdDurableSupervisor } from "./bash-process-systemd.js";
-import { maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
+import { settleHostExecDescendants } from "./bash-tools.exec-descendants.js";
+import { captureExecRequesterSource, maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
 import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
@@ -84,7 +86,6 @@ function writeOrdinary(id: string, write: () => Promise<void>) {
 const ordinaryExitWakeRecorder = {
   backgrounded(session: ProcessSession) {
     const persistence = store;
-    const target = session.notifySessionTarget;
     if (
       !persistence ||
       session.durable ||
@@ -92,8 +93,7 @@ const ordinaryExitWakeRecorder = {
       !session.agentId ||
       !session.sessionKey ||
       // Incognito state stays in memory; it never reaches shared storage.
-      isIncognitoSessionKey(session.sessionKey) ||
-      !target?.sessionId
+      isIncognitoSessionKey(session.sessionKey)
     ) {
       return;
     }
@@ -105,7 +105,6 @@ const ordinaryExitWakeRecorder = {
       agentId: session.agentId,
       sessionKey: session.sessionKey,
       scopeKey: session.scopeKey,
-      sessionId: target.sessionId,
       // An older reader finds no unit and records the process as lost, which stays true.
       unitName,
       logPath: path.join(resolveStateDir(), "processes", `${unitName}.log`),
@@ -117,6 +116,8 @@ const ordinaryExitWakeRecorder = {
       maxOutputChars: session.maxOutputChars,
       notifyOnExit: true,
       notifyOnExitEmptySuccess: session.notifyOnExitEmptySuccess,
+      // The lost-process notice wakes the chat as the requester who started the command.
+      operatorSource: captureExecRequesterSource(session.notifySessionTarget),
     };
     ordinaryRecords.set(session, record);
     writeOrdinary(session.id, () => persistence.upsert(record));
@@ -167,7 +168,7 @@ async function settleLostOrdinaryProcess(
   // After a crash, agent database preparation finishes after the listener binds.
   await waitForAgentDatabasePreparation(record.agentId);
   // Eligibility and authority are rechecked against the current session, as for durable outcomes.
-  await prepareAdoptedDurableProcessNotification(session, record.sessionId);
+  await prepareAdoptedDurableProcessNotification(session);
   // The registry's exit hook deletes the row once the notice settles.
   ordinaryRecords.set(session, record);
   addSession(session);
@@ -200,7 +201,7 @@ async function settleLostOrdinaryProcess(
   });
 }
 
-/** Restore registry entries, never requester continuations or a second process manager. */
+/** Restore registry entries, never a second process manager; exits admit saved requesters again. */
 export async function initializeDurableProcesses(
   options: {
     assertCurrent?: () => void;
@@ -235,8 +236,15 @@ export async function initializeDurableProcesses(
       record.endedAt !== undefined &&
       record.endedAt + record.cleanupMs <= Date.now()
     ) {
-      await current.remove(record.id);
-      await forgetLog(record.logPath);
+      // Release a job retained for what its command left running; keep the row if that fails.
+      // Unit queries stay off the startup path.
+      void supervisor()
+        .cleanup(record.unitName, { assertCurrent: current.assertCurrent })
+        .then(async () => {
+          await current.remove(record.id);
+          await forgetLog(record.logPath);
+        })
+        .catch(warn);
       continue;
     }
     const session = createProcessSession({
@@ -253,7 +261,7 @@ export async function initializeDurableProcesses(
     // Prepare the wake at adoption so poll and process lists report it; exit prepares it again.
     const prepareNotification = () => {
       session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
-      return prepareAdoptedDurableProcessNotification(session, record.sessionId);
+      return prepareAdoptedDurableProcessNotification(session);
     };
     await prepareNotification();
     const run = bind(session, record, current);
@@ -263,15 +271,17 @@ export async function initializeDurableProcesses(
       .then(async (exit) => {
         session.finalizing = true;
         await prepareNotification();
+        const outcome = buildExecExitOutcome({
+          exit,
+          aggregated: session.aggregated,
+          durationMs: exit.durationMs,
+          timeoutSec: null,
+          processContinuationAvailable: true,
+        });
         await settleExecProcessExit({
           session,
-          outcome: buildExecExitOutcome({
-            exit,
-            aggregated: session.aggregated,
-            durationMs: exit.durationMs,
-            timeoutSec: null,
-            processContinuationAvailable: true,
-          }),
+          // What the command left running becomes ordinary background sessions, named here.
+          outcome: await settleHostExecDescendants(session, run, outcome, []),
           notifyOnExit: (target, status) => maybeNotifyOnExit(target, status, false),
           failureOutcome: (error) =>
             buildExecRuntimeErrorOutcome({
@@ -303,11 +313,10 @@ export async function disposeDurableProcesses() {
 
 export async function startDurableExecProcess(
   session: ProcessSession,
-  sessionId: string | undefined,
   input: SpawnInput,
   notification: { notifyOnExit?: boolean; notifyOnExitEmptySuccess?: boolean } = {},
 ): Promise<ManagedRun> {
-  if (!store || !session.agentId || !session.sessionKey || !sessionId || input.mode !== "child") {
+  if (!store || !session.agentId || !session.sessionKey || input.mode !== "child") {
     throw new Error(
       "Durable exec requires a Gateway-host session on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session; sandbox, node, worker, and one-shot execution are unsupported.",
     );
@@ -324,7 +333,6 @@ export async function startDurableExecProcess(
     agentId: session.agentId,
     sessionKey: session.sessionKey,
     scopeKey: session.scopeKey,
-    sessionId,
     unitName,
     logPath,
     // Arguments may contain credentials. Only the live registry retains the command.
@@ -336,6 +344,8 @@ export async function startDurableExecProcess(
     notifyOnExit: notification.notifyOnExit ?? session.notifyOnExit,
     notifyOnExitEmptySuccess:
       notification.notifyOnExitEmptySuccess ?? session.notifyOnExitEmptySuccess,
+    // The exit after a restart wakes the chat as the requester who started the command.
+    operatorSource: captureExecRequesterSource(session.notifySessionTarget),
   };
   const assertCurrent = () => {
     persistence.assertCurrent();
@@ -385,6 +395,9 @@ function bind(
     terminal = false,
     stopReason: TerminationReason | undefined;
   let cgroupDirectory: string | undefined;
+  // Processes the command left running when it exited; they become ordinary background
+  // sessions (process list, kill, session reset and Gateway stop end them).
+  let survivors: ReleasedProcess[] = [];
   const decoder = new StringDecoder("utf8"),
     sanitize = createStreamingBinaryOutputSanitizer();
   // Observation timers detach request context; retain only the process transport owner.
@@ -432,6 +445,8 @@ function bind(
       if (observed.state === "exited" && observed.note) {
         appendOutput(session, "stderr", observed.note);
       }
+      // Accepted edge case: when they cannot be listed, they keep running untracked.
+      survivors = (observed.state === "exited" && observed.survivors) || [];
       const result = {
         reason:
           stopReason ?? (observed.state === "exited" ? observed.reason : ("spawn-error" as const)),
@@ -447,10 +462,6 @@ function bind(
       record.result = result;
       record.endedAt = endedAt;
     }
-    // Record the real status before releasing the supervisor's retained job.
-    await supervisor().cleanup(record.unitName, {
-      assertCurrent: persistence.assertCurrent,
-    });
     session.endedAt = record.endedAt;
     appendOutput(session, "stdout", sanitize(decoder.end()));
     terminal = true;
@@ -462,7 +473,12 @@ function bind(
       timedOut: record.result.reason === "overall-timeout",
       noOutputTimedOut: false,
     });
+    // The recorded result comes first; release never waits for what the command left
+    // running, and a job that still holds it is released at retention end or restart.
+    await release();
   };
+  const release = () =>
+    supervisor().cleanup(record.unitName, { assertCurrent: persistence.assertCurrent });
   const cancel = (reason: TerminationReason, assertSource?: () => void) => {
     const assertCurrent = () => {
       persistence.assertCurrent();
@@ -518,6 +534,7 @@ function bind(
     },
     remove: () => {
       void enqueue(async () => {
+        await release();
         await persistence.remove(record.id);
         await forgetLog(record.logPath);
       }).catch(warn);
@@ -544,6 +561,12 @@ function bind(
     startedAtMs: record.startedAt,
     activity,
     wait: () => exit.promise,
+    releasesOnRootExit: true,
+    // Exec settlement hands these to the leftover-session owner, as for ordinary exec.
+    waitForExtinction: async () => {
+      await exit.promise;
+      return { status: "released", survivors };
+    },
     cancel: (reason = "manual-cancel") => {
       void cancel(reason).catch(warn);
     },

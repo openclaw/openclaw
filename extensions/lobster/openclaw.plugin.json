@@ -6,7 +6,7 @@
   },
   "name": "Lobster",
   "description": "Lobster workflow tool plugin for typed pipelines and resumable approvals.",
-  "catalog": { "featured": true, "order": 50 },
+  "catalog": { "featured": true, "order": 50, "sidebar": true },
   "contracts": {
     "tools": ["lobster"]
   },

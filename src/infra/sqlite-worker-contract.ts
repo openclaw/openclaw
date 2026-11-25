@@ -1,4 +1,5 @@
-import type { MessagePort } from "node:worker_threads";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
@@ -55,6 +56,7 @@ export type SqliteWorkerDatabaseAuthority = {
   assertRequest?(): void;
   assertAccess(): void;
   assertCreate?(databasePath: string): void;
+  prepareCreate?(databasePath: string): Promise<void>;
   acquireSchema(): { assertCurrent(): void; release(): void };
 };
 
@@ -89,11 +91,19 @@ export type SqliteWorkerCloseReceipt = {
   checkpoint?: SqliteWalCheckpointSnapshot;
 };
 
+/** A recorded maintenance observation, not a COMMIT, close receipt, or access grant. */
+export type SqliteWorkerWalCheckpoint = {
+  identity: DatabasePathIdentity;
+  incarnation: string;
+  checkpoint: SqliteWalCheckpointSnapshot;
+};
+
 // Source fixtures and compiled backends can load separate copies in the same Worker.
 export const SQLITE_WORKER_PREPARE_COMMAND = Symbol.for("openclaw.sqliteWorkerPrepareCommand");
 export const SQLITE_WORKER_PREPARE_ADMITTED = Symbol.for("openclaw.sqliteWorkerPrepareAdmitted");
 export const SQLITE_WORKER_OPERATION_CLEANUP = Symbol.for("openclaw.sqliteWorkerOperationCleanup");
 export const SQLITE_WORKER_CLOSE_RECEIPT = Symbol.for("openclaw.sqliteWorkerCloseReceipt");
+export const SQLITE_WORKER_WAL_CHECKPOINT = Symbol.for("openclaw.sqliteWorkerWalCheckpoint");
 
 /** Internal preparation and cleanup facts; public SDK operation and close contracts stay unchanged. */
 export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperations> =
@@ -108,12 +118,21 @@ export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperation
       command: SqliteWorkerCommand<Operations>,
     ): SqliteSourceFence | undefined;
     [SQLITE_WORKER_CLOSE_RECEIPT]?(): SqliteWorkerCloseReceipt | undefined;
+    [SQLITE_WORKER_WAL_CHECKPOINT]?(
+      command: SqliteWorkerCommand<Operations>,
+    ): SqliteWorkerWalCheckpoint | undefined;
   };
+
+export type SqliteWorkerExecuteOptions = {
+  signal?: AbortSignal;
+  /** Move producer-owned binary fields into the command input without serializing their bytes. */
+  transferredInput?: Record<string, Uint8Array<ArrayBuffer>>;
+};
 
 export type SqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
   execute<Key extends keyof Operations>(
     command: { type: Key; input: Operations[Key]["input"] },
-    options?: { signal?: AbortSignal },
+    options?: SqliteWorkerExecuteOptions,
   ): Promise<Operations[Key]["output"]>;
   close(): Promise<void>;
 };
@@ -133,6 +152,7 @@ export type SqliteWorkerRequest = {
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];
+  transferredInput?: Record<string, Uint8Array<ArrayBuffer>>;
 } & (
   | {
       type: "open";
@@ -157,6 +177,7 @@ export type SqliteWorkerReply = {
   transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
+  walCheckpoint?: SqliteWorkerWalCheckpoint;
 } & (
   | {
       ok: true;
@@ -212,3 +233,54 @@ export const SqliteWorkerAdmissionTimeoutError = resolveGlobalSingleton(
       }
     },
 );
+
+/** Decode private admission framing and retain the receiving thread's wait budget. */
+export function readSqliteWorkerAdmissionDecision(message: unknown):
+  | {
+      decision: Int32Array<SharedArrayBuffer>;
+      expired: () => boolean;
+      request: SqliteWorkerAdmissionRequest;
+    }
+  | undefined {
+  const REQUESTED = 0;
+  const TIMED_OUT = 3;
+  if (
+    !isRecord(message) ||
+    !(message.decision instanceof SharedArrayBuffer) ||
+    message.decision.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
+    (message.stage !== "open" &&
+      message.stage !== "prepare" &&
+      message.stage !== "transaction" &&
+      message.stage !== "commit")
+  ) {
+    return undefined;
+  }
+  const decision = new Int32Array(message.decision);
+  // Bun starts process.hrtime at zero in each thread, so the worker's deadline
+  // instant cannot cross threads. The host bounds its own late work from receipt;
+  // the worker still enforces its budget through the shared decision word.
+  const deadlineNs =
+    typeof message.deadlineMs === "number" && Number.isFinite(message.deadlineMs)
+      ? readSqliteWorkerMonotonicNs() +
+        BigInt(Math.max(0, Math.ceil(message.deadlineMs))) * 1_000_000n
+      : undefined;
+  const expired = () => {
+    if (deadlineNs !== undefined && readSqliteWorkerMonotonicNs() >= deadlineNs) {
+      if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
+        Atomics.notify(decision, 0);
+      }
+    }
+    if (Atomics.load(decision, 0) !== TIMED_OUT) {
+      return false;
+    }
+    if (Array.isArray(message.ports)) {
+      for (const port of message.ports) {
+        if (port instanceof MessagePort) {
+          port.close();
+        }
+      }
+    }
+    return true;
+  };
+  return { decision, expired, request: { stage: message.stage, facts: message.facts } };
+}
