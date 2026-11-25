@@ -176,7 +176,7 @@ export function createUsagePage(context: ApplicationContext) {
     },
   });
 
-  const usageExportRequest = createUsageExportRequest(notify, gateway, currentQuery);
+  const usageExportRequest = createUsageExportRequest(notify, gateway, currentQuery, usageResult);
 
   const details = createUsageDetails(
     notify,

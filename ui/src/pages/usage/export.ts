@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { compactUsageOverviewSession } from "../../../../src/shared/usage-overview.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { downloadTextFile } from "../../lib/download.ts";
@@ -7,16 +9,85 @@ import { createPageRequest } from "../../lib/page-request.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
+import type { SessionsUsageResult } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { buildDailyCsv, buildSessionsCsv } from "./query.ts";
-import type { UsageJsonExport } from "./usage-state-types.ts";
+import type { UsageJsonExport, UsageSessionEntry } from "./usage-state-types.ts";
 
 registerUsageEnglish();
+
+function sessionIdentity(row: UsageSessionEntry) {
+  return JSON.stringify([row.agentId, row.key, row.sessionId, row.includedSessionIds?.toSorted()]);
+}
+
+// Cohort and row accumulation can differ by roundoff. Counts and all other discrete facts are exact.
+function sameReportValue(a: unknown, b: unknown, relativeError: number): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (typeof a === "number" && typeof b === "number") {
+    return (
+      !(Number.isInteger(a) && Number.isInteger(b)) &&
+      Math.abs(a - b) <= relativeError * Math.max(Math.abs(a), Math.abs(b))
+    );
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return (
+      a.length === b.length && a.every((value, i) => sameReportValue(value, b[i], relativeError))
+    );
+  }
+  if (isRecord(a) && isRecord(b)) {
+    // Optional fields may be omitted on the wire.
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const key of keys) {
+      if (!sameReportValue(a[key], b[key], relativeError)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function measuredUsage(row: UsageSessionEntry, days: ReadonlySet<string>) {
+  const { usage } = compactUsageOverviewSession(row, days);
+  // Recomputing cache metadata for a new prompt report does not change the measured usage.
+  return usage
+    ? { ...usage, computedAt: undefined, refreshing: undefined, staleSince: undefined }
+    : null;
+}
+
+function matchesDisplayedSnapshot(
+  displayed: SessionsUsageResult,
+  data: UsageJsonExport,
+  query: SessionUsageQuery,
+) {
+  const rows = query.selectedSessions?.length
+    ? (displayed.overview?.selectedRows ??
+      displayed.sessions.filter((row) => query.selectedSessions?.includes(row.key)))
+    : displayed.sessions;
+  const exported = new Map(data.sessions.map((row) => [sessionIdentity(row), row]));
+  const days = new Set(query.selectedDays);
+  const relativeError = Number.EPSILON * Math.max(1, data.sessions.length, days.size);
+  return (
+    (displayed.overview?.selectedRowCount ?? data.sessions.length) === data.sessions.length &&
+    sameReportValue(displayed.totals, data.totals, relativeError) &&
+    sameReportValue(displayed.aggregates, data.aggregates, relativeError) &&
+    rows.every((row) => {
+      const detail = exported.get(sessionIdentity(row));
+      return (
+        detail !== undefined &&
+        sameReportValue(measuredUsage(row, days), measuredUsage(detail, days), relativeError)
+      );
+    })
+  );
+}
 
 export function createUsageExportRequest(
   notify: () => void,
   gateway: GatewayPageBinding,
   query: () => SessionUsageQuery,
+  displayedSnapshot?: () => SessionsUsageResult | null,
 ) {
   return createPageRequest(notify, {
     task: async (format: "json" | "sessions-csv" | "daily-csv", { signal }) => {
@@ -25,6 +96,7 @@ export function createUsageExportRequest(
         throw new Error(t("common.offline"));
       }
       const selectedQuery = query();
+      const displayed = format === "json" ? displayedSnapshot?.() : undefined;
       const result = await requestSessionUsage(
         connection.client,
         { ...selectedQuery, offset: undefined },
@@ -51,6 +123,12 @@ export function createUsageExportRequest(
         aggregates: result.aggregates,
         daily: result.aggregates.costDaily ?? [],
       };
+      if (
+        displayed === null ||
+        (displayed && !matchesDisplayedSnapshot(displayed, data, selectedQuery))
+      ) {
+        throw new Error(t("usage.export.changed"));
+      }
       return { connection, data, format };
     },
     onComplete: ({ connection, data, format }) => {
