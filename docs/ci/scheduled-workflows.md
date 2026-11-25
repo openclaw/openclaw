@@ -582,6 +582,37 @@ workflows, or grant timing admission. `timingAdmission` remains `false`.
 It binds the recorded prepared-inventory digest; a measurement consumer must
 compare a fresh whole-workload inventory before starting measured calls.
 
+#### Qualified paired measurements
+
+`node-cache-qualified-measurement` admits a completed three-control output and
+uses the existing paired runner. Keep the physical workload directory, harness
+commit, runtime, native pnpm and sealed seed unchanged after qualification.
+Receipts from a different harness commit or workload path do not qualify.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-qualified-measurement \
+  --definition /work/definition.json --workload /work/prepared \
+  --qualification /work/controls --harness-sha <exact-harness-commit> \
+  --pnpm-bin /tools/pnpm-native --output /work/measurements \
+  --scratch /work/measurement-scratch --timeout-ms 9000000 --run-attempt 1
+```
+
+Output and scratch must be new physical directories, disjoint from the two
+checkouts and qualification output. Admission verifies all control reports,
+logs, source identities and seed files. The runner compares its initial full
+prepared inventory with the control inventory before starting a measured call.
+It rechecks source, receipt and seed identities before success. Failed admission
+produces a failed terminal receipt and starts no measured workload.
+
+The explicit timeout covers admission, all twenty alternating pairs and final
+verification, with a maximum of 150 minutes. GNU `/usr/bin/time` is required.
+Both treatments use the same selected pnpm and Node PATH, fixed offline settings,
+fresh writable cache namespaces and disabled Vitest caches. Native diagnostic
+tracing stays off during measurement. Incomplete pairs admit no comparison.
+The earlier qualification receipt retains `timingAdmission: false`; the new
+measurement output records the verified provenance and resulting analysis.
+This CLI does not add a scheduled workflow, install dependencies or publish data.
+
 ## Security Review reconciler
 
 Every ten minutes, Security Review reconciles CI completions

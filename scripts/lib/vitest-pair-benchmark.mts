@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { inspectManagedProcessGroup, runManagedCommand } from "./managed-child-process.mts";
 import {
   inventoryPreparedWorkload,
@@ -400,8 +401,12 @@ async function runSetupCommand(
 
 function gitOutput(cwd: string, args: string[], deadline?: VitestPairDeadline): string {
   deadline?.throwIfExpired();
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (result.status !== 0) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    ...(deadline ? { timeout: Math.max(1, deadline.deadlineAt - Date.now()) } : {}),
+  });
+  if (result.error || result.signal || result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed in ${cwd}`);
   }
   deadline?.throwIfExpired();
@@ -456,6 +461,91 @@ type NodeCacheContext = {
   pnpmBin: string;
   manifest: NodeCacheManifest;
 };
+
+type NodeCacheQualification = {
+  manifest: NodeCacheManifest;
+  preparedSha256: string;
+  provenance: unknown;
+  revalidate: () => void;
+};
+
+type QualifiedExecution = {
+  deadline: VitestPairDeadline;
+  checkOutput: () => void;
+  qualification: NodeCacheQualification;
+};
+
+export async function runQualifiedNodeCacheBenchmark(input: {
+  workloadDir: string;
+  qualificationDir: string;
+  outputDir: string;
+  scratchDir: string;
+  pnpmBin: string;
+  timeoutMs: number;
+  admit: (deadline: VitestPairDeadline) => NodeCacheQualification;
+}): Promise<void> {
+  if (
+    !Number.isSafeInteger(input.timeoutMs) ||
+    input.timeoutMs <= 0 ||
+    input.timeoutMs > 150 * 60_000
+  ) {
+    throw new Error("Qualified measurement requires a deadline of at most 150 minutes");
+  }
+  const output = path.resolve(input.outputDir);
+  const scratch = path.resolve(input.scratchDir);
+  const harness = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
+  const workload = realpathSync(input.workloadDir);
+  const qualification = realpathSync(input.qualificationDir);
+  const roots = [output, scratch, harness, workload, qualification];
+  if (
+    roots.some((root, i) =>
+      roots.some((other, j) => i !== j && (root === other || root.startsWith(other + path.sep))),
+    )
+  ) {
+    throw new Error("Qualified measurement paths must be outside both checkouts and disjoint");
+  }
+  for (const directory of [output, scratch]) {
+    if (
+      existsSync(directory) ||
+      realpathSync(path.dirname(directory)) !== path.dirname(directory)
+    ) {
+      throw new Error("Qualified measurement requires absent directories with physical parents");
+    }
+  }
+  const checkOutput = ownedDirectory(output);
+  await withTerminalManifest(
+    output,
+    async () => {
+      await withVitestPairDeadline(async (deadline) => {
+        const admitted = input.admit(deadline);
+        deadline.throwIfExpired();
+        writeJsonAtomic(path.join(output, "qualification.json"), admitted.provenance);
+        writeJsonAtomic(path.join(output, "manifest.json"), admitted.manifest);
+        const probe = spawnSync("/usr/bin/time", ["--version"], {
+          encoding: "utf8",
+          timeout: Math.max(1, Math.min(10_000, deadline.deadlineAt - Date.now())),
+          env: { PATH: process.env.PATH, LANG: "C", LC_ALL: "C" },
+        });
+        if (probe.error || probe.status !== 0 || !/GNU [Tt]ime/u.test(probe.stdout)) {
+          throw new Error("Qualified measurement requires GNU /usr/bin/time");
+        }
+        deadline.throwIfExpired();
+        await runNodeCacheBenchmark(
+          {
+            workloadDir: workload,
+            seedDir: path.join(qualification, "seed"),
+            outputDir: output,
+            scratchDir: scratch,
+            pnpmBin: input.pnpmBin,
+            manifest: admitted.manifest,
+          },
+          { deadline, checkOutput, qualification: admitted },
+        );
+      }, input.timeoutMs);
+    },
+    checkOutput,
+  );
+}
 
 export function readNodeCacheSeed(root: string): NodeCacheManifest["seed"]["files"] {
   const files: NodeCacheManifest["seed"]["files"] = [];
@@ -554,7 +644,10 @@ export function ownedDirectory(dir: string) {
   };
 }
 
-export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<void> {
+export async function runNodeCacheBenchmark(
+  input: NodeCacheContext,
+  qualified?: QualifiedExecution,
+): Promise<void> {
   const workload = realpathSync(input.workloadDir);
   const seed = path.resolve(input.seedDir);
   const output = path.resolve(input.outputDir);
@@ -593,18 +686,30 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
     ) {
       throw new Error("Prepared benchmark runtime identity differs");
     }
-    if (gitOutput(workload, ["rev-parse", "HEAD"]) !== context.manifest.workloadSha) {
+    if (
+      gitOutput(workload, ["rev-parse", "HEAD"], qualified?.deadline) !==
+      context.manifest.workloadSha
+    ) {
       throw new Error("Prepared workload SHA differs");
     }
     assertPreparedInputs(context);
     assertSeed(context);
-    if (gitOutput(workload, ["status", "--porcelain=v1", "--untracked-files=all"])) {
+    if (
+      gitOutput(
+        workload,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        qualified?.deadline,
+      )
+    ) {
       throw new Error("Prepared workload must have clean tracked and untracked state");
     }
   };
   assertInputs();
-  const checkOutput = ownedDirectory(output);
-  await withTerminalManifest(
+  const checkOutput = qualified?.checkOutput ?? ownedDirectory(output);
+  const terminal = qualified
+    ? async (_output: string, task: () => Promise<void>) => task()
+    : withTerminalManifest;
+  await terminal(
     output,
     async () => {
       const checkScratch = ownedDirectory(scratch);
@@ -639,13 +744,23 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
       let failure: Error | undefined;
       const records: NodeCacheMeasurement[] = [];
       try {
-        await withVitestPairDeadline(async (deadline) => {
+        const runWithDeadline = qualified
+          ? async (task: (deadline: VitestPairDeadline) => Promise<void>) =>
+              task(qualified.deadline)
+          : withVitestPairDeadline;
+        await runWithDeadline(async (deadline) => {
           let prepared: PreparedEntry[] | undefined;
           const integrityFile = path.join(output, "prepared-integrity.json");
           const scope =
             "All regular bytes, file modes and internal symlink targets; only root Git metadata excluded. Pre/post comparison only, not continuous mutation detection.";
           try {
             prepared = await inventoryPreparedWorkload(workload, deadline);
+            if (
+              qualified &&
+              sha256(JSON.stringify(prepared)) !== qualified.qualification.preparedSha256
+            ) {
+              throw new Error("Prepared workload differs from successful controls");
+            }
             checkOutput();
             writeJsonAtomic(path.join(output, "prepared-inventory.json"), prepared);
             writeJsonAtomic(integrityFile, {
@@ -816,7 +931,13 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
         // Do not inspect or remove a workload while an uncertain child may own it.
         if (allSettled) {
           try {
+            qualified?.deadline.throwIfExpired();
             assertInputs();
+            if (qualified) {
+              qualified.deadline.throwIfExpired();
+              qualified.qualification.revalidate();
+              qualified.deadline.throwIfExpired();
+            }
           } catch (error) {
             failure ??= normalizeError(error);
           }
