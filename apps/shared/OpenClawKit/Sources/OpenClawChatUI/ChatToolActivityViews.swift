@@ -225,33 +225,44 @@ extension ChatToolActivityItem {
 
     /// The collapsed row's title (web chat-tool-row-presentation.ts:65-99).
     var rowTitle: String {
+        self.rowTitle(chatName: nil)
+    }
+
+    /// The collapsed row's title, naming the chat a call addresses when the session list has it. On
+    /// iPhone every call reads in the Control UI's words (`ChatToolOperationCopy`); a message to another
+    /// chat names that chat, never its key.
+    func rowTitle(chatName: String?) -> String {
         if self.commandPreview != nil { return self.commandVerb }
         if let launch = self.sessionLaunch {
             return String(ChatSessionLaunch.title([launch], linksChildren: false).characters)
         }
         if self.call.name == "exec", let purpose = self.commandPurpose { return purpose }
+        #if os(iOS)
+        if let label = ChatToolOperationCopy.label(self.operationCall(addressedName: chatName)) { return label }
+        #endif
         let call = ToolDisplayRegistry.displayCall(name: self.name, args: self.arguments)
         return self.activity?.preparedTitle ?? ToolDisplayRegistry.resolve(name: call.name, args: call.args).title
     }
 
-    /// The collapsed row's title once the chat a call addresses has a name. On iPhone a message to
-    /// another chat names that chat, never its key, in the web's words (en-chat-tool-labels.ts
-    /// `sessionSend`, main after #204399).
-    func rowTitle(chatName: String?) -> String {
-        #if os(iOS)
-        if self.namesChatInTitle {
-            let name = chatName ?? self.callLabel
-            return switch self.displayState {
-            case .running: name.map { String(format: String(localized: "Sending message to %@"), $0) } ??
-                String(localized: "Sending message")
-            case .finished: name.map { String(format: String(localized: "Sent message to %@"), $0) } ??
-                String(localized: "Sent message")
-            default: name.map { String(format: String(localized: "Send message to %@"), $0) } ??
-                String(localized: "Send message")
-            }
+    private func operationCall(addressedName: String?) -> ChatToolOperationCopy.Call {
+        func plain(_ value: AnyCodable?) -> Any? {
+            guard let value, let data = try? JSONEncoder().encode(value) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
         }
-        #endif
-        return self.rowTitle
+        let call = ToolDisplayRegistry.displayCall(name: self.name, args: self.arguments)
+        let outcome: ChatToolOperationCopy.Outcome = switch self.displayState {
+        case .running: .running
+        case .finished: .succeeded
+        case .failed: .failed
+        default: .other
+        }
+        return .init(
+            name: call.name ?? "",
+            args: plain(call.args) as? [String: Any] ?? [:],
+            outcome: outcome,
+            details: plain(self.receiptDetails) as? [String: Any],
+            resultText: self.receiptText,
+            addressedName: addressedName)
     }
 
     /// A message to another chat carries that chat in its title, so its row has no detail line.

@@ -16,7 +16,7 @@ public struct ToolDisplaySummary: Sendable, Equatable {
 
 public enum ToolDisplayRegistry {
     private static let resourceBundleName = "OpenClawKit_OpenClawKit"
-    private static let resourceBundle = locateResourceBundle()
+    static let resourceBundle = locateResourceBundle()
 
     private struct ToolDisplayActionSpec: Decodable {
         let label: String?
