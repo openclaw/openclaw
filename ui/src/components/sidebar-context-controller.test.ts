@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { createRoot } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -7,11 +8,67 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { createSidebarScroll } from "./sidebar-context-controller.ts";
 
 setupSidebarTest();
 
 const mountEmptySidebar = () =>
   mountSidebar(createGateway({} as GatewayBrowserClient), createSessions("main", []));
+
+it("remeasures fades when content grows or shrinks without resizing the scrollport", async () => {
+  const observers: Array<{
+    resize(): void;
+    observe: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+  }> = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      constructor(callback: () => void) {
+        observers.push({ resize: callback, observe: this.observe, disconnect: this.disconnect });
+      }
+    },
+  );
+  const scroller = document.body.appendChild(document.createElement("div"));
+  const content = scroller.appendChild(document.createElement("nav"));
+  let contentHeight = 80;
+  Object.defineProperties(scroller, {
+    clientHeight: { value: 100 },
+    scrollHeight: { get: () => contentHeight },
+  });
+  const view = createRoot((dispose) => {
+    const scroll = createSidebarScroll({
+      isConnected: true,
+      navigationView: "customize",
+      contextualSidebar: undefined,
+      sidebarSnapshot: null,
+      snapshot: { capture() {} },
+    });
+    scroll.createRef()(scroller);
+    scroll.observeContent()(content);
+    return { scroll, dispose };
+  });
+  const { scroll, dispose } = view;
+  const observer = observers.find((entry) =>
+    entry.observe.mock.calls.some(([el]) => el === content),
+  )!;
+  try {
+    await waitForSolid(() => expect(scroll.state()).toBe("none"));
+    contentHeight = 500;
+    observer.resize();
+    await waitForSolid(() => expect(scroll.state()).toBe("top"));
+    contentHeight = 80;
+    observer.resize();
+    await waitForSolid(() => expect(scroll.state()).toBe("none"));
+  } finally {
+    dispose();
+    scroller.remove();
+  }
+  expect(observer.disconnect).toHaveBeenCalledOnce();
+});
 
 it("restores destination offsets and updates fades after content commits", async () => {
   const { sidebar } = await mountEmptySidebar();

@@ -7,6 +7,7 @@ import { observeScrollState } from "./scroll-state-observer.ts";
 export const SidebarScrollContext = createContext<{
   element(): HTMLElement | undefined;
   content(): HTMLElement | undefined;
+  observeContent(): (element: HTMLElement) => void;
   rowFloor(): number;
   captureRowFloor(value: number): void;
   registerWindow(read: () => readonly string[] | undefined): () => void;
@@ -64,6 +65,16 @@ export function createSidebarScroll(
     },
     element: () => scroller,
     content: () => content,
+    observeContent() {
+      return elementRef((element: HTMLElement) => {
+        if (typeof ResizeObserver === "undefined") {
+          return undefined;
+        }
+        const observer = new ResizeObserver(() => observation?.schedule());
+        observer.observe(element);
+        return () => observer.disconnect();
+      });
+    },
     createContentRef() {
       return elementRef((element: HTMLElement) => {
         content = element;
