@@ -111,7 +111,9 @@ describe("receipt-backed aggregate recovery", () => {
           );
         });
       }
-      expect(test.recovery.children.normalCi.inputs.release_scope).toBe("full");
+      expect(
+        expectDefined(test.recovery.children.normalCi, "normal CI selection").inputs.release_scope,
+      ).toBe("full");
       const operation = verifyOriginalReceiptQualification(test.recovery, { client: test.client });
       if (actual !== expected) {
         await expect(operation).rejects.toThrow(
