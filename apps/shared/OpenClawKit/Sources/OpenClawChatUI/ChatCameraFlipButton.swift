@@ -69,13 +69,28 @@ struct ChatTalkButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
-        .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+        .accessibilityLabel(self.accessibilityLabel)
         .accessibilityValue(self.control.accessibilityStatus)
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.helpText)
         .chatActionContextMenu {
             ChatTalkInputDeviceMenu(control: self.control)
         }
+    }
+
+    /// iPhone and iPad name the action like the composer's primary button; macOS keeps its wording.
+    private var accessibilityLabel: Text {
+        #if os(iOS)
+        if self.control.isEnabled {
+            return Text("End voice conversation")
+        }
+        return Text("Start voice conversation")
+        #else
+        if self.control.isEnabled {
+            return Text("Stop realtime chat")
+        }
+        return Text("Start realtime chat")
+        #endif
     }
 
     private var fullLabel: some View {

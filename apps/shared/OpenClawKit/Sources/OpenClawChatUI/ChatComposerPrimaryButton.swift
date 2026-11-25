@@ -11,6 +11,7 @@ extension OpenClawChatComposer {
             send: .init(
                 isEnabled: self.canSendMessage,
                 isReplyRunning: self.viewModel.pendingRunCount > 0,
+                keepsReply: self.sendKeepsReply,
                 fill: self.sendButtonFill,
                 disabledFill: self.disabledSendButtonFill,
                 ink: self.sendButtonForeground,
@@ -27,7 +28,6 @@ extension OpenClawChatComposer {
                 fill: self.stopButtonFill,
                 action: { self.viewModel.abort() }),
             talkControl: self.talkControl,
-            talkHelpText: self.talkControl.map { self.talkHelpText($0) } ?? "",
             sessionKey: self.viewModel.sessionKey,
             controlSize: self.cleanControlHeight,
             visualSize: self.cleanIconControlSize)
@@ -82,6 +82,12 @@ extension OpenClawChatComposer {
     /// outbox on the test Gateway); the Gateway's run advertisement keeps Stop after that.
     static let replyMarkTimeout: Duration = .seconds(2)
 
+    /// Sending during a reply queues or steers it, except in the Gateway's interrupt mode.
+    private var sendKeepsReply: Bool {
+        (self.viewModel.defaultFollowUpMode?.rawValue ?? self.viewModel.currentSessionEntry()?.effectiveQueueMode)
+            != "interrupt"
+    }
+
     /// Marks a send that will ask for a reply, so the button turns into Stop at the tap instead of
     /// passing through Talk or a second Send while the message is saved and delivered.
     private func markAwaitingReplyIfNeeded() {
@@ -116,6 +122,8 @@ struct ChatComposerPrimaryButton: View {
         let isEnabled: Bool
         /// A reply is running, so Send stands where Stop would be.
         let isReplyRunning: Bool
+        /// Sending now leaves that reply running (every queue mode but interrupt).
+        let keepsReply: Bool
         let fill: Color
         let disabledFill: Color
         let ink: Color
@@ -137,7 +145,6 @@ struct ChatComposerPrimaryButton: View {
     let send: Send
     let stop: Stop
     let talkControl: OpenClawChatTalkControl?
-    let talkHelpText: String
     let sessionKey: String
     let controlSize: CGFloat
     let visualSize: CGFloat
@@ -186,11 +193,11 @@ struct ChatComposerPrimaryButton: View {
         }
         .buttonStyle(ChatComposerPrimaryButtonStyle())
         .disabled(self.isDisabled)
-        .accessibilityLabel(self.accessibilityLabel)
-        .accessibilityHint(self.accessibilityHint)
-        .accessibilityValue(self.role == .talk ? self.talkControl?.accessibilityStatus ?? "" : "")
+        // No `.help`: on iOS it sets the accessibility hint too and would fight the one below.
+        .accessibilityLabel(Text(self.accessibility.label))
+        .accessibilityValue(Text(self.accessibility.value))
+        .accessibilityHint(Text(self.accessibility.hint))
         .accessibilityIdentifier(self.accessibilityIdentifier)
-        .help(self.role == .talk ? self.talkHelpText : "")
     }
 
     private var hasMenuItems: Bool {
@@ -333,37 +340,18 @@ struct ChatComposerPrimaryButton: View {
         role == .send ? self.send.borderOpacity : 0
     }
 
-    private var accessibilityLabel: Text {
+    private var accessibility: ChatComposerPrimaryAccessibility {
         switch self.role {
         case .talk:
-            if self.talkControl?.isEnabled == true {
-                Text("Stop realtime chat")
-            } else {
-                Text("Start realtime chat")
-            }
+            let isActive = self.talkControl?.isEnabled == true
+            return .talk(
+                isActive: isActive,
+                isConnected: self.talkControl?.isGatewayConnected == true,
+                liveStatus: isActive ? self.talkControl?.statusText ?? "" : "")
         case .send:
-            Text(verbatim: "Send message")
+            return .send(isReplyRunning: self.send.isReplyRunning, sendKeepsReply: self.send.keepsReply)
         case .stop:
-            Text("Stop response")
-        }
-    }
-
-    private var accessibilityHint: Text {
-        switch self.role {
-        case .talk:
-            if self.talkControl?.isEnabled == true {
-                Text("Ends the voice conversation.")
-            } else {
-                Text("Starts a voice conversation in this chat.")
-            }
-        case .send:
-            if self.send.isReplyRunning {
-                Text("Sends your message while the reply continues. To stop the reply, clear the field.")
-            } else {
-                Text("Sends your message.")
-            }
-        case .stop:
-            Text("Stops the current reply.")
+            return .stop(canStop: self.stop.canStop, isStopping: self.stop.isAborting)
         }
     }
 

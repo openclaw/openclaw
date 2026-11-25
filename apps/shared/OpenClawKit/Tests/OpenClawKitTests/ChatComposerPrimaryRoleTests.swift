@@ -64,4 +64,37 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
         XCTAssertEqual(self.role(capture: true), .send)
         XCTAssertEqual(self.role(draft: true, canSend: true, blocking: true), .send)
     }
+
+    func testTalkReadsWhatItDoesAndOnlyLiveStatus() {
+        let idle = ChatComposerPrimaryAccessibility.talk(isActive: false, isConnected: true, liveStatus: "")
+        XCTAssertEqual(idle, .init(label: "Start voice conversation", value: "", hint: ""))
+        let offline = ChatComposerPrimaryAccessibility.talk(isActive: false, isConnected: false, liveStatus: "")
+        XCTAssertEqual(offline.value, "")
+        XCTAssertEqual(offline.hint, "Voice conversations aren’t available while disconnected.")
+        let active = ChatComposerPrimaryAccessibility.talk(isActive: true, isConnected: true, liveStatus: "Listening")
+        XCTAssertEqual(active, .init(label: "End voice conversation", value: "Listening", hint: ""))
+    }
+
+    func testSendHintOnlyWhileAReplyKeepsRunning() {
+        XCTAssertEqual(
+            ChatComposerPrimaryAccessibility.send(isReplyRunning: false, sendKeepsReply: true),
+            .init(label: "Send message", value: "", hint: ""))
+        XCTAssertEqual(
+            ChatComposerPrimaryAccessibility.send(isReplyRunning: true, sendKeepsReply: true).hint,
+            "Sends without stopping the current reply. Clear your message to stop the reply.")
+        // Interrupt mode stops the reply on send, so the hint would be false there.
+        XCTAssertEqual(ChatComposerPrimaryAccessibility.send(isReplyRunning: true, sendKeepsReply: false).hint, "")
+    }
+
+    func testStopAlwaysSaysStopResponse() {
+        XCTAssertEqual(
+            ChatComposerPrimaryAccessibility.stop(canStop: true, isStopping: false),
+            .init(label: "Stop response", value: "", hint: ""))
+        XCTAssertEqual(
+            ChatComposerPrimaryAccessibility.stop(canStop: false, isStopping: false),
+            .init(label: "Stop response", value: "", hint: "Can’t stop this reply from this device right now."))
+        XCTAssertEqual(
+            ChatComposerPrimaryAccessibility.stop(canStop: true, isStopping: true),
+            .init(label: "Stop response", value: "Stopping", hint: ""))
+    }
 }

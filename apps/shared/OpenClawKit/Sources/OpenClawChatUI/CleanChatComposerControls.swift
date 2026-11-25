@@ -1067,9 +1067,14 @@ private struct UnifiedChatMicMetadata: ViewModifier {
     }
 
     private var accessibilityValue: Text {
-        Text((self.isPending && self.control.phase == .idle
-                ? OpenClawChatDictationControl.Phase.starting
-                : self.control.phase).statusText)
+        let phase = self.isPending && self.control.phase == .idle
+            ? OpenClawChatDictationControl.Phase.starting
+            : self.control.phase
+        #if os(iOS)
+        // Idle has nothing to report; the label already says what the button does.
+        if phase == .idle { return Text(verbatim: "") }
+        #endif
+        return Text(phase.statusText)
     }
 
     private var helpText: Text {
