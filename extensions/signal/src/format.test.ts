@@ -81,4 +81,38 @@ describe("Signal formatting", () => {
       })),
     );
   });
+
+  it.each([
+    ["`  go  `", " go "],
+    ["`   `", "   "],
+  ])("keeps the entire terminal inline-code cell %s after an expanded link", (cell, code) => {
+    const table = `| ID | Value |\n| --- | --- |\n| [manual](https://example.org) | ${cell} |`;
+    const prefix = "manual (https://example.org)\n• Value: ";
+    const formatted = markdownToSignalText(table, { tableMode: "bullets" });
+    expect(formatted.text).toBe(prefix + code);
+    expect(formatted.styles).toContainEqual({
+      start: prefix.length,
+      length: code.length,
+      style: "MONOSPACE",
+    });
+  });
+
+  it("preserves inline-code spaces at an internal packet boundary", () => {
+    const label = "👋 " + "label ".repeat(7);
+    const table = `| ID | Value |\n| --- | --- |\n| ${label} | \`  go  \` |\n| after | Done |`;
+    const chunks = markdownToSignalTextChunks(table, 20, { tableMode: "bullets" });
+    const code = chunks.flatMap(({ text, styles }) =>
+      styles
+        .filter((range) => range.style === "MONOSPACE")
+        .map(({ start, length }) => text.slice(start, start + length)),
+    );
+    expect(code).toEqual([" go "]);
+    expect(chunks.every(({ text }) => text.length <= 20)).toBe(true);
+    expect(chunks.at(-1)?.text).toContain("Done");
+  });
+
+  it("trims ordinary trailing whitespace and fenced-code framing", () => {
+    expect(markdownToSignalText("ordinary   ").text).toBe("ordinary");
+    expect(markdownToSignalText("```\nhello\n```").text).toBe("hello");
+  });
 });
