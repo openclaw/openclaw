@@ -368,7 +368,7 @@ single-triple behavior; `--pairs` still controls only warm filter repetitions.
 Add `--cold-backend-utc-switch` to measure the first switch from Local on a UTC
 client to explicit UTC, after the full cold report becomes ready. It asserts
 that the reports agree except for `updatedAt` and records switch latency, CPU
-and worker dispatches separately from cold readiness.
+and worker dispatches, including snapshot reads, separately from cold readiness.
 
 For attribution, add `--diagnostic`. It runs only 1× at localhost and 100 ms RTT,
 prepares the normal page, runs an untraced model00/model01 pair, then traces

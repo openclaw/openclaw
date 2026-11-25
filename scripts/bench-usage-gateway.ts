@@ -540,6 +540,7 @@ async function prepareFixture(
                 OPENCLAW_SKIP_CRON: "1",
                 OPENCLAW_SKIP_GMAIL_WATCHER: "1",
                 OPENCLAW_SKIP_PROVIDERS: "1",
+                ...(values["cold-backend-utc-switch"] && { OPENCLAW_USAGE_BENCH_COUNT_READS: "1" }),
               },
             }),
             stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -1237,7 +1238,11 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
     peer.start();
     await connected.promise;
     clearTimeout(connectionTimer);
-    assert.deepEqual(await owner.snapshot(), [], "No report aggregation before the first RPC");
+    assert.deepEqual(
+      (await owner.snapshot()).filter(({ kind }) => !kind.startsWith("usage-cost:")),
+      [],
+      "No report aggregation before the first RPC",
+    );
     const query = {
       startDate: owner.ready.startDate,
       endDate: owner.ready.endDate,
@@ -1321,7 +1326,10 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
         assert.equal(response.overview?.total, population);
         assert.equal(response.totals.totalTokens, owner.ready.allTokens);
         assert.equal(response.sessions.length, Math.min(population, 50));
-        assert(dispatches.length > 0, "Usage request aggregated the snapshot");
+        assert(
+          dispatches.some(({ kind }) => !kind.startsWith("usage-cost:")),
+          "Usage request aggregated the snapshot",
+        );
         if (mode === "cold") {
           if (values["cold-backend-utc-switch"]) {
             // Local on a UTC client and explicit UTC are the same calendar.
