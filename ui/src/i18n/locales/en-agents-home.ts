@@ -11,7 +11,10 @@ const enAgentsHome = {
     deleteAgentDetails:
       "Its workspace, agent state, and chat history move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
-    working: "Working now",
+    showOnlyAgent: "Show only this agent",
+    showAllAgents: "Show all agents",
+    otherAgentsUnread: "Other agents have unread messages",
+    agentOptionsOthersUnread: "Options for {agent}. Other agents have unread messages.",
   },
   templatesDraft: {
     title: "Create template",

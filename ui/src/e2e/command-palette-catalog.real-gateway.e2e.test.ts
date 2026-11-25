@@ -739,8 +739,7 @@ suite.define(() => {
           await settings.waitFor({ state: "hidden" });
           rejectCatalogReplies = true;
           const sidebar = page.locator("openclaw-app-sidebar");
-          await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-          await sidebar.getByRole("menuitem", { name: "Reviewer fixture", exact: true }).click();
+          await showOnlySidebarAgent(sidebar, "Reviewer fixture");
           await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
           const requestsBeforeOpen = catalogParams.length;
           await page.keyboard.press("ControlOrMeta+K");
@@ -804,3 +803,4 @@ suite.define(() => {
   }, 120_000);
 });
 import { createHash } from "node:crypto";
+import { showOnlySidebarAgent } from "./sidebar-agent-row.test-support.ts";

@@ -105,7 +105,6 @@ type SidebarPresentationHost = Pick<
 > & {
   readonly sessionData: SessionDataOwner;
   readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
-  readonly sidebarMenus: { agentMenuPosition: { x: number; top: number } | null };
   readonly rosterSessionSource: {
     agentIds: readonly string[];
     collapsedAgentIds: ReadonlySet<string>;
@@ -209,12 +208,6 @@ export class SidebarSessionProjection {
       host.sessionDataContext?.agents.state.agentsList,
       host.sidebarAgentsMode === "chip" ? chip.identity : null,
       host.sidebarAgentsMode === "chip" && host.otherAgentsHaveUnread(),
-      host.sidebarMenus.agentMenuPosition !== null
-        ? chip.agents.map(({ id }) => [
-            chip.identities.get(normalizeAgentId(id)),
-            host.agentUnreadCount(id),
-          ])
-        : null,
       host.sessionDataContext?.plugins.registryStatus,
       this.#pluginPresentation.readRevision(
         () => [context?.plugins, context?.plugins.revision],

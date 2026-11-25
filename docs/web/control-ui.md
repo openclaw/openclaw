@@ -605,22 +605,20 @@ name the child session that failed, even when its parent has finished or continu
 working. Select the warning to open the child session and acknowledge its failure;
 a subagent chat opens without adding a sidebar row.
 
-Choose **Create new agent** in the agent selector to open a name-and-avatar
+Choose **New agent** in the agent row's **⋯** menu to open a name-and-avatar
 dialog. Enter a name and choose or generate a Blobster avatar. On submission,
-the agent appears first in the list and its own chat opens immediately while
+the agent's own chat opens immediately and its row is selected while
 OpenClaw checks that inference is usable. If the check fails, OpenClaw explains
 the problem and does not create an agent. After verification, it saves the agent
 and a greeting that uses its name, then asks you to choose one role. The agent
 follows up by asking for more detail about your goal before helping. Every
 message stays in that conversation; leaving and returning resumes the same
 chat. Its stable internal ID can appear in the URL, but never as its display
-name or subtitle. The latest created agent stays first after a reload.
+name or subtitle.
 
-The selector starts with **Create new agent**, using a plus-circle icon, followed
-by **Show all** when multiple agents are available. Compact avatar-and-name rows
-fill a bounded, scrollable list. Each row's settings gear opens that agent's
-existing settings without switching the selected agent. Reopening the menu
-brings the selected agent into view.
+Each agent row's **⋯** menu starts with **Show all agents** (or **Show only this
+agent** when all agents are shown) and **New agent**, followed by that agent's
+own actions, including **Settings**.
 
 ## Download files
 
@@ -780,8 +778,9 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 ## Agents and Templates
 
-Use the agent selector to open an agent's chat or its settings gear to configure
-that agent. Per-agent settings remain at `/settings/agents/<id>`.
+Click an agent row in the sidebar to open its main chat, or open its **⋯** menu
+and choose **Settings** to configure that agent. Per-agent settings remain at
+`/settings/agents/<id>`.
 
 The agent's **Automations** panel shows loading placeholders for its initial
 scheduler and jobs reads independently, and an empty state only after its jobs
@@ -796,31 +795,25 @@ Templates are available by default, without a Labs switch. An explicit
 `gateway.controlUi.experimental.templates: false` hides the Templates entry and
 direct visits to discovery or details. The former `/agents` overview is removed.
 
-To browse sessions across agents, choose the **Show all** tile in the agent
-switcher. It appears with two or more agents and groups their own avatars: two
-overlap diagonally, three or four form a two-column grid, and five or more show
-three avatars plus a remaining-agent count. This enables **team mode**, a browser
-preference that is off by default. The top row becomes a workspace header with
-the configured Gateway display name, or **OpenClaw**, and a small static OpenClaw mark.
-Both modes use the same selector: **Create new agent**, **Show all**, then compact
-agent rows with a settings gear on the right. Choosing a gear opens that agent's
-configuration without selecting it. The selected row has an avatar ring. Help
-and its links remain in the account menu. Pinned sessions stay in **Pages**, using
-their agent's avatar as the icon.
+To browse across agents, open the selected agent row's **⋯** menu and choose
+**Show all agents**. This enables **team mode**, a browser preference that is
+off by default. Help and its links remain in the account menu. Pinned sessions
+stay in **Pages**, using their agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
-which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
-open that agent's main chat. The separate collapse control only folds its sessions.
-The accented rail **+** below the workspace mark, labeled **New session**, opens the New session composer directly with your last-selected agent.
+which stays stable as activity changes. Click an agent row to open that agent's
+main chat.
+The accented rail **+** labeled **New session** opens the New session composer
+directly with your last-selected agent.
 The selection is remembered in this browser for each Gateway; you can choose a
 different agent inside the composer.
 Each group's **+** opens a composer for that specific agent, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
-agent for chat. Choose a named agent tile in the workspace menu to leave team
-mode with that agent selected, restoring the agent chip and Home row.
+agent for chat. Choose **Show only this agent** in any agent row's **⋯** menu to
+leave team mode with that agent selected.
 
-Choosing **Show all** defaults the shared page scope to **All agents**. That scope,
+Choosing **Show all agents** defaults the shared page scope to **All agents**. That scope,
 including an explicit **All agents** selection, is saved in this browser for each
 gateway. It survives reloads and switching to another gateway and back, even if
-you open a different agent's chat in team mode. Choosing a named agent tile leaves
+you open a different agent's chat in team mode. Choosing **Show only this agent** leaves
 team mode and scopes pages to that agent. You can still choose a narrower page
 scope while in team mode; navigating between pages does not reset that choice.
 Automations, Dashboards, Sessions, and Usage support all-agent views, with
@@ -830,7 +823,7 @@ Global settings remain global. Skill Workshop uses the agent selected through
 chat; open an agent's main chat from its group header to select it. Chat actions
 always belong to the conversation's agent.
 
-Choose **All sessions** from an agent group’s options menu to open the Sessions
+Choose **Sessions** from an agent row's **⋯** menu to open the Sessions
 page filtered to that agent. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
 for group controls and filtering.
 
@@ -843,7 +836,7 @@ Profiles with an uploaded photo or a linked email (for a Gateway-proxied Gravata
 versioned profile image; profiles with neither use initials without probing an image route. Authenticated
 misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
 the browser cache for up to one minute. New profile and agent image revisions use a new URL.
-This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+This behavior is shared by the sidebar, identity chips, settings, and chat.
 
 Current Work applies complete session events without a periodic list refresh.
 Uncertain membership and reconnects still fetch an authoritative list. Activity

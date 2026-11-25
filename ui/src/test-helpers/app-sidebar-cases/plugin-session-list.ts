@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../src/plugin-sdk/control-ui.js";
+import { patchSettings } from "../../app/settings.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { createControlUiPluginHost } from "../../plugins/control-ui-host.ts";
@@ -122,8 +123,9 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
 
   sessions.publishList(S.createSessionState("main", nextKeys));
   await vi.waitFor(() => expect(keys()).toEqual(nextKeys));
-  await toggleRoster(sidebar);
-  await vi.waitFor(() => expect(find(".sidebar-agent-card__main")).not.toBeNull());
+  // A list that does not delegate hides the roster rows, so return through the setting.
+  patchSettings({ sidebarAgentsMode: "chip" });
+  await vi.waitFor(() => expect(find(".sidebar-agent-roster--selected")).not.toBeNull());
   expect(keys()).toEqual(nextKeys);
   const wide = S.createSessionState("main", [
     "agent:main:main",

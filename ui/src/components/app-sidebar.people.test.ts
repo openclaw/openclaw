@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
 
 import "../test-helpers/app-sidebar-suite.ts";
-import "../test-helpers/app-sidebar-cases/agent-menu.ts";
-import "../test-helpers/app-sidebar-cases/agent-menu-scope.ts";
-import "../test-helpers/app-sidebar-cases/agent-menu-hover.ts";
+import "../test-helpers/app-sidebar-cases/agent-row.ts";
 import "../test-helpers/app-sidebar-cases/roster-agent-only.ts";
 import "../test-helpers/app-sidebar-cases/roster-main-metadata.ts";
 import "../test-helpers/app-sidebar-cases/roster-live.ts";

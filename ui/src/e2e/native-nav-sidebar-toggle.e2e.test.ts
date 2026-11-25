@@ -505,7 +505,7 @@ suite.define(() => {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
     const footerControls = rail.locator(
-      ".sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
+      ".sidebar-rail__home, .sidebar-issues-button, .sidebar-identity-card",
     );
     const footerBoxes = await footerControls.evaluateAll((buttons) =>
       buttons.map((button) => {

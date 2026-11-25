@@ -85,7 +85,7 @@ function fixtureDocument() {
       ${samples("pointer", null, '<a href="https://example.com">External link</a>', '<a class="nav-item" href="/chat" target="_BLANK">New tab</a>', '<a class="nav-item" href="/chat" data-new-tab-action>New window</a>')}
     </aside>
     <aside class="settings-sidebar">${classLinks("default", null, "settings-sidebar__item settings-sidebar__subitem sidebar-footer-build")}</aside>
-    <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item">${samples("pointer", null, '<a href="https://example.com/docs" target="_blank">Docs</a>')}</div></div>
+    <div class="sidebar-agent-roster__menu"><div class="sidebar-customize-menu__item">${samples("pointer", null, '<a href="https://example.com/docs" target="_blank">Docs</a>')}</div></div>
     ${samples("pointer", "none", '<a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>')}
     ${samples("pointer", null, '<button id="new-tab-button" class="btn" data-new-tab-action>New tab</button>')}
     <div id="shadow-policy-host"><template shadowrootmode="open"><style>${readStyleSheet("ui/src/components/dock-panel.css")}</style>

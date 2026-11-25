@@ -6,7 +6,7 @@ import { sidebarSession } from "./sidebar-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar New session" });
 suite.define(() => {
-  it("keeps New session in the Sessions header and adds it above Home in the mobile rail", async () => {
+  it("keeps New session in the Sessions header and adds it to the mobile rail footer", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 800 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -71,16 +71,18 @@ suite.define(() => {
           const railPlus = element
             .querySelector(".sidebar-rail .sidebar-new-session")!
             .getBoundingClientRect();
-          const home = element.querySelector(".sidebar-footer-bar__home")!.getBoundingClientRect();
+          const home = element.querySelector(".sidebar-rail__home")!.getBoundingClientRect();
+          const inbox = element.querySelector(".sidebar-issues-button")!.getBoundingClientRect();
           return {
             plusX: railPlus.x,
             homeX: home.x,
             plusBottom: railPlus.bottom,
-            homeTop: home.top,
+            inboxTop: inbox.top,
           };
         });
+        // Home leads the rail; New session joins the footer controls above Inbox.
         expect(alignment.plusX).toBe(alignment.homeX);
-        expect(alignment.plusBottom).toBeLessThanOrEqual(alignment.homeTop);
+        expect(alignment.plusBottom).toBeLessThanOrEqual(alignment.inboxTop);
         await nav.locator('[data-navigation-view="online"]').click();
         await nav.locator(".sidebar-online").waitFor();
         await railCreate.focus();

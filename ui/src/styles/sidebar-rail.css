@@ -212,8 +212,6 @@
 .sidebar-rail .nav-item,
 .sidebar-rail .sidebar-brand__icon,
 .sidebar-rail .sidebar-issues-button,
-.sidebar-rail .sidebar-agent-card__main,
-.sidebar-rail .sidebar-workspace-header__main,
 .sidebar-rail .sidebar-identity-card {
   --rail-control-surface: var(--rail-background);
   display: flex;
@@ -314,8 +312,7 @@
   height: var(--rail-glyph-size);
 }
 
-/* Include Home's wrapper so its inherited resting ink is not dimmed twice. */
-.sidebar-rail :is(.nav-item, .sidebar-footer-bar__home) .nav-item__icon {
+.sidebar-rail .nav-item .nav-item__icon {
   width: var(--rail-glyph-size);
   height: var(--rail-glyph-size);
   flex: 0 0 var(--rail-glyph-size);
@@ -399,25 +396,16 @@
   box-shadow: 0 0 0 2px var(--rail-control-surface);
 }
 
-.sidebar-rail .sidebar-agent-card__menu-unread {
-  width: 8px;
-  height: 8px;
-  top: 3px;
-  right: 3px;
-  left: auto;
-  box-shadow: 0 0 0 2px var(--rail-control-surface);
-}
-
-.sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
+.sidebar-rail .sidebar-rail__home .session-glyph__ring {
   inset: -4px;
 }
 
-.sidebar-footer-bar__home {
+.sidebar-rail__home {
   position: relative;
 }
 
 /* Home keeps its centered activity glyph; compact badges never move the rail. */
-.sidebar-footer-bar__home .session-row-badges {
+.sidebar-rail__home .session-row-badges {
   position: absolute;
   inset-block-end: 0;
   inset-inline-end: 0;
@@ -428,13 +416,13 @@
   background: var(--rail-control-surface);
 }
 
-.sidebar-footer-bar__home .session-row-badge > i {
+.sidebar-rail__home .session-row-badge > i {
   width: 10px;
   height: 10px;
 }
 
 /* The tooltip and accessible label retain the full outbox count. */
-.sidebar-footer-bar__home .session-row-badge--attention > span {
+.sidebar-rail__home .session-row-badge--attention > span {
   display: none;
 }
 
@@ -534,17 +522,11 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   scrollbar-width: none;
 }
 
-.shell--mobile-nav
-  .sidebar-rail
-  :is(
-    .sidebar-rail__button,
-    .nav-item,
-    .sidebar-brand__icon,
-    .sidebar-issues-button,
-    .sidebar-agent-card__main,
-    .sidebar-workspace-header__main,
-    .sidebar-identity-card
-  ) {
+.shell--mobile-nav .sidebar-rail .sidebar-rail__button,
+.shell--mobile-nav .sidebar-rail .nav-item,
+.shell--mobile-nav .sidebar-rail .sidebar-brand__icon,
+.shell--mobile-nav .sidebar-rail .sidebar-issues-button,
+.shell--mobile-nav .sidebar-rail .sidebar-identity-card {
   border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1));
 }
 
@@ -559,7 +541,7 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   margin-block-start: calc(var(--rail-block-gap) - var(--rail-item-gap));
 }
 
-.shell--mobile-nav .sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
+.shell--mobile-nav .sidebar-rail .sidebar-rail__home .session-glyph__ring {
   inset: -5px;
 }
 
@@ -617,27 +599,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
   --shell-controls-width: 68px;
-}
-
-/* Keep identity and command access in the persistent rail. */
-.sidebar-rail .sidebar-agent-card--rail,
-.sidebar-rail .sidebar-workspace-header--rail {
-  flex: 0 0 var(--rail-control-size);
-  width: var(--rail-control-size);
-  height: var(--rail-control-size);
-  min-height: var(--rail-control-size);
-  padding: 0;
-}
-
-.sidebar-rail .sidebar-agent-card__text {
-  display: none;
-}
-
-.sidebar-rail .sidebar-agent-card__avatar,
-.sidebar-rail .sidebar-workspace-header__mark {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
 }
 
 .sidebar--rail .sidebar-panel-header {
@@ -770,6 +731,18 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   width: 28px;
   height: 28px;
   border-radius: var(--radius-md);
+}
+
+/* Under the agent row, the Sessions header reads as the list's section title. */
+.sidebar--rail .sidebar-session-toolbar--section {
+  min-height: 36px;
+}
+
+.sidebar-session-toolbar--section
+  :is(.sidebar-panel-header__title, .sidebar-session-owner-filter .picker-select__label) {
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 600;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {

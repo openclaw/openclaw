@@ -3,7 +3,13 @@ import { strokeIconData, type IconData } from "./icon-data-types.ts";
 // Navigation section icons: outline at rest, `*Filled` for the current page.
 // Drawn on a 24 grid, stroke 2, round caps and joins. `users` reuses the
 // existing Lucide outline. Mask ids are scoped per rendered instance by Icon.
+// One outline with an arched doorway; filled, the doorway stays cut out.
+const HOUSE =
+  "M9 21H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2h-4v-4a3 3 0 0 0-6 0z";
+
 export const navigationIconData = {
+  house: strokeIconData([["path", { d: HOUSE }]]),
+  houseFilled: strokeIconData([["path", { d: HOUSE, fill: "currentColor" }]]),
   usersFilled: strokeIconData([
     [
       "path",
@@ -340,6 +346,7 @@ export const navigationFilledIconNames = {
   clawrouter: "clawrouterFilled",
   customize: "customizeFilled",
   dashboards: "dashboardsFilled",
+  house: "houseFilled",
   knowledge: "knowledgeFilled",
   meetings: "meetingsFilled",
   portals: "portalsFilled",

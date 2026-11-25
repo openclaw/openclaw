@@ -45,7 +45,15 @@ const expectAgent = (picker: Locator, value: string) =>
     .toBe(value);
 const expectAgentName = (sidebar: Locator, name: string) =>
   expect
-    .poll(async () => (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim())
+    .poll(async () =>
+      (
+        await sidebar
+          .locator(
+            ".sidebar-agent-roster--selected .sidebar-agent-roster__header .sidebar-agent-roster__name",
+          )
+          .textContent()
+      )?.trim(),
+    )
     .toBe(name);
 suite.define(() => {
   it.each(["ordinary reload", "route before hello"])(

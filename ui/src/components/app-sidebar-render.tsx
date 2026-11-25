@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { isRouteId, pluginTabLocation, pluginTabKey } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -8,15 +8,14 @@ import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gatewa
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
-import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { resolveTrustedAvatarUrl } from "../lib/identity-avatar.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
@@ -27,8 +26,6 @@ import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { GatewayIdentityPlaceholder } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
-import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import {
@@ -36,7 +33,6 @@ import {
   SessionGlyph,
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
-import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly scroll?: { windowKeys(): string[] | undefined; rowFloor(): number };
@@ -59,166 +55,79 @@ export function sidebarCollapsedByChoice(host: AppSidebarRenderHost): boolean {
   return host.navigationCollapsedByChoice ?? host.navigationCollapsed;
 }
 
-export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Element {
-  let menuTrigger: HTMLButtonElement | undefined;
-  const chipAgent = createMemo(() => host.activeChipAgent()),
-    cardAgentId = () => chipAgent().activeId,
-    rosterAgent = () => chipAgent().agent,
-    cardAgents = () => chipAgent().agents,
-    cardIdentity = () => chipAgent().identity;
-  const gateway = () => host.sessionDataContext?.gateway;
-  const bootstrapIdentity = createMemo(() =>
-    gateway() && hasSameOriginGatewayTransport(gateway()?.connection.gatewayUrl ?? "")
-      ? host.sessionDataContext?.config.current.assistantIdentity
-      : undefined,
+/** The Sessions list is open beside the rail, so its agent row is on screen. */
+export function sidebarSessionsListShown(host: AppSidebarRenderHost): boolean {
+  return (
+    host.navigationVisible &&
+    !host.onExitSettings &&
+    !host.navigationCollapsed &&
+    host.navigationView === "sessions" &&
+    !host.contextualSidebar
   );
-  const cardAgent = createMemo(
-    () =>
-      rosterAgent() ??
-      (bootstrapIdentity()?.agentId === cardAgentId()
-        ? {
-            id: cardAgentId(),
-            name: bootstrapIdentity()?.name,
-            identity: { avatar: bootstrapIdentity()?.avatar ?? undefined },
-          }
-        : undefined),
-  );
-  const cached = () =>
-    host.sidebarSnapshot?.mode === "chip" && host.sidebarSnapshot.brand.agentId === cardAgentId()
-      ? host.sidebarSnapshot.brand
-      : null;
-  const menuUnread = createMemo(() => host.otherAgentsHaveUnread());
-  const cardName = createMemo(() => {
-    const agent = cardAgent();
-    return cached()?.name ?? (agent ? normalizeAgentLabel(agent, cardIdentity()) : "");
+}
+
+/** Home opens the selected agent's main conversation in the dock, in either list mode. */
+export function SidebarRailHome(props: { host: AppSidebarRenderHost }) {
+  const host = () => props.host;
+  const dock = createMemo(() => {
+    const source = host().sessionDataContext?.assistantDock;
+    return source && projectOwner(source, (owner) => owner.homeOpen);
   });
-  const avatarAuthReady = createMemo(() =>
-    Boolean(
-      gateway() &&
-      (gateway()?.snapshot.hello ||
-        gateway()?.connection.token.trim() ||
-        gateway()?.connection.password.trim() ||
-        bootstrapIdentity()?.agentId === cardAgentId()),
-    ),
-  );
-  const avatarUrl = () =>
-    cached()
-      ? cached()!.avatar
-      : cardAgent()
-        ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
-        : null;
-  const avatarText = () =>
-    cached()
-      ? (cached()!.textAvatar ?? null)
-      : cardAgent()
-        ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
-        : null;
-  const environment = () => host.sessionDataContext?.config?.current?.environment ?? null;
-  const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
-  function AgentCard() {
-    const avatarGateway = useAvatarGatewayContext();
-    const avatar = () => {
-      const url = avatarUrl();
-      // Keep the sidebar's canonical-route policy; the avatar owns image loading.
-      return url?.startsWith("/") ? resolveTrustedAvatarUrl(url, avatarGateway().origin) : url;
-    };
-    const menuLabel = () =>
-      cardAgents().length > 1 ? t("agentChip.switchAgent") : t("agentChip.menuLabel");
-    return (
-      <openclaw-sidebar-agent-card
-        style={{ display: "contents" }}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          if (!menuOpen()) {
-            host.sidebarMenus.toggleAgentMenu(menuTrigger ?? event.currentTarget);
+  const open = () => dock()?.read() ?? false;
+  // The agent row carries the conversation's activity while the list is open.
+  const home = () =>
+    sidebarSessionsListShown(host()) ? null : host().visibleHomeSession(host().expandedAgentId());
+  return (
+    <openclaw-tooltip>
+      <span slot="content">
+        <ShortcutHint
+          label={t("assistantPanel.toggle")}
+          combo={KEYBOARD_SHORTCUT_COMBOS.homePanel}
+        />
+      </span>
+      <button
+        type="button"
+        class="sidebar-rail__button sidebar-rail__home"
+        aria-label={t("assistantPanel.toggle")}
+        aria-pressed={open() ? "true" : "false"}
+        disabled={!isHomePanelAvailable(host().sessionDataContext?.gateway)}
+        onClick={(event) => {
+          window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+          if (
+            !isMobileNavLayout() &&
+            !host().navigationCollapsed &&
+            shouldHandleNavigationClick(event)
+          ) {
+            host().onToggleSidebar?.();
           }
         }}
       >
-        <div
-          class={[
-            "sidebar-agent-card",
-            { "sidebar-agent-card--open": menuOpen(), "sidebar-agent-card--rail": true },
-          ]}
-        >
-          <button
-            ref={(element) => (menuTrigger = element)}
-            type="button"
-            class="sidebar-agent-card__main"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen() ? "true" : "false"}
-            aria-label={`${cardName()} · ${menuLabel()}`}
-            onPointerMove={(event) => {
-              if (cardAgents().length > 1) {
-                host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-              }
-            }}
-            onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-            onPointerDown={(event: PointerEvent) => {
-              // The portaled menu has a hidden trigger; keep its outside-click
-              // handler from dismissing hover-open state before click can pin it.
-              event.stopPropagation();
-            }}
-            onClick={(event) => {
-              event.stopPropagation();
-              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-            }}
-          >
-            <span
-              class={[
-                "sidebar-agent-card__avatar",
-                { "sidebar-agent-card__avatar--environment": Boolean(environment()) },
-              ]}
-            >
-              <Show
-                when={!host.connectionPending}
-                fallback={<GatewayIdentityPlaceholder kind="agent" />}
-              >
-                <AgentIdentityAvatar
-                  agent={{
-                    id: cardAgentId(),
-                    avatar: avatar(),
-                    textAvatar: avatarText(),
-                    pending: Boolean(avatarUrl()?.startsWith("/") && !avatarAuthReady()),
-                  }}
+        <Show when={home()} fallback={<Icon name="house" filled={open()} />}>
+          {(session) => {
+            const running = () =>
+              (session().isRunVisuallyActive ?? session().hasActiveRun) ||
+              session().runningChildCount > 0;
+            return (
+              <>
+                {/* Home is navigation, not an interactive session-attention target. */}
+                <SessionGlyph
+                  content={<Icon name="house" filled={open()} />}
+                  running={running()}
+                  queued={session().status === "queued" && session().runningChildCount === 0}
+                  badge={
+                    <Show when={session().unread && !running()}>{renderSessionUnreadBadge()}</Show>
+                  }
                 />
-              </Show>
-              {menuUnread() && !menuOpen() ? (
-                <span
-                  class="session-unread-dot sidebar-agent-card__menu-unread"
-                  role="img"
-                  aria-label={t("sessionsView.unread")}
+                <SessionRowBadges
+                  outboxAttentionCount={session().outboxAttentionCount}
+                  hasComposerDraft={session().hasComposerDraft}
                 />
-              ) : null}
-            </span>
-            <span class="sidebar-agent-card__text">
-              <span class="sidebar-agent-card__name">
-                <HoverMarquee
-                  content={cardName()}
-                  class="sidebar-agent-card__name-text"
-                  options={{ loop: true, delay: 300, speed: 35 }}
-                />
-                <span class="sidebar-agent-card__chevron" aria-hidden="true">
-                  <Icon name="chevronsUpDown" />
-                </span>
-              </span>
-              {environment() ? (
-                <span class="sidebar-agent-card__subtitle-row">
-                  <span class="control-ui-environment-pill">{environment()?.label}</span>
-                </span>
-              ) : null}
-            </span>
-          </button>
-        </div>
-      </openclaw-sidebar-agent-card>
-    );
-  }
-  return (
-    <Show
-      when={host.sidebarAgentsMode !== "roster" && (cardAgent() || cached())}
-      fallback={renderSidebarWorkspaceHeader(host)}
-    >
-      <AgentCard />
-    </Show>
+              </>
+            );
+          }}
+        </Show>
+      </button>
+    </openclaw-tooltip>
   );
 }
 
@@ -240,107 +149,7 @@ export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
       host.sidebarAgentsMode === "chip" && chip.agent
         ? resolveAgentAvatarUrl(chip.agent, chip.identity)
         : (config?.assistantIdentity.avatar ?? null),
-    icon: branding.brandIcon,
-    iconUrl: branding.artwork?.icons?.[branding.brandIcon]?.url,
-    environment: config?.environment?.label ?? null,
   };
-}
-
-function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Element {
-  let button: HTMLButtonElement | undefined;
-  const focusHeader = () => button?.focus();
-  onSettled(() => () => {
-    if (host.sidebarMenus.focusAgentRoster === focusHeader) {
-      host.sidebarMenus.focusAgentRoster = undefined;
-    }
-  });
-  const currentBranding = () => host.sessionDataContext?.theme.branding ?? currentThemeBranding();
-  const cached = () => (host.sidebarSnapshot?.brand.agentId ? null : host.sidebarSnapshot?.brand);
-  const brand = () => cached() ?? readSidebarBrandPresentation(host);
-  const branding = createMemo(() => {
-    const current = currentBranding();
-    const saved = cached();
-    if (!saved) {
-      return current;
-    }
-    const url = saved.iconUrl;
-    return {
-      ...current,
-      brandName: saved.name,
-      brandIcon: saved.icon,
-      artwork: url ? { icons: { [saved.icon]: { url } } } : undefined,
-    };
-  });
-  const name = () => brand().name;
-  const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
-  return (
-    <div class="sidebar-workspace-header sidebar-workspace-header--rail">
-      <button
-        type="button"
-        class="sidebar-workspace-header__main"
-        ref={(element: HTMLButtonElement) => {
-          button = element;
-          host.sidebarMenus.focusAgentRoster = focusHeader;
-        }}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen() ? "true" : "false"}
-        aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-        onPointerMove={(event) =>
-          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event)
-        }
-        onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-        onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation();
-          host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-        }}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          if (!menuOpen()) {
-            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-          }
-        }}
-      >
-        {host.connectionPending ? (
-          <span class="sidebar-workspace-header__mark" aria-hidden="true">
-            <GatewayIdentityPlaceholder kind="agent" />
-          </span>
-        ) : branding().brandIcon !== "claw" ? (
-          <span
-            class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
-            aria-hidden="true"
-          >
-            {branding().brandIcon === "mark" ? (
-              <Icon name="mark" />
-            ) : (
-              <ThemeBrandIcon branding={branding()} aria-hidden="true" />
-            )}
-          </span>
-        ) : (
-          <span class="sidebar-workspace-header__mark" aria-hidden="true">
-            <Icon name="lobster" />
-          </span>
-        )}
-        <span class="sidebar-agent-card__text">
-          <span class="sidebar-agent-card__name">
-            <HoverMarquee
-              content={name()}
-              class="sidebar-agent-card__name-text"
-              options={{ loop: true, delay: 300, speed: 35 }}
-            />
-            <span class="sidebar-agent-card__chevron" aria-hidden="true">
-              <Icon name="chevronsUpDown" />
-            </span>
-          </span>
-          {host.sessionDataContext?.config.current.environment ? (
-            <span class="control-ui-environment-pill">
-              {host.sessionDataContext.config.current.environment.label}
-            </span>
-          ) : undefined}
-        </span>
-      </button>
-    </div>
-  );
 }
 
 export function SidebarNewSessionAction(props: {
@@ -370,7 +179,6 @@ export function SidebarNewSessionAction(props: {
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.Element {
   const context = useApplication();
   const profileGateway = projectGateway(context.gateway);
-  const home = () => host.visibleHomeSession(host.expandedAgentId());
   const connectionStatus = () => host.connectionStatus;
   const selfUser = createMemo(() => {
     profileGateway.read();
@@ -471,57 +279,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
         <Show when={host.newSessionInRail}>
           <SidebarNewSessionAction host={host} class="sidebar-rail__button sidebar-new-session" />
         </Show>
-        <openclaw-tooltip>
-          <span slot="content">
-            <ShortcutHint
-              label={t("assistantPanel.toggle")}
-              combo={KEYBOARD_SHORTCUT_COMBOS.homePanel}
-            />
-          </span>
-          <button
-            type="button"
-            class="sidebar-brand__icon sidebar-footer-bar__home"
-            aria-label={t("assistantPanel.toggle")}
-            disabled={!isHomePanelAvailable(host.sessionDataContext?.gateway)}
-            onClick={(event) => {
-              window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
-              if (
-                !isMobileNavLayout() &&
-                !host.navigationCollapsed &&
-                shouldHandleNavigationClick(event)
-              ) {
-                host.onToggleSidebar?.();
-              }
-            }}
-          >
-            <Show when={home()} fallback={<Icon name="home" />}>
-              {(session) => {
-                const running = () =>
-                  (session().isRunVisuallyActive ?? session().hasActiveRun) ||
-                  session().runningChildCount > 0;
-                return (
-                  <>
-                    {/* Home is navigation, not an interactive session-attention target. */}
-                    <SessionGlyph
-                      content={<Icon name="home" />}
-                      running={running()}
-                      queued={session().status === "queued" && session().runningChildCount === 0}
-                      badge={
-                        <Show when={session().unread && !running()}>
-                          {renderSessionUnreadBadge()}
-                        </Show>
-                      }
-                    />
-                    <SessionRowBadges
-                      outboxAttentionCount={session().outboxAttentionCount}
-                      hasComposerDraft={session().hasComposerDraft}
-                    />
-                  </>
-                );
-              }}
-            </Show>
-          </button>
-        </openclaw-tooltip>
         <SidebarAttention
           cachedCount={host.sidebarSnapshot?.issuesCount}
           activeRouteId={host.activeRouteId}
@@ -625,12 +382,4 @@ export function renderAppSidebarPluginTab(
       {(route) => host.sidebarMenus.renderRoute(route, host)}
     </Show>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-sidebar-agent-card": HTMLAttributes<HTMLElement>;
-    }
-  }
 }

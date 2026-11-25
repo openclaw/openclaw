@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { showAllSidebarAgents } from "./sidebar-agent-row.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI sidebar agent roster" });
 
@@ -41,8 +42,7 @@ suite.define(() => {
         });
         await page.goto(suite.server.baseUrl + "chat");
         const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(".sidebar-agent-card__main").click();
-        await sidebar.locator('[data-value="scope:all"]').click();
+        await showAllSidebarAgents(sidebar);
         const header = sidebar.locator('[data-agent-group="forge"] .sidebar-agent-roster__header');
         await header.locator(".session-glyph__ring").waitFor();
         const ringInset = await header.evaluate((element) => {

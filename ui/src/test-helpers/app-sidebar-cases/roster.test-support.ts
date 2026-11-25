@@ -132,18 +132,21 @@ export const agentIds = (sidebar: HTMLElement) =>
 export const sessionKeys = (sidebar: HTMLElement) =>
   dataValues(sidebar, ".sidebar-recent-session", "sessionKey");
 
+/** Switches list modes through the agent row menu: Show all agents, or Show only this agent. */
 export async function toggleRoster(sidebar: HTMLElement, agentId = "main") {
-  const trigger = expectDefined(
-    sidebar.querySelector<HTMLButtonElement>(
-      ".sidebar-agent-card__main, .sidebar-workspace-header__main",
+  const chip = sidebar.querySelector(".sidebar-agent-roster--selected");
+  const header = chip
+    ? ".sidebar-agent-roster--selected .sidebar-agent-roster__header"
+    : `[data-agent-group="${agentId}"] .sidebar-agent-roster__header`;
+  await vi.dynamicImportSettled();
+  const trigger = await vi.waitFor(() =>
+    expectDefined(
+      sidebar.querySelector<HTMLButtonElement>(`${header} .sidebar-agent-roster__action`),
+      "Missing agent row menu",
     ),
-    "Missing agent switch control",
   );
-  const value = sidebar.querySelector(".sidebar-workspace-header__main")
-    ? `agent:${encodeURIComponent(agentId)}`
-    : "scope:all";
   trigger.click();
-  const selector = `.sidebar-agent-menu [data-value="${value}"]`;
+  const selector = `${header} [data-value="${chip ? "show-all" : "show-only"}"]`;
   await vi.waitFor(() => expect(sidebar.querySelector(selector)).not.toBeNull());
   sidebar.querySelector<HTMLElement>(selector)?.click();
 }

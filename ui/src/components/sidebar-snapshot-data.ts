@@ -197,9 +197,6 @@ export const sidebarSnapshotSchema = json.object({
     agentId: optionalText,
     textAvatar: json.optional(json.nullable(text)),
     avatar: json.nullable(text),
-    icon: text,
-    iconUrl: optionalText,
-    environment: json.nullable(text),
   }),
 });
 export type SidebarSnapshotModel = json.SnapshotValue<typeof sidebarSnapshotSchema>;

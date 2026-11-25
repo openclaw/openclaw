@@ -621,7 +621,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <span data-scale class="session-row-trail">3m</span>
               <div class="sidebar-session-catalog-host__head"><span class="sidebar-session-catalog-host__label">Local host</span><span data-scale class="sidebar-session-catalog-host__count">100</span></div>
               <button class="sidebar-session-catalog-project__head"><span class="sidebar-session-catalog-project__label">Project</span><span data-scale class="sidebar-session-catalog-project__count">100</span></button>
-              <span data-scale class="sidebar-agent-card__name">Agent</span>
               <span data-scale class="settings-sidebar__item-label">Settings</span>
               <span data-scale class="sidebar-file-view__path">workspace/file.ts</span>
               <div class="workspace-desktop"><span data-scale class="workspace-desktop__filename">3 files</span></div>

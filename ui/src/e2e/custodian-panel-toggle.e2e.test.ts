@@ -28,7 +28,7 @@ const contextOptions = { colorScheme: "dark", ...createControlUiE2eContextOption
 async function openHome(page: Page, scenario: ControlUiMockGatewayScenario) {
   const gateway = await installMockGateway(page, { sessionKey: WORK_SESSION_KEY, ...scenario });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, WORK_SESSION_KEY));
-  await page.locator(".sidebar-footer-bar__home").click();
+  await page.locator(".sidebar-rail__home").click();
   return { gateway, panel: page.locator("openclaw-assistant-panel") };
 }
 

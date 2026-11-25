@@ -7,6 +7,8 @@ export type AssistantDockOwner = {
   openSession: (params: SessionParams, activation: object) => void;
   closeSession: (activation?: object) => void;
   readonly openSessionKey: string | null;
+  /** The Home conversation is showing in the dock. */
+  readonly homeOpen: boolean;
 };
 
 /** Application-local adapter. The mounted assistant panel owns all dock state. */
@@ -38,6 +40,10 @@ export class AssistantDock {
 
   get openSessionKey(): string | null {
     return this.owner?.openSessionKey ?? null;
+  }
+
+  get homeOpen(): boolean {
+    return this.owner?.homeOpen ?? false;
   }
 
   readonly subscribe = this.listeners.subscribe;

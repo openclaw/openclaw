@@ -74,7 +74,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: workKey } });
         // Click the glyph, not the button padding: session attention must not intercept Home.
-        await page.locator(".sidebar-footer-bar__home .session-glyph__content").click();
+        await page.locator(".sidebar-rail__home").click();
         const panel = page.locator("openclaw-assistant-panel");
         await panel.locator("openclaw-chat-pane").waitFor();
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: homeKey } });
@@ -113,7 +113,7 @@ suite.define(() => {
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, work.key));
-      await page.locator(".sidebar-footer-bar__home").click();
+      await page.locator(".sidebar-rail__home").click();
       const panel = page.locator("openclaw-assistant-panel");
       const details = panel.locator(".assistant-panel-context details");
       await details.locator("summary").click();

@@ -2984,157 +2984,6 @@ a:is(
   color: var(--text-strong);
 }
 
-.sidebar-workspace-header {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.sidebar-agent-card {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  max-width: 100%;
-  min-width: 0;
-  flex: 0 1 auto;
-}
-
-.sidebar-agent-card__main,
-.sidebar-workspace-header__main {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 5px 0;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  text-align: left;
-  cursor: var(--cursor-action);
-  transition:
-    background var(--duration-fast) ease,
-    opacity var(--duration-fast) ease;
-}
-
-.sidebar-agent-card__main:hover,
-.sidebar-workspace-header__main:hover,
-.sidebar-workspace-header__main[aria-expanded="true"],
-.sidebar-agent-card--open .sidebar-agent-card__main {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
-.sidebar-agent-card__main:active,
-.sidebar-workspace-header__main:active {
-  background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
-}
-
-.sidebar-agent-card__main:focus-visible,
-.sidebar-workspace-header__main:focus-visible,
-.sidebar-identity-card:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
-}
-
-.sidebar-workspace-header__mark,
-.sidebar-agent-card__avatar {
-  width: 28px;
-  height: 28px;
-  flex: none;
-}
-
-.sidebar-workspace-header__mark {
-  display: grid;
-  place-items: center;
-}
-
-.sidebar-workspace-header__mark > svg {
-  width: 24px;
-  height: 24px;
-}
-
-.sidebar-agent-card__avatar {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-full);
-  background: var(--secondary);
-  color: var(--secondary-foreground);
-  font-size: 19px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.sidebar-agent-card__avatar img {
-  width: 100%;
-  height: 100%;
-  border-radius: var(--radius-full);
-  object-fit: cover;
-}
-
-.sidebar-agent-card__avatar--environment {
-  box-shadow: 0 0 0 2px var(--control-ui-environment-color);
-}
-
-.sidebar-agent-card__text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 1px;
-  overflow: hidden;
-}
-
-.sidebar-agent-card__name {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  min-width: 0;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
-  font-weight: 650;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.sidebar-agent-card__name-text {
-  min-width: 0;
-  overflow: hidden;
-  padding-inline-end: 4px;
-  white-space: nowrap;
-}
-
-.sidebar-agent-card__chevron {
-  display: inline-flex;
-  flex: none;
-  color: var(--muted);
-  opacity: 0.58;
-}
-
-.sidebar-agent-card__chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 1.5px;
-}
-
-.sidebar-agent-card__subtitle-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  max-width: 100%;
-  gap: 5px;
-}
-
-.sidebar-agent-card__menu-unread {
-  position: absolute;
-  top: -1px;
-  left: -1px;
-  width: 6px;
-  height: 6px;
-  box-shadow: 0 0 0 2px var(--sidebar-bg);
-}
-
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
    border is the only divider (and the pet's ledge); no second line here. */
 .sidebar-footer-bar {
@@ -3148,10 +2997,6 @@ a:is(
 
 .sidebar-footer-bar--one-action {
   padding-inline-end: 44px;
-}
-
-.sidebar-footer-bar:has(.sidebar-footer-bar__home) {
-  padding-inline-end: 84px;
 }
 
 .sidebar-footer-actions {
@@ -4393,21 +4238,6 @@ html.openclaw-native-web-chrome
   flex: none;
   border-radius: 50%;
   background: color-mix(in srgb, var(--muted) 16%, transparent);
-}
-
-/* The agent slot marks where the avatar lands, a step stronger than the other placeholders. */
-.gateway-identity-placeholder[data-kind="agent"] {
-  background: color-mix(in srgb, var(--muted) 20%, transparent);
-}
-
-.sidebar-agent-card__avatar > .gateway-identity-placeholder {
-  width: 100%;
-  height: 100%;
-}
-
-.sidebar-workspace-header__mark > .gateway-identity-placeholder {
-  width: 26px;
-  height: 26px;
 }
 
 /* While connecting, the rail's current controls step back to placeholders. */

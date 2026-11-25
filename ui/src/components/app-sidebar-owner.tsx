@@ -4,7 +4,10 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { finishBootFrame } from "../app/boot-composer.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
-import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
+import {
+  beginNativeWindowDrag,
+  beginNativeWindowDragFromTopInset,
+} from "../app/native-window-drag.ts";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
@@ -45,6 +48,8 @@ import {
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
 import { SessionOrganizer } from "./session-organizer.ts";
+import { SidebarSelectedAgentRow } from "./sidebar-agent-row.tsx";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { SidebarScrollContext, type createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
 import { sidebarOnlineOrder } from "./sidebar-online-state.ts";
@@ -269,13 +274,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     if (this.context.plugins.registryStatus === "complete") {
       this.sidebarPluginSnapshot = null;
     }
-    // An open switcher tracks roster/reconnect updates; otherwise only hydrate
-    // the active card and avoid background RPCs for every configured agent.
-    const identityIds =
-      this.sidebarMenus.agentMenuPosition === null
-        ? [this.expandedAgentId()]
-        : this.activeChipAgent().agents.map((agent) => agent.id);
-    this.ensureAgentIdentities(identityIds);
+    // Hydrate only the selected agent's row; the roster loads its own identities.
+    this.ensureAgentIdentities([this.expandedAgentId()]);
   }
 
   ensureAgentIdentities(agentIds: readonly string[]): void {
@@ -561,7 +561,23 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
               <Show when={!this.connectionPending} fallback={<GatewaySidebarSkeleton />}>
                 {/* Every panel header sits above the scroller so it stays pinned, keeps
                   one geometry across views, and the scroll fade starts below it. */}
-                <Switch fallback={toolbar}>
+                <Switch
+                  fallback={
+                    <>
+                      {/* The selected agent leads the list; Sessions titles the list below it. */}
+                      <Show when={this.sidebarAgentsMode === "chip"}>
+                        <div
+                          class="sidebar-panel-header sidebar-agent-lead"
+                          onMouseDown={beginNativeWindowDrag}
+                        >
+                          <SidebarSelectedAgentRow host={this} />
+                          <SidebarCollapseToggle onToggle={() => this.onToggleSidebar?.()} />
+                        </div>
+                      </Show>
+                      {toolbar}
+                    </>
+                  }
+                >
                   <Match when={this.navigationView === "automations"}>
                     <SidebarAutomationsHeader host={this} />
                   </Match>

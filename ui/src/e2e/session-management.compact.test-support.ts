@@ -4,6 +4,7 @@ import { expect } from "vitest";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { bounds } from "./new-session-page.scenario.test-support.ts";
 import * as support from "./session-management.test-support.ts";
+import { showOnlySidebarAgent } from "./sidebar-agent-row.test-support.ts";
 
 export { bounds };
 export { expectAttribute, expectCount, expectText } from "./session-page.test-support.ts";
@@ -131,8 +132,7 @@ export const sessionPatch = (gateway: Gateway, key: string, fields: Fields) =>
   );
 
 export async function switchAgent(sidebar: Locator, name: string) {
-  await button(sidebar, /Switch agent/, false).click();
-  await menuItem(sidebar.locator(".sidebar-agent-menu"), name).click();
+  await showOnlySidebarAgent(sidebar, name);
 }
 
 export async function archiveSession(

@@ -1,17 +1,11 @@
 // Agent-specific English strings stay split from the oversized source locale.
 export const agentChip = {
-  menuLabel: "Agent menu",
-  agents: "Agents",
-  showAll: "Show all",
-  createAgent: "Create new agent",
   newAgent: "New agent",
   creatingAgent: "Creating new agent",
   namedSettings: "{name} settings",
   namedShare: "Share {name}",
   shareTemplatePrompt: "Create a shareable template of yourself",
   newConversation: "New session",
-  workspaceMenuLabel: "Workspace menu",
-  switchAgent: "Switch agent",
   help: "Help",
   getHelp: "Get support",
   getApps: "Get the apps",
@@ -25,6 +19,6 @@ export const agentScope = {
 };
 
 export const pinning = {
-  pinToSwitcher: "Pin to switcher",
-  unpinFromSwitcher: "Unpin from switcher",
+  pinToSwitcher: "Pin to sidebar",
+  unpinFromSwitcher: "Unpin from sidebar",
 };

@@ -1,15 +1,16 @@
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { polledAttribute, polledCount, polledVisible } from "./chat-presentation.test-support.ts";
+import { polledCount, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectedAgentRow, showAllSidebarAgents } from "./sidebar-agent-row.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Show all agents sidebar navigation" });
 
 suite.define(() => {
-  it("shows all agents from empty My sessions and other panels, including re-selection and reload", async () => {
+  it("shows all agents from an empty My sessions list and keeps the choice after reload", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, locale: "en-US" },
       async ({ page }) => {
@@ -50,47 +51,30 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await waitForControlUiRoute(page, { routeId: "chat" });
         const sidebar = page.locator("openclaw-app-sidebar");
-        const switcher = sidebar.locator(
-          ".sidebar-agent-card__main, .sidebar-workspace-header__main",
-        );
-        await switcher.waitFor();
+        await selectedAgentRow(sidebar).waitFor();
         const ownerTitle = sidebar.locator("#sidebar-session-owner-title");
         const groups = sidebar.locator("[data-agent-group]");
-        const sessionTab = sidebar.locator('[data-navigation-view="sessions"]');
-        const shellClass = () => polledAttribute(page.locator(".shell"), "class");
         await chooseSidebarOwner(page, "owner:profile-riley");
         await sidebar.getByText("No active sessions match this filter", { exact: true }).waitFor();
         expect(await ownerTitle.textContent()).toContain("My sessions");
         await captureSidebarUiProof(suite, page, "empty-my-sessions.png");
-        for (const panel of ["sessions", "online", "collapsed"] as const) {
-          if (panel === "online") {
-            await sidebar.locator('[data-navigation-view="online"]').click();
-          }
-          if (panel === "collapsed") {
-            await page.keyboard.press("ControlOrMeta+B");
-            await shellClass().toContain("shell--nav-collapsed");
-          }
-          // The avatar opens the switcher from any view, open or collapsed; Show all returns to Sessions.
-          await switcher.click();
-          await page.getByRole("menuitem", { name: "Show all", exact: true }).click();
-          await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
-          await shellClass().not.toContain("shell--nav-collapsed");
-          await polledAttribute(sessionTab, "aria-pressed").toBe("true");
-          await expect
-            .poll(() =>
-              groups.evaluateAll((items) =>
-                items.map((group) => group.getAttribute("data-agent-group")),
-              ),
-            )
-            .toEqual(["main", "research"]);
-          await polledVisible(groups.first()).toBe(true);
-          expect(await ownerTitle.textContent()).toContain("My sessions");
-          if (panel === "sessions") {
-            await captureSidebarUiProof(suite, page, "all-agents-empty-my-sessions.png");
-          }
-        }
+        // The agent row stays above an empty filtered list, so Show all agents is one menu away.
+        const pathname = new URL(page.url()).pathname;
+        await showAllSidebarAgents(sidebar);
+        await expect
+          .poll(() =>
+            groups.evaluateAll((items) =>
+              items.map((group) => group.getAttribute("data-agent-group")),
+            ),
+          )
+          .toEqual(["main", "research"]);
+        await polledVisible(groups.first()).toBe(true);
+        expect(await ownerTitle.textContent()).toContain("My sessions");
+        // Show all changes the list, not the page.
+        expect(new URL(page.url()).pathname).toBe(pathname);
+        await captureSidebarUiProof(suite, page, "all-agents-empty-my-sessions.png");
         await page.reload();
-        await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
+        await waitForControlUiRoute(page, { routeId: "chat" });
         await polledCount(groups).toBe(2);
       },
     );

@@ -48,9 +48,7 @@ it.each([
       find<HTMLButtonElement>("[data-child-session-toggle]")!.click();
     } else {
       await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
-      expect(
-        sidebar.querySelectorAll(".sidebar-rail__bottom .sidebar-footer-bar__home"),
-      ).toHaveLength(1);
+      expect(sidebar.querySelectorAll(".sidebar-rail .sidebar-rail__home")).toHaveLength(1);
       expect(find(`[data-session-key="${parentKey}"]`)).toBeNull();
     }
     await waitForFast(() =>

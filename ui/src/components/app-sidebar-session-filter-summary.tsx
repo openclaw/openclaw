@@ -109,14 +109,24 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
 }
 
 export function renderSessionListToolbar(
-  host: SessionListHost & Pick<AppSidebarRenderHost, "onToggleSidebar">,
+  host: SessionListHost & Pick<AppSidebarRenderHost, "onToggleSidebar" | "sidebarAgentsMode">,
 ) {
+  // Under the selected agent's row, the toolbar is the Sessions section title.
+  const section = () => host.sidebarAgentsMode === "chip";
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
       : t(`sessionsView.${host.sessionsStatusFilter}`);
   return (
-    <SidebarPanelHeader class="sidebar-session-toolbar" onToggleSidebar={host.onToggleSidebar}>
+    <SidebarPanelHeader
+      class={
+        section()
+          ? "sidebar-session-toolbar sidebar-session-toolbar--section"
+          : "sidebar-session-toolbar"
+      }
+      onToggleSidebar={host.onToggleSidebar}
+      collapse={!section()}
+    >
       <SidebarOwnerPicker host={host} />
       <SidebarPanelFilter
         menus={host.sidebarMenus}

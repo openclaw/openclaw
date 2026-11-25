@@ -349,6 +349,7 @@ function AppSidebarContent(
     getSessions: () => prepared().sessionDataContext?.sessions,
   });
   const SessionBody = () => hostView.renderSessionsBody();
+  // The selected agent's row sits in the pinned header, above any plugin-provided list.
   const Sessions = () => (
     <PluginSurface
       surface="session-list"

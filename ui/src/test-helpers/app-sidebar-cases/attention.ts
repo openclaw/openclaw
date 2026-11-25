@@ -357,9 +357,7 @@ describe("AppSidebar session attention", () => {
         ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
     ).toBe("git status");
 
-    expect(dom.attr(".sidebar-workspace-header__main", "aria-label")).not.toContain(
-      "pending approval",
-    );
+    expect(dom.attr(".sidebar-rail__home", "aria-label")).not.toContain("pending approval");
   });
 
   it("keeps a read failure dismissed after the sessions list refreshes", async () => {

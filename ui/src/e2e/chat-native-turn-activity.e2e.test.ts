@@ -17,7 +17,9 @@ suite.define(() => {
       );
       const thread = page.locator(".chat-working-indicator");
       const composer = page.locator(".agent-chat__run-status-announcement");
-      const sidebar = page.locator(".sidebar-footer-bar__home").getByLabel("Active run");
+      const sidebar = page
+        .locator(".sidebar-agent-roster--selected .sidebar-agent-roster__header")
+        .getByLabel("Active run");
       const favicon = page.locator('link[rel="icon"][type="image/svg+xml"]');
       const emit = (seq: number, stream: string, data: Record<string, unknown>) =>
         gateway.emitGatewayEvent("agent", { sessionKey, runId, seq, stream, data, ts: seq });

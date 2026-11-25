@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
@@ -22,11 +23,11 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AppSidebarOnline } from "./app-sidebar-online.tsx";
-import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { AppSidebarOwner, type AppSidebarElement } from "./app-sidebar.tsx";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
+import { SidebarSelectedAgentRow } from "./sidebar-agent-row.tsx";
 import {
   parseSidebarSnapshot,
   restoreSnapshotSession,
@@ -39,7 +40,7 @@ import { installTitleTooltips } from "./tooltip-title.ts";
 const emptySnapshot: SidebarSnapshotModel = {
   ...sidebarBootSnapshot(null),
   mode: "chip",
-  brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
+  brand: { name: "Harbor", avatar: null },
 };
 
 function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<SidebarSnapshotModel>) {
@@ -426,51 +427,29 @@ it("materializes the archive hint on hover without changing the action name", ()
   expect(archive.getAttribute("aria-label")).toBe(name);
 });
 
-it("renders the saved chip identity before agent discovery without reviving another agent's chip", async () => {
+it("leads with the saved agent before agent discovery without reviving another agent's row", async () => {
   const { host, container, context, dom } = createHost("chip");
+  // Row-only fixture: the main conversation has no loaded activity yet.
+  Object.assign(host, { visibleHomeSession: () => null });
   host.sessionKey = "agent:main:thread";
   expect(host.activeChipAgent().agent).toBeUndefined();
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
     brand: { ...emptySnapshot.brand, agentId: "main", name: "Harbor", textAvatar: "⚓" },
   });
-  const update = mountObservedHost(host, container, renderSidebarAgentCard);
-  const card = dom.query("openclaw-sidebar-agent-card");
-  expect(card).not.toBeNull();
+  const update = mountObservedHost(host, container, (observedHost) => (
+    <ApplicationProvider value={context}>
+      <SidebarSelectedAgentRow host={observedHost} />
+    </ApplicationProvider>
+  ));
   await waitForSolid(() => {
-    expect(dom.query(".sidebar-workspace-header")).toBeNull();
-    expect(card!.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label")).toContain(
-      "Harbor",
-    );
-    expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
+    expect(dom.text(".sidebar-agent-roster__name")).toBe("Harbor");
+    expect(dom.query(".sidebar-agent-roster__avatar [data-avatar='⚓']")).not.toBeNull();
   });
-  // The visible name already labels the trigger; no hover tooltip repeats it.
-  expect(dom.query("openclaw-tooltip")).toBeNull();
   host.sessionKey = "agent:other:thread";
   context.agentSelection.set("other");
   update();
-  expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
-  expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
-  expect(dom.query("openclaw-tooltip")).toBeNull();
-});
-
-it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
-  const { host, container, dom } = createHost("roster", {});
-  const update = mountObservedHost(host, container, renderSidebarAgentCard);
-  const name = () => dom.query(".sidebar-agent-card__name-text");
-  const original = name();
-  expect(original?.textContent).toBe("Harbor");
-
-  update();
-  expect(name()).toBe(original);
-
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
-    brand: { ...emptySnapshot.brand, name: "Harbor renamed" },
-  });
-  update();
-  expect(name()).toBe(original);
-  expect(name()?.textContent).toBe("Harbor renamed");
+  expect(dom.query(".sidebar-agent-roster--selected")).toBeNull();
 });
 
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {

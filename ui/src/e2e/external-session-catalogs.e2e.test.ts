@@ -4,6 +4,7 @@ import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { showOnlySidebarAgent } from "./sidebar-agent-row.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "OpenCode and Pi external session catalogs",
@@ -440,11 +441,7 @@ suite.define(() => {
         );
         const sidebar = page.locator("openclaw-app-sidebar");
         if (entrance === "sidebar") {
-          await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-          await sidebar
-            .locator(".sidebar-agent-menu")
-            .getByRole("menuitem", { name: "Other", exact: true })
-            .click();
+          await showOnlySidebarAgent(sidebar, "Other");
           await waitForChat(page, "other");
           await assertOwner("other");
           await exactText(sidebar, "other native thread").click();

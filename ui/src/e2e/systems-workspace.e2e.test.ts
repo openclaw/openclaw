@@ -856,10 +856,10 @@ suite.define(() => {
         // The middle column no longer includes the navigation stack: overflow its own roster.
         await installSystemsGateway(page, 40);
         await page.goto(suite.server.baseUrl + "systems");
-        const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
+        const home = page.locator(".sidebar-rail .sidebar-rail__home");
         const scroller = page.locator(".sidebar-shell__body");
         const railControls = page.locator(
-          ".sidebar-rail__bottom :is(.sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card)",
+          ".sidebar-rail :is(.sidebar-rail__home, .sidebar-issues-button, .sidebar-identity-card)",
         );
         const railBounds = () =>
           railControls.evaluateAll((controls) =>

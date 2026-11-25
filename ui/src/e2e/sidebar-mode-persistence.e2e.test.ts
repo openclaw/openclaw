@@ -108,11 +108,10 @@ suite.define(() => {
             storageKey,
           ),
         ).toBe("chip");
-        expect(await next.locator(".sidebar-agent-card__main").count()).toBe(1);
-        expect(await next.locator(".sidebar-agent-roster").count()).toBe(0);
+        expect(await next.locator("openclaw-sidebar-agent-roster").count()).toBe(0);
         await nextGateway.resolveDeferred("connect");
         await next.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-        expect(await next.locator(".sidebar-agent-card__main").count()).toBe(1);
+        expect(await next.locator(".sidebar-agent-roster--selected").count()).toBe(1);
       },
     );
   });

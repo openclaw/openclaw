@@ -43,39 +43,20 @@ it.each(["chip", "roster"] as const)(
     });
     await settleLitElement(sidebar);
 
-    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).toContain(
-      mode === "chip" ? "New agent" : "OpenClaw",
-    );
-    sidebar
-      .querySelector<HTMLButtonElement>(
-        mode === "chip" ? ".sidebar-agent-card__main" : ".sidebar-workspace-header__main",
-      )!
-      .click();
-    await settleLitElement(sidebar);
-    expect(sidebar.querySelector('[data-value^="agent:"]')?.getAttribute("data-value")).toBe(
-      "agent:bot-pending",
-    );
-    expect(
-      sidebar.querySelector('[data-value="agent:bot-pending"]')?.getAttribute("aria-current"),
-    ).toBe(mode === "chip" ? "true" : null);
-    expect(
-      sidebar.querySelector('[data-value="agent:main"]')?.getAttribute("aria-current"),
-    ).not.toBe("true");
-    expect(sidebar.querySelector('[data-value="scope:all"]')?.getAttribute("aria-current")).toBe(
-      mode === "roster" ? "true" : null,
-    );
+    const rowName = () =>
+      sidebar.querySelector(".sidebar-agent-roster--selected .sidebar-agent-roster__name")
+        ?.textContent ?? "";
+    // Only the one-agent list leads with its agent; the roster keeps its configured agents.
+    expect(rowName()).toBe(mode === "chip" ? "New agent" : "");
     expect(sidebar.activeChipAgent().agents.map((agent) => agent.id)).toEqual(["main", "scout"]);
     expect(context.agentSelection.state.selectedId).toBe(savedSelection);
     expect(gateway.gateway.snapshot.sessionKey).toBe(savedSessionKey);
 
-    sidebar.sidebarMenus.closeAgentMenu();
     sidebar.sessionKey = savedSessionKey;
     release();
     await settleLitElement(sidebar);
     expect(sidebar.activeChipAgent().activeId).toBe("main");
-    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent ?? "").not.toContain(
-      "New agent",
-    );
+    expect(rowName()).not.toContain("New agent");
     expect(sidebar.sidebarAgentsMode).toBe(mode);
   },
 );

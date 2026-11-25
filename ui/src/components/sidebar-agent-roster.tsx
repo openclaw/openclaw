@@ -1,8 +1,6 @@
-import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
-import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
-import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
-import { canDeleteAgent, deleteAgent } from "../lib/agents/delete-agent.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -12,25 +10,21 @@ import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
-import { templateCreatorAction } from "../pages/templates/creator-owner.ts";
-import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import "../styles/sidebar-pinned-agents.css";
+import { SidebarAgentRowMenu } from "./sidebar-agent-row-menu.tsx";
+import { SidebarAgentRow } from "./sidebar-agent-row.tsx";
 import { createSidebarRosterWindow } from "./sidebar-roster-window.tsx";
-import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
-import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
-import { Menu, type MenuEntry } from "./solid/menu.tsx";
 import {
   SessionGlyph,
   TeamSessionSlots,
   sessionRunVisibility,
   type TeamSessionSlotsProps,
 } from "./solid/session-presentation.tsx";
-import "../styles/sidebar-agent-roster.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 type RosterHost = AppSidebarRenderHost & SessionListHost;
@@ -144,121 +138,26 @@ export function SidebarAgentRoster(props: {
           ),
       )?.id,
   );
-  // Pinned tiles and roster rows share one action list; only the opening affordance differs.
-  const agentMenuItems = (card: AgentMenuCard): MenuEntry[] => {
-    const pinned = pinnedIds().has(card.id);
-    return [
-      {
-        id: "pin",
-        label: t(pinned ? "nav.unpin" : "nav.pin"),
-        class: ["sidebar-customize-menu__item", { "sidebar-agent-roster__pin--pinned": pinned }],
-        icon: <Icon name="pin" />,
-      },
-      {
-        id: "sessions",
-        label: t("agentsHome.viewSessions"),
-        class: "sidebar-customize-menu__item",
-        icon: <Icon name="listTree" />,
-      },
-      ...(canCreateTemplateDraft(context)
-        ? [
-            {
-              id: "create-template",
-              label: t("templatesDraft.title"),
-              class: "sidebar-customize-menu__item",
-              icon: <Icon name="share" />,
-            },
-          ]
-        : []),
-      {
-        id: "settings",
-        label: t("nav.settings"),
-        class: "sidebar-customize-menu__item",
-        icon: <Icon name="settings" />,
-      },
-      {
-        id: "delete",
-        label: t("common.delete"),
-        class: "sidebar-customize-menu__item",
-        icon: <Icon name="trash" />,
-        variant: "danger" as const,
-        disabled: !canDeleteAgent(context, card.id),
-      },
-    ];
-  };
-  const selectAgentMenuItem = (itemId: string, card: AgentMenuCard) => {
-    switch (itemId) {
-      case "pin":
-        // The destination row registers after the pinned/unpinned branch changes.
-        focusAfterPin = card.id;
-        rosterWindow.focus(card.id);
-        togglePinnedAgent(context.navigation, card.id);
-        break;
-      case "sessions":
-        context.agentSelection.setScope(card.id);
-        host().onNavigate?.("sessions");
-        break;
-      case "create-template":
-        templateCreatorAction(context, card.id)?.();
-        break;
-      case "settings":
-        context.navigate("agents", {
-          pathname: pathForAgentPanel(card.id, null, context.basePath),
-        });
-        break;
-      case "delete":
-        void deleteAgent(context, card);
-        break;
-    }
-  };
   const [contextMenu, setContextMenu] = createSignal<AgentContextMenu | null>(null);
   const openContextMenu = (id: string, event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(event, agentLinks.get(id) ?? null, (anchor, x, y) => {
       host().dismissTransientMenus();
       setContextMenu({ id, x, y, anchor });
     });
-  const agentMenu = (card: () => AgentMenuCard, point?: AgentContextMenu) => {
-    const items = createMemo(() => agentMenuItems(card()));
-    const contextId = point && `sidebar-agent-roster-context-${createUniqueId()}`;
-    // Context menus open at the pointer or shortcut target; roster rows also keep a kebab.
-    const opening = point
-      ? { open: true, triggerAttributes: pointMenuTriggerAttributes(point) }
-      : {
-          lazy: true,
-          triggerClass: "sidebar-agent-roster__action",
-          trigger: <Icon name="moreHorizontal" />,
-        };
-    return (
-      <Menu
-        {...opening}
-        id={contextId || `sidebar-agent-roster-${card().id}`}
-        class="sidebar-customize-menu sidebar-agent-roster__menu"
-        placement={point ? "bottom-start" : "bottom-end"}
-        label={t("agentsHome.agentOptions", { agent: card().name })}
-        ref={({ overlay }) => {
-          overlay.surface.dataset.chatAutotypeExempt = "";
-          if (point) {
-            if (point.anchor) {
-              overlay.setReturnTarget(point.anchor);
-            }
-            overlay.request(true, "first");
-          }
-        }}
-        onBeforeShow={() => {
-          if (!point) {
-            host().dismissTransientMenus();
-          }
-        }}
-        onOpenChange={(open) => {
-          if (point && !open) {
-            setContextMenu((current) => (current === point ? null : current));
-          }
-        }}
-        onSelect={(item) => selectAgentMenuItem(item.id, card())}
-        items={items()}
-      />
-    );
-  };
+  // Pinned tiles and roster rows share one action list; only the opening affordance differs.
+  const agentMenu = (card: () => AgentMenuCard, point?: AgentContextMenu) => (
+    <SidebarAgentRowMenu
+      host={host()}
+      card={card()}
+      point={point}
+      onPin={(id) => {
+        // The destination row registers after the pinned/unpinned branch changes.
+        focusAfterPin = id;
+        rosterWindow.focus(id);
+      }}
+      onClose={() => setContextMenu((current) => (current === point ? null : current))}
+    />
+  );
   const error = () => snapshot().error ?? snapshot().subscriptionError;
   return (
     <openclaw-sidebar-agent-roster>
@@ -391,49 +290,22 @@ export function SidebarAgentRoster(props: {
                     data-agent-group={card().id}
                     aria-label={card().name}
                   >
-                    <div
-                      class={[
-                        "sidebar-agent-roster__header session-row-host",
-                        { "sidebar-agent-roster__header--current": active() },
-                      ]}
+                    <SidebarAgentRow
+                      card={{ ...card(), href: card().target.href }}
+                      environment={
+                        card().id === host().activeChipAgent().activeId
+                          ? host().sessionDataContext?.config.current.environment?.label
+                          : undefined
+                      }
+                      current={active()}
+                      running={card().activeNow}
+                      linkRef={linkRef}
+                      claimFocus={(id) => host().sidebarMenus.claimAgentRowFocus(id)}
+                      onOpen={() => host().openMainSession(card().id)}
                       onContextMenu={(event) => openContextMenu(card().id, event)}
-                      onKeyDown={(event) => openContextMenu(card().id, event)}
-                    >
-                      <a
-                        ref={linkRef}
-                        class="sidebar-agent-roster__row"
-                        data-agent-id={card().id}
-                        href={card().target.href}
-                        aria-current={active() ? "page" : undefined}
-                        onClick={(event: MouseEvent) =>
-                          handleNavigationClick(event, () => host().openMainSession(card().id))
-                        }
-                      >
-                        <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                          <SessionGlyph
-                            circular
-                            content={<AgentIdentityAvatar agent={card()} />}
-                            running={card().activeNow}
-                            runVisibility={sessionRunVisibility}
-                          />
-                        </span>
-                        <span class="sidebar-agent-roster__copy">
-                          <span class="sidebar-agent-roster__name">{card().name}</span>
-                          <Show when={card().assistantPreview}>
-                            <span class="sidebar-agent-roster__preview">
-                              {card().assistantPreview}
-                            </span>
-                          </Show>
-                          <Show when={card().activeNow}>
-                            <span class="sr-only">{t("agentsHome.working")}</span>
-                          </Show>
-                        </span>
-                      </a>
-                      <span class="sidebar-agent-roster__signals">
-                        <TeamSessionSlots {...headerSummary()} />
-                      </span>
-                      <span class="sidebar-agent-roster__actions">{agentMenu(card)}</span>
-                    </div>
+                      signals={<TeamSessionSlots {...headerSummary()} />}
+                      actions={agentMenu(card)}
+                    />
                   </section>
                 );
               }}

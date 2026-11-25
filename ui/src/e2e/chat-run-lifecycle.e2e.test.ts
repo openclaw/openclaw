@@ -76,9 +76,13 @@ function bubbleText(page: Page, text: string) {
   return page.locator(".chat-bubble").getByText(text, { exact: true });
 }
 function runIndicator(page: Page) {
-  return page
-    .locator(".sidebar-footer-bar__home .session-glyph")
-    .getByRole("img", { name: "Active run" });
+  return (
+    page
+      // The row's avatar is decorative; the row announces "Active run" as text.
+      .locator(
+        '.sidebar-agent-roster--selected .sidebar-agent-roster__header .session-glyph__ring[aria-label="Active run"]',
+      )
+  );
 }
 async function expectIdle(page: Page) {
   expect(await stopButton(page).count()).toBe(0);
@@ -139,7 +143,7 @@ async function startLifecycleRun(prompt: string) {
   await gateway.waitForRequest("sessions.list", { match: rosterMatch });
   const runId = await sendPrompt(page, gateway, prompt);
   await stopButton(page).waitFor();
-  const mainSession = page.locator(".sidebar-footer-bar__home");
+  const mainSession = page.locator(".sidebar-agent-roster--selected .sidebar-agent-roster__header");
   await mainSession.waitFor({ state: "visible" });
   const emitActive = await deferRosterEvent(page, gateway);
   const activeUpdatedAt = await page.evaluate(() => Date.now());

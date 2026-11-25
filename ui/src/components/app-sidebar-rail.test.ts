@@ -8,7 +8,6 @@ import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isRouteId, locationForRoute, routePageSpec, type RouteId } from "../app-route-paths.ts";
 import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import * as toast from "../lib/toast.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
@@ -90,11 +89,6 @@ function tooltip() {
     ":scope > openclaw-tooltip",
   )!;
 }
-async function openAgentMenu(sidebar: Sidebar) {
-  await click(sidebar, ".sidebar-agent-card__main");
-  await vi.dynamicImportSettled();
-  await sidebar.updateComplete;
-}
 async function removePin(sidebar: Sidebar) {
   expect(sidebar.querySelector(".sidebar-rail-pin-menu")).not.toBeNull();
   await click(sidebar, '.sidebar-rail-pin-menu [data-value="remove"]');
@@ -148,7 +142,7 @@ function drag(
 }
 
 describe("personal navigation rail", () => {
-  it("keeps fixed navigation and Home, Inbox, identity separate from the middle view", async () => {
+  it("keeps fixed navigation, Inbox and identity separate from the middle view", async () => {
     const { sidebar, dom } = await fixture();
     expect(
       [...dom.all("[data-navigation-view]")].map((button) =>
@@ -159,11 +153,11 @@ describe("personal navigation rail", () => {
     const bottom = dom.query(".sidebar-rail__bottom")!;
     expect(
       domProbe(bottom).present(
-        ".sidebar-footer-bar__home",
+        ".sidebar-rail__home",
         "openclaw-sidebar-attention",
         ".sidebar-identity-card",
       ),
-    ).toEqual([true, true, true]);
+    ).toEqual([false, true, true]);
     expect(dom.present(".nav-item--home", ".sidebar-shell__footer .sidebar-identity-card")).toEqual(
       [false, false],
     );
@@ -193,7 +187,7 @@ describe("personal navigation rail", () => {
     const { sidebar, publish, dom } = await fixture();
     publish({ hasActiveRun: true, status: "running" }, "agent:main:main");
     await update(sidebar, { storedOutboxes: outbox("agent:main:main"), navigationCollapsed: true });
-    const home = dom.query(".sidebar-footer-bar__home")!;
+    const home = dom.query(".sidebar-rail__home")!;
     const icons = domProbe(home);
     expect(icons.attr(".session-glyph__ring", "aria-label")).toBe("Active run");
     expect(icons.attr(".session-row-badge--attention", "aria-label")).toContain("2");
@@ -565,7 +559,7 @@ describe("personal navigation rail", () => {
         '[data-sidebar-entry="route:usage"] a',
         '[data-sidebar-entry="person:other"] a',
         '[data-sidebar-entry="plugin:logbook/logbook"] a',
-        ".sidebar-footer-bar__home",
+        ".sidebar-rail__home",
       ]) {
         await update(sidebar, { navigationCollapsed: false });
         const shortcut = dom.query<HTMLElement>(`.sidebar-rail ${selector}`);
@@ -573,69 +567,18 @@ describe("personal navigation rail", () => {
         shortcut!.click();
         await sidebar.updateComplete;
         // The opened page decides whether a sidebar shows; only Home's panel collapses it.
-        const home = selector === ".sidebar-footer-bar__home";
+        const home = selector === ".sidebar-rail__home";
         expect(sidebar.navigationCollapsed, selector).toBe(home && !mobile);
       }
       expect(toggle).toHaveBeenCalledTimes(mobile ? 0 : 1);
     },
   );
 
-  it("opens the existing agent menu from the named avatar at the top of the rail", async () => {
-    const { sidebar, dom } = await fixture({}, TWO_AGENTS);
-    const agent = dom.query<HTMLButtonElement>(".sidebar-rail .sidebar-agent-card__main");
-    expect(agent).not.toBeNull();
-    expect(agent?.getAttribute("aria-label")).toContain("Molty");
-    await openAgentMenu(sidebar);
-    expect(
-      dom.present(".sidebar-agent-menu", '[data-value="agent:research"]', ".sidebar-brand"),
-    ).toEqual([true, true, false]);
-  });
-
-  it("settles retained menu avatars through a sidebar view-root replacement", async () => {
-    setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"]);
-    onTestFinished(() => setAvatarGatewayOrigin(null));
-    const response = createDeferred<Response>();
-    onTestFinished(() => response.resolve(new Response(null, { status: 404 })));
-    const nativeFetch = globalThis.fetch;
-    const fetchAvatar = vi.fn<typeof fetch>().mockReturnValue(response.promise);
-    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-      const url = new URL(input instanceof Request ? input.url : String(input), location.href);
-      return url.pathname === "/avatar/research"
-        ? fetchAvatar(input, init)
-        : nativeFetch(input, init);
-    });
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = vi.fn(() => "blob:retained-menu-avatar");
-        static override revokeObjectURL = vi.fn();
-      },
-    );
-    const agents = {
-      ...TWO_AGENTS,
-      agents: TWO_AGENTS.agents.map((agent) =>
-        agent.id === "research"
-          ? Object.assign({}, agent, { identity: { avatar: "/avatar/research?v=1" } })
-          : agent,
-      ),
-    };
-    const { sidebar, provider, context, dom } = await fixture({}, agents);
-    await openAgentMenu(sidebar);
-    await waitForSolid(() => expect(fetchAvatar).toHaveBeenCalledOnce());
-    provider.setContext({ ...context, basePath: "/control" });
-    await sidebar.updateComplete;
-    await vi.dynamicImportSettled();
-    response.resolve(
-      new Response(new Uint8Array([1, 2, 3]), {
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    await waitForSolid(() =>
-      expect(dom.attr('[data-value="agent:research"] img', "src")).toBe(
-        "blob:retained-menu-avatar",
-      ),
-    );
-    expect(fetchAvatar).toHaveBeenCalledOnce();
+  it("leads the rail with Home and no agent switcher", async () => {
+    const { dom } = await fixture({}, TWO_AGENTS);
+    const first = dom.query(".sidebar-rail")!.firstElementChild;
+    expect(first?.querySelector(".sidebar-rail__home")).not.toBeNull();
+    expect(dom.query(".sidebar-rail [aria-haspopup='menu'][aria-label*='Molty']")).toBeNull();
   });
 
   it("updates the avatar of a retained pinned person when owner metadata changes", async () => {

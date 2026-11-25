@@ -209,9 +209,9 @@ describe("AppSidebar session section visibility", () => {
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     await sidebar.updateComplete;
 
-    // The identity card is the main-session entry; the list stays empty.
+    // The agent row is the main-session entry; the list stays empty.
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
-    expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-roster--selected")).not.toBeNull();
   });
 
   it("keeps a selected child reachable when its parent is outside the loaded window", async () => {

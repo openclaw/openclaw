@@ -98,7 +98,6 @@ export async function createApplicationAgent(
     patchSettings(
       {
         gatewayUrl,
-        sidebarRecentlyCreatedAgentId: agentId,
         ...(foreground ? { sidebarAgentsMode: "chip" as const } : {}),
       },
       { selectGateway: false },

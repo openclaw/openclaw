@@ -145,7 +145,7 @@ suite.define(() => {
       await page.evaluate(() => window.openclawControlUi?.navigate("sessions"));
       await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
       await page.locator("openclaw-sessions-page").waitFor();
-      await page.locator(".sidebar-footer-bar__home").click();
+      await page.locator(".sidebar-rail__home").click();
       const dock = page.locator("openclaw-assistant-panel");
       const dockComposer = dock.locator(".agent-chat__composer-combobox textarea");
       await dockComposer.waitFor({ state: "visible" });

@@ -3,12 +3,15 @@ import { patchSettings } from "../app/settings.ts";
 import {
   mountRoster,
   settleRoster,
+  toggleRoster,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import "../test-helpers/load-styles.ts";
 import "./app-sidebar.tsx";
 
 setupSidebarTest();
+
+const selectedName = ".sidebar-agent-roster--selected .sidebar-agent-roster__name";
 
 it("only shows a child disclosure on pins that can expand a sidebar branch", async () => {
   const main = "agent:main:main";
@@ -120,26 +123,24 @@ for (const mode of ["chip", "roster"] as const) {
         sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__row'),
       ).not.toBeNull();
     }
-    sidebar
-      .querySelector<HTMLButtonElement>(
-        ".sidebar-agent-card__main, .sidebar-workspace-header__main",
-      )!
-      .click();
-    await settleRoster(sidebar);
-    sidebar.querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:recent"]')!.click();
+    if (mode === "chip") {
+      await toggleRoster(sidebar);
+      await settleRoster(sidebar);
+    }
+    await toggleRoster(sidebar, "recent");
     await settleRoster(sidebar);
     expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
-    expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain("Scout");
+    expect(sidebar.querySelector(selectedName)?.textContent).toContain("Scout");
   });
 }
 
 it("keeps agent switching available without a Home session", async () => {
   const { sidebar, context } = await mountRoster(undefined, []);
   expect(sidebar.mainSessionRow()).toBeNull();
-  sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+  await toggleRoster(sidebar);
   await settleRoster(sidebar);
-  sidebar.querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:recent"]')!.click();
+  await toggleRoster(sidebar, "recent");
   await settleRoster(sidebar);
   expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
-  expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain("Scout");
+  expect(sidebar.querySelector(selectedName)?.textContent).toContain("Scout");
 });

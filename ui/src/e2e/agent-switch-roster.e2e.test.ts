@@ -9,6 +9,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
 } from "./session-management.test-support.ts";
+import { showOnlySidebarAgent } from "./sidebar-agent-row.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const rows = ["main", "writer"].flatMap((agentId) =>
@@ -23,9 +24,7 @@ const rows = ["main", "writer"].flatMap((agentId) =>
 );
 
 async function switchAgent(page: Page, agentId: string): Promise<void> {
-  const sidebar = page.locator("openclaw-app-sidebar");
-  await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-  await sidebar.locator(`[data-value="agent:${agentId}"]`).click();
+  await showOnlySidebarAgent(page.locator("openclaw-app-sidebar"), agentId);
 }
 
 function projectRow(page: Page, agentId: string) {

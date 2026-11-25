@@ -162,6 +162,6 @@ export function GatewaySidebarSkeleton(): JSX.Element {
   );
 }
 
-export function GatewayIdentityPlaceholder(props: { kind: "agent" | "user" }): JSX.Element {
+export function GatewayIdentityPlaceholder(props: { kind: "user" }): JSX.Element {
   return <span class="gateway-identity-placeholder" data-kind={props.kind} aria-hidden="true" />;
 }

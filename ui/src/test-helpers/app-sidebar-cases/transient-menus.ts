@@ -53,28 +53,6 @@ it("AppSidebar keeps filters open after a choice and closes from the trigger", a
   expect(q(".sidebar-session-sort-menu")).toBeNull();
 });
 
-it("AppSidebar ignores a stale agent-menu hide after opening its replacement", async () => {
-  const { q, click, hide } = await mountMenus(undefined, TWO_AGENTS);
-  const trigger = q(".sidebar-agent-card__main")!;
-
-  await click(trigger);
-  const firstMenu = q(".sidebar-agent-menu");
-  const settingsItem = firstMenu?.querySelector<HTMLElement>(
-    '[data-value="agent:main"] .sidebar-agent-menu__settings',
-  );
-  expect(firstMenu).not.toBeNull();
-  expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
-  expect(settingsItem).not.toBeNull();
-  await click(settingsItem!);
-
-  await click(trigger);
-  const replacement = q(".sidebar-agent-menu");
-  expect(replacement).not.toBe(firstMenu);
-
-  await hide(firstMenu);
-  expect(q(".sidebar-agent-menu")).toBe(replacement);
-});
-
 it.each(["recreated", "different"] as const)("AppSidebar isolates %s pin menus", async (kind) => {
   const { sidebar, q, click, remove, hide, openPin } = await mountMenus();
   const recreated = kind === "recreated";

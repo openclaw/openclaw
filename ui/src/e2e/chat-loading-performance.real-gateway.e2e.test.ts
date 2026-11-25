@@ -432,7 +432,7 @@ suite.define(() => {
         };
         await waitForTail();
         await composer.waitFor();
-        await page.locator(".sidebar-footer-bar__home").click();
+        await page.locator(".sidebar-rail__home").click();
         await waitForHome();
 
         startedAt = Date.now();
@@ -441,9 +441,11 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await measureLoad();
         await page.waitForFunction(() =>
-          [...document.querySelectorAll<HTMLImageElement>(".sidebar-agent-card__avatar img")].some(
-            (image) => image.complete && image.naturalWidth > 0,
-          ),
+          [
+            ...document.querySelectorAll<HTMLImageElement>(
+              ".sidebar-agent-roster--selected .sidebar-agent-roster__header .sidebar-agent-roster__avatar img",
+            ),
+          ].some((image) => image.complete && image.naturalWidth > 0),
         );
         // Transcript and roster avatars can render before the dedicated identity reply.
         // Freeze only completed payloads; keep the earlier visibility timings unchanged.
@@ -454,7 +456,9 @@ suite.define(() => {
           JSON.stringify(startupMetrics, null, 2),
         );
         const images = await page
-          .locator(".sidebar-agent-card__avatar img")
+          .locator(
+            ".sidebar-agent-roster--selected .sidebar-agent-roster__header .sidebar-agent-roster__avatar img",
+          )
           .evaluateAll((elements) =>
             elements.map((element) => {
               const image = element as HTMLImageElement;

@@ -1,4 +1,5 @@
-openclaw-sidebar-agent-roster {
+openclaw-sidebar-agent-roster,
+.sidebar-agent-roster--selected {
   --team-slot-gap: 4px;
   --roster-avatar-size: 28px;
   width: 100%;
@@ -21,7 +22,8 @@ openclaw-sidebar-agent-roster {
   font-weight: 600;
 }
 
-.sidebar-agent-roster__header:is(:hover, :focus-within),
+/* Keyboard focus reveals what hover does; a mouse click leaves no pinned state behind. */
+.sidebar-agent-roster__header:is(:hover, :has(:focus-visible)),
 .sidebar-agent-roster__header--current {
   background: var(--bg-hover);
 }
@@ -29,6 +31,10 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__row > .sidebar-agent-roster__avatar {
   grid-column: 1;
   justify-self: end;
+}
+
+.sidebar-agent-roster__avatar--environment {
+  box-shadow: 0 0 0 2px var(--control-ui-environment-color);
 }
 
 .sidebar-agent-roster__header .sidebar-agent-roster__avatar {
@@ -123,8 +129,37 @@ openclaw-sidebar-agent-roster {
   margin-top: 12px;
 }
 
+/* The selected agent leads the pinned header; the inset keeps its fill on the
+   session rows' edges, and the collapse button trails it. */
+.sidebar-agent-lead {
+  padding-block: 8px 0;
+}
+
+.sidebar-agent-roster--selected {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-inline: 8px;
+}
+
 .sidebar-agent-roster__name {
   color: var(--text);
+}
+
+/* The name gives way to the main conversation's outbox and draft badges. */
+.sidebar-agent-roster__copy > .sidebar-agent-roster__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-agent-roster__title > .sidebar-agent-roster__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-agent-roster__title > .session-row-badges {
+  flex: none;
 }
 
 .sidebar-agent-roster__header--current .sidebar-agent-roster__name {
@@ -221,11 +256,13 @@ openclaw-sidebar-agent-roster {
   padding: 0;
 }
 
-.sidebar-agent-roster__header:is(:hover, :focus-within) .sidebar-agent-roster__row {
+.sidebar-agent-roster__header:is(:hover, :has(:focus-visible)) .sidebar-agent-roster__row,
+.sidebar-agent-roster__header--attention .sidebar-agent-roster__row {
   padding-inline-end: 32px;
 }
 
 .sidebar-agent-roster__action {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -237,6 +274,31 @@ openclaw-sidebar-agent-roster {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
+}
+
+/* Other agents' unread conversations wait behind Show all agents in this menu. */
+.sidebar-agent-roster__action-unread {
+  position: absolute;
+  top: 7px;
+  inset-inline-end: 6px;
+  box-shadow: 0 0 0 2px var(--sidebar-bg, var(--bg));
+}
+
+/* With a mouse, ⋯ waits for hover; until then its dot stands alone where it will appear. */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-agent-roster__header--attention:not(
+      :hover,
+      :has(:focus-visible, .sidebar-agent-roster__menu [aria-expanded="true"])
+    )
+    .sidebar-agent-roster__action {
+    & > svg {
+      visibility: hidden;
+    }
+    & > .sidebar-agent-roster__action-unread {
+      inset: 0;
+      margin: auto;
+    }
+  }
 }
 
 .sidebar-agent-roster__action:hover {
@@ -273,7 +335,7 @@ openclaw-sidebar-agent-roster {
 }
 /* Revealed actions overlay the row end; step the status left of them instead of
    reserving the same space again inside the link. */
-.sidebar-agent-roster__header:is(:hover, :focus-within):has(
+.sidebar-agent-roster__header:is(:hover, :has(:focus-visible)):has(
     > .sidebar-agent-roster__signals .sidebar-session-team-state
   ) {
   & > .sidebar-agent-roster__row {
@@ -295,7 +357,8 @@ openclaw-sidebar-agent-roster {
   transform: translateY(-50%);
 }
 .sidebar-agent-roster__header:hover .sidebar-agent-roster__actions,
-.sidebar-agent-roster__header:focus-within .sidebar-agent-roster__actions,
+.sidebar-agent-roster__header:has(:focus-visible) .sidebar-agent-roster__actions,
+.sidebar-agent-roster__header--attention .sidebar-agent-roster__actions,
 .sidebar-agent-roster__header:has(.sidebar-agent-roster__menu [aria-expanded="true"])
   .sidebar-agent-roster__actions {
   opacity: 1;

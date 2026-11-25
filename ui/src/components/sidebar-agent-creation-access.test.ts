@@ -47,13 +47,24 @@ describe("sidebar agent creation access", () => {
     );
     sidebar.connected = true;
     await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await vi.dynamicImportSettled();
+    const trigger = await vi.waitFor(() => {
+      const button = sidebar.querySelector<HTMLButtonElement>(
+        ".sidebar-agent-roster--selected .sidebar-agent-roster__action",
+      );
+      expect(button).not.toBeNull();
+      return button!;
+    });
+    trigger.click();
     await sidebar.updateComplete;
-    const create = sidebar.querySelector<HTMLButtonElement>('[data-value="command:new-agent"]');
-    expect(create).not.toBeNull();
-    expect(create?.disabled).toBe(false);
-    expect(create?.getAttribute("aria-disabled")).toBe("true");
-    expect(create?.textContent?.trim()).toBe("Create new agent");
+    const create = await vi.waitFor(() => {
+      const item = sidebar.querySelector<HTMLButtonElement>('[data-value="new-agent"]');
+      expect(item).not.toBeNull();
+      return item!;
+    });
+    expect(create.disabled).toBe(false);
+    expect(create.getAttribute("aria-disabled")).toBe("true");
+    expect(create.textContent?.trim()).toBe("New agent");
     expect(create?.getAttribute("title")).toBe(reason);
     expect(create?.getAttribute("aria-description")).toBe(reason);
     create?.click();
