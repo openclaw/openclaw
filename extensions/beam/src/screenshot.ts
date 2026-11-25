@@ -17,7 +17,7 @@ export function readScreenshotEnvelope(raw: Buffer): { packet: Buffer; image: Be
     value.name === ".." ||
     Buffer.byteLength(value.name) > 255 ||
     value.name !== value.name.toWellFormed() ||
-    /[\/\\\p{Cc}\p{Cf}]/u.test(value.name) ||
+    /[/\\\p{Cc}\p{Cf}]/u.test(value.name) ||
     typeof value.png !== "string" ||
     value.png.length > Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4
   ) {
