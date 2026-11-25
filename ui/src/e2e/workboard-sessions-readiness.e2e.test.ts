@@ -78,6 +78,7 @@ suite.define(() => {
         expect(await peoplePicker.evaluate(top)).toBeCloseTo(await boardPicker.evaluate(top), 0);
         await peoplePicker.tap();
         await page.getByRole("option", { name: person.label, exact: true }).tap();
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
         await expect.poll(() => peoplePicker.innerText()).toBe(person.label);
         expect(await peoplePicker.evaluate(top)).toBeGreaterThan(
           await boardPicker.evaluate((el) => el.getBoundingClientRect().bottom),
