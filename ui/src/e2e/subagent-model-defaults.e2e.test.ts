@@ -21,7 +21,16 @@ const context = {
   viewport: { width: 1280, height: 1000 },
 } as const;
 const models = [
-  catalogModel("fixture", "orchestrator", "Fixture Orchestrator"),
+  {
+    ...catalogModel("fixture", "orchestrator", "Fixture Orchestrator"),
+    reasoning: true,
+    thinkingLevels: [
+      { id: "low", label: "Low" },
+      { id: "high", label: "High" },
+    ],
+    supportsFastMode: true,
+    serviceTiers: ["priority"],
+  },
   catalogModel("fixture", "runner", "Fixture Runner"),
 ];
 const written = (params: unknown) => {
@@ -70,44 +79,84 @@ suite.define(() => {
     });
   });
 
-  it("overrides the subagent model for one agent from its Overview", async () => {
-    await suite.withPage(context, async ({ page }) => {
-      const config = {
-        agents: {
-          defaults: { model: "fixture/orchestrator", subagents: { model: "fixture/runner" } },
-          entries: { main: {} },
-        },
-      };
-      const gateway = await installMockGateway(page, {
-        assistantName: "Main agent",
-        defaultAgentId: "main",
-        featureMethods: [
-          ...defaultControlUiFeatureMethods,
-          "agents.list",
-          "config.get",
-          "models.list",
-        ],
-        models,
-        methodResponses: {
-          "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
-          "config.get": {
-            ...sourceConfigSnapshot(config, "agent-subagent-model"),
-            runtimeConfig: config,
+  it.each([1280, 390])(
+    "overrides the subagent model from agent Overview at %ipx",
+    async (width) => {
+      await suite.withPage({ ...context, viewport: { width, height: 1000 } }, async ({ page }) => {
+        const config = {
+          agents: {
+            defaults: { model: "fixture/orchestrator", subagents: { model: "fixture/runner" } },
+            entries: { main: {} },
           },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`);
-      await gateway.waitForRequest("config.get");
-      const agentsPage = page.locator("openclaw-agents-page");
-      await agentsPage.locator("#agent-utility-model").waitFor();
+        };
+        const gateway = await installMockGateway(page, {
+          assistantName: "Main agent",
+          defaultAgentId: "main",
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "agents.list",
+            "config.get",
+            "models.list",
+          ],
+          models,
+          methodResponses: {
+            "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
+            "config.get": {
+              ...sourceConfigSnapshot(config, "agent-subagent-model"),
+              runtimeConfig: config,
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`);
+        await gateway.waitForRequest("config.get");
+        const agentsPage = page.locator("openclaw-agents-page");
+        // The panel should offer the same top-level controls and disclosure as Models.
+        const more = agentsPage.getByRole("button", { name: "More settings", exact: true });
+        await expect.poll(() => more.count()).toBe(1);
+        for (const title of ["Effort", "Speed"]) {
+          expect(await agentsPage.getByText(title, { exact: true }).first().isVisible()).toBe(true);
+        }
+        if ((await more.getAttribute("aria-expanded")) === "true") {
+          await more.click();
+        }
+        const subagentRow = agentsPage.getByText("Subagent model", { exact: true });
+        await expect.poll(() => subagentRow.isVisible()).toBe(false);
+        await more.click();
+        await expect.poll(() => subagentRow.isVisible()).toBe(true);
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      const picker = agentsPage.locator("openclaw-select-picker:has(#agent-subagent-model)");
-      const trigger = picker.locator(".picker-select__trigger");
-      expect(await trigger.textContent()).toContain("Inherit default (fixture/runner)");
-      await selectPickerValue(picker, "fixture/orchestrator");
-      const set = written((await gateway.waitForRequest("config.set")).params);
-      expect(set.agents.entries.main).toEqual({ subagents: { model: "fixture/orchestrator" } });
-      await expect.poll(() => trigger.textContent()).toContain("Fixture Orchestrator");
-    });
-  });
+        const controls = agentsPage.locator(
+          ".model-providers__defaults .model-picker .picker-select__trigger",
+        );
+        const positions = await controls.evaluateAll((elements) =>
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              left: rect.left,
+              width: rect.width,
+              fits: rect.left >= 0 && rect.right <= innerWidth,
+            };
+          }),
+        );
+        expect(positions).toHaveLength(6);
+        for (const box of positions) {
+          expect(box.fits).toBe(true);
+          expect(Math.abs(box.width - positions[0]!.width)).toBeLessThan(1);
+          expect(Math.abs(box.left - positions[0]!.left)).toBeLessThan(1);
+        }
+        const picker = agentsPage
+          .locator(".settings-row")
+          .filter({ has: page.getByText("Subagent model", { exact: true }) })
+          .locator("openclaw-select-picker");
+        const trigger = picker.locator(".picker-select__trigger");
+        expect(await trigger.textContent()).toContain("Inherit default (fixture/runner)");
+        await selectPickerValue(picker, "fixture/orchestrator");
+        const set = written((await gateway.waitForRequest("config.set")).params);
+        expect(set.agents.defaults).toEqual(config.agents.defaults);
+        expect(set.agents.entries.main).toEqual({ subagents: { model: "fixture/orchestrator" } });
+        await expect.poll(() => trigger.textContent()).toContain("Fixture Orchestrator");
+      });
+    },
+  );
 });

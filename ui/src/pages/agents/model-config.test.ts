@@ -120,8 +120,14 @@ describe("agent model config", () => {
     runtimeConfig.dispose();
   });
   it("sets the agent's subagent model and clears it without leaving an empty block", async () => {
+    const fallbacks = ["fixture/first", "fixture/second"];
     const runtimeConfig = createRuntimeConfig({
-      agents: { entries: { main: {}, scout: { subagents: { allowAgents: ["main"] } } } },
+      agents: {
+        entries: {
+          main: {},
+          scout: { subagents: { allowAgents: ["main"], model: { fallbacks } } },
+        },
+      },
     });
     await runtimeConfig.ensureLoaded();
     const entries = () =>
@@ -132,11 +138,16 @@ describe("agent model config", () => {
     actions.onSubagentModelChange("scout", "openai/gpt-5.4");
     expect(entries()).toEqual({
       main: { subagents: { model: "openai/gpt-5.4" } },
-      scout: { subagents: { allowAgents: ["main"], model: "openai/gpt-5.4" } },
+      scout: {
+        subagents: { allowAgents: ["main"], model: { primary: "openai/gpt-5.4", fallbacks } },
+      },
     });
     actions.onSubagentModelChange("main", null);
     actions.onSubagentModelChange("scout", null);
-    expect(entries()).toEqual({ main: {}, scout: { subagents: { allowAgents: ["main"] } } });
+    expect(entries()).toEqual({
+      main: {},
+      scout: { subagents: { allowAgents: ["main"], model: { fallbacks } } },
+    });
     runtimeConfig.dispose();
   });
   it("distinguishes an explicit decision disable from inheritance without changing other settings", async () => {
@@ -155,6 +166,41 @@ describe("agent model config", () => {
     });
     modelActionsFor(runtimeConfig).onDecisionModelChange("main", null);
     expect(runtimeConfig.state.configForm).toEqual({ agents: { defaults, entries: { main: {} } } });
+    runtimeConfig.dispose();
+  });
+  it("keeps false distinct from inherited speed and preserves neighboring model settings", async () => {
+    const defaults = { fastModeDefault: "auto", utilityModel: { fallbacks: ["global/backup"] } };
+    const entry = {
+      utilityModel: "",
+      subagents: { allowAgents: ["worker"] },
+      model: { fallbacks: ["chat/a", "chat/b"] },
+    };
+    const runtimeConfig = createRuntimeConfig({ agents: { defaults, entries: { coder: entry } } });
+    await runtimeConfig.ensureLoaded();
+    const actions = modelActionsFor(runtimeConfig);
+    actions.onFastModeDefaultChange("coder", false);
+    actions.onUtilityFallbacksChange("coder", ["local/b", "local/a"]);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: {
+        defaults,
+        entries: {
+          coder: {
+            ...entry,
+            fastModeDefault: false,
+            utilityModel: { primary: "", fallbacks: ["local/b", "local/a"] },
+          },
+        },
+      },
+    });
+    actions.onUtilityFallbacksChange("coder", null);
+    actions.onFastModeDefaultChange("coder", null);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { defaults, entries: { coder: entry } },
+    });
+    actions.onModelFallbacksChange("coder", null);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { defaults, entries: { coder: { subagents: entry.subagents, utilityModel: "" } } },
+    });
     runtimeConfig.dispose();
   });
   it("sets and clears the agent's thinking default without touching the global one", async () => {
