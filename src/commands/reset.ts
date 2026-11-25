@@ -11,7 +11,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
 import { stopGatewayForCleanup } from "./cleanup-service.js";
 import {
-  removeAgentSessions,
+  removeConfigCredentialsAndSessions,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -112,24 +112,20 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     runtime.exit(1);
     return;
   }
-  const { configPath, oauthDir, workspaceDirs } = cleanupPlan;
-
   let failed = false;
   if (scope === "config+creds+sessions") {
     try {
-      await removeAgentSessions(cleanupPlan, runtime, { dryRun });
+      failed = !(await removeConfigCredentialsAndSessions(cleanupPlan, runtime, { dryRun }));
     } catch (error) {
-      runtime.error(`Failed to reset session history: ${String(error)}`);
-      failed = true;
+      runtime.error(error instanceof Error ? error.message : String(error));
+      runtime.exit(1);
+      return;
     }
-    const configRemoval = await removePath(configPath, runtime, { dryRun, label: configPath });
-    const oauthRemoval = await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    failed ||= !configRemoval.ok || !oauthRemoval.ok;
   }
 
   if (scope === "full") {
     const stateRemoved = await removeStateAndLinkedPaths(cleanupPlan, runtime, { dryRun });
-    const workspaceFailures = await removeWorkspaceDirs(workspaceDirs, runtime, {
+    const workspaceFailures = await removeWorkspaceDirs(cleanupPlan.workspaceDirs, runtime, {
       dryRun,
       removeStateRows: !stateRemoved,
     });

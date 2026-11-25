@@ -2,15 +2,13 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { createActionGate, ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
+import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import {
   adaptScopedAccountAccessor,
   createHybridChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
-  ChannelMessageActionAdapter,
   ChannelMessageActionContext,
-  ChannelMessageToolDiscovery,
   ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -45,15 +43,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
-import type {
-  ChannelMessageActionName,
-  ChannelMeta,
-  ChannelPlugin,
-  ClawdbotConfig,
-} from "../runtime-api.js";
+import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
 import {
-  inspectFeishuCredentials,
-  listEnabledFeishuAccounts,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
@@ -81,6 +72,7 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { feishuGatewayAdapter } from "./gateway.js";
 import { chunkFeishuMarkdown } from "./markdown.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
+import { describeFeishuMessageTool, isFeishuActionEnabled } from "./message-tool-discovery.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
 import {
   FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
@@ -366,60 +358,6 @@ const collectFeishuOpenGroupFindings = createConditionalWarningCollector.finding
   title: "Feishu security warning",
 });
 
-function describeFeishuMessageTool({
-  cfg,
-  accountId,
-}: Parameters<
-  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
->[0]): ChannelMessageToolDiscovery {
-  const enabledAccounts = accountId
-    ? [resolveFeishuAccount({ cfg, accountId })].filter(
-        (account) => account.enabled && account.configured,
-      )
-    : listEnabledFeishuAccounts(cfg);
-  const enabled =
-    enabledAccounts.length > 0 ||
-    (!accountId &&
-      cfg.channels?.feishu?.enabled !== false &&
-      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined, cfg)));
-  if (enabledAccounts.length === 0) {
-    return {
-      actions: [],
-      capabilities: enabled ? ["presentation"] : [],
-    };
-  }
-  const actions = new Set<ChannelMessageActionName>([
-    "send",
-    "read",
-    "edit",
-    "thread-reply",
-    "pin",
-    "list-pins",
-    "unpin",
-    "member-info",
-    "channel-info",
-    "channel-list",
-  ]);
-  if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "reactions"))) {
-    actions.add("react");
-    actions.add("reactions");
-  }
-  if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "sticker"))) {
-    actions.add("sticker");
-  }
-  const selectedAccount = resolveFeishuAccount({ cfg, accountId });
-  if (
-    isFeishuActionEnabled(selectedAccount, "sticker") &&
-    resolveFeishuStickerSet(cfg, selectedAccount).length > 0
-  ) {
-    actions.add("sticker-search");
-  }
-  return {
-    actions: Array.from(actions),
-    capabilities: enabled ? ["presentation"] : [],
-  };
-}
-
 const feishuConfigAdapter = createHybridChannelConfigAdapter<
   ResolvedFeishuAccount,
   ResolvedFeishuAccount
@@ -432,16 +370,6 @@ const feishuConfigAdapter = createHybridChannelConfigAdapter<
   resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
 });
-
-function isFeishuActionEnabled(
-  account: ResolvedFeishuAccount,
-  action: "reactions" | "sticker",
-): boolean {
-  if (!account.enabled || !account.configured) {
-    return false;
-  }
-  return createActionGate(account.config.actions)(action, action === "reactions");
-}
 
 type FeishuActionReplyAnchor = {
   replyToMessageId: string | undefined;

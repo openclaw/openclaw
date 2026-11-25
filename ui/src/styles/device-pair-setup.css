@@ -131,6 +131,10 @@
   gap: var(--space-2);
 }
 
+.device-pair-setup__command > p {
+  margin: 0;
+}
+
 .device-pair-setup .login-gate__command {
   min-width: 0;
 }
@@ -183,7 +187,7 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.device-pair-setup__code > .device-pair-setup__fallback > summary {
+.device-pair-setup__fallback > summary {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -208,7 +212,7 @@
   transform: rotate(90deg);
 }
 
-.device-pair-setup__fallback code {
+.device-pair-setup__fallback > code {
   display: block;
   max-height: 110px;
   margin-top: var(--space-2);

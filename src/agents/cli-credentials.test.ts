@@ -338,15 +338,9 @@ describe("cli credentials", () => {
     vi.stubGlobal("fetch", fetchFn);
     for (const backendId of ["google-gemini-cli", "codex-cli"]) {
       expect(await credentials.resolveNativeCliLoginOwner(backendId, process.env)).toEqual({});
-      expect(credentials.readAttestedNativeCliLoginOwner(backendId, process.env)).toBeUndefined();
     }
     expect(fetchFn).not.toHaveBeenCalled();
-    // The Claude backend attests the same login, and only then answers the local check.
-    expect(credentials.readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBeUndefined();
     expect((await credentials.resolveNativeCliLoginOwner("claude-cli", process.env)).owner).toBe(
-      "uuid:uuid-a",
-    );
-    expect(credentials.readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBe(
       "uuid:uuid-a",
     );
   });

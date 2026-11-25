@@ -4,10 +4,12 @@ import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { jobToForm } from "../../lib/cron/form.ts";
 import { formatCronCadence } from "../../lib/presenter.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { failedRunId } from "./route-model.ts";
 import { FailureDetails } from "./view-attention.tsx";
 import {
@@ -19,15 +21,25 @@ import {
   NoticeBanner,
 } from "./view-controls.tsx";
 import { Editor, EditorActions } from "./view-editor.tsx";
-import { describeJobNextRun, describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
+import {
+  describeEditedOneShotStatus,
+  describeJobNextRun,
+  describeJobSchedule,
+  TriggerIndicator,
+} from "./view-job-status.tsx";
 import { RunHistory } from "./view-runs.tsx";
 import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
+
+registerEnglishCatalog(registerPreferencesEnglish);
+
 export function DetailView(
   props: CronProps & {
     mode: CronPanelMode;
   },
 ) {
+  // Keep control placement on the same breakpoint as cron.css.
+  const phoneLayout = createMediaQuery("(max-width: 640px)");
   // Status refresh updates the selected job's runtime facts in place.
   const selectedJob = createMemo(
     () => (props.mode === "job" ? (props.editingJob ?? undefined) : undefined),
@@ -61,6 +73,7 @@ export function DetailView(
           {...props}
           mode={props.mode}
           editing={editing()}
+          phoneLayout={phoneLayout()}
           selectedJob={selectedJob()}
         />
         <AdminRequired {...props} />
@@ -69,7 +82,7 @@ export function DetailView(
         <div id="cron-detail-panel" class="cron-tab-panel">
           {editing() ? (
             <>
-              <Editor {...props} mode={props.mode} />
+              <Editor {...props} mode={props.mode} phoneLayout={phoneLayout()} />
               <CronSuggestionLists {...props} />
             </>
           ) : (
@@ -107,6 +120,7 @@ function DetailHeader(
   props: CronProps & {
     mode: CronPanelMode;
     editing: boolean;
+    phoneLayout: boolean;
     selectedJob?: CronJob;
   },
 ) {
@@ -116,6 +130,8 @@ function DetailHeader(
       : t("cron.detail.newTitle");
   const reading = () => props.mode === "job" && !props.editing;
   const description = () => (reading() ? props.selectedJob?.description?.trim() : undefined);
+  const editStatus = () =>
+    props.editing ? describeEditedOneShotStatus(props.selectedJob, props.form) : undefined;
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   // The cadence reads as the Automations sidebar does ("Daily"); event triggers keep their source.
@@ -137,13 +153,25 @@ function DetailHeader(
             {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
           </div>
         ) : undefined}
+        {editStatus() ? (
+          <div class="cron-detail-runtime" data-test-id="cron-schedule-runtime" role="status">
+            {editStatus()}
+          </div>
+        ) : undefined}
         {description() ? (
           <div class="cron-detail-description" data-test-id="cron-detail-description">
             {description()}
           </div>
         ) : undefined}
       </div>
-      <Show when={props.mode === "job" ? props.selectedJob : undefined} keyed>
+      <Show
+        when={
+          props.mode === "job" && !(props.editing && props.phoneLayout)
+            ? props.selectedJob
+            : undefined
+        }
+        keyed
+      >
         {(job) => (
           <div class="cron-detail-actions">
             {props.canManage ? <EnabledSwitch {...props} job={job} /> : undefined}

@@ -1,5 +1,6 @@
 import {
   AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
   embeddedAgentLog,
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -8,6 +9,7 @@ import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
+import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import { isJsonObject, type CodexServerNotification, type JsonValue } from "./protocol.js";
 import {
   readCodexRateLimitsRevision,
@@ -20,6 +22,53 @@ import {
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
+import { getSharedCodexAppServerClientState } from "./shared-client-lifecycle.js";
+
+/** The running Codex and who owns updating it, captured from the client that ran the turn. */
+export type CodexRuntimeUpdateFacts = {
+  serverVersion?: string;
+  source?: "global" | "desktop" | "config" | "env" | "remote";
+  /** Configured command path, or the desktop app that supplied Codex. */
+  command?: string;
+};
+
+export function readCodexRuntimeUpdateFacts(client: CodexAppServerClient): CodexRuntimeUpdateFacts {
+  const start = getSharedCodexAppServerClientState().startMetadata.get(client)?.startOptions;
+  const serverVersion = client.getServerVersion();
+  if (start && start.transport !== "stdio") {
+    return { serverVersion, source: "remote" };
+  }
+  // Configured commands win over PATH Codex, so updating global Codex would not help.
+  if (start?.commandSource === "config" || start?.commandSource === "env") {
+    return { serverVersion, source: start.commandSource, command: start.command };
+  }
+  // Desktop-first selection never consults PATH Codex while the desktop app is present.
+  const desktopApp =
+    start?.commandSource === "resolved-managed"
+      ? resolveMacOSDesktopCodexAppPathCandidates().find(
+          (candidate) => candidate.appServerCommandPath === start.command,
+        )
+      : undefined;
+  if (desktopApp) {
+    return { serverVersion, source: "desktop", command: desktopApp.appName.replace(/\.app$/, "") };
+  }
+  return { serverVersion, source: "global" };
+}
+
+function formatCodexUpdateInstruction(facts: CodexRuntimeUpdateFacts): string {
+  switch (facts.source) {
+    case "remote":
+      return "Update the Codex app-server this Gateway connects to, then restart it.";
+    case "desktop":
+      return `Update the ${facts.command} desktop app, which provides this Codex, then restart the Gateway.`;
+    case "config":
+      return `Update the Codex at ${facts.command} (set by plugins.entries.codex.config.appServer.command), then restart the Gateway.`;
+    case "env":
+      return `Update the Codex at ${facts.command} (set by OPENCLAW_CODEX_APP_SERVER_BIN), then restart the Gateway.`;
+    default:
+      return 'Update your global Codex with "npm i -g @openai/codex", then restart the Gateway.';
+  }
+}
 
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 
@@ -50,6 +99,7 @@ export class CodexUsageLimitPromptError extends Error {
 
 export function resolveCodexPromptError(
   source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
+  runtime: { model: string } & CodexRuntimeUpdateFacts,
 ): string | Error | undefined {
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
@@ -89,12 +139,57 @@ export function resolveCodexPromptError(
   ) {
     return new AgentHarnessModelRequestPolicyError();
   }
+  if (isChatGptModelVersionError(source.message, info)) {
+    const version = runtime.serverVersion ? ` than ${runtime.serverVersion}` : "";
+    embeddedAgentLog.warn("codex app-server model requires a newer Codex", {
+      ...runtime,
+      nativeMessage: source.message,
+    });
+    return Object.assign(
+      new AgentHarnessRuntimeUpdateRequiredError(
+        `${runtime.model} needs a newer Codex${version}. ${formatCodexUpdateInstruction(runtime)} Or choose another model.`,
+      ),
+      { nativeMessage: source.message, ...(status === undefined ? {} : { status }) },
+    );
+  }
   return status === undefined
     ? (source.message ?? undefined)
     : Object.assign(new Error(source.message ?? "codex app-server error"), {
         status,
         ...(info === "serverOverloaded" ? { code: "OVERLOADED" } : {}),
       });
+}
+
+function isChatGptModelVersionError(
+  message: string | null | undefined,
+  codexErrorInfo: JsonValue | null | undefined,
+): boolean {
+  const phrase = "not supported when using Codex with a ChatGPT account";
+  if (!message?.includes(phrase)) {
+    return false;
+  }
+  // Newer Codex versions preserve the provider code as this protocol variant.
+  if (codexErrorInfo === "modelNotFound") {
+    return true;
+  }
+  // Older binaries retain the HTTP response body in their native error text.
+  const start = message.indexOf("{");
+  const end = message.lastIndexOf("}");
+  if (start === -1 || end < start) {
+    return false;
+  }
+  try {
+    const body: unknown = JSON.parse(message.slice(start, end + 1));
+    return (
+      isJsonObject(body) &&
+      isJsonObject(body.error) &&
+      body.error.code === "model_not_found" &&
+      typeof body.error.message === "string" &&
+      body.error.message.includes(phrase)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isRequestPolicyDenial(message: string | null | undefined): boolean {
@@ -160,6 +255,7 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
 
 export async function resolveCodexTurnStartError(params: {
   client: CodexAppServerClient;
+  model: string;
   error: unknown;
   errorNotification?: CodexServerNotification;
   rateLimitsRevisionBeforeTurnStart?: number;
@@ -178,7 +274,10 @@ export async function resolveCodexTurnStartError(params: {
   }
   // Startup RPC errors carry the same provider facts as terminal notifications.
   // Normalize them before the generic runner loses the native error envelope.
-  const promptError = resolveCodexPromptError(source);
+  const promptError = resolveCodexPromptError(source, {
+    model: params.model,
+    ...readCodexRuntimeUpdateFacts(params.client),
+  });
   return promptError instanceof Error ? { message: promptError.message, promptError } : undefined;
 }
 

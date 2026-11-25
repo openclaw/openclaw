@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it, vi } from "vitest";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { createBackupArchive } from "../infra/backup-create.js";

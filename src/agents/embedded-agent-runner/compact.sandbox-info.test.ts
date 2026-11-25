@@ -76,6 +76,8 @@ async function compactionParams(required = false) {
     ...target,
     sessionTarget,
     workspaceDir: TEST_WORKSPACE_DIR,
+    provider: "openai", // direct compaction callers pass the session model
+    model: "gpt-5.6-luna",
     skillsSnapshot: { prompt: "stored skills prompt", skills: [] }, // stored copy: no catalogs
     config: {
       agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },

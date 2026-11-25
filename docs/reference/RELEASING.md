@@ -52,10 +52,12 @@ and live-authority gates.
 
 Normally publish beta, validate, then promote stable. Core and every published
 official npm plugin must have `beta` at least as new as `latest`; preserve a newer
-beta. Prereleases precede their same-base final. Final versions require stable
+beta. Prereleases precede their same-base final. Final versions normally require stable
 validation even when first published to beta.
 
 ## Release validation
+
+Normal releases follow these validation requirements.
 
 - Stable/final publication requires stable or full validation, longer soak,
   and blocking performance checks; beta-profile evidence is insufficient.
@@ -64,18 +66,18 @@ validation even when first published to beta.
   same Release SHA at most twice. Never re-cut, change tooling, or restart FRV
   solely to clear a flake. An intentional
   [release-tooling waiver](/reference/full-release-validation/evidence#release-tooling-waivers)
-  is reviewed policy requiring validation with new pinned tooling, unchanged candidate.
+  is operator-approved Q grant data requiring a new qualification request with
+  pinned Q, unchanged candidate, and reevaluation of eligible raw receipts.
 - Blocking coverage: CI coverage gate, seal/evidence, Build Artifacts, install
   smoke, survivor lanes, `update-first-hop-compat*`, pack/npm qualification,
   package integrity, and all Linux/Windows/macOS Gateway checks, including
   Windows packaged install/upgrade in Release Checks. All-group qualification
   includes all nine Gateway install/upgrade combinations.
-- Selected `openclaw/ci-gate` must succeed unless checked-in exact-job grants
-  cover every failed cause. Missing, skipped, or cancelled required coverage
-  blocks. Exact failed live-provider/Telegram leaves and operator-accepted
-  `2026.11.5-beta.3`/candidate-bound `2026.11.4` jobs may use that policy;
-  candidate, job, version, and attempt restrictions still apply. **FRV must
-  conclude success; publishers cannot waive it.**
+- Selected `openclaw/ci-gate` must succeed unless it is itself waived. A matching
+  job waiver does not require a run; omit `jobName` to waive the entire child
+  role and all descendants without a run or receipt. Optional `step` limits a
+  job waiver to the first incomplete or failed step. Unwaived gaps block, and
+  waived is not passed. **FRV must conclude success.**
 - Coverage spans source CI, packages, plugins, Gateway installs/upgrades, and
   selected app, UI, Telegram, QA, and live-provider checks. Inspect recorded
   profile/OS coverage; skipped or deferred is not passed.
@@ -121,8 +123,8 @@ caller-specific approval reads.
 ### Resume activation while ClawHub recovery is independent
 
 For already-published core, recovery accepts `defer_clawhub=true`,
-`openclaw_npm_resume_run_id=<original-successful-run>`, and
-`wait_for_clawhub=false` only with direct `publish_openclaw_npm=true` and no
+`openclaw_npm_resume_run_id=<original-successful-run>` only with direct
+`publish_openclaw_npm=true` and no
 `prepared_plugins`. It authenticates original registry bytes/provenance, retains
 npm/source/artifact/approval/finalization gates, and neither republishes core
 nor plans/dispatches ClawHub work.
@@ -148,6 +150,24 @@ all nondeferred packages before core. Readback retains failures and deferred
 status, never invented success. Already-public deferred versions require normal
 integrity/selector checks; remaining recovery needs separate authorization and
 original qualified bytes.
+
+### Beta.1 plugin trust closeout
+
+After core npm, Docker, and GitHub activation complete, both the direct publisher
+and Release Button require **Plugin NPM Trust Closeout** for beta.1. It selects
+packages from successful token-bootstrap jobs in the original npm publication,
+not from current registry contents, and runs the existing trusted-publisher
+preflight in `plugin-npm-release.yml` with the original protected tooling ref.
+Releases without bootstrapped packages need no OIDC exchange.
+
+A failed closeout leaves the release published but the overall release run red.
+Configure the listed packages' npm trusted publisher for `openclaw/openclaw`,
+workflow `plugin-npm-release.yml`, environment `npm-publish`, then rerun **only
+the failed closeout job**. If its linked preflight is waiting for environment
+approval, resolve that run first. Closeout does not publish versions, create
+placeholders, change npm trust, or automate npm login/2FA. A successful exchange
+proves current authentication only, not a subsequent publish or permanent trust
+activation. Native app and ClawHub publication remain independent.
 
 ### Watch publication
 
@@ -208,19 +228,18 @@ changed bytes. This change authorizes no dispatch/publication.
 publication selection, including plugin subsets, and rechecks live authority.
 Only authenticated direct admission qualifies evidence for publication.
 Unadmitted historical manifests, including v3, require new admitted
-qualification; ancestry alone is not admission. Receipt-backed aggregate recovery
-is retired for every profile, including beta. Normal authenticated qualification
-and reuse remain available, and C, Q, and P may remain independent. Existing
-waiver, profile, soak, and performance rules apply. Historical manifest parsing
-remains available for diagnostic summaries, not qualification or publication.
+qualification; ancestry alone is not admission. Use [receipt-only recovery](/reference/full-release-validation/evidence#receipt-backed-aggregate-recovery)
+to reseal existing qualification without rerunning any wave. A separately admitted,
+signed ledger can add candidate-scoped job or whole-child waivers. Recovery cannot replace unwaived receipts or qualify unwaived
+failures. C, Q, and P may remain independent.
 
 ### Frozen qualification identity
 
 | Identity                | Owns                                                                                                                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **C — candidate**       | Exact tested/published commit, package bytes, version, upgrade baselines.                                                                                                                                 |
-| **Q — qualification**   | Complete workflow/reusable-workflow/action/script/planner/contract/coverage closure; defaults to C. An independent Q requires review and verified main ancestry.                                          |
-| **P — trusted tooling** | Admission, aggregate validation, verification, publication, checked-in waivers, FRV verdict; independently trusted main revision or protected publication tag. May differ from C/Q; C need not precede P. |
+| **Q — qualification**   | Complete qualification closure and pinned grant ledger; defaults to C. Executable tooling requires review and verified lineage; authorized grants are committed directly to Q.                            |
+| **P — trusted tooling** | Admission, aggregate validation, verification, publication, Q-grant evaluation, FRV verdict; independently trusted main revision or protected publication tag. May differ from C/Q; C need not precede P. |
 
 [Dispatch](/reference/full-release-validation/dispatch) defines P's immutable
 operator-attestation/input/coverage admission before Q's `release-ci/*` dispatch.
@@ -246,6 +265,9 @@ diagnostics. Local Parallels uses isolated Q harness/frozen dependencies against
 exact validated C tarballs when Q differs.
 
 Reuse preserves producer/consumer identities, inputs, coverage, and provenance.
+[Child evidence reuse](/reference/full-release-validation/stages) can cross Q with
+an authenticated producer and reevaluation under current Q grants. Tooling
+changes alone do not force fresh runs; whole-parent reuse still requires exact Q/P.
 [Root-request recovery](/reference/full-release-validation/dispatch#retain-and-reconcile-the-root-request)
 owns read-only reconciliation and explicit pre-POST resume: intended Q, empty
 uncertain-ref inventory, revalidated admission/signer, final ref verification.

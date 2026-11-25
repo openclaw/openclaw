@@ -296,9 +296,10 @@ export async function handleBashChatCommand(params: {
         ? result.details
         : {};
     const exitLabel = renderExecExitLabel(exitDetails);
+    // Warnings carry what OpenClaw has to say about the run, such as a process left running.
     const output =
       result.details?.status === "completed"
-        ? result.details.aggregated
+        ? [result.details.warningText, result.details.aggregated].filter(Boolean).join("\n\n")
         : result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
     return {
       text: [

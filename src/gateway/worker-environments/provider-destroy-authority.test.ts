@@ -25,103 +25,67 @@ describe("worker deletion request authority", () => {
     };
   }
 
-  it.each([
-    { force: false, revoked: true },
-    { force: true, revoked: true },
-    { force: false, revoked: false },
-    { force: true, revoked: false },
-  ])("checks queued deletion before acceptance: %j", async ({ force, revoked }) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const destroy = vi.fn(async () => {});
-    const resolveAllocation = vi.fn(async () => ({ leaseId: "lease-held", sharedHost: true }));
-    const service = support.createService(
-      support.createProvider({
-        prepareProvision: async () => {
-          entered.resolve();
-          await release.promise;
-          return async () => {
-            throw new Error("Allocation outcome requires reconciliation");
-          };
-        },
-        resolveAllocation,
-        destroy,
-      }),
-    );
-    const deletionQueued = createDeferredCore();
-    const destroyEnvironment = service.destroy;
-    vi.spyOn(service, "destroy").mockImplementation((...args) => {
-      const deletion = destroyEnvironment(...args);
-      deletionQueued.resolve();
-      return deletion;
-    });
-    const context = await contextFor(service);
-    const creating = service.create("development", "independent-create").catch(() => undefined);
-    await beforeSettlement(entered.promise, creating, "Independent create preparation");
-    const original = support.testState.store.list()[0]!;
-    let current = true;
-    const deleting = invokeEnvironment(
-      "environments.destroy",
-      { environmentId: original.environmentId, force },
-      context,
-      null,
-      () => current,
-    );
-    try {
-      if (force) {
-        // Finish placement preflight before provisioning can fence its synchronous reads.
-        await beforeSettlement(deletionQueued.promise, deleting, "Forced deletion queue handoff");
-      }
-      expect(support.testState.store.get(original.environmentId)).toMatchObject({
-        state: "requested",
-        destroyRequestedAtMs: null,
+  it.each([false, true])(
+    "queues deletion before provisioning completes (force=%s)",
+    async (force) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const destroy = vi.fn(async () => {});
+      const resolveAllocation = vi.fn(async () => ({ leaseId: "lease-held", sharedHost: true }));
+      const service = support.createService(
+        support.createProvider({
+          prepareProvision: async () => {
+            entered.resolve();
+            await release.promise;
+            return async () => {
+              throw new Error("Allocation outcome requires reconciliation");
+            };
+          },
+          resolveAllocation,
+          destroy,
+        }),
+      );
+      const deletionQueued = createDeferredCore();
+      const destroyEnvironment = service.destroy;
+      vi.spyOn(service, "destroy").mockImplementation((...args) => {
+        const deletion = destroyEnvironment(...args);
+        deletionQueued.resolve();
+        return deletion;
       });
-      current = !revoked;
-    } finally {
-      release.resolve();
-      await creating;
-    }
-    const response = await deleting;
-    expect(response[0], JSON.stringify(response[2])).toBe(!revoked);
-    expect(support.testState.store.get(original.environmentId)).toMatchObject(
-      revoked
-        ? { state: "provisioning", destroyRequestedAtMs: null }
-        : { state: "destroyed", destroyRequestedAtMs: support.testState.nowMs },
-    );
-    expect(resolveAllocation).toHaveBeenCalledTimes(revoked ? 0 : 1);
-    expect(destroy).toHaveBeenCalledTimes(revoked ? 0 : 1);
-  });
-
-  it("requires current authority to upgrade accepted cleanup to forced discard", async () => {
-    const original = await support.seedReady("accepted-ordinary-cleanup");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const destroy = vi.fn(async () => {});
-    destroy.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      throw new Error("Accepted cleanup remains pending");
-    });
-    const service = support.createService(support.createProvider({ destroy }));
-    const cleanup = service.destroy(original.environmentId).catch(() => undefined);
-    await beforeSettlement(entered.promise, cleanup, "Independent accepted cleanup");
-    let current = true;
-    const forced = invokeEnvironment(
-      "environments.destroy",
-      { environmentId: original.environmentId, force: true },
-      await contextFor(service),
-      null,
-      () => current,
-    );
-    current = false;
-    release.resolve();
-    await cleanup;
-    expect((await forced)[0]).toBe(false);
-    expect(
-      hasForcedWorkerEnvironmentAbandonment(support.testState.store.get(original.environmentId)!),
-    ).toBe(false);
-    expect(destroy).toHaveBeenCalledOnce();
-  });
+      const context = await contextFor(service);
+      const creating = service.create("development", "independent-create").catch(() => undefined);
+      await beforeSettlement(entered.promise, creating, "Independent create preparation");
+      const original = support.testState.store.list()[0]!;
+      const deleting = invokeEnvironment(
+        "environments.destroy",
+        { environmentId: original.environmentId, force },
+        context,
+        null,
+        () => true,
+      );
+      try {
+        if (force) {
+          // Finish placement preflight before provisioning can fence its synchronous reads.
+          await beforeSettlement(deletionQueued.promise, deleting, "Forced deletion queue handoff");
+        }
+        expect(support.testState.store.get(original.environmentId)).toMatchObject({
+          state: "requested",
+          destroyRequestedAtMs: null,
+        });
+      } finally {
+        release.resolve();
+        await creating;
+      }
+      const response = await deleting;
+      expect(response[0], JSON.stringify(response[2])).toBe(true);
+      expect(support.testState.store.get(original.environmentId)).toMatchObject({
+        state: "destroyed",
+        destroyRequestedAtMs: support.testState.nowMs,
+      });
+      expect(resolveAllocation).toHaveBeenCalledOnce();
+      expect(destroy).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["destroyed", "failed", "orphaned"] as const)(
     "accepts forced discard durably for a %s worker",
@@ -163,30 +127,6 @@ describe("worker deletion request authority", () => {
       expect(discard).toHaveBeenCalledOnce();
     },
   );
-
-  it("refuses a terminal worker's forced discard if authority ends before acceptance", async () => {
-    const original = await support.seedReady("terminal-discard-refused");
-    const service = support.createService(support.createProvider());
-    await service.destroy(original.environmentId);
-    let current = true;
-    const recordError = support.testState.store.recordError.bind(support.testState.store);
-    vi.spyOn(support.testState.store, "recordError").mockImplementationOnce(async (input) => {
-      current = false;
-      return recordError(input);
-    });
-    const discard = vi.fn(async () => {});
-    await expect(
-      service.destroy(original.environmentId, undefined, discard, () => {
-        if (!current) {
-          throw new Error("Deletion requester removed");
-        }
-      }),
-    ).rejects.toThrow("Deletion requester removed");
-    expect(discard).not.toHaveBeenCalled();
-    expect(
-      hasForcedWorkerEnvironmentAbandonment(support.testState.store.get(original.environmentId)!),
-    ).toBe(false);
-  });
 
   it.each(["current", "removed", "maintenance"])(
     "leaves missing-worker discard to internal maintenance (requester %s)",

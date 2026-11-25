@@ -3,10 +3,7 @@
 // oxfmt-ignore
 import {
   installSpawnAuthorityFixture,
-  installSpawnThreadBindingFixture,
-  installSpawnAttachmentFixture,
 } from "./subagent-spawn.authority.test-support.js";
-import { promises as fs } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-spawn-model.mocks.shared.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
@@ -14,7 +11,6 @@ import { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fo
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
-  listSessionChildEntriesReadOnly,
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
@@ -22,7 +18,6 @@ import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import {
@@ -187,201 +182,131 @@ function createPreparationGateway(context: BoundParent["context"], deleted: stri
 }
 
 describe("pending spawn preparation authority", () => {
-  it.each(["closed", "live"])(
-    "checks parent authority after queued fork preparation: %s",
-    async (closure) => {
-      const bound = await createBoundParent();
-      const { cfg, storePath, context, admission, parent, admitted } = bound;
-      for (const message of [
-        { role: "user", content: "synthetic parent context" },
-        { role: "assistant", content: "synthetic completed reply", stopReason: "stop" },
-      ]) {
-        await appendTranscriptMessage(
-          { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
-          { message },
+  it("forks parent context after queued preparation", async () => {
+    const bound = await createBoundParent();
+    const { cfg, storePath, context, admission, parent } = bound;
+    for (const message of [
+      { role: "user", content: "synthetic parent context" },
+      { role: "assistant", content: "synthetic completed reply", stopReason: "stop" },
+    ]) {
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
+        { message },
+      );
+    }
+    const writerGate = createEnteredGate();
+    const forkQueued = createDeferred<{ childSessionKey: string; initialSessionId: string }>();
+    const forkSettled = createDeferred<
+      Awaited<ReturnType<typeof forkSessionEntryFromParent>> | Error
+    >();
+    const inspected = createDeferred();
+    let blocker: Promise<void> | undefined;
+    const dispatch = vi.fn();
+    const deleted: string[] = [];
+    const gateway = createPreparationGateway(context, deleted);
+    spawnTesting.setDepsForTest({
+      forkSessionEntryFromParent: async (params) => {
+        // Hold a genuine preceding database writer, then enqueue the real fork owner.
+        blocker = runExclusiveSqliteSessionWrite(
+          resolveSqliteStoreScope(storePath),
+          writerGate.wait,
+          "session.transcript.batch",
         );
-      }
-      const writerGate = createEnteredGate();
-      const forkQueued = createDeferred<{ childSessionKey: string; initialSessionId: string }>();
-      const forkSettled = createDeferred<
-        Awaited<ReturnType<typeof forkSessionEntryFromParent>> | Error
-      >();
-      const inspected = createDeferred();
-      let blocker: Promise<void> | undefined;
-      const dispatch = vi.fn();
-      const deleted: string[] = [];
-      const gateway = createPreparationGateway(context, deleted);
-      spawnTesting.setDepsForTest({
-        forkSessionEntryFromParent: async (params) => {
-          // Hold a genuine preceding database writer, then enqueue the real fork owner.
-          blocker = runExclusiveSqliteSessionWrite(
-            resolveSqliteStoreScope(storePath),
-            writerGate.wait,
-            "session.transcript.batch",
-          );
-          await writerGate.entered;
-          const initial = loadSessionEntry({ storePath, sessionKey: params.sessionKey })!;
-          const pending = forkSessionEntryFromParent(params);
-          forkQueued.resolve({
-            childSessionKey: params.sessionKey,
-            initialSessionId: initial.sessionId,
-          });
-          try {
-            const result = await pending;
-            forkSettled.resolve(result);
-            await inspected.promise;
-            return result;
-          } catch (error) {
-            forkSettled.resolve(error instanceof Error ? error : new Error(String(error)));
-            await inspected.promise;
-            throw error;
-          }
-        },
-        resolveContextEngine: async () => new LegacyContextEngine(),
-        dispatchGatewayMethodInProcess: spawnDispatch(gateway, dispatch),
-      });
-      const [tool] = finalizeParentTools(bound, [createSessionsSpawnTool(parentToolOptions(cfg))]);
-      const pending = asCaller(bound, () =>
-        tool!.execute!("spawn-fork-queued", {
-          task: "bounded fork",
-          context: "fork",
-          mode: "run",
-          expectsCompletionMessage: false,
-        }),
-      ).catch((error: unknown) => error);
-      try {
-        const { childSessionKey, initialSessionId } = await Promise.race([
-          forkQueued.promise,
-          pending.then((result) => {
-            throw new Error(`Spawn settled before fork queue: ${JSON.stringify(result)}`);
-          }),
-        ]);
-        expect(subagentRuns.size).toBe(0);
-        expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
-          model: "gpt-5.4",
-          modelProvider: "openai",
-          modelOverride: "gpt-5.4",
-          providerOverride: "openai",
+        await writerGate.entered;
+        const initial = loadSessionEntry({ storePath, sessionKey: params.sessionKey })!;
+        const pending = forkSessionEntryFromParent(params);
+        forkQueued.resolve({
+          childSessionKey: params.sessionKey,
+          initialSessionId: initial.sessionId,
         });
-        if (closure === "closed") {
-          admission.close();
-          expect(parent.controller.signal.aborted).toBe(false);
-          expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        }
-        writerGate.release();
-        const result = await forkSettled.promise;
-        const entry = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
-        const transcript = await loadTranscriptEvents({
-          agentId: "main",
-          sessionId: entry.sessionId,
-          sessionKey: childSessionKey,
-          storePath,
-        });
-        if (closure === "closed") {
-          expect.soft(entry.sessionId).toBe(initialSessionId);
-          expect.soft(transcript).toEqual([]);
-          expect.soft(result).toBeInstanceOf(Error);
-        } else {
-          expect(result).toMatchObject({ status: "forked" });
-          expect(entry.sessionId).not.toBe(initialSessionId);
-          expect(entry).toMatchObject({ model: "gpt-5.4", modelProvider: "openai" });
-          expect(transcript).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: { role: "user", content: "synthetic parent context" },
-              }),
-            ]),
-          );
-        }
-        inspected.resolve();
-        const outcome = await pending;
-        if (closure === "closed") {
-          expect(outcome).toMatchObject({ details: { status: "error" } });
-          expect(dispatch).not.toHaveBeenCalled();
-          expect(subagentRuns.size).toBe(0);
-          expect(deleted).toEqual([childSessionKey]);
-          expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
-        } else {
-          expect(outcome).toMatchObject({ details: { status: "accepted" } });
-          expect(dispatch).toHaveBeenCalledOnce();
-        }
-      } finally {
-        writerGate.release();
-        inspected.resolve();
-        await blocker;
-        await pending;
         try {
-          await gateway.close();
-        } finally {
-          admission.close();
-          parent.cleanup();
+          const result = await pending;
+          forkSettled.resolve(result);
+          await inspected.promise;
+          return result;
+        } catch (error) {
+          forkSettled.resolve(error instanceof Error ? error : new Error(String(error)));
+          await inspected.promise;
+          throw error;
         }
+      },
+      resolveContextEngine: async () => new LegacyContextEngine(),
+      dispatchGatewayMethodInProcess: spawnDispatch(gateway, dispatch),
+    });
+    const [tool] = finalizeParentTools(bound, [createSessionsSpawnTool(parentToolOptions(cfg))]);
+    const pending = asCaller(bound, () =>
+      tool!.execute!("spawn-fork-queued", {
+        task: "bounded fork",
+        context: "fork",
+        mode: "run",
+        expectsCompletionMessage: false,
+      }),
+    ).catch((error: unknown) => error);
+    try {
+      const { childSessionKey, initialSessionId } = await Promise.race([
+        forkQueued.promise,
+        pending.then((result) => {
+          throw new Error(`Spawn settled before fork queue: ${JSON.stringify(result)}`);
+        }),
+      ]);
+      expect(subagentRuns.size).toBe(0);
+      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+        model: "gpt-5.4",
+        modelProvider: "openai",
+        modelOverride: "gpt-5.4",
+        providerOverride: "openai",
+      });
+      writerGate.release();
+      const result = await forkSettled.promise;
+      const entry = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
+      const transcript = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: entry.sessionId,
+        sessionKey: childSessionKey,
+        storePath,
+      });
+      expect(result).toMatchObject({ status: "forked" });
+      expect(entry.sessionId).not.toBe(initialSessionId);
+      expect(entry).toMatchObject({ model: "gpt-5.4", modelProvider: "openai" });
+      expect(transcript).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: { role: "user", content: "synthetic parent context" },
+          }),
+        ]),
+      );
+      inspected.resolve();
+      const outcome = await pending;
+      expect(outcome).toMatchObject({ details: { status: "accepted" } });
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      writerGate.release();
+      inspected.resolve();
+      await blocker;
+      await pending;
+      try {
+        await gateway.close();
+      } finally {
+        admission.close();
+        parent.cleanup();
       }
-    },
-  );
+    }
+  });
 
   it.each([
-    "native engine resolution",
-    "native thread binding",
-    "native attachment staging",
-    "native attachment directory",
-    "native attachment files",
     "native abort",
     "native acceptance",
     "native call signal",
     "native construction signal",
-    "native admission close",
     "projected close",
   ])("rolls back an untransferred native spawn: %s", async (closure) => {
     const entered = createDeferred<string>();
     const release = createDeferred();
-    const hasThread =
-      closure === "native thread binding" || closure === "native attachment staging";
-    const hasAttachments = closure.startsWith("native attachment");
-    const bindingFixture = hasThread
-      ? installSpawnThreadBindingFixture(async (binding) => {
-          if (closure === "native attachment staging") {
-            entered.resolve(binding.targetSessionKey);
-            await release.promise;
-          }
-        })
-      : undefined;
     const bound = await createBoundParent(
       closure.startsWith("projected") ? "plugin-harness" : "embedded",
     );
     const { cfg, storePath, context, admission, parent, admitted } = bound;
-    if (closure === "native thread binding") {
-      await replaceTranscriptEvents(
-        { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
-        [
-          {
-            type: "session",
-            version: 3,
-            id: "parent-session",
-            timestamp: "2026-09-05T00:00:00Z",
-            cwd: fixture.stateDir,
-          },
-        ],
-      );
-    }
-    const readChildKey = async () =>
-      (await listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey }))[0]!
-        .sessionKey;
-    const attachmentFixture = hasAttachments
-      ? installSpawnAttachmentFixture({
-          stateDir: fixture.stateDir,
-          admitted,
-          pauseAt:
-            closure === "native attachment directory"
-              ? "directory"
-              : closure === "native attachment files"
-                ? "files"
-                : undefined,
-          entered: async () => entered.resolve(await readChildKey()),
-          release: release.promise,
-        })
-      : undefined;
     const acceptedGate = createDeferred();
     const acceptedEntered = createDeferred();
     let childController: ReturnType<typeof registerChatAbortController> | undefined;
@@ -395,19 +320,7 @@ describe("pending spawn preparation authority", () => {
     const deleted: string[] = [];
     const gateway = createPreparationGateway(context, deleted);
     spawnTesting.setDepsForTest({
-      forkSessionEntryFromParent: async (params) => {
-        const result = await forkSessionEntryFromParent(params);
-        if (closure === "native thread binding") {
-          entered.resolve(params.sessionKey);
-          await release.promise;
-        }
-        return result;
-      },
       resolveContextEngine: async () => {
-        if (closure === "native engine resolution") {
-          entered.resolve(await readChildKey());
-          await release.promise;
-        }
         return Object.assign(new LegacyContextEngine(), { prepareSubagentSpawn: prepare });
       },
       dispatchGatewayMethodInProcess: spawnDispatch(
@@ -453,9 +366,6 @@ describe("pending spawn preparation authority", () => {
       : undefined;
     const source = createSessionsSpawnTool({
       ...parentToolOptions(cfg),
-      agentChannel: hasThread ? "matrix" : undefined,
-      agentAccountId: hasThread ? "default" : undefined,
-      agentTo: hasThread ? "room:parent" : undefined,
       signal: closure === "native construction signal" ? invocationAbort.signal : undefined,
     });
     let forwarded: Promise<unknown> | undefined;
@@ -481,13 +391,9 @@ describe("pending spawn preparation authority", () => {
         "spawn-pending",
         {
           task: "bounded child",
-          collect: closure !== "native acceptance" && !hasThread,
-          thread: hasThread,
-          context: closure === "native thread binding" ? "fork" : "isolated",
-          attachments: hasAttachments
-            ? [{ name: "synthetic.txt", content: "synthetic attachment" }]
-            : undefined,
-          groupId: closure === "native acceptance" || hasThread ? undefined : groupId,
+          collect: closure !== "native acceptance",
+          context: "isolated",
+          groupId: closure === "native acceptance" ? undefined : groupId,
         },
         closure === "native call signal" ? invocationAbort.signal : undefined,
       ),
@@ -529,10 +435,8 @@ describe("pending spawn preparation authority", () => {
       } else {
         if (closure === "projected close") {
           host!.close();
-        } else if (closure.endsWith("signal")) {
-          invocationAbort.abort();
         } else {
-          admission.close();
+          invocationAbort.abort();
         }
         expect(parent.controller.signal.aborted).toBe(false);
       }
@@ -546,25 +450,7 @@ describe("pending spawn preparation authority", () => {
         expect(agentDispatch).not.toHaveBeenCalled();
       }
       expect(subagentRuns.size).toBe(0);
-      const closedBeforePreparation =
-        closure === "native engine resolution" || hasThread || hasAttachments;
-      if (closedBeforePreparation) {
-        expect.soft(prepare).not.toHaveBeenCalled();
-        expect.soft(rollback).not.toHaveBeenCalled();
-      } else {
-        expect(rollback).toHaveBeenCalledOnce();
-      }
-      if (closure === "native thread binding") {
-        expect.soft(bindingFixture!.bind).not.toHaveBeenCalled();
-      }
-      if (closure === "native attachment staging") {
-        expect(bindingFixture!.bind).toHaveBeenCalledOnce();
-      }
-      expect.soft(attachmentFixture?.lateWrites ?? []).toEqual([]);
-      expect(bindingFixture?.bindings ?? []).toEqual([]);
-      for (const directory of attachmentFixture?.attachmentDirs ?? []) {
-        await expect(fs.stat(directory), directory).rejects.toMatchObject({ code: "ENOENT" });
-      }
+      expect(rollback).toHaveBeenCalledOnce();
       expect(deleted).toEqual([childSessionKey]);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
       await holdSpawnCapacity(
@@ -583,8 +469,6 @@ describe("pending spawn preparation authority", () => {
         host?.close();
         admission.close();
         parent.cleanup();
-        attachmentFixture?.restore();
-        bindingFixture?.unregister();
       }
     }
   });

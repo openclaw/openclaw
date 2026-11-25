@@ -66,7 +66,7 @@ function seal(data = fixture(), runAttempt = 1, targetInput = TARGET) {
     JSON.stringify({
       inputs: {
         dispatch_id: `full-release-validation-77-1${spec.suffix}`,
-        target_ref: targetInput,
+        [role === "stableClientCompatibility" ? "target_sha" : "target_ref"]: targetInput,
         release_scope: "full",
       },
     }),
@@ -188,6 +188,25 @@ describe("full release child evidence producer", () => {
     );
   });
 
+  it.each(["success", "failure", "skipped"])(
+    "seals stable client role with its exact target_sha and gate (%s)",
+    (conclusion) => {
+      const data = fixture("stableClientCompatibility");
+      data.jobs[1]!.name = "Verify stable client compatibility";
+      data.jobs[1]!.conclusion = conclusion;
+      const { evidence } = sealed(data);
+      expect(evidence).toMatchObject({
+        role: "stableClientCompatibility",
+        targetSha: TARGET,
+        inputs: { target_sha: TARGET },
+        workloadConclusion: conclusion === "success" ? "success" : "failure",
+      });
+      const { result } = seal(data, 1, SHA);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("exact dispatched product source");
+    },
+  );
+
   it("seals independent Q without substituting the dispatched C", () => {
     const data = fixture();
     data.run.head_sha = SHA;
@@ -215,6 +234,9 @@ describe("full release child evidence producer", () => {
     data.jobs[2]!.status = "completed";
     data.jobs[2]!.conclusion = "failure";
     data.jobs[1]!.conclusion = "failure";
+    Object.assign(data.jobs[1]!, { runner_id: 42, runner_name: "hosted-42" });
+    data.jobs.push({ ...data.jobs[1]!, id: 99, status: "queued", conclusion: null });
+    Object.assign(data.jobs.at(-1)!, { runner_id: null, runner_name: null });
     data.attempts.push([
       { ...data.jobs[1]!, run_attempt: 2, conclusion: "success" },
       { ...data.jobs[2]!, id: 4, run_attempt: 2, status: "in_progress", conclusion: null },
@@ -270,7 +292,7 @@ describe("full release child evidence producer", () => {
     [
       "ambiguous publisher",
       (data) => void data.jobs.push({ ...data.jobs[2]!, id: 4 }),
-      "publisher job identity",
+      "duplicate job identity",
     ],
   ])("rejects %s", (_name, mutate, error) => {
     const data = fixture();

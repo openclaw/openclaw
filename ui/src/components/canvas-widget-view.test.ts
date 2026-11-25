@@ -398,40 +398,51 @@ describe("Canvas widget view", () => {
     expect(sibling.scrollTop).toBe(0);
   });
 
-  it("opens a guest widget automatically when its result commits", async () => {
-    vi.useFakeTimers();
-    const pending = createDeferred<CanvasDocumentViewResult>();
-    client.request.mockReturnValueOnce(pending.promise);
-    const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
-    await settle(view);
-    const events = gateways.get(view)!.eventListeners;
-    expect(events.size).toBe(1);
-    expect(client.request).toHaveBeenLastCalledWith(
-      "canvas.document.view",
-      { docId: view.docId, sessionKey: view.sessionKey },
-      { timeoutMs: 30_000 },
-    );
-    pending.reject(
-      new GatewayProtocolRequestError({
-        code: "UNAVAILABLE",
-        message: "Waiting for the widget result.",
-        retryable: true,
-        details: { type: "canvas_widget_pending" },
-      }),
-    );
-    await settle(view);
-    expect(notice(view)).toContain("Waiting for the widget result");
-    expect(alert(view)).toBeNull();
-    expect(events.size).toBe(1);
-    commitWidget(view, "agent:main:another");
-    expect(client.request).toHaveBeenCalledOnce();
-    commitWidget(view);
-    await settle(view);
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(view.documentHtml).toBe(documentView.html);
-    expect(alert(view)).toBeNull();
-    expect(events.size).toBe(0);
-  });
+  it.each(["pending result", "sandbox startup"])(
+    "opens a guest widget after recoverable %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      const pending = createDeferred<CanvasDocumentViewResult>();
+      client.request.mockReturnValueOnce(pending.promise);
+      const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
+      await settle(view);
+      const events = gateways.get(view)!.eventListeners;
+      expect(events.size).toBe(1);
+      expect(client.request).toHaveBeenLastCalledWith(
+        "canvas.document.view",
+        { docId: view.docId, sessionKey: view.sessionKey },
+        { timeoutMs: 30_000 },
+      );
+      pending.reject(
+        new GatewayProtocolRequestError({
+          code: "UNAVAILABLE",
+          message:
+            failure === "pending result"
+              ? "Waiting for the widget result."
+              : "Sandbox host temporarily unavailable.",
+          retryable: true,
+          ...(failure === "pending result" ? { details: { type: "canvas_widget_pending" } } : {}),
+        }),
+      );
+      await settle(view);
+      expect(notice(view)).toContain(
+        failure === "pending result" ? "Waiting for the widget result" : "reconnects automatically",
+      );
+      expect(alert(view)).toBeNull();
+      expect(events.size).toBe(failure === "pending result" ? 1 : 0);
+      commitWidget(view, "agent:main:another");
+      expect(client.request).toHaveBeenCalledOnce();
+      commitWidget(view);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(client.request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      await settle(view);
+      expect(client.request).toHaveBeenCalledTimes(2);
+      expect(view.documentHtml).toBe(documentView.html);
+      expect(alert(view)).toBeNull();
+      expect(events.size).toBe(0);
+    },
+  );
 
   it("replaces an in-flight guest lookup when its result commits", async () => {
     vi.useFakeTimers();
@@ -619,6 +630,61 @@ describe("Canvas widget view", () => {
     await transition(view, "connected");
     expect(view.querySelector("iframe")).not.toBeNull();
     expect(client.request).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps unavailable widgets terminal across chat events and remounts", async () => {
+    vi.useFakeTimers();
+    client.request.mockRejectedValue(
+      new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Canvas widget unavailable; reload the chat or ask the agent to recreate it.",
+      }),
+    );
+    let view = mount(client, "cv_missing", document.body, ["operator.sessions.read"]);
+    await settle(view);
+    for (let i = 0; i < 12; i += 1) {
+      commitWidget(view);
+      gateways.get(view)!.emit({
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: view.sessionKey, state: "final" },
+      });
+      await settle(view);
+      view.remove();
+      await settle(view);
+      view = mount(client, "cv_missing", document.body, ["operator.sessions.read"]);
+      await settle(view);
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(alert(view)?.textContent).toContain("Canvas widget unavailable");
+    expect(view.querySelector("button")).toBeNull();
+    client.request.mockResolvedValue(documentView);
+    view.docId = "cv_recreated";
+    await settle(view);
+    expect(view.documentHtml).toBe(documentView.html);
+    expect(client.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds transient retries even while chat events arrive", async () => {
+    vi.useFakeTimers();
+    client.request.mockRejectedValue(
+      new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Projection busy",
+        retryable: true,
+      }),
+    );
+    const view = mount(client, "cv_busy", document.body, ["operator.sessions.read"]);
+    await settle(view);
+    for (let i = 0; i < 40; i += 1) {
+      commitWidget(view);
+      await settle(view);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(client.request).toHaveBeenCalledTimes(6);
+    expect(alert(view)?.textContent).toContain("Projection busy");
   });
 
   it("keeps a slow authenticated read alive after the loading notice", async () => {

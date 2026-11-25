@@ -1134,7 +1134,7 @@ function canonicalMainCommits(base, mainRef, filters = []) {
     return [];
   }
   const mainCommit = /** @type {string} */ (gitCommit(mainRef, true));
-  const mainBase = git(["merge-base", base, mainCommit]);
+  const mainBase = gitMergeBase(base, mainCommit);
   const records = gitLogRecords([
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",

@@ -3,7 +3,10 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import {
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -109,6 +112,39 @@ const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
 
 suite.define(() => {
   const openPage = createNativeNavPageOpener(suite);
+
+  it("paints translucent macOS sidebar dividers without brighter joins", async () => {
+    const page = await openPage({ webChrome: true, pathname: "chat" });
+    await page.addStyleTag({
+      content:
+        ".macos-titlebar-sidebar-toggle svg { color: rgb(255 255 255 / 50%); background: black; }",
+    });
+    const toggles = page.locator(".macos-titlebar-sidebar-toggle");
+    await count(toggles, 2);
+    for (const toggle of await toggles.all()) {
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
+      await attr(toggle, "aria-expanded", "true");
+      await page.mouse.move(600, 400);
+      const screenshot = await toggle.locator("svg").screenshot();
+      const brightest = await page.evaluate(async (png) => {
+        const image = new Image();
+        image.src = "data:image/png;base64," + png;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(image, 0, 0);
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        return Math.max(...pixels.filter((_, i) => i % 4 === 0));
+      }, screenshot.toString("base64"));
+      // A single half-opacity white stroke reaches 128 on black; two passes reach 192.
+      expect(brightest).toBeGreaterThanOrEqual(127);
+      expect(brightest).toBeLessThanOrEqual(129);
+    }
+  });
 
   it("keeps sidebar rail toggles in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
@@ -354,6 +390,10 @@ suite.define(() => {
         backdropOpacity: "0",
         moving: false,
       });
+      if (destination === "session") {
+        // Home stays mounted during navigation; wait before resolving its replacement composer.
+        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/main/session-a" });
+      }
       const composer = page.locator(
         destination === "session"
           ? ".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea"
@@ -373,6 +413,7 @@ suite.define(() => {
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
     await toggle.click();
+    await waitForControlUiRoute(page, { routeId: "activity" });
     const collapse = page
       .locator("openclaw-app-sidebar")
       .getByRole("button", { name: "Collapse sidebar", exact: true });

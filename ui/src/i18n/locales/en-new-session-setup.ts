@@ -7,6 +7,8 @@ const runtime = registerNewSessionRuntimeEnglish.catalog.newSession;
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    incognitoPermissionDenied: "You don’t have permission to start an Incognito session.",
+    fullAccessPermissionDenied: "You don’t have permission to turn on Full access.",
     openClawWorker: "Cloud device",
     deviceFolder: "Existing folder",
     deviceFolderOn: "Existing folder on {device}",
@@ -28,7 +30,6 @@ const enNewSessionSetup = {
     requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
     requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
-    hint: en.newSession.hint,
     environments: "Devices",
     gateway: "This computer",
     cloudWorkerMachine: "{profile} · {machine}",

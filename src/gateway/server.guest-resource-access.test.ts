@@ -27,9 +27,7 @@ import { repositoryGitHubPublicationDigest } from "./github-repository-publicati
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
 import * as transcript from "./session-transcript-readers.js";
 
-it("rechecks invited membership before artifact bytes and GitHub receipt disclosure", async ({
-  signal,
-}) => {
+it("rechecks artifact membership and retains admitted GitHub receipt reads", async ({ signal }) => {
   await withInvitedGuestGateway(signal, async ({ state, gateway, sender, invited, carol }) => {
     const { key } = await sender.request<{ key: string }>(
       "sessions.create",
@@ -175,7 +173,7 @@ it("rechecks invited membership before artifact bytes and GitHub receipt disclos
       );
       await membership("remove");
       held.release();
-      await expect(pendingStatus).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(JSON.stringify(await pendingStatus)).toContain(url);
       await expect(status()).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     } finally {
       held.release();

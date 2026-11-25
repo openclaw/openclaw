@@ -84,6 +84,7 @@ describe("Gateway dispatch run ownership", () => {
       targetSessionKey: f.sessionKey,
       custody: {
         run: (work) => work(),
+        runWithRequester: (work) => work(),
         assertCurrent: vi.fn(),
         signal: new AbortController().signal,
         release: vi.fn(),

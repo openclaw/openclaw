@@ -1,4 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { hasSameRequesterOrigin } from "../../requester-origin.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -11,20 +16,66 @@ export function isSubagentCancellationNotice(entry: SubagentRunRecord): boolean 
   );
 }
 
+/** Durable child lineage cannot fall back to owner/System authority after custody loss. */
+export function assertRequiredCompletionCustody(
+  entry: SubagentRunRecord,
+  custody: SubagentCompletionCustody["authority"] | undefined,
+): void {
+  if (entry.requiresCompletionAuthority) {
+    if (!custody?.operatorAuthority?.participationCeiling) {
+      throw new Error("Constrained completion requires current original-source custody.");
+    }
+    custody.signal.throwIfAborted();
+    custody.assertCurrent();
+  }
+}
+
+function sameCompletionAuthority(
+  first: SubagentCompletionCustody["authority"] | undefined,
+  source: SubagentCompletionCustody["authority"] | undefined,
+): boolean {
+  return (
+    source?.operatorAuthority?.source === first?.operatorAuthority?.source &&
+    source?.operatorAuthority?.invocation === first?.operatorAuthority?.invocation &&
+    isDeepStrictEqual(
+      source?.operatorAuthority?.participationCeiling,
+      first?.operatorAuthority?.participationCeiling,
+    ) &&
+    isDeepStrictEqual(source?.operatorAuthority?.scopes, first?.operatorAuthority?.scopes) &&
+    isDeepStrictEqual(source?.scopes, first?.scopes)
+  );
+}
+
+/** Display and conversation metadata do not identify the authenticated human. */
+function hasSharedRequester(
+  sources: readonly (SubagentCompletionCustody["authority"] | undefined)[],
+): boolean {
+  const first = sources[0]?.requesterOrigin;
+  return sources.every((source) =>
+    first && source?.requesterOrigin
+      ? hasSameRequesterOrigin(first, source.requesterOrigin)
+      : first === source?.requesterOrigin,
+  );
+}
+
 /** Separate requester turns before admission; a sibling never supplies another invocation's authority. */
 export function selectCompletionAuthorityBatch(
   observed: readonly SubagentRunRecord[],
   anchor: SubagentRunRecord,
   custodies: ReadonlyMap<object, SubagentCompletionCustody>,
+  retired: WeakSet<object>,
 ): SubagentRunRecord[] {
   const first = custodies.get(getSubagentRunRuntimeKey(anchor))?.authority;
+  const anchorResolver = getGatewayContextResolver(anchor);
+  const gateway = anchorResolver && getCanonicalGatewayContextResolver(anchorResolver);
+  const isRetired = retired.has(getSubagentRunRuntimeKey(anchor));
   return observed.filter((entry) => {
     const source = custodies.get(getSubagentRunRuntimeKey(entry))?.authority;
+    const resolver = getGatewayContextResolver(entry);
     return (
-      source?.operatorAuthority?.source === first?.operatorAuthority?.source &&
-      source?.operatorAuthority?.invocation === first?.operatorAuthority?.invocation &&
-      isDeepStrictEqual(source?.operatorAuthority?.scopes, first?.operatorAuthority?.scopes) &&
-      isDeepStrictEqual(source?.scopes, first?.scopes)
+      retired.has(getSubagentRunRuntimeKey(entry)) === isRetired &&
+      (resolver && getCanonicalGatewayContextResolver(resolver)) === gateway &&
+      sameCompletionAuthority(first, source)
     );
   });
 }
@@ -35,52 +86,47 @@ export function runWithSubagentCompletionBatchAuthority<T>(
     batch: readonly SubagentRunRecord[];
     custodies: ReadonlyMap<object, SubagentCompletionCustody>;
     assertCurrent: (entry: SubagentRunRecord) => void;
-    assertRetainedAuthority: (entry: SubagentRunRecord) => void;
-    runWithAuthority: (entry: SubagentRunRecord, run: () => T) => T;
+    runWithAuthority: (
+      entry: SubagentRunRecord,
+      run: (authority?: SubagentCompletionCustody["authority"]) => T,
+    ) => T;
   },
-  run: () => T,
+  run: (authority?: SubagentCompletionCustody["authority"]) => T,
 ): T {
   const { batch, custodies } = params;
-  batch.forEach(params.assertCurrent);
+  batch.forEach((entry) => {
+    params.assertCurrent(entry);
+    assertRequiredCompletionCustody(
+      entry,
+      custodies.get(getSubagentRunRuntimeKey(entry))?.authority,
+    );
+  });
   const resultEntry = batch.find((entry) => !isSubagentCancellationNotice(entry));
-  if (!resultEntry) {
-    const sources = batch.map((entry) => custodies.get(getSubagentRunRuntimeKey(entry))?.authority);
-    const first = sources[0];
-    const original = first?.operatorAuthority;
-    // A cancellation-only cohort can share its retained requester. Otherwise its
-    // independently admitted cancellation caller still owns the notices.
-    if (
-      !first ||
-      !original ||
-      sources.some(
-        (source) =>
-          source?.operatorAuthority?.source !== original.source ||
-          source?.operatorAuthority?.invocation !== original.invocation ||
-          !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
-      )
-    ) {
-      return run();
+  const anchor = resultEntry ?? batch[0];
+  const first = anchor && custodies.get(getSubagentRunRuntimeKey(anchor))?.authority;
+  const sources = batch.map((entry) => custodies.get(getSubagentRunRuntimeKey(entry))?.authority);
+  // Cancellation notices need an operator source; ordinary results can retain
+  // source-less Gateway custody. Neither path may mix participant restrictions.
+  const shared =
+    first !== undefined &&
+    (resultEntry !== undefined || first.operatorAuthority !== undefined) &&
+    sources.every(
+      (source) => source?.signal.aborted === false && sameCompletionAuthority(first, source),
+    );
+  if (!shared) {
+    if (sources.some((source) => source?.operatorAuthority?.participationCeiling)) {
+      throw new Error("Participant completion custody must stay current and separate.");
     }
-    sources.forEach((source) => source?.assertCurrent());
-    return first.run(run);
+    return run();
   }
-  const firstCustody = custodies.get(getSubagentRunRuntimeKey(resultEntry));
-  const first = firstCustody?.authority.operatorAuthority;
-  // Mixed waves must still prove the cancelled member's original source is live and identical.
-  // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
-  for (const entry of batch) {
-    const custody = custodies.get(getSubagentRunRuntimeKey(entry));
-    params.assertRetainedAuthority(entry);
-    custody?.authority.assertCurrent();
-    const source = custody?.authority.operatorAuthority;
-    if (
-      source?.source !== first?.source ||
-      source?.invocation !== first?.invocation ||
-      !isDeepStrictEqual(source?.scopes, first?.scopes) ||
-      !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
-    ) {
-      throw new Error("Subagent completion batch has incompatible operator authority");
-    }
+  // Mixed humans keep operator-owned delivery. Never select one member's
+  // personal identity for the whole wave.
+  const requester = hasSharedRequester(sources);
+  if (resultEntry) {
+    return params.runWithAuthority(resultEntry, (authority) =>
+      run(requester ? authority : undefined),
+    );
   }
-  return params.runWithAuthority(resultEntry, run);
+  sources.forEach((source) => source?.assertCurrent());
+  return first.run(() => run(requester ? first : undefined));
 }

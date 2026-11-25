@@ -108,12 +108,7 @@ describe("selected bundled install config recovery", () => {
         .command("install")
         .argument("<spec>")
         .hook("preAction", async (_command, actionCommand) => {
-          await assertAdmission(
-            resolvePluginInstallPreactionRequest({
-              actionCommand,
-              commandPath: ["plugins", "install"],
-            }),
-          );
+          await assertAdmission(resolvePluginInstallPreactionRequest(actionCommand));
         })
         .action(async () => {
           const preflight = await resolvePluginInstallPreflight({

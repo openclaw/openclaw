@@ -292,6 +292,21 @@ run_prepared_correction_review() (
     return 1
   fi
   validate_review_artifact_data || return 1
+  local acceptance=.local/pending-proof-acceptance.json
+  if { [ "$command" = validate ] || [ "$command" = validate-preflight ]; } &&
+    { [ -e "$acceptance" ] || [ -L "$acceptance" ]; }; then
+    local PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSH_PURPOSE=""
+    local PR_HEAD_SHA_AFTER_PUSH="" PUSHED_FROM_SHA="" PUSH_REPLACED_HOSTED_ANCESTRY=""
+    local PUSH_REVIEW_OID="" PUSH_PENDING_FINDINGS=""
+    if [ ! -f "$acceptance" ] || [ -L "$acceptance" ] ||
+      ! read_prep_publication_result .local/prepare-push-result.env ||
+      [ "$PUSH_PURPOSE" != proof ] || [ "$PUSH_PREP_HEAD_SHA" != "$head" ]; then
+      echo "Pending proof acceptance requires a regular acceptance file and the exact native proof publication receipt." >&2
+      return 1
+    fi
+    set -- "$pr" "$command" "${PR_WORKFLOW_SOURCE_REVISION:-}" "${PR_WORKFLOW_BINDING_OID:-}" \
+      "$PUSH_REVIEW_OID" "$PUSH_PENDING_FINDINGS"
+  fi
   OPENCLAW_PR_CAPTURED_MAIN="${PR_MAIN_SHA:-}" node "$(dirname "$(review_artifacts_helper_path)")/correction-review.mjs" \
     "$command" "$pr" "$PR_HEAD_SHA_BEFORE" "$head" \
     "$PREP_INCOMING_JSON_OID" "$PREP_BASELINE_REFRESH_HEAD" "$PREP_BASELINE_REFRESH_OID" "${@:3}"
@@ -350,6 +365,7 @@ correction_review_snapshot() (
     .local/review.json \
     .local/correction-review.json \
     .local/correction-incoming-review.json \
+    .local/pending-proof-acceptance.json \
     .local/prepare-baseline.json \
     .local/prep.env .local/prepare-push-result.env .local/prepare-sync-result.env; do
     oid=absent
@@ -358,6 +374,8 @@ correction_review_snapshot() (
       oid=$(pr_git hash-object --no-filters -- "$receipt") || return 1
     else
       case "$receipt" in
+        # Preserve the fixed snapshot inventory for ordinary baseline admission.
+        .local/pending-proof-acceptance.json) continue ;;
         .local/prep.env|.local/prepare-push-result.env|.local/prepare-sync-result.env|.local/prepare-baseline.json) ;;
         *) return 1 ;;
       esac

@@ -1,5 +1,7 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -10,6 +12,35 @@ import {
 import { clawhubVerdictKey, type ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 
 registerSkillsBrowserEnglish();
+
+/** A skill's own mark: its image, else its emoji, else the default skill icon. */
+export function SkillTile(props: {
+  emoji?: string;
+  imageUrl?: string;
+  class?: JSX.HTMLAttributes<HTMLElement>["class"];
+}) {
+  return (
+    <span
+      class={[
+        "skill-tile",
+        props.class,
+        { "skill-tile--default": !props.imageUrl && !props.emoji },
+      ]}
+      aria-hidden="true"
+    >
+      <Show
+        when={props.imageUrl}
+        fallback={
+          <Show when={props.emoji} fallback={<Icon name="bookOpenText" />}>
+            {props.emoji}
+          </Show>
+        }
+      >
+        {(url) => <img src={url()} alt="" loading="lazy" />}
+      </Show>
+    </span>
+  );
+}
 
 export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBadge?: boolean }) {
   return (
@@ -26,6 +57,15 @@ export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBa
       </Show>
     </div>
   );
+}
+
+/** The registry reference an installed ClawHub skill was added from, as search results name it. */
+export function installedReference(skill: SkillStatusEntry): string | null {
+  const link = skill.clawhub;
+  if (!link?.valid) {
+    return null;
+  }
+  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
 }
 
 export function verdictForSkill(

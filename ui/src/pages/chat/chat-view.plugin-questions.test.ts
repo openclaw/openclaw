@@ -267,6 +267,7 @@ it.each(["native", "delegated"] as const)(
     const onRefresh = vi.fn();
     const initial = createChatProps({
       paneId: `mobile-presentation-${mode}`,
+      selectedSession: { key: "agent:main:main", kind: "direct", hasMessages: true },
       mobileComposer: true,
       loading: true,
       draft: "Retain this draft",
@@ -276,8 +277,8 @@ it.each(["native", "delegated"] as const)(
     render(initial);
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
-      expect(provider.querySelector(".chat-error.app-toast")?.textContent).toContain(
-        "Couldn't finish this reply.",
+      expect(provider.querySelector(".chat-error--reply .app-toast__message")?.textContent).toBe(
+        "Request interrupted.\nPlease check the conversation.",
       );
     });
     const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -285,13 +286,13 @@ it.each(["native", "delegated"] as const)(
     provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
 
-    const notice = provider.querySelector(".chat-error.app-toast");
+    const notice = provider.querySelector(".chat-error--reply");
     render({ ...initial, mobileComposer: false });
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
-      expect(provider.querySelector(".chat-error.app-toast")).toBe(notice);
-      expect(provider.querySelector(".chat-error")?.textContent).toContain(
-        "Couldn't finish this reply. Check the conversation before trying again.",
+      expect(provider.querySelector(".chat-error--reply")).toBe(notice);
+      expect(notice?.querySelector(".app-toast__message")?.textContent).toBe(
+        "Request interrupted.\nPlease check the conversation.",
       );
     });
     expect(provider.querySelector("textarea")).toBe(textarea);

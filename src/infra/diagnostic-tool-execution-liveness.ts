@@ -126,7 +126,7 @@ export function recordDiagnosticToolExecutionDeadline(deadlineAtMs: number | und
   state.context.getStore()?.(deadlineAtMs);
 }
 
-/** The Code Mode owner supplies only its current, bounded bridge frontier. */
+/** The execution owner supplies only its current, bounded structural wait state. */
 export function captureDiagnosticToolExecutionAwaiting() {
   const carrier = state.context.getStore();
   return (read: () => readonly DiagnosticToolAwaiting[]) => carrier?.awaiting?.(read);

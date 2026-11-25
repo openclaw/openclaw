@@ -1,12 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
+import { resolveSettledTurnFinalizationRequest } from "./incomplete-turn-recovery.js";
 import { toolAssistant } from "./settled-turn-fixtures.test-support.js";
 import { prepareAttempt } from "./terminal-preparation.test-support.js";
-import {
-  resolveEmbeddedRunTerminal,
-  resolveSettledTurnFinalizationRequest,
-} from "./terminal-resolution.js";
+import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import {
   expectComplete,
   makeTerminalInput,

@@ -7,6 +7,7 @@
  * --retained measures real projection/fragment ownership and release (use --expose-gc).
  * --images uses 48 messages with 12 frozen 64 KiB inline images (user + tool results),
  * the real host image normalizer and existing serialization on both revisions.
+ * --large-images uses 20 frozen 1–5 MiB images (60 MiB decoded); use --mode build.
  * --mode system isolates system normalization; use --prepared-system and --iterations 20000.
  * --prepared-system carries a session-owned 64 KiB prompt revision through request construction.
  * All non-build modes consume contiguous bytes, flattening older Blob bodies like guarded fetch.
@@ -52,6 +53,7 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean", default: false },
     retained: { type: "boolean", default: false },
     "prepared-system": { type: "boolean", default: false },
+    "large-images": { type: "boolean", default: false },
     images: { type: "boolean", default: false },
     restored: { type: "boolean", default: false },
     turns: { type: "string" },
@@ -68,10 +70,15 @@ assert(
 );
 assert(values.turns === undefined || ["100", "500"].includes(values.turns));
 assert(values.hook === undefined || ["none", "observer", "service-tier"].includes(values.hook));
+if (values["large-images"]) {
+  values.images = true;
+}
 const messageCount = values.turns
   ? Number(values.turns) * 3
   : values.images
-    ? 48
+    ? values["large-images"]
+      ? 66
+      : 48
     : Number(values.messages);
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
@@ -173,13 +180,15 @@ for (let index = 0; index < messageCount; index++) {
 }
 if (values.images) {
   // Synthetic PNG headers exercise MIME sniffing without invoking a native image codec.
-  const bytes = Buffer.alloc(64 * 1024, 0xa7);
-  Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(bytes);
-  for (let index = 0; index < 36; index += 6) {
+  let imageIndex = 0;
+  for (let index = 0; index < (values["large-images"] ? 60 : 36); index += 6) {
     for (const offset of [0, 2]) {
       const message = messages[index + offset]!;
       assert(message.role === "toolResult" || message.role === "user");
       assert(Array.isArray(message.content));
+      const size = values["large-images"] ? (1 + (imageIndex++ % 5)) * 1024 * 1024 : 64 * 1024;
+      const bytes = Buffer.alloc(size, 0xa7);
+      Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(bytes);
       bytes.writeUInt32BE(index + offset, 32);
       message.content.push({
         type: "image",
@@ -526,9 +535,11 @@ const prepared = await build();
 let lastPrepared = prepared;
 let last: Uint8Array<ArrayBuffer> | undefined;
 let lastSystem: ReturnType<typeof buildAnthropicSystemBlocks>;
+const wallSamples: number[] = [];
 async function run() {
+  wallSamples.length = 0;
   for (let index = 0; index < iterations; index++) {
-    const requestStart = intervalMs ? performance.now() : 0;
+    const requestStart = performance.now();
     if (values.mode === "system") {
       assert(context);
       lastSystem = buildAnthropicSystemBlocks(
@@ -545,6 +556,7 @@ async function run() {
     }
     lastPrepared = values.mode === "serialize" ? prepared : await build();
     last = values.mode === "build" ? undefined : await encode(lastPrepared);
+    wallSamples.push(performance.now() - requestStart);
     if (intervalMs) {
       await delay(Math.max(0, intervalMs - (performance.now() - requestStart)));
     }
@@ -592,6 +604,8 @@ const collections = gc.stop()?.statistics ?? [];
 let allocationBytesPerRequest: number | undefined;
 let sites: Array<{ name: string; bytesPerRequest: number }> | undefined;
 const ownerNames = new Set([
+  "estimateBase64DecodedBytes",
+  "normalizeAnthropicInlineContentBlocks",
   "copyPlainData",
   "samePlainData",
   "inspectPlainData",
@@ -657,7 +671,7 @@ console.log(
     messages: messageCount,
     mode: values.mode,
     preparedSystem: values["prepared-system"],
-    images: values.images ? 12 : 0,
+    images: values.images ? (values["large-images"] ? 20 : 12) : 0,
     turns: values.turns,
     hook: values.hook,
     intervalMs,
@@ -670,6 +684,8 @@ console.log(
     mainThreadCpuUsPerRequest: (cpu.user + cpu.system) / iterations,
     allocationBytesPerRequest,
     elapsedMs,
+    wallMedianMs: wallSamples.toSorted((a, b) => a - b)[Math.floor(wallSamples.length / 2)],
+    wallP95Ms: wallSamples.toSorted((a, b) => a - b)[Math.floor(wallSamples.length * 0.95)],
     gcMs: collections.reduce((sum, entry) => sum + entry.cost / 1000, 0),
     gcMaxMs: Math.max(0, ...collections.map((entry) => entry.cost / 1000)),
     gcCount: collections.length,

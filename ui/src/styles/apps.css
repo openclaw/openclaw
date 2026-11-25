@@ -3,7 +3,7 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
 .apps-hero {
@@ -45,6 +45,16 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--space-4, 16px);
+}
+
+/* A native setup report belongs to Chrome, not to the neighboring Plugins card. */
+.apps-grid:has(.native-chrome-setup) {
+  align-items: start;
+}
+
+/* An ordinary browser has no native controls and needs no flex gap for them. */
+.apps-card__body > openclaw-native-chrome-setup:empty {
+  display: none;
 }
 
 .apps-card {

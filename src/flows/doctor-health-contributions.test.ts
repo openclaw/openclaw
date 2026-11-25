@@ -3101,7 +3101,7 @@ describe("doctor health contributions", () => {
         expect.objectContaining({
           path: "gateway.port",
           severity: "error",
-          fixHint: expect.stringContaining("openclaw config unset"),
+          fixHint: expect.stringContaining(" config file`"),
         }),
       );
     });

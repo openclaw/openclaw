@@ -37,14 +37,8 @@ function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
     : undefined;
 }
 
-/** Snapshots the permissions used by all scheduled message actions. */
-export function resolveCronJobMessageToolAuthorityInputs(job: CronStoredJob) {
-  const policy = resolveCronJobScheduledMessagePolicy(job);
-  return policy ? { policy } : undefined;
-}
-
 /** Snapshots the normalized permissions used by scheduled message access. */
-export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
   const policy = resolveCronJobScheduledMessagePolicy(job);
   if (!policy) {
     return undefined;
@@ -67,16 +61,6 @@ export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
         }
       : {}),
   };
-}
-
-export function cronJobMessageToolAuthorityInputsEqual(
-  previous: CronStoredJob,
-  next: CronStoredJob,
-): boolean {
-  return isDeepStrictEqual(
-    resolveCronJobMessageToolAuthorityInputs(previous),
-    resolveCronJobMessageToolAuthorityInputs(next),
-  );
 }
 
 export function cronJobMessageActionAuthorityInputsEqual(
@@ -161,6 +145,10 @@ export function reconcileCronOperatorSource(params: {
     isCronOperatorSourceParent(job, source.sessionKey)
   ) {
     job.operatorSource = { source, executionRevision };
+  } else if (source?.snapshot.participationCeiling) {
+    throw new TypeError(
+      "Participant automation edits must retain authenticated execution authority.",
+    );
   } else {
     delete job.operatorSource;
   }

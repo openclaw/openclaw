@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
-import { basename, delimiter, join } from "node:path";
+import { basename, delimiter, join, relative } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect } from "vitest";
 import { parse } from "yaml";
@@ -233,6 +233,77 @@ fi
 });
 
 describe("pnpm version output owns its failure", () => {
+  it("shares the store archive across hosted and Boat workspace layouts", async ({ command }) => {
+    const root = command.createTempDir("pnpm-portable-store-");
+    const workspaces = [
+      join(root, "home/runner/work/repo/repo"),
+      join(root, "boat/_work/repo/repo"),
+    ];
+    const resolve = action.runs.steps.find(
+      (step: { name: string }) => step.name === "Resolve pnpm store path",
+    );
+    const restore = action.runs.steps.find(
+      (step: { name: string }) => step.name === "Restore pnpm store cache",
+    );
+    const cachePaths: string[] = [];
+    for (const workspace of workspaces) {
+      fs.mkdirSync(workspace, { recursive: true });
+      const output = join(workspace, "outputs");
+      const envFile = join(workspace, "env");
+      const result = await command.run("bash", ["-eu", "-c", resolve.run], {
+        cwd: workspace,
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_WORKSPACE: workspace,
+          GITHUB_OUTPUT: output,
+          GITHUB_ENV: envFile,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const outputs = Object.fromEntries(
+        read(output)
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      cachePaths.push(
+        restore.with.path.replace(
+          /\$\{\{ steps\.pnpm-store\.outputs\.([^ ]+) \}\}/g,
+          (_: string, name: string) => expectDefined(outputs[name], "store cache path"),
+        ),
+      );
+      expect(read(envFile)).toContain(
+        "PNPM_CONFIG_STORE_DIR=" + join(workspace, ".cache/openclaw-pnpm-store") + "\n",
+      );
+    }
+    // Actions versions caches by the literal path input as well as the key.
+    expect(cachePaths[1]).toBe(cachePaths[0]);
+    const cachePath = cachePaths[0]!;
+    const publisher = parse(read(".github/workflows/vitest-cache-warm.yml"));
+    const save = publisher.jobs.dependencies.steps.find(
+      (step: { name: string }) => step.name === "Save pnpm store cache",
+    );
+    const setup = parse(read(".github/actions/setup-node-env/action.yml"));
+    expect(save.with.path).toBe("${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}");
+    expect(setup.outputs["pnpm-store-cache-path"].value).toBe(
+      "${{ steps.setup-pnpm.outputs.store-cache-path }}",
+    );
+    expect(action.outputs["store-cache-path"].value).toBe(restore.with.path);
+    const entry = join(workspaces[0]!, cachePath, "entry");
+    fs.writeFileSync(entry, "cached package bytes\n");
+    const archive = join(root, "store.tar");
+    const pack = await command.run("tar", ["-cf", archive, "-C", workspaces[0]!, cachePath]);
+    expect(pack.status, pack.stderr).toBe(0);
+    const unpack = await command.run("tar", ["-xf", archive, "-C", workspaces[1]!]);
+    expect(unpack.status, unpack.stderr).toBe(0);
+    expect(read(join(workspaces[1]!, ".cache/openclaw-pnpm-store/entry"))).toBe(
+      "cached package bytes\n",
+    );
+  });
+
   it.for([false, true])(
     "restores the store root before pnpm runs (configured: %s)",
     async (configured, { command }) => {
@@ -259,7 +330,7 @@ describe("pnpm version output owns its failure", () => {
       });
       expect(result.error, "pnpm store action subprocess").toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
-      expect(read(output)).toBe(`path=${store}\n`);
+      expect(read(output)).toBe(`path=${store}\ncache-path=${relative(root, store)}\n`);
       expect(read(envFile)).toBe(
         `PNPM_CONFIG_STORE_DIR=${store}\nPNPM_CONFIG_CACHE_DIR=${store}/cache\n`,
       );
@@ -271,18 +342,62 @@ describe("pnpm version output owns its failure", () => {
     const output = join(root, "outputs");
     fs.writeFileSync(output, "");
     const step = action.runs.steps.find((entry: { id?: string }) => entry.id === "pnpm-version");
-    const run = `pnpm() { if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }\n${step.run}`;
+    const calls = join(root, "pnpm-calls");
+    const pnpm = `pnpm() { echo called >> "$PNPM_CALLS"; if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }`;
+    const run = `${pnpm}\n${step.run}`;
     const result = await command.run(
       "bash",
       ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run],
       {
         encoding: "utf8",
         cwd: root,
-        env: { PATH: process.env.PATH, PROJECT_DIR: root, GITHUB_OUTPUT: output },
+        env: {
+          PATH: process.env.PATH,
+          PROJECT_DIR: root,
+          GITHUB_OUTPUT: output,
+          PNPM_CALLS: calls,
+        },
       },
     );
     expect(result.error, "pnpm version action subprocess").toBeUndefined();
     expect(result.status, result.stderr).toBe(status);
     expect(read(output)).toBe(status === 0 ? "pnpm-version=12.9.0\n" : "");
+    if (status === 0) {
+      const nodeAction = parse(read(".github/actions/setup-node-env/action.yml"));
+      const diagnostic = nodeAction.runs.steps.find(
+        (entry: { name?: string }) => entry.name === "Runtime versions",
+      );
+      const outputs = Object.fromEntries(
+        read(output)
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      const env = Object.fromEntries(
+        Object.entries(diagnostic.env ?? {}).map(([key, expression]) => [
+          key,
+          String(expression).replace(
+            /\$\{\{ steps\.setup-pnpm\.outputs\.([^ ]+) \}\}/g,
+            (_, name) => expectDefined(outputs[name], `recorded pnpm output ${name}`),
+          ),
+        ]),
+      );
+      const versions = await command.run(
+        "bash",
+        [
+          "--noprofile",
+          "--norc",
+          "-e",
+          "-o",
+          "pipefail",
+          "-c",
+          `${pnpm}\nnode() { echo fixture-node; }\nnpm() { echo fixture-npm; }\nbun() { echo fixture-bun; }\n${diagnostic.run}`,
+        ],
+        { encoding: "utf8", cwd: root, env: { PATH: process.env.PATH, PNPM_CALLS: calls, ...env } },
+      );
+      expect(versions.status, versions.stderr).toBe(0);
+      expect(versions.stdout).toBe("fixture-node\nfixture-npm\n12.9.0\nfixture-bun\n");
+    }
+    expect(read(calls)).toBe("called\n");
   });
 });

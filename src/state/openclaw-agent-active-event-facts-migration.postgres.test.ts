@@ -53,7 +53,7 @@ describe.skipIf(!connection)("PostgreSQL active event facts migration", () => {
         [],
       );
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*41/iu);
+      expect(() => fixture.open(source)).toThrow(/minimum reader 41.*supports 40/iu);
       const reopened = fixture.open(target);
       reopened.exec(
         "INSERT INTO session_transcript_active_event_facts VALUES ('retained',1,46,'{}')",

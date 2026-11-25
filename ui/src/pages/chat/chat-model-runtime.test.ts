@@ -3,6 +3,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
@@ -35,7 +36,10 @@ type ModelControlsProps = Parameters<typeof ChatModelControls>[0];
 async function renderControls(
   result: SessionsListResult,
   models: ModelCatalogEntry[],
-  options: Pick<ModelControlsProps, "onModelSelect" | "onModelSetup" | "modelSelectionLocked"> = {},
+  options: Pick<
+    ModelControlsProps,
+    "onModelSelect" | "onModelSetup" | "modelSelectionLocked" | "modelAuthStatusResult"
+  > = {},
   container = document.createElement("div"),
 ) {
   await renderChatModelControls(
@@ -360,4 +364,25 @@ it("carries provider presentation from the admitted catalog into trigger and pic
   );
   expect(container.querySelector('[data-chat-model-option="workstation/local"]')).not.toBeNull();
   expect(onModelSelect).not.toHaveBeenCalled();
+});
+
+it("retains model controls when inference credentials belong to the worker", async () => {
+  const result = sessionsFor(model);
+  result.sessions[0]!.modelOverrideSource = null;
+  result.sessions[0]!.placement = createActiveSessionPlacement({
+    environmentId: "worker:test",
+    workspaceBaseManifestRef: "workspace-base",
+    remoteWorkspaceDir: "/worker/workspace",
+    inference: "worker",
+  });
+  const container = await renderControls(
+    result,
+    [{ ...model, available: false, runtimeChoices: [] }],
+    {
+      modelAuthStatusResult: { ts: 1, providers: [] },
+    },
+  );
+  expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain("GPT-5.6 Sol");
+  expect(container.querySelector(solSelector)).not.toBeNull();
+  expect(container.querySelector(".chat-controls__effort-picker")).not.toBeNull();
 });

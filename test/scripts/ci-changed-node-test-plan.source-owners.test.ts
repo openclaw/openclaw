@@ -12,10 +12,8 @@ import {
   createSelectedNodeTestShardBundles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
-import {
-  isCiProofTestFile,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -194,6 +192,12 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(owners ?? [])).toEqual([reader]);
   });
 
+  it("selects the Node launcher proof when its CI runtime policy changes", () => {
+    expect(resolvePolicyTestTargets(["scripts/lib/ci-test-runtime.mts"])).toContain(
+      "src/infra/git-release.test.ts",
+    );
+  });
+
   it.each([
     ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
     ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
@@ -297,10 +301,10 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.restart-final.integration.test.ts",
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
-        "src/auto-reply/reply/commands-allowlist.owner.test.ts",
         "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
         "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
         "src/gateway/operator-run-recovery.channel.test.ts",
+        "src/gateway/operator-run-recovery.start-grant.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
         "src/gateway/session-restart-resume.admission.test.ts",
@@ -855,6 +859,7 @@ describe("CI changed Node test plan", () => {
       [["node-runtime-recovery.mjs"], ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"]],
       [["src/auto-reply/reply/abort.test.ts"], ["test/scripts/tsgo-core-test-shards.test.ts"]],
       [["scripts/lib/ci-proof-test-inventory.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
+      [["scripts/lib/ci-test-tier-policy.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
       [
         ["src/plugins/plugin-instance.ts"],
         ["test/scripts/eager-import-closure.test.ts", "test/scripts/pr-worktree-provision.test.ts"],

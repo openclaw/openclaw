@@ -944,6 +944,12 @@ extension OpenClawChatViewModel {
             retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)
         })
         nextMessages = Self.dedupeMessages(nextMessages)
+        self.applyOlderHistoryBoundary(
+            payload,
+            page: canonical,
+            isDelta: isDelta,
+            replacingCanonicalHistory: replacingCanonicalHistory,
+            to: &nextMessages)
         self.historyRouteLocalUserEchoIDs.formIntersection(nextMessages.map(\.id))
         // An unchanged cursor is not a newer transcript projection. Incomplete reads must not fence
         // an older request that still owns a durable reply for the unanswered turn.

@@ -30,8 +30,16 @@ type Publication = {
 };
 export type PublicationView = () => Publication;
 
-const publications = new WeakMap<
+type PublicationProjection = Pick<
   SessionRowProjection,
+  "onSelectionChange" | "onMembershipChange" | "onFactsChange"
+> & {
+  state: Pick<SessionRowProjection["state"], "cfg" | "revision"> & {
+    rowContext: Pick<SessionRowProjection["state"]["rowContext"], "identityProjection">;
+  };
+};
+const publications = new WeakMap<
+  PublicationProjection,
   {
     revision: object | undefined;
     cfg: SessionRowProjection["state"]["cfg"];
@@ -40,7 +48,7 @@ const publications = new WeakMap<
 >();
 /** Retained comparison witnesses follow the projection lifecycle, independently of readers. */
 export function prepareSessionRowPublicationView(
-  projection: SessionRowProjection,
+  projection: PublicationProjection,
 ): PublicationView {
   return () => {
     const { revision, cfg, rowContext } = projection.state;
@@ -58,6 +66,7 @@ export function prepareSessionRowPublicationView(
       };
       publications.set(projection, publication);
       const retained = publication;
+      projection.onMembershipChange(() => retained.lists.invalidateSelections(true));
       projection.onSelectionChange((change) => {
         if (change.kind === "reset") {
           if (retained.lists.hasRowBaselines()) {

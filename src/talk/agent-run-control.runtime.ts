@@ -65,6 +65,7 @@ function resolveSourceRunOwner(runId: string, signal: AbortSignal) {
 async function stopRealtimeVoiceSessionRun(params: {
   sessionKey: string;
   sessionId: string;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
   const operation = resolveActiveReplyOperationForSessionId(params.sessionId);
   if (!operation || operation.key !== params.sessionKey) {
@@ -80,7 +81,12 @@ async function stopRealtimeVoiceSessionRun(params: {
   const outcome = await stopSession({
     source: "talk",
     capture,
-    hookContext: { ...params, commandSource: "talk" },
+    assertCurrent: params.assertCurrent,
+    hookContext: {
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      commandSource: "talk",
+    },
     stopChildren: async (applyParentStop) => {
       if (!turnRunId) {
         await applyParentStop();
@@ -92,6 +98,7 @@ async function stopRealtimeVoiceSessionRun(params: {
         agentId: operation.agentId,
         requesterTurnRunId: turnRunId,
         beforeKill: applyParentStop,
+        assertCurrent: params.assertCurrent,
       });
       return {
         stopped: descendants?.killed ?? 0,

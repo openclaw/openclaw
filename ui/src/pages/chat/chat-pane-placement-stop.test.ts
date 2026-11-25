@@ -394,7 +394,8 @@ describe("chat pane worker stop", () => {
       expect(actions.querySelector<HTMLButtonElement>(".btn[autofocus]")?.disabled).toBe(true);
       expect(actions.querySelector<HTMLButtonElement>(".btn.danger")?.disabled).toBe(true);
       expect(
-        document.querySelector<HTMLButtonElement>(".session-worker-stop__close")?.disabled,
+        document.querySelector<HTMLButtonElement>(".session-worker-stop-dialog .oc-dialog__close")
+          ?.disabled,
       ).toBe(true);
       answerConfirmDialog(actions, "confirm");
       await pane.changeHeaderPlacement(sessionA, "reclaim");

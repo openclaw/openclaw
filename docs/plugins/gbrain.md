@@ -18,9 +18,15 @@ only connects and reports.
 
 ## Before you install
 
-On macOS and Linux, GBrain needs [Bun](https://bun.sh) 1.4.4 or newer. OpenClaw does
-not install Bun. If neither `gbrain` nor `bun` is installed, the plugin shows this
-command in the Control UI; run it once and setup finishes within a minute:
+On Apple Silicon macOS and x86-64 Linux you need nothing else: without Bun, the
+plugin installs GBrain's own release binary. It accepts the download only when
+GitHub's build-provenance attestation shows GBrain's release workflow built that
+exact file. When Bun is already installed, the plugin uses GBrain's Bun install.
+
+GBrain publishes no binary for Intel macOS or ARM Linux. There it needs
+[Bun](https://bun.sh) 1.4.4 or newer. OpenClaw does not install Bun. If neither
+`gbrain` nor `bun` is installed, the plugin shows this command in the Control UI;
+run it once and setup finishes within a minute:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -33,8 +39,10 @@ In Docker, the GBrain container image already includes Bun; see [Docker](#docker
 
 On the first Gateway start after install, the plugin:
 
-1. Uses the `gbrain` command when it is installed. When it is missing and Bun is
-   installed, it runs GBrain's installer: `bun install -g github:garrytan/gbrain#stable`.
+1. Uses the `gbrain` command when it is installed. Otherwise, with Bun present, it
+   runs `bun install -g github:garrytan/gbrain#stable`; without Bun, it downloads
+   GBrain's stable release binary to `~/.gbrain/bin/gbrain` (Apple Silicon macOS,
+   x86-64 Linux).
 2. Starts GBrain's service with `gbrain mcp expose --no-tailscale --yes`. GBrain
    installs a launchd agent (`com.gbrain.serve`) on macOS or a systemd user unit
    (`gbrain-serve.service`) on Linux, on `127.0.0.1:3131`. When no brain exists yet,
@@ -77,16 +85,22 @@ read-only to create its key; it never opens the brain.
 The plugin rechecks every minute and reports problems as plugin health in the Control
 UI and in `openclaw plugins inspect gbrain --runtime --json`.
 
-| You see                                                       | Cause                                                                                    | What to do                                                                                                                 |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| GBrain needs Bun 1.4.4 or newer                               | `gbrain` and `bun` are both missing                                                      | Install Bun (`curl -fsSL https://bun.sh/install \| bash`; on Linux it also needs `unzip`). Setup finishes within a minute. |
-| GBrain is not running next to this container                  | Docker without the overlay                                                               | Start Compose with `deploy/gbrain/compose.yaml`.                                                                           |
-| GBrain's service is not answering                             | The service stopped or crashed                                                           | `gbrain mcp expose --status`; GBrain's supervisor restarts it.                                                             |
-| Another program answers on 127.0.0.1:3131                     | Port taken                                                                               | Free the port, or `gbrain mcp expose --no-tailscale --yes --port <port>`; the plugin follows GBrain's receipt.             |
-| The gbrain memory server is running but cannot open its brain | Another `gbrain serve` (for example a stdio entry in another app) holds the PGLite brain | Stop that process. GBrain rechecks every 5 seconds.                                                                        |
+| You see                                                                                            | Cause                                                                                               | What to do                                                                                                                 |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| GBrain publishes release binaries only for Apple Silicon macOS and x86-64 Linux; … needs Bun 1.4.4 | Intel macOS or ARM Linux with neither `gbrain` nor `bun`                                            | Install Bun (`curl -fsSL https://bun.sh/install \| bash`; on Linux it also needs `unzip`). Setup finishes within a minute. |
+| Installing GBrain failed: … no build-provenance attestation                                        | The downloaded binary does not match GBrain's release workflow                                      | Nothing was installed. OpenClaw retries within 10 minutes; report it to GBrain if it repeats.                              |
+| Installing GBrain failed: GitHub refused … API limit for this network is used up                   | The attestation lookup hit GitHub's unauthenticated limit (60 requests an hour per network address) | Nothing was installed. OpenClaw retries within 10 minutes; the limit resets within an hour.                                |
+| GBrain is not running next to this container                                                       | Docker without the overlay                                                                          | Start Compose with `deploy/gbrain/compose.yaml`.                                                                           |
+| GBrain's service is not answering                                                                  | The service stopped or crashed                                                                      | `gbrain mcp expose --status`; GBrain's supervisor restarts it.                                                             |
+| Another program answers on 127.0.0.1:3131                                                          | Port taken                                                                                          | Free the port, or `gbrain mcp expose --no-tailscale --yes --port <port>`; the plugin follows GBrain's receipt.             |
+| The gbrain memory server is running but cannot open its brain                                      | Another `gbrain serve` (for example a stdio entry in another app) holds the PGLite brain            | Stop that process. GBrain rechecks every 5 seconds.                                                                        |
 
 A revoked or rotated OpenClaw key is replaced automatically within a minute.
-`gbrain upgrade` needs no OpenClaw change.
+`gbrain upgrade` needs no OpenClaw change. With the release binary, add
+`~/.gbrain/bin` to your `PATH` to run `gbrain` in a terminal: `gbrain upgrade`
+checks the new version through `PATH` and stops before restarting the service when
+it cannot find `gbrain` there. On Linux, `gbrain upgrade` also needs `git` to read
+GBrain's stable channel.
 
 ## Uninstall
 

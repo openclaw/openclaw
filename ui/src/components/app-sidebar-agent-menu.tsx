@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, mapArray, merge } from "solid-js";
+import { createMemo, For, mapArray, merge, Show } from "solid-js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
@@ -34,6 +34,8 @@ type SidebarAgentMenuSwitcherParams = {
   resolveAvatarUrl: (url: string) => string | null;
   avatarErrorHandler: (url: string) => () => void;
   agentUnreadCount: (agentId: string) => number;
+  /** Absent while this connection cannot turn an agent into a Template. */
+  onAgentShare?: (agentId: string) => void;
   onAgentSettings: (agentId: string) => void;
 };
 
@@ -100,6 +102,31 @@ function renderAgentGroupAvatar(
   );
 }
 
+function AgentRowAction(props: {
+  controls?: MenuControls;
+  icon: "share" | "settings";
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      ref={props.controls?.ref()}
+      type="button"
+      class={["sidebar-agent-menu__action", `sidebar-agent-menu__${props.icon}`]}
+      aria-label={props.label}
+      tabindex="-1"
+      data-form-control
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        props.onSelect();
+      }}
+    >
+      <Icon name={props.icon} />
+    </button>
+  );
+}
+
 function renderAgentRow(
   readAgent: () => GatewayAgentRow,
   params: SidebarAgentMenuSwitcherParams,
@@ -153,21 +180,22 @@ function renderAgentRow(
               <span class="btn__spinner" aria-hidden="true" />
             </span>
           ) : (
-            <button
-              ref={controls?.ref()}
-              type="button"
-              class="sidebar-agent-menu__settings"
-              aria-label={t("agentChip.namedSettings", { name: label() })}
-              tabindex="-1"
-              data-form-control
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                params.onAgentSettings(agentId());
-              }}
-            >
-              <Icon name="settings" />
-            </button>
+            <>
+              <Show when={params.onAgentShare}>
+                <AgentRowAction
+                  controls={controls}
+                  icon="share"
+                  label={t("agentChip.namedShare", { name: label() })}
+                  onSelect={() => params.onAgentShare?.(agentId())}
+                />
+              </Show>
+              <AgentRowAction
+                controls={controls}
+                icon="settings"
+                label={t("agentChip.namedSettings", { name: label() })}
+                onSelect={() => params.onAgentSettings(agentId())}
+              />
+            </>
           )}
         </span>
       </span>
@@ -231,7 +259,10 @@ function renderSidebarAgentMenuSwitcher(
 }
 
 export function renderSidebarAgentMenu(
-  params: Omit<SidebarAgentMenuSwitcherParams, "allAgentsScope" | "onAgentSettings"> & {
+  params: Omit<
+    SidebarAgentMenuSwitcherParams,
+    "allAgentsScope" | "onAgentShare" | "onAgentSettings"
+  > & {
     position: { x: number; top: number; placement?: "right-start" };
     anchor?: HTMLElement;
     basePath: string;
@@ -243,6 +274,7 @@ export function renderSidebarAgentMenu(
     onPointerLeave: () => void;
     onAfterShow: () => void;
     onSwitchAgent: (agentId: string) => void;
+    onShareAgent?: (agentId: string) => void;
     onClose: (restoreFocus?: boolean) => void;
     onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
     ref?: (handle: MenuHandle) => void;
@@ -301,6 +333,16 @@ export function renderSidebarAgentMenu(
     merge(params, {
       get allAgentsScope() {
         return params.rosterMode && hasMultipleAgents();
+      },
+      get onAgentShare() {
+        const share = params.onShareAgent;
+        return (
+          share &&
+          ((agentId: string) => {
+            params.onClose(false);
+            share(agentId);
+          })
+        );
       },
       onAgentSettings: (agentId: string) => {
         params.onClose(false);

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import fs, { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -543,6 +543,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
     const databasePath = path.join(root, "admitted.sqlite");
     const requestedPath =
       scenario === "different-path" ? path.join(root, "other.sqlite") : databasePath;
+    using stat = vi.spyOn(fs, "statSync");
     const admission = admissionFixture(() => {
       throw new Error("Format exchange must not request transaction authority");
     });
@@ -596,6 +597,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
         await expect(exchange).resolves.toEqual([0]);
       }
       expect(existsSync(requestedPath)).toBe(scenario === "admitted");
+      expect(stat.mock.calls.filter(([location]) => location === requestedPath)).toEqual([]);
     } finally {
       await worker.terminate();
       await admission.finish();

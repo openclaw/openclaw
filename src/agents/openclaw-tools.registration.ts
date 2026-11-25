@@ -9,6 +9,11 @@ import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
+import {
+  isToolExplicitlyAllowedByFactoryPolicy,
+  mergeFactoryPolicyList,
+} from "./openclaw-tools.media-factory-plan.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -69,6 +74,7 @@ type ProgressCardToolRegistrationParams = {
   modelProvider?: string;
   pluginToolDenylist?: string[];
   runtimeToolAllowlist?: string[];
+  fixedToolListing?: boolean;
 };
 
 export function prepareProgressCardToolForOpenClawTools(
@@ -90,7 +96,9 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
     !isToolAllowedByPolicyName("progress_card", {
       deny: expandShippedCoreToolPolicyNames(params.pluginToolDenylist),
     }) ||
-    !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist)
+    // A fixed listing builds it whatever the run allowlist names; the turn policy gates calls.
+    (!params.fixedToolListing &&
+      !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist))
   ) {
     return false;
   }
@@ -126,6 +134,35 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
       }).subagentPolicy,
     ].map(expandProgressCardPolicyNames),
   );
+}
+
+export function resolveOptionalToolRegistrationPolicy(
+  options: OpenClawToolsOptions | undefined,
+  embedded: boolean,
+): { includeMessageTool: boolean; scheduledWidgetExplicitlyAllowed: boolean } {
+  const denylist = mergeFactoryPolicyList(
+    options?.config?.tools?.deny,
+    options?.pluginToolDenylist,
+  );
+  return {
+    includeMessageTool:
+      !embedded ||
+      options?.sourceReplyDeliveryMode === "message_tool_only" ||
+      isToolExplicitlyAllowedByFactoryPolicy({
+        toolName: "message",
+        allowlist: mergeFactoryPolicyList(
+          options?.config?.tools?.allow,
+          options?.config?.tools?.alsoAllow,
+          options?.pluginToolAllowlist,
+        ),
+        denylist,
+      }),
+    scheduledWidgetExplicitlyAllowed: isToolExplicitlyAllowedByFactoryPolicy({
+      toolName: "show_widget",
+      allowlist: options?.runtimeToolAllowlist,
+      denylist,
+    }),
+  };
 }
 
 type PrimarySessionToolRegistrationParams = {

@@ -43,7 +43,19 @@ read_when:
   </Accordion>
 
   <Accordion title="Choose and configure models">
-    Set the primary model and optional fallbacks:
+    To change only the default primary model, use a **terminal command** on the
+    Gateway host. This updates `agents.defaults.model.primary` in the active
+    config and preserves unrelated settings, including configured fallbacks:
+
+    ```bash
+    openclaw config set agents.defaults.model.primary "anthropic/claude-sonnet-4-6"
+    ```
+
+    **Configuration example — do not run in a terminal.** To also configure
+    fallbacks and aliases, merge this fragment into `~/.openclaw/openclaw.json`
+    (or the path printed by `openclaw config file`). Keep other `agents.defaults`
+    settings and existing model entries. Choose the fallback list deliberately;
+    the example array replaces the existing fallback list, not appends to it:
 
     ```json5
     {

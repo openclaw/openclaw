@@ -21,6 +21,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { countSyncFsCalls } from "../lib/sync-fs-counters.mjs";
 const { values } = parseArgs({
   options: {
     root: { type: "string" },
@@ -108,37 +109,26 @@ const readChildCpu = async () => {
   return ticks * 10; // Linux fixture CLK_TCK is 100, verified with getconf.
 };
 const counters = {};
-const originalFs = new Map();
-if (values.counts) {
-  for (const name of [
-    "accessSync",
-    "existsSync",
-    "statSync",
-    "lstatSync",
-    "fstatSync",
-    "readdirSync",
-    "openSync",
-    "closeSync",
-    "readFileSync",
-    "readlinkSync",
-    "realpathSync",
-  ]) {
-    const original = fs[name];
-    originalFs.set(name, original);
-    const wrapped = (...args) => {
-      counters[name] = (counters[name] ?? 0) + 1;
-      return original(...args);
-    };
-    if (original.native) {
-      wrapped.native = (...args) => {
-        counters[`${name}.native`] = (counters[`${name}.native`] ?? 0) + 1;
-        return original.native(...args);
-      };
-    }
-    fs[name] = wrapped;
-  }
-  syncBuiltinESMExports();
-}
+const restoreFs = values.counts
+  ? countSyncFsCalls(
+      [
+        "accessSync",
+        "existsSync",
+        "statSync",
+        "lstatSync",
+        "fstatSync",
+        "readdirSync",
+        "openSync",
+        "closeSync",
+        "readFileSync",
+        "readlinkSync",
+        "realpathSync",
+      ],
+      (name) => {
+        counters[name] = (counters[name] ?? 0) + 1;
+      },
+    )
+  : undefined;
 const inspector = values.allocations ? new Session() : undefined;
 inspector?.connect();
 let watch;
@@ -221,12 +211,7 @@ try {
     helperCpuMs,
   };
 } finally {
-  for (const [name, original] of originalFs) {
-    fs[name] = original;
-  }
-  if (values.counts) {
-    syncBuiltinESMExports();
-  }
+  restoreFs?.();
   watch?.close();
   anchor.close();
   inspector?.disconnect();

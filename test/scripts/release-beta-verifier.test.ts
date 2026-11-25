@@ -519,7 +519,8 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(commands).toHaveLength(90);
+      // One hour of 10s retries under the default npm readback budget.
+      expect(commands).toHaveLength(360);
       expect(commands.every((args) => args[0] === "npm" && args[1] === "view")).toBe(true);
     },
   );

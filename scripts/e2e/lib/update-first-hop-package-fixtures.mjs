@@ -383,29 +383,38 @@ export function packFailingDoctorUpdateFixture(
     method: "candidate-failing-post-activation-doctor-fixture",
     ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
       stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
-      const relative = "dist/infra/update-migrated-finalize.worker.js";
-      const worker = path.join(root, relative);
-      fs.writeFileSync(
-        worker,
-        `if (process.argv.includes("--doctor") && process.env.OPENCLAW_STATE_DIR === ${JSON.stringify(stateDir)}) { process.stderr.write("fixture: post-activation Doctor fails\\n"); process.exit(1); }\n${fs.readFileSync(worker, "utf8")}`,
-      );
-      const bytes = fs.readFileSync(worker);
-      updateFixtureContentInventory(resolveFixturePaths(root), (entries) =>
-        entries.map((entry) =>
-          entry.path === relative
-            ? createPackageDistContentInventoryEntry(
-                entry.path,
-                {
-                  bytes: bytes.byteLength,
-                  digest: createHash("sha256").update(bytes).digest("hex"),
-                },
-                fs.statSync(worker).mode,
-              )
-            : entry,
-        ),
+      prependPostActivationDoctor(
+        root,
+        stateDir,
+        `process.stderr.write("fixture: post-activation Doctor fails\\n"); process.exit(1);`,
       );
     }),
   };
+}
+
+/** Rehearsal runs `doctor` on copied state, so only the post-activation Doctor runs `body`. */
+function prependPostActivationDoctor(root, stateDir, body) {
+  const relative = "dist/infra/update-migrated-finalize.worker.js";
+  const worker = path.join(root, relative);
+  fs.writeFileSync(
+    worker,
+    `if (process.argv.includes("--doctor") && process.env.OPENCLAW_STATE_DIR === ${JSON.stringify(stateDir)}) { ${body} }\n${fs.readFileSync(worker, "utf8")}`,
+  );
+  const bytes = fs.readFileSync(worker);
+  updateFixtureContentInventory(resolveFixturePaths(root), (entries) =>
+    entries.map((entry) =>
+      entry.path === relative
+        ? createPackageDistContentInventoryEntry(
+            entry.path,
+            {
+              bytes: bytes.byteLength,
+              digest: createHash("sha256").update(bytes).digest("hex"),
+            },
+            fs.statSync(worker).mode,
+          )
+        : entry,
+    ),
+  );
 }
 
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
@@ -419,7 +428,7 @@ export function packFutureUpdateFixture(candidateTarball, outputTarball, sequenc
 
 export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
-    method: "candidate-without-admission-marker-fixture",
+    method: "candidate-without-update-admission-fixture",
     ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
       const manifestPath = path.join(root, "package.json");
       const manifest = readJson(manifestPath);
@@ -428,14 +437,44 @@ export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball,
       }
       delete manifest.openclaw.updateAdmissionProtocol;
       writeJson(manifestPath, manifest);
+      // Frozen legacy updaters use the marker. The release-aware updater checks
+      // for candidate-side command modules instead and refuses this target.
+      const paths = resolveFixturePaths(root);
+      const removed = new Set();
+      for (const file of fs.readdirSync(path.join(root, "dist"))) {
+        if (/^check-release(?:-[\w-]+)?\.m?js$/u.test(file)) {
+          const relative = "dist/" + file;
+          fs.rmSync(path.join(root, relative));
+          removed.add(relative);
+        }
+      }
+      if (removed.size > 0) {
+        writeJson(
+          paths.inventory,
+          readJson(paths.inventory).filter((entry) => !removed.has(entry)),
+        );
+        updateFixtureContentInventory(paths, (entries) =>
+          entries.filter((entry) => !removed.has(entry.path)),
+        );
+      }
       stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
     }),
   };
 }
 
-function packFuturePluginFixture(candidateTarball, outputTarball, sequence = 0, expectedName = "") {
+/**
+ * A future plugin package. `targetVersion`, when given, is the core version it is served beside;
+ * otherwise the plugin's own release is advanced, which matches only a core cut from that release.
+ */
+export function packFuturePluginFixture(
+  candidateTarball,
+  outputTarball,
+  sequence = 0,
+  expectedName = "",
+  targetVersion = "",
+) {
   const receipt = packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
-    const version = futureFixtureVersion(sourceVersion, sequence);
+    const version = targetVersion || futureFixtureVersion(sourceVersion, sequence);
     const manifestPath = path.join(root, "package.json");
     const manifest = readJson(manifestPath);
     if (

@@ -40,7 +40,7 @@ export type SpawnBillingRoute = {
 };
 
 /** Maps the credential owner's evaluation onto the documented receipt values. */
-export function describeSpawnAuth(
+function describeSpawnAuth(
   evaluation: Pick<
     ModelAuthAvailabilityEvaluation,
     "availability" | "selectedAuthMode" | "selectedProfileId" | "runtimeAuth"
