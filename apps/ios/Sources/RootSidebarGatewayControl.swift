@@ -1,4 +1,5 @@
 import Combine
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
@@ -184,7 +185,6 @@ struct RootSidebarGatewayControl: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(GatewayConnectionController.self) private var gatewayController
     @State private var registry = GatewaySettingsStore.GatewayRegistry.empty
-    @State private var switchError: String?
     let fallbackName: String
     let openSettings: () -> Void
 
@@ -207,18 +207,11 @@ struct RootSidebarGatewayControl: View {
             .onAppear { self.refreshRegistry() }
             .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
                 .receive(on: DispatchQueue.main)) { _ in self.refreshRegistry() }
-            .alert("Could Not Switch Gateway", isPresented: Binding(
-                get: { self.switchError != nil },
-                set: { if !$0 { self.switchError = nil } }))
-            {
-                Button { self.switchError = nil } label: {
-                    Text("OK")
-                        .font(OpenClawType.body)
-                }
-            } message: {
-                Text(verbatim: self.switchError ?? "")
-                    .font(OpenClawType.body)
-            }
+    }
+
+    /// The picker shows the host it's still on, so the toast only says what to do first.
+    private func refuseSwitch(_ text: String) {
+        self.appModel.toasts.post(OpenClawToast(text, systemImage: "exclamationmark.circle", kind: .warning))
     }
 
     private func refreshRegistry() {
@@ -235,13 +228,11 @@ struct RootSidebarGatewayControl: View {
         if self.appModel.chatPresentation.viewModel?.isAttachmentOwnerPinned == true ||
             self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
         {
-            self.switchError = String(localized: """
-            Finish recording, remove attachments, or wait for delivery before switching gateways.
-            """)
+            self.refuseSwitch(String(localized: "Finish recording or remove attachments first."))
             return
         }
         if let draft = self.appModel.chatPresentation.viewModel?.input, !draft.isEmpty {
-            self.switchError = String(localized: "Send or clear the current draft before switching gateways.")
+            self.refuseSwitch(String(localized: "Send or clear your draft first."))
             return
         }
         self.appModel.isGatewayPickerRequestInFlight = true
@@ -257,9 +248,10 @@ struct RootSidebarGatewayControl: View {
                 // trust review, reset, and route commitment.
                 break
             case let .failed(message):
-                self.switchError = message
+                self.appModel.toasts.post(.failure(message, retry: { self.switchGateway(stableID) }))
             case .superseded:
-                self.switchError = String(localized: "Another connection attempt replaced this gateway switch.")
+                // The newer attempt is the one the picker shows; nothing to say about this one.
+                break
             }
         }
     }

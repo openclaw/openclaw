@@ -329,7 +329,6 @@ struct CommandSessionsScreen: View {
     @State private var archived: [OpenClawChatSessionEntry] = []
     @State private var isLoadingArchived = false
     @State private var archiveLoadFailed = false
-    @State private var actionErrorText: String?
     /// Notice for a partially loaded archive; rendered alongside the retained rows, never instead of them.
     @State private var partialLoadText: String?
     /// Bumped by the partial-load retry button; part of `refreshID` so `.task(id:)` refetches.
@@ -522,9 +521,6 @@ struct CommandSessionsScreen: View {
     private var notices: some View {
         if let groupError = self.appModel.sessionGroups.failure {
             self.noticeText(groupError)
-        }
-        if let actionErrorText {
-            self.noticeText(actionErrorText)
         }
         if let partial = self.partialNoticeText {
             HStack(spacing: 8) {
@@ -862,7 +858,11 @@ struct CommandSessionsScreen: View {
                 await self.refreshSessions()
                 self.openSessionKey(key)
             } catch {
-                self.actionErrorText = error.localizedDescription
+                self.appModel.toasts.post(.failure(
+                    String(
+                        format: String(localized: "Couldn’t fork “%@”."),
+                        CommandCenterTab.sessionTitle(session)),
+                    retry: { self.forkSession(session) }))
             }
         }
     }
@@ -879,13 +879,12 @@ struct CommandSessionsScreen: View {
                 }
                 await self.refreshSessions()
             } catch {
-                self.actionErrorText = error.localizedDescription
+                // The row's action already said what failed, in a toast with Try again.
             }
         }
     }
 
     private func refreshSessions() async {
-        self.actionErrorText = nil
         if self.statusScope == .archived {
             await self.appModel.sessionGroups.refresh(appModel: self.appModel)
             await self.loadArchived()
