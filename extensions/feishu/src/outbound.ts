@@ -41,6 +41,7 @@ import {
   type SendMediaResult,
 } from "./media.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
+import type { FeishuOutboundSendMedia } from "./outbound-types.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationFallback,
@@ -127,13 +128,6 @@ type FeishuOutboundPayload = Parameters<
 >[0]["payload"];
 type FeishuSendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
 type FeishuSendTextContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
-
-// Direct sends surface upload failure; normal replies may deliver a text fallback.
-export type FeishuOutboundSendMedia = (
-  params: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0] & {
-    propagateMediaUploadFailure?: boolean;
-  },
-) => ReturnType<NonNullable<ChannelOutboundAdapter["sendMedia"]>>;
 
 function toFeishuOutboundResult<T extends { chatId: string }>(result: T) {
   const { chatId, ...delivery } = result;
@@ -684,6 +678,7 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         mediaLocalRoots,
         mediaReadFile,
         propagateMediaUploadFailure,
+        filename,
       } = ctx;
       const sendParams = { cfg, to, accountId: ctx.accountId ?? undefined };
       const nextReplyToId = createFeishuReplyFanout(ctx);
@@ -740,6 +735,7 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
           mediaLocalRoots,
           mediaReadFile,
           ...mediaReplyMode,
+          ...(filename ? { fileName: filename } : {}),
           ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
       } catch (err) {
