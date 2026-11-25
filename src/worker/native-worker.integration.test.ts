@@ -179,7 +179,7 @@ describe.skipIf(process.platform === "win32")(
           'import { execFileSync } from "node:child_process";\n' +
           "const ancestors = []; let pid = process.ppid;\n" +
           'if (process.platform === "linux") { while (pid > 1 && ancestors.length < 20) { ancestors.push(pid); const stat = readFileSync("/proc/" + pid + "/stat", "utf8"); pid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]); } }\n' +
-          'const proof = { pid: process.pid, ancestors, catalog: execFileSync("git", ["config", "--get", "example.catalog"], {encoding: "utf8"}).trim(), toolData: JSON.parse(process.env.OPENCLAW_WORKER_TOOL_DATA), carrierPresent: "OPENCLAW_NODE_WORKER_EXECUTION" in process.env, startupPresent: process.argv.includes("--internal-worker-native-inference"), credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env };\n' +
+          'const proof = { pid: process.pid, ancestors, catalog: execFileSync("/usr/bin/git", ["config", "--get", "example.catalog"], {encoding: "utf8"}).trim(), toolData: JSON.parse(process.env.OPENCLAW_WORKER_TOOL_DATA), carrierPresent: "OPENCLAW_NODE_WORKER_EXECUTION" in process.env, startupPresent: process.argv.includes("--internal-worker-native-inference"), credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env };\n' +
           'writeFileSync(new URL("./tool-proof.json", import.meta.url), JSON.stringify(proof)); console.log("worker tool wrote proof");\n',
       );
       const registry = startupFor(descriptor, provider.baseUrl);
