@@ -315,7 +315,13 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
             throw new Error("Expected the shared chunk's emitted sourcemap asset");
           }
           expect(sidecar.source.length).toBeGreaterThan(0);
-          for (const entry of chunks.filter((chunk) => chunk.isEntry && chunk.map !== null)) {
+          const entryChunks = chunks.filter((chunk) => chunk.isEntry);
+          expect(entryChunks.map((entry) => entry.fileName).sort()).toEqual([
+            "left.js",
+            "right.js",
+          ]);
+          for (const entry of entryChunks) {
+            expect(entry.map).not.toBeNull();
             if (entry.sourcemapFileName === null) {
               throw new Error("Expected a mapped entry's sourcemap filename");
             }
@@ -348,7 +354,7 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
                   : Buffer.from(asset.source),
             });
           }
-          expect(entries.length).toBeGreaterThan(0);
+          expect(entries).toHaveLength(2);
           // Model an earlier plugin eliding code; retire its genuine map with that chunk.
           shared.code = "export{};";
         },
