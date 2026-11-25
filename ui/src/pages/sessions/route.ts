@@ -5,12 +5,12 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 
 export type SessionsRouteData = {
-  folder?: string | null;
+  folder?: string;
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
 };
 
-function routeOptions(location: RouteLocation) {
+function routeOptions(location: RouteLocation): SessionsRouteData {
   const search = new URLSearchParams(location.search);
   const expandedSessionKey = search.get("session")?.trim() || null;
   // The retired internal `showArchived` param is deliberately not read; Sessions
@@ -18,11 +18,10 @@ function routeOptions(location: RouteLocation) {
   const requestedStatus = search.get("status");
   const statusFilter: SessionArchivedFilter =
     requestedStatus === "archived" ? "archived" : requestedStatus === "all" ? "all" : "active";
-  return {
-    expandedSessionKey,
-    statusFilter,
-    folder: search.has("folder") ? (search.get("folder") ?? "") : null,
-  };
+  const options = { expandedSessionKey, statusFilter };
+  const folder = search.get("folder");
+  // An empty folder opens the folder list. Ordinary session routes keep their existing shape.
+  return folder === null ? options : { ...options, folder };
 }
 
 export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRouteData>(

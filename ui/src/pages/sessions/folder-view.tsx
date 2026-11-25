@@ -6,6 +6,7 @@ import { SessionProgressCard } from "../../components/session-progress-card-soli
 import { Icon } from "../../components/solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "../../components/solid/new-session-link.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { TabPanel, Tabs } from "../../components/solid/tabs.tsx";
 import { registerSessionFoldersEnglish } from "../../i18n/locales/en-session-folders.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
@@ -53,16 +54,16 @@ function SavedBrief(props: { row: GatewaySessionRow }) {
   const store = sessionProgressCardsForGateway(context.gateway);
   const progress = projectProgressCard(() => ({ store, target: { sessionKey: props.row.key } }));
   return (
-    <section class="folder-brief">
-      <div class="folder-eyebrow">{t("sessionFolders.savedBrief")}</div>
-      <h3>
+    <section class="card folder-brief">
+      <div class="row label">{t("sessionFolders.savedBrief")}</div>
+      <h3 class="card-title">
         <ThreadLink row={props.row} />
       </h3>
       <p class="muted">{t("sessionFolders.briefSource")}</p>
       <Show
         when={progress.read().card}
         fallback={
-          <p class="folder-empty">
+          <p class="card-sub">
             {progress.read().loading
               ? t("common.loading")
               : progress.read().error
@@ -82,8 +83,8 @@ function ThreadCard(props: { row: GatewaySessionRow; view: SessionsProps; pinned
   const context = useApplication();
   const active = () => isSessionRunStateActive(props.row);
   return (
-    <article class="folder-thread" data-folder-thread={props.row.key}>
-      <div class="folder-thread__top">
+    <article class="card" data-folder-thread={props.row.key}>
+      <div class="row folder-thread__top">
         <Icon name="messageSquare" />
         <ThreadLink row={props.row} />
         <SettingsStatus
@@ -92,9 +93,9 @@ function ThreadCard(props: { row: GatewaySessionRow; view: SessionsProps; pinned
         />
       </div>
       <Show when={props.row.lastAssistantMessage?.text ?? props.row.lastMessagePreview}>
-        {(preview) => <p class="folder-thread__preview">{preview()}</p>}
+        {(preview) => <p class="card-sub folder-thread__preview">{preview()}</p>}
       </Show>
-      <div class="folder-thread__footer">
+      <div class="filters label folder-thread__footer">
         <span>{formatRelativeTimestamp(props.row.updatedAt ?? 0)}</span>
         <button
           type="button"
@@ -146,7 +147,7 @@ export function SessionFolderView(props: {
       params: {},
       sessionScope: true,
     });
-  const [tab, setTab] = createSignal<"overview" | "threads" | "context">("overview");
+  const [tab, setTab] = createSignal("overview");
   const rows = createMemo(() => props.view.result?.sessions ?? []);
   const members = createMemo(() =>
     rows()
@@ -163,10 +164,10 @@ export function SessionFolderView(props: {
         when={props.folder}
         fallback={
           <>
-            <div class="folder-title-row">
+            <div class="row folder-title-row">
               <div>
-                <h2>{t("sessionFolders.title")}</h2>
-                <p class="muted">{t("sessionFolders.description")}</p>
+                <h2 class="page-title">{t("sessionFolders.title")}</h2>
+                <p class="page-subtitle">{t("sessionFolders.description")}</p>
               </div>
               <button
                 type="button"
@@ -178,12 +179,12 @@ export function SessionFolderView(props: {
                 {t("sessionFolders.newFolder")}
               </button>
             </div>
-            <div class="folder-grid">
+            <div class="grid folder-grid">
               <For each={props.view.knownCategories}>
                 {(name) => (
-                  <button type="button" class="folder-tile" onClick={() => props.onOpen(name)}>
+                  <button type="button" class="card folder-tile" onClick={() => props.onOpen(name)}>
                     <Icon name="folder" />
-                    <h3>{name}</h3>
+                    <h3 class="card-title">{name}</h3>
                     <span class="muted">
                       {t("sessionFolders.threadCount", {
                         count: String(rows().filter((row) => row.category === name).length),
@@ -195,7 +196,7 @@ export function SessionFolderView(props: {
               </For>
             </div>
             <Show when={!props.view.knownCategories.length}>
-              <p class="folder-empty">{t("sessionFolders.noFolders")}</p>
+              <p class="card-sub">{t("sessionFolders.noFolders")}</p>
             </Show>
           </>
         }
@@ -203,14 +204,14 @@ export function SessionFolderView(props: {
         <button class="btn btn--sm btn--ghost" onClick={() => props.onOpen("")}>
           ← {t("sessionFolders.title")}
         </button>
-        <div class="folder-title-row">
+        <div class="row folder-title-row">
           <div>
-            <div class="folder-eyebrow">
+            <div class="row label">
               <Icon name="folder" />
               {t("sessionFolders.projectFolder")}
             </div>
-            <h2>{props.folder}</h2>
-            <p class="muted">{t("sessionFolders.accessUnchanged")}</p>
+            <h2 class="page-title">{props.folder}</h2>
+            <p class="page-subtitle">{t("sessionFolders.accessUnchanged")}</p>
           </div>
           <NewSessionLink
             basePath={context.basePath}
@@ -225,100 +226,105 @@ export function SessionFolderView(props: {
             })()}
           />
         </div>
-        <div class="folder-metrics">
+        <div class="card filters folder-metrics">
           <div>
-            <strong>{members().length}</strong>
-            <span>{t("sessionFolders.threads")}</span>
+            <strong class="stat-value">{members().length}</strong>
+            <span class="label">{t("sessionFolders.threads")}</span>
           </div>
           <div>
-            <strong>{running()}</strong>
-            <span>{t("sessionFolders.running")}</span>
+            <strong class="stat-value">{running()}</strong>
+            <span class="label">{t("sessionFolders.running")}</span>
           </div>
           <div>
-            <strong>{pinned().length}</strong>
-            <span>{t("sessionFolders.pinned")}</span>
+            <strong class="stat-value">{pinned().length}</strong>
+            <span class="label">{t("sessionFolders.pinned")}</span>
           </div>
-          <p>{t("sessionFolders.statusCaveat")}</p>
+          <p class="label">{t("sessionFolders.statusCaveat")}</p>
         </div>
-        <div class="folder-tabs" role="tablist" aria-label={t("sessionFolders.title")}>
-          <For each={["overview", "threads", "context"] as const}>
-            {(name) => (
-              <button
-                role="tab"
-                aria-selected={tab() === name ? "true" : "false"}
-                class={["btn btn--sm", { primary: tab() === name }]}
-                onClick={() => setTab(name)}
-              >
-                {t("sessionFolders." + name)}
-              </button>
-            )}
-          </For>
-        </div>
-        <Show
-          when={tab() !== "context"}
-          fallback={
-            <section class="folder-context">
-              <h3>{t("sessionFolders.context")}</h3>
-              <p class="muted">{t("sessionFolders.contextDescription")}</p>
-              <For each={pinned()}>{(row) => <SavedBrief row={row} />}</For>
-              <Show when={!pinned().length}>
-                <p class="folder-empty">{t("sessionFolders.pinHint")}</p>
-              </Show>
-              <h3>{t("sessionFolders.artifacts")}</h3>
-              <p class="muted">{t("sessionFolders.artifactDescription")}</p>
-              <For each={members()}>
-                {(row) => (
-                  <div class="folder-artifact-source">
-                    <Icon name="folder" />
-                    <ThreadLink row={row} />
-                    <span class="muted">{t("sessionFolders.sourceThread")}</span>
-                  </div>
-                )}
-              </For>
-            </section>
-          }
-        >
-          <div class={["folder-layout", { "folder-layout--threads": tab() === "threads" }]}>
-            <section>
-              <div class="folder-section-title">
-                <h3>{t("sessionFolders.threads")}</h3>
-                <span class="muted">{t("sessionFolders.moveHint")}</span>
-              </div>
-              <div class="folder-thread-list">
-                <For each={members()}>
-                  {(row) => <ThreadCard row={row} view={props.view} pinned={isPinned(row)} />}
-                </For>
-              </div>
-              <Show when={!members().length}>
-                <p class="folder-empty">{t("sessionFolders.empty")}</p>
-              </Show>
-            </section>
-            <Show when={tab() === "overview"}>
-              <aside>
-                <Show
-                  when={briefing()}
-                  fallback={
-                    <section class="folder-brief">
-                      <h3>{t("sessionFolders.savedBrief")}</h3>
-                      <p class="muted">{t("sessionFolders.pinHint")}</p>
-                    </section>
-                  }
-                >
-                  {(row) => <SavedBrief row={row()} />}
+        <Tabs
+          class="folder-tabs"
+          ariaLabel={t("sessionFolders.title")}
+          active={tab()}
+          items={[
+            { value: "overview", label: t("sessionFolders.overview") },
+            { value: "threads", label: t("sessionFolders.threads") },
+            { value: "context", label: t("sessionFolders.context") },
+          ].map((item) => ({
+            ...item,
+            id: `session-folder-tab-${item.value}`,
+            panelId: "session-folder-panel",
+          }))}
+          onSelect={(value) => {
+            setTab(value);
+          }}
+        />
+        <TabPanel id="session-folder-panel" tabId={`session-folder-tab-${tab()}`} active>
+          <Show
+            when={tab() !== "context"}
+            fallback={
+              <section class="folder-context">
+                <h3 class="card-title">{t("sessionFolders.context")}</h3>
+                <p class="muted">{t("sessionFolders.contextDescription")}</p>
+                <For each={pinned()}>{(row) => <SavedBrief row={row} />}</For>
+                <Show when={!pinned().length}>
+                  <p class="card-sub">{t("sessionFolders.pinHint")}</p>
                 </Show>
-                <div class="folder-callout">
-                  <Icon name="layers" />
-                  <div>
-                    <strong>{t("sessionFolders.coordinator")}</strong>
-                    <p>{t("sessionFolders.coordinatorHint")}</p>
-                  </div>
+                <h3 class="card-title">{t("sessionFolders.artifacts")}</h3>
+                <p class="muted">{t("sessionFolders.artifactDescription")}</p>
+                <For each={members()}>
+                  {(row) => (
+                    <div class="filters folder-artifact-source">
+                      <Icon name="folder" />
+                      <ThreadLink row={row} />
+                      <span class="muted">{t("sessionFolders.sourceThread")}</span>
+                    </div>
+                  )}
+                </For>
+              </section>
+            }
+          >
+            <div class={["grid folder-layout", { "folder-layout--threads": tab() === "threads" }]}>
+              <section>
+                <div class="row folder-section-title">
+                  <h3 class="card-title">{t("sessionFolders.threads")}</h3>
+                  <span class="muted">{t("sessionFolders.moveHint")}</span>
                 </div>
-              </aside>
-            </Show>
-          </div>
-        </Show>
+                <div class="stack">
+                  <For each={members()}>
+                    {(row) => <ThreadCard row={row} view={props.view} pinned={isPinned(row)} />}
+                  </For>
+                </div>
+                <Show when={!members().length}>
+                  <p class="card-sub">{t("sessionFolders.empty")}</p>
+                </Show>
+              </section>
+              <Show when={tab() === "overview"}>
+                <aside class="stack">
+                  <Show
+                    when={briefing()}
+                    fallback={
+                      <section class="card folder-brief">
+                        <h3 class="card-title">{t("sessionFolders.savedBrief")}</h3>
+                        <p class="muted">{t("sessionFolders.pinHint")}</p>
+                      </section>
+                    }
+                  >
+                    {(row) => <SavedBrief row={row()} />}
+                  </Show>
+                  <div class="card row">
+                    <Icon name="layers" />
+                    <div>
+                      <strong>{t("sessionFolders.coordinator")}</strong>
+                      <p class="card-sub">{t("sessionFolders.coordinatorHint")}</p>
+                    </div>
+                  </div>
+                </aside>
+              </Show>
+            </div>
+          </Show>
+        </TabPanel>
       </Show>
-      <p class="folder-coverage">
+      <p class="label">
         {t("sessionFolders.coverage")}
         {props.view.result?.hasMore ? (
           <button class="btn btn--sm btn--ghost" onClick={() => props.view.onLoadMore()}>

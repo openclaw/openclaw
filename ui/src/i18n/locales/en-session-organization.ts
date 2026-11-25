@@ -279,6 +279,7 @@ const enSessionOrganization = {
     newGroupStale: sharedSessions.newGroupStale,
     moveToGroup: "Move session to a group",
     groupOptions: en.sessionsView.groupOptions,
+    openFolder: en.sessionsView.openFolder,
     openSessionsPage: en.sessionsView.openSessionsPage,
     newSessionInGroup: en.sessionsView.newSessionInGroup,
     groupDefaultsFailed: "Couldn’t save the group defaults. Try again.",
