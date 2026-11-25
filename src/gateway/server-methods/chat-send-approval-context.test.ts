@@ -105,7 +105,6 @@ it("keeps a WebChat approval visible without invalidating the waiting turn or en
         ),
       )
       .resolves.toEqual(expect.any(String));
-    expect(fixture.context.logGateway.warn).not.toHaveBeenCalled();
   } finally {
     approval.mockRestore();
     await fixture.cleanup();

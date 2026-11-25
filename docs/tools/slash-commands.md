@@ -87,7 +87,7 @@ on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
 These exchanges appear in session history and later model context. Read-only
 `/status` replies and fast `/approve` exchanges stay visible in history without
-entering model context or interrupting an active turn. Other exchanges delivered
+entering the agent's conversational context or interrupting an active turn. Other exchanges delivered
 while a turn is running are recorded after it settles, preserving the running
 answer and including the exchange in later model context.
 Login codes, pairing codes,
