@@ -1,4 +1,4 @@
 interface:
   display_name: "Auto QA"
-  short_description: "Continuously verify real OpenClaw bugs"
-  default_prompt: "Use $auto-qa to audit current OpenClaw main across at least ten independent subsystem lanes, reproduce real bugs, maintain a verified ledger, and land only authorized high-confidence low-risk fixes."
+  short_description: "Investigate and verify real OpenClaw bugs"
+  default_prompt: "Use $auto-qa to investigate current OpenClaw main within the requested scope and budget, delegate useful independent questions, reproduce real bugs, and land only authorized high-confidence low-risk fixes."
