@@ -4,7 +4,7 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot.runtime.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
-import bundledProviderNames from "../shared/provider-names.generated.json" with { type: "json" };
+import bundledProviderNames from "../shared/provider-names.generated.js";
 
 export type ProviderDisplayNameSources = {
   /** Explicit config wins; configless Gateway callers use the published runtime config. */

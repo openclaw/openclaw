@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
+import bundledProviderNames from "../../shared/provider-names.generated.js";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { loadPluginManifest, type PluginManifest } from "../manifest.js";
 import { buildPluginMetadataProviderFacts } from "../plugin-metadata-provider-facts.js";
@@ -67,10 +68,7 @@ it("keeps shared cold-start names identical to loaded manifest names", () => {
     },
   }).plugins.filter((plugin) => plugin.origin === "bundled");
   const owners = buildPluginMetadataProviderFacts(plugins);
-  const generated: unknown = JSON.parse(
-    readFileSync(resolve(process.cwd(), "src/shared/provider-names.generated.json"), "utf8"),
-  );
-  expect(generated, "Run pnpm providers:names:gen.").toEqual(
+  expect(bundledProviderNames, "Run pnpm providers:names:gen.").toEqual(
     Object.fromEntries(owners.providerNames),
   );
 });

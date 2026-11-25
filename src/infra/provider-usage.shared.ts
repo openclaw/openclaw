@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import bundledProviderNames from "../shared/provider-names.generated.json" with { type: "json" };
+import bundledProviderNames from "../shared/provider-names.generated.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 /** One provider cannot hold the aggregate usage response beyond this deadline. */

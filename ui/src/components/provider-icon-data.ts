@@ -1,5 +1,5 @@
 // Same manifest projection as the server; regenerate with `pnpm providers:names:gen`.
-import BUNDLED_PROVIDER_NAMES from "../../../src/shared/provider-names.generated.json" with { type: "json" };
+import BUNDLED_PROVIDER_NAMES from "../../../src/shared/provider-names.generated.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 
 const PROVIDER_ICON_NAMES = new Set([

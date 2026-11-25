@@ -2,9 +2,10 @@
 // Projects plugin-owned provider names for server and client readers before metadata loads.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { format } from "oxfmt";
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 
-const outputPath = "src/shared/provider-names.generated.json";
+const outputPath = "src/shared/provider-names.generated.ts";
 
 try {
   const args = process.argv.slice(2);
@@ -38,10 +39,16 @@ try {
   const sorted = Object.fromEntries(
     [...names].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
   );
+  // A default-only source module avoids Vite emitting a binding per JSON key.
+  const source = `// Generated from plugin manifests by scripts/generate-provider-display-names.mts.\nexport default ${JSON.stringify(sorted, null, 2)};\n`;
+  const formatted = await format(outputPath, source);
+  if (formatted.errors.length > 0) {
+    throw new Error(`Cannot format ${outputPath}: ${JSON.stringify(formatted.errors)}`);
+  }
   const check = args.includes("--check");
   const result = writeGeneratedOutput({
     check,
-    next: `${JSON.stringify(sorted, null, 2)}\n`,
+    next: formatted.code,
     outputPath,
     repoRoot,
   });
