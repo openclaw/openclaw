@@ -239,8 +239,8 @@ struct NativeChatSettingsScreen: View {
             guard snapshot.authority == self.appModel.operatorAuthorityGeneration else { return }
             await self.loadVerbosity()
         } catch {
-            guard snapshot.authority == self.appModel.operatorAuthorityGeneration else { return }
-            self.status = "Couldn’t save this to OpenClaw. Try again."
+            // The switch already took effect on the phone; the desktop keeps its own value until a later save.
+            return
         }
     }
 
