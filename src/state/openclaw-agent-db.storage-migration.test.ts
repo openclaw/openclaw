@@ -10,7 +10,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
-import { assertCanonicalAgentPersistenceVersion } from "./openclaw-agent-db-schema-read.js";
+import {
+  assertCanonicalAgentPersistenceVersion,
+  readExistingAgentSchemaMeta,
+} from "./openclaw-agent-db-schema-read.js";
 import {
   ensureOpenClawAgentDatabaseSchema,
   ensureOpenClawAgentSchema,
@@ -493,6 +496,8 @@ it("upgrades v44 under maintenance custody without issuing or rewriting existing
     );
     await migrate();
     expectVersion(db, 45);
+    // The nullable marker keeps the v44 reader floor, matching the update preflight.
+    expect(readExistingAgentSchemaMeta(db)?.minReader).toBe(44);
     expect(readRow(db, "SELECT access FROM session_members WHERE identity_id='reader'")).toEqual({
       access: "suggest",
     });
