@@ -1,7 +1,13 @@
-import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginSetupWizardConfigure,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { telegramSetupPlugin } from "./channel.setup.js";
 import { telegramSetupContract } from "./setup-core.js";
 import { telegramSetupDmPolicy } from "./setup-surface.helpers.js";
 import { telegramSetupWizard } from "./setup-surface.js";
@@ -92,5 +98,39 @@ describe("Telegram setup", () => {
     });
     expect(state).toMatchObject({ accountConfigured: true, hasConfiguredValue: true });
     expect(state?.resolvedValue).toBeUndefined();
+  });
+  it("keeps a store SecretRef bot token when the wizard runs again", async () => {
+    const botToken = { source: "store", provider: "default", id: "TELEGRAM_BOT_TOKEN" } as const;
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async () => true),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+    const result = await runSetupWizardConfigure({
+      configure: createPluginSetupWizardConfigure(telegramSetupPlugin),
+      cfg: { channels: { telegram: { botToken, allowFrom: ["123"] } } },
+      prompter,
+      options: {},
+    });
+    expect(result.cfg.channels?.telegram?.botToken).toEqual(botToken);
+  });
+  it("prompts for allowFrom with a store SecretRef bot token", async () => {
+    const botToken = { source: "store", provider: "default", id: "TELEGRAM_BOT_TOKEN" } as const;
+    const next = await telegramSetupDmPolicy.promptAllowFrom?.({
+      cfg: { channels: { telegram: { botToken } } },
+      prompter: createTestWizardPrompter({
+        text: vi.fn(async () => "123456789") as WizardPrompter["text"],
+      }),
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+    expect(next?.channels?.telegram).toMatchObject({ botToken, allowFrom: ["123456789"] });
+  });
+  it("still reads a plaintext bot token", () => {
+    const state = telegramSetupWizard.credentials[0]?.inspect({
+      cfg: { channels: { telegram: { botToken: "123:abc" } } },
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+    expect(state?.resolvedValue).toBe("123:abc");
   });
 });
