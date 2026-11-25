@@ -832,18 +832,27 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
+  it.for([
     ["completed response without a provider terminal", "completed", false, false, false],
     ["provider-failed response with a resolved run", "failed", true, true, false],
     ["rejected response with a provider terminal", "failed", true, true, true],
-  ])(
+  ] as const)(
     "keeps the %s admitted until its deferred SSE terminal is written",
-    async (_label, name, failed, providerTerminal, reject) => {
-      await expectDeferredTerminalResponse(enabledPort, name, failed, providerTerminal, reject);
+    async ([_label, name, failed, providerTerminal, reject], { signal }) => {
+      await expectDeferredTerminalResponse(
+        enabledPort,
+        name,
+        failed,
+        providerTerminal,
+        reject,
+        signal,
+      );
     },
   );
 
-  it("retires deferred response work after an early assertion fails before the next request", async () => {
+  it("retires deferred response work after an early assertion fails before the next request", async ({
+    signal,
+  }) => {
     const idleRootCount = getActiveGatewayRootWorkCount();
     let earlyFailure: unknown;
     let ownedWork: ReadonlyArray<{ kind: string; settled: boolean }> = [];
@@ -853,6 +862,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       false,
       false,
       false,
+      signal,
       (work) => {
         ownedWork = work;
         try {
@@ -868,6 +878,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       () => undefined,
       (error: unknown) => error,
     );
+    if (earlyFailure === undefined) {
+      throw failure ?? new Error("Expected the pre-release assertion to fail");
+    }
     expect(earlyFailure).toBeInstanceOf(Error);
     expect(failure).toBe(earlyFailure);
     expect(ownedWork.map(({ kind, settled }) => ({ kind, settled }))).toEqual(

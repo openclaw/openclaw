@@ -1,9 +1,13 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { expect, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { parseSseEvents } from "./http-stream.test-support.js";
+import { createOpenAiHttpTestClient, parseSseEvents } from "./http-stream.test-support.js";
 import { agentCommandMock } from "./test-helpers.js";
 
 export async function expectDeferredTerminalResponse(
@@ -12,11 +16,13 @@ export async function expectDeferredTerminalResponse(
   failed: boolean,
   providerTerminal: boolean,
   reject: boolean,
+  signal: AbortSignal,
   beforeRelease?: (work: ReadonlyArray<{ kind: string; settled: boolean }>) => void,
 ) {
   const idleRootCount = getActiveGatewayRootWorkCount();
   let terminalAdmission: { active: number } | undefined;
   let wireRead: Promise<string> | undefined;
+  const entered = createDeferred();
   const continueAgent = createDeferred();
   const lifecycleTerminals: string[] = [];
   const ownedWork: Array<{ kind: string; promise: Promise<unknown>; settled: boolean }> = [];
@@ -67,6 +73,7 @@ export async function expectDeferredTerminalResponse(
         if (!activeRunId) {
           throw new Error("expected a streaming response run ID");
         }
+        entered.resolve();
         await continueAgent.promise;
         emitAgentEvent({ runId: activeRunId, stream: "assistant", data: { delta: "answer" } });
         if (providerTerminal) {
@@ -87,11 +94,7 @@ export async function expectDeferredTerminalResponse(
     )) as never);
 
   try {
-    const client = new OpenAI({
-      apiKey: "test",
-      baseURL: `http://127.0.0.1:${port}/v1`,
-      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-      maxRetries: 0,
+    const client = createOpenAiHttpTestClient(port).withOptions({
       fetch: (input, init) =>
         own(
           "fetch",
@@ -109,14 +112,23 @@ export async function expectDeferredTerminalResponse(
     stream.on("response.completed", () => terminalEvents.push("response.completed"));
     stream.on("response.failed", () => terminalEvents.push("response.failed"));
     const finalResponse = own("sdk", stream.finalResponse());
-    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    // A slow admission may still be healthy. The request itself reports early failure.
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        finalResponse,
+        "Response ended before agent entry",
+      ),
+      signal,
+    );
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
     beforeRelease?.(ownedWork);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     continueAgent.resolve();
 
-    const response = await finalResponse;
+    const response = await withinTest(finalResponse, signal);
     if (!wireRead) {
       throw new Error("expected the streaming HTTP response body");
     }
