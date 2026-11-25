@@ -25,7 +25,7 @@ const enModelAccounts = {
           "Use the identity-enabled Gateway address from your admin, through Tailscale Serve or a trusted proxy. A shared token or device pairing alone doesn’t identify you.",
         write:
           "This connection doesn’t have permission to add accounts. Ask your admin for access, then reconnect to the Gateway.",
-        profile: "Your profile hasn’t loaded yet. Use Refresh or Set identity above to try again.",
+        profile: "Your profile hasn’t loaded. Use Refresh at the top of this page to try again.",
         disconnected: "Reconnect to the Gateway to add or change accounts.",
       },
       description: "Choose the default account for new sessions.",

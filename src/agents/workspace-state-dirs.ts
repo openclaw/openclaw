@@ -134,5 +134,22 @@ export async function assertConfiguredWorkspaceStateReady(params: {
       await readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
     }
   }
-  assertWorkspaceStateMigrationReady({ ...params, workspaceDirs, env, homedir });
+  // Sandbox code can write its copy (and, with shared scope, the whole sandbox
+  // root), so files there must not refuse every agent. Genuine legacy copies
+  // also carry a state-dir attestation, which keeps them Gateway-wide. Copy
+  // preparation refuses a file present at its first check in this process; the
+  // per-turn check caches clean results per process, so a later write waits for
+  // the next process start (an in-process restart keeps the cache).
+  const configuredDirs = new Set(listAgentWorkspaceDirs(params.cfg, env));
+  const sandboxWritableDirs =
+    params.operation === "doctor"
+      ? undefined
+      : new Set(workspaceDirs.filter((dir) => !configuredDirs.has(dir)));
+  assertWorkspaceStateMigrationReady({
+    ...params,
+    workspaceDirs,
+    sandboxWritableDirs,
+    env,
+    homedir,
+  });
 }

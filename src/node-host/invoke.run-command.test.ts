@@ -73,14 +73,20 @@ describe("runCommand", () => {
         vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) =>
           run(argv, {
             ...(typeof options === "number" ? { timeoutMs: options } : options),
-            // Cancel after the real child installs its SIGTERM handler.
+            // Hold stdin until the parent has admitted the spawned process.
+            beforeInput: () => {},
             onOutputChunk: () => controller.abort(),
           }),
         );
       }
       const result = await runNode(
         cancelled
-          ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')"
+          ? `
+            process.on('SIGTERM', () => {});
+            setInterval(() => {}, 1000);
+            process.stdin.resume();
+            process.stdin.once('end', () => process.stdout.write('ready'));
+          `
           : "process.kill(process.pid, 'SIGTERM')",
         undefined,
         controller.signal,

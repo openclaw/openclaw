@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   composeReleaseChildAttemptEvidence,
+  resolveReleaseAttemptJobs,
+  evidenceReadRetryDelay,
+  isReleaseGhServerError,
+  matchesReleaseChildAttemptEvidence,
+  readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  terminalPolicyPass,
   validateReleaseChildRunProvenance,
 } from "../full-release-validation-policy.mjs";
 import {
@@ -17,6 +24,11 @@ import {
 } from "./full-release-evidence.mjs";
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
+import {
+  decodeReleaseValidationSource,
+  isWaived,
+  readReleaseValidationWaiversAsync,
+} from "./release-validation-waivers.mjs";
 
 const MAX_RUNS = 100;
 const MAX_ARTIFACT_PROBES = 40;
@@ -66,35 +78,95 @@ function requestValue(request) {
     "request identity or current parent workflow SHA is invalid",
   );
   const spec = releaseChildSpec(request.role);
+  if (request.role === "stableClientCompatibility") {
+    requireEvidence(
+      request.inputs?.target_sha === request.targetSha,
+      "stable client target_sha differs from the exact product source",
+    );
+  }
   return { ...request, inputs: normalizedInputs(request.inputs), spec };
+}
+
+function githubFailureReason(error) {
+  // Classify the original response without exposing its body, identity, or credentials.
+  // Keep the ordinary gh route: --include selects a different Octopool transport.
+  const output = [error?.message, error?.stderr, error?.stdout].join("\n");
+  for (const [reason, pattern] of [
+    ["secondary-rate-limit", /secondary rate limit|abuse detection mechanism/iu],
+    ["primary-rate-limit", /API rate limit exceeded/iu],
+    ["permission", /Resource not accessible by (?:integration|personal access token)/iu],
+    ["saml-enforcement", /SAML enforcement|SAML SSO/iu],
+    ["bad-credentials", /Bad credentials/iu],
+  ]) {
+    if (pattern.test(output)) {
+      return reason;
+    }
+  }
+  return "unclassified";
 }
 
 function dependencies(repository, deps) {
   const deadlineMs = deps.deadlineMs ?? Date.now() + 120_000;
-  const remaining = () => {
+  const remaining = (stage = "verification") => {
     const milliseconds = deadlineMs - Date.now();
-    requireEvidence(milliseconds > 0, "verification exceeded its time budget");
+    requireEvidence(milliseconds > 0, `${stage} exceeded its time budget`);
     return milliseconds;
   };
-  const github = async (endpoint) => {
-    const timeout = Math.min(60_000, remaining());
-    return deps.github
-      ? deps.github(endpoint)
-      : JSON.parse(
-          await execGhReadAsync(["api", `repos/${repository}/${endpoint}`], {
-            timeout,
-            maxBuffer: 4 * 1024 * 1024,
-            env: { ...process.env, OCTOPOOL_FRESH: "1" },
-          }),
-        );
+  const github = async (endpoint, { smallerPageFallback = false, replay = true } = {}) => {
+    const args = ["api", "repos/" + repository + "/" + endpoint];
+    const stage = `API GET ${args[1]}`;
+    remaining(stage);
+    const load = async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        const timeout = Math.min(60_000, remaining(stage));
+        try {
+          return deps.github
+            ? JSON.stringify(await deps.github(endpoint))
+            : await execGhReadAsync(args, {
+                timeout,
+                maxBuffer: 4 * 1024 * 1024,
+                env: { ...process.env, OCTOPOOL_FRESH: "1" },
+              });
+        } catch (error) {
+          const serverError = isReleaseGhServerError(error);
+          if (smallerPageFallback && serverError) {
+            throw error;
+          }
+          let delay;
+          try {
+            delay = evidenceReadRetryDelay(args, error, attempt);
+          } catch {
+            // Report the read stage and endpoint, never raw CLI output or response bodies.
+            const status =
+              /HTTP [1-5][0-9]{2}\b/u.exec(
+                `${error?.message ?? ""}\n${error?.stderr ?? ""}`,
+              )?.[0] ?? (serverError ? "HTTP 5xx" : undefined);
+            throw new Error(
+              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}; reason=${githubFailureReason(error)}`,
+            );
+          }
+          requireEvidence(delay < remaining(stage), `${stage} exceeded its time budget`);
+          await sleep(delay);
+        }
+      }
+    };
+    const value = JSON.parse(
+      await (replay && deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
+    );
+    deps.immutableReads?.observeRun(endpoint, value);
+    return value;
   };
   return {
     github,
+    immutableReads: deps.immutableReads,
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
         if (params.token) {
-          return downloadExactActionsArtifactArchive(params);
+          return downloadExactActionsArtifactArchive({
+            ...params,
+            immutableReads: deps.immutableReads,
+          });
         }
         // Local verifiers can use gh's authenticated session without exporting
         // its token. The shared verifier below still checks metadata and bytes.
@@ -168,46 +240,58 @@ function validateRun(run, selection, request) {
     run.run_attempt === selection.runAttempt &&
       run.run_attempt <= MAX_ATTEMPTS &&
       run.status === "completed" &&
-      run.conclusion === "success" &&
+      (run.conclusion === "success" ||
+        (request.policyTargetVersion && typeof run.conclusion === "string" && run.conclusion)) &&
       run.head_repository?.full_name === request.repository,
     "child is not the current successful attempt",
   );
 }
 
-async function readAttemptJobs(github, run, runAttempt) {
-  const jobs = [];
-  let total;
-  for (let page = 1; page <= MAX_JOB_PAGES; page += 1) {
-    const inventory = await github(
-      `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=100&page=${page}`,
-    );
-    total ??= inventory?.total_count;
-    requireEvidence(
-      positiveInteger(total) &&
-        total <= MAX_JOB_PAGES * 100 &&
-        inventory?.total_count === total &&
-        Array.isArray(inventory.jobs) &&
-        inventory.jobs.length > 0 &&
-        inventory.jobs.every(
-          (job) =>
-            String(job.run_id) === String(run.id) &&
-            job.run_attempt === runAttempt &&
-            job.head_sha === run.head_sha &&
-            job.status === "completed",
-        ),
-      "job inventory is incomplete or belongs to another attempt",
-    );
-    jobs.push(...inventory.jobs);
-    if (jobs.length >= total) {
-      requireEvidence(jobs.length === total, "job inventory count changed");
-      return jobs;
+async function readAttemptJobs(deps, run, runAttempt) {
+  const path = `actions/runs/${run.id}/attempts/${runAttempt}/jobs?`;
+  return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+    const jobs = [];
+    let total;
+    const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
+    for (let page = 1; page <= maxPages; page += 1) {
+      const inventory = await deps.github(
+        `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
+        { smallerPageFallback },
+      );
+      total ??= inventory?.total_count;
+      requireEvidence(
+        positiveInteger(total) &&
+          total <= MAX_JOB_PAGES * 100 &&
+          inventory?.total_count === total &&
+          Array.isArray(inventory.jobs) &&
+          inventory.jobs.length > 0 &&
+          inventory.jobs.every(
+            (job) =>
+              String(job.run_id) === String(run.id) &&
+              job.run_attempt === runAttempt &&
+              job.head_sha === run.head_sha,
+          ),
+        "job inventory is incomplete or belongs to another attempt",
+      );
+      jobs.push(...inventory.jobs);
+      if (jobs.length >= total) {
+        requireEvidence(jobs.length === total, "job inventory count changed");
+        deps.immutableReads?.selectJobPageSize(path, perPage);
+        requireEvidence(
+          resolveReleaseAttemptJobs(jobs, runAttempt).every((job) => job.status === "completed"),
+          "job inventory contains unfinished executions",
+        );
+        return jobs;
+      }
     }
-  }
-  throw new Error("Full release child evidence job inventory exceeded its bound");
+    throw new Error("Full release child evidence job inventory exceeded its bound");
+  }, deps.immutableReads?.jobPageSizes(path));
 }
 
 function validatePublisher(jobs, receipt) {
-  const publishers = jobs.filter((job) => job.name === PUBLISHER_JOB);
+  const publishers = resolveReleaseAttemptJobs(jobs, receipt.effectiveRunAttempt).filter(
+    (job) => job.name === PUBLISHER_JOB,
+  );
   requireEvidence(
     publishers.length === 1 &&
       String(publishers[0].id) === receipt.publisher?.jobId &&
@@ -257,26 +341,24 @@ function validateSelectionIdentity(selection, request) {
 }
 
 async function validateEvidence(selection, request, deps) {
-  requireEvidence(
-    selection.workflowSha === request.workflowSha,
-    `tooling ${selection.workflowSha} differs from current parent ${request.workflowSha}; same tooling is required`,
-  );
   validateSelectionIdentity(selection, request);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
-  if (selection.workflowSha !== request.targetSha) {
-    const lineage = await deps.github(`compare/${selection.workflowSha}...main?per_page=1`);
+  if (
+    selection.workflowSha !== request.targetSha &&
+    (!request.policyTargetVersion || selection.workflowSha !== request.workflowSha)
+  ) {
+    const lineageTarget = request.policyTargetVersion ? request.workflowSha : "main";
+    const lineage = await deps.github(
+      `compare/${selection.workflowSha}...${lineageTarget}?per_page=1`,
+    );
     requireEvidence(
       ["ahead", "identical"].includes(lineage?.status) &&
         lineage.merge_base_commit?.sha === selection.workflowSha,
       "workflow SHA is not a main ancestor or the candidate SHA",
     );
   }
-  const artifact = await deps.github(`actions/artifacts/${String(selection.artifact.id)}`);
-  requireEvidence(
-    canonical(artifactIdentity(artifact, request, run, deps.now)) === canonical(selection.artifact),
-    "artifact identity changed after selection",
-  );
+  // The archive owner returns fresh metadata; validate that one acquisition below.
   const downloaded = await deps.downloadArchive({
     deadlineMs: deps.deadlineMs,
     expected: {
@@ -330,13 +412,25 @@ async function validateEvidence(selection, request, deps) {
       receipt.dispatchId === origin(selection, request) &&
       receipt.sourceParentRunId === selection.sourceParentRunId &&
       receipt.sourceParentAttempt === selection.sourceParentAttempt &&
-      receipt.workloadConclusion === "success" &&
+      (receipt.workloadConclusion === "success" ||
+        (request.policyTargetVersion && receipt.workloadConclusion === "failure")) &&
       canonical(normalizedInputs(receipt.inputs)) === canonical(request.inputs),
     "receipt target, origin, or exact dispatch inputs changed",
   );
   const attempts = [];
-  for (let runAttempt = 1; runAttempt <= run.run_attempt; runAttempt += 1) {
-    attempts.push({ runAttempt, jobs: await readAttemptJobs(deps.github, run, runAttempt) });
+  // Match the shared gh process budget; settle each batch before failing or claiming more work.
+  for (let first = 1; first <= run.run_attempt; first += 4) {
+    const results = await Promise.allSettled(
+      Array.from({ length: Math.min(4, run.run_attempt - first + 1) }, async (_, index) => {
+        const runAttempt = first + index;
+        return { runAttempt, jobs: await readAttemptJobs(deps, run, runAttempt) };
+      }),
+    );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+    attempts.push(...results.map((result) => result.value));
   }
   const jobs = attempts.at(-1).jobs;
   validatePublisher(jobs, receipt);
@@ -344,19 +438,44 @@ async function validateEvidence(selection, request, deps) {
     attempts,
     expected: expectedRun(selection, request),
     run,
+    recordedJobs: receipt.jobs,
   });
   composite.jobs = composite.jobs.filter((job) => job.name !== PUBLISHER_JOB);
   composite.compositeJobsSha256 = releaseCompositeJobsSha256(composite);
   requireEvidence(
     composite.jobs.length > 0 &&
-      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion)) &&
-      Object.entries(composite).every(
-        ([key, value]) => canonical(receipt[key]) === canonical(value),
-      ),
+      (request.policyTargetVersion ||
+        composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))) &&
+      matchesReleaseChildAttemptEvidence(receipt, composite),
     "receipt does not match the complete live composite workload",
   );
+  // P evaluates raw executions against the current admitted candidate and Q grants.
+  if (request.policyTargetVersion || request.role === "stableClientCompatibility") {
+    const child = {
+      key: request.role,
+      runId: String(run.id),
+      runAttempt: run.run_attempt,
+      status: run.status,
+      conclusion: run.conclusion,
+      jobs: composite.jobs,
+    };
+    requireEvidence(
+      terminalPolicyPass(
+        child,
+        request.policyTargetVersion,
+        request.targetSha,
+        request.waiverPolicy,
+        request.requiredJobs,
+      ),
+      "workload does not pass recovery release policy",
+    );
+  }
+  // The source parent is the pinned dispatch origin, not a live evidence producer.
+  // Its later reruns do not supersede the independently checked child attempt.
+  // Read the exact origin below, including when immutable payloads are replayed.
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
+    { replay: false },
   );
   requireEvidence(
     String(parent?.id) === selection.sourceParentRunId &&
@@ -372,18 +491,67 @@ async function validateEvidence(selection, request, deps) {
   // A rerun begun during verification invalidates the previously sealed attempt.
   const currentRun = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(currentRun, selection, request);
-  return { selection: { ...selection, receiptSha256: sha256 }, receipt, run: currentRun, jobs };
+  return {
+    selection: { ...selection, receiptSha256: sha256 },
+    receipt,
+    run: currentRun,
+    jobs,
+    compositeJobs: composite.jobs,
+  };
 }
 
 export async function validateReusableReleaseChild(selection, request, deps = {}) {
   const normalized = requestValue(request);
+  const resolved = dependencies(request.repository, deps);
+  if (request.policyTargetVersion) {
+    // Receipt recovery may supply the policy from its separately authenticated admission.
+    normalized.waiverPolicy =
+      deps.waiverPolicy ??
+      (await readReleaseValidationWaiversAsync(async (sourcePath) =>
+        decodeReleaseValidationSource(
+          await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+          sourcePath,
+        ),
+      ));
+  }
+  requireEvidence(
+    !isWaived(
+      {
+        targetVersion: request.policyTargetVersion,
+        targetSha: request.targetSha,
+        childRole: request.role,
+      },
+      normalized.waiverPolicy,
+    ),
+    "waived child does not require a reuse receipt",
+  );
   requireEvidence(/^[a-f0-9]{64}$/u.test(selection?.receiptSha256), "selection omitted its digest");
-  return validateEvidence(selection, normalized, dependencies(request.repository, deps));
+  return validateEvidence(selection, normalized, resolved);
 }
 
 export async function discoverReusableReleaseChild(request, deps = {}) {
   const normalized = requestValue(request);
   const resolved = dependencies(request.repository, deps);
+  if (request.policyTargetVersion) {
+    normalized.waiverPolicy = await readReleaseValidationWaiversAsync(async (sourcePath) =>
+      decodeReleaseValidationSource(
+        await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+        sourcePath,
+      ),
+    );
+  }
+  if (
+    isWaived(
+      {
+        targetVersion: request.policyTargetVersion,
+        targetSha: request.targetSha,
+        childRole: request.role,
+      },
+      normalized.waiverPolicy,
+    )
+  ) {
+    return null;
+  }
   const report = deps.report ?? console.error;
   const inventory = await resolved.github(
     `actions/workflows/${normalized.spec.workflow}/runs?event=workflow_dispatch&per_page=${MAX_RUNS}`,
@@ -402,7 +570,10 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
     );
   for (const run of inventory.workflow_runs.slice(0, MAX_RUNS)) {
     scanned += 1;
-    if (run.status !== "completed" || run.conclusion !== "success") {
+    if (
+      run.status !== "completed" ||
+      (run.conclusion !== "success" && !normalized.policyTargetVersion)
+    ) {
       skip("not-green");
       continue;
     }
@@ -446,14 +617,6 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         skip("target receipt absent");
         continue;
       }
-      // Older tooling cannot pass validation; keep it off the full-validation budget.
-      if (run.head_sha !== request.workflowSha) {
-        skip("other tooling");
-        report(
-          `run ${run.id} ${run.display_title}: rejected: tooling ${run.head_sha} differs from current parent ${request.workflowSha}; same tooling is required`,
-        );
-        continue;
-      }
       evaluated += 1;
       requireEvidence(matching.length === 1, "receipt artifact is ambiguous");
       const selection = {
@@ -472,7 +635,7 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         inputs: normalized.inputs,
       };
       const verified = await validateEvidence(selection, normalized, resolved);
-      report(`run ${run.id} ${run.display_title}: reused: verified receipt and same tooling`);
+      report(`run ${run.id} ${run.display_title}: reused: verified child receipt`);
       summary(true);
       return verified.selection;
     } catch (error) {

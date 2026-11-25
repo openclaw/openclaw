@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
@@ -23,7 +22,7 @@ import {
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "../daemon/service-managed-env.js";
-import { mergeServicePath } from "../daemon/service-path-policy.js";
+import { mergeServicePath, normalizeServicePathForCompare } from "../daemon/service-path-policy.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -553,6 +552,15 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(params.serviceEnvironment, {
     includeRawKeys: true,
   });
+  if (platform === "linux") {
+    // Allocators read this before config/dotenv loading; musl and jemalloc ignore it.
+    environment.MALLOC_ARENA_MAX =
+      durableEnvironment.MALLOC_ARENA_MAX ??
+      params.env.MALLOC_ARENA_MAX ??
+      params.existingEnvironment?.MALLOC_ARENA_MAX ??
+      "2";
+    environmentValueSources.MALLOC_ARENA_MAX = "inline";
+  }
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
@@ -645,6 +653,7 @@ export async function buildGatewayInstallPlan(params: {
     delete serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY];
   }
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+    env,
     port: params.port,
     allowUnconfigured:
       params.allowUnconfigured ??
@@ -712,17 +721,6 @@ export async function buildGatewayInstallPlan(params: {
     ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
     ...(durableCliReplacement ? { durableCliReplacement } : {}),
   };
-}
-
-function normalizeServicePathForCompare(
-  value: string | undefined,
-  platform: NodeJS.Platform,
-): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {

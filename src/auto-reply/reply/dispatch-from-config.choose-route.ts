@@ -3,16 +3,17 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { PARTICIPATION_RUNTIME_ERROR } from "../../agents/participation-ceiling.js";
 import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
+import { shouldDeferFinalTtsText } from "../../tts/captioned-final-eligibility.js";
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
   mergeDeferredFinalText,
-  shouldDeferFinalTtsText,
 } from "../../tts/captioned-final.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
@@ -102,15 +103,15 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     trackDispatchLifecycleWork,
     turnLedger,
   } = state;
+  const { replyOptions } = params;
   const shouldSuppressProgressDelivery = async () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !(await shouldDeliverVerboseProgressDespiteSourceSuppression()));
   // The released reply_dispatch getter retains its synchronous contract.
   const shouldSendToolSummaries = () =>
-    params.replyOptions?.suppressToolProgressMessages !== true && state.shouldEmitVerboseProgress();
+    replyOptions?.suppressToolProgressMessages !== true && state.shouldEmitVerboseProgress();
   const shouldSendToolSummariesAsync = async () =>
-    params.replyOptions?.suppressToolProgressMessages !== true &&
-    (await shouldEmitVerboseProgressAsync());
+    replyOptions?.suppressToolProgressMessages !== true && (await shouldEmitVerboseProgressAsync());
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -127,7 +128,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       !(allowsVerboseProgressDespiteSourceSuppression() && shouldSendToolSummaries()));
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
     allowsVerboseProgressDespiteSourceSuppression() &&
-    params.replyOptions?.forceToolResultProgress === true;
+    replyOptions?.forceToolResultProgress === true;
   let finalReplyDeliveryStarted = false;
   const prepareSessionWriterDelivery = createSessionWriterDeliveryPreparation({
     storePath: sessionStoreEntry.storePath,
@@ -327,7 +328,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
     const payload = renderPostCompactionModelFailurePayload(preparation.payload);
     const payloadMetadata = getReplyPayloadMetadata(payload);
-    const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
+    const expectedWriterRunId = normalizeOptionalString(replyOptions?.runId);
     const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
     const transcriptWriterMetadata = (
       binding: ReturnType<typeof resolvePreparedTranscriptBinding>,
@@ -449,7 +450,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
     const transcriptMirrorSourceId =
       normalizeOptionalString(state.messageIdForHook) ??
-      normalizeOptionalString(params.replyOptions?.runId);
+      normalizeOptionalString(replyOptions?.runId);
     const transcriptMirrorSessionBinding = resolvePreparedTranscriptBinding(
       transcriptMirrorSessionKey,
     );
@@ -551,14 +552,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   };
 
+  const restrictedRuntime =
+    replyOptions?.operatorAuthority?.participationCeiling ||
+    admittedSessionSettingsRestrictRuntime(replyOptions?.admittedSessionSettings);
   let takeover:
     | { payload: ReplyPayload; deliveryId: string; recordProcessed: () => void }
     | undefined;
-  if (
-    state.allowInboundHandlers &&
-    !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&
-    hookRunner?.hasHooks("before_dispatch")
-  ) {
+  if (state.allowInboundHandlers && !restrictedRuntime && hookRunner?.hasHooks("before_dispatch")) {
     // This outer lookup key is resolved from the routed context; fields inside
     // sessionStoreEntry.entry cannot redirect hook or requester lineage.
     const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -621,13 +621,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  if (
-    !takeover &&
-    state.dispatchKind === "acp" &&
-    admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings)
-  ) {
-    const error =
-      "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.";
+  if (!takeover && state.dispatchKind === "acp" && restrictedRuntime) {
+    const error = replyOptions?.operatorAuthority?.participationCeiling
+      ? PARTICIPATION_RUNTIME_ERROR
+      : "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.";
     takeover = {
       payload: { text: error, isError: true },
       deliveryId: "restricted-runtime-takeover",
@@ -659,10 +656,12 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   if (acpRefusal) {
     return acpRefusal;
   }
-  const replyDispatchTakeover = await runReplyDispatchHook(state, {
-    shouldSendToolSummaries,
-    shouldSendToolSummariesAsync,
-  });
+  const replyDispatchTakeover = replyOptions?.operatorAuthority?.participationCeiling
+    ? undefined
+    : await runReplyDispatchHook(state, {
+        shouldSendToolSummaries,
+        shouldSendToolSummariesAsync,
+      });
   if (replyDispatchTakeover?.handled) {
     commitInboundDedupeIfClaimed();
     completeDispatchReplyOperation();

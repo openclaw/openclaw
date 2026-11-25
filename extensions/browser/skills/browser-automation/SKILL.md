@@ -13,7 +13,7 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 1. Check browser state before acting:
    - `openclaw browser doctor` or `action="status"` when the browser/plugin setup itself may be broken.
    - `action="status"` for availability.
-   - `action="profiles"` if login state or profile choice matters.
+   - `action="profiles"` if login state or profile choice matters. Profiles describe the selected route; `nodeRoutes` advertises connected browser-node candidates, not verified browser access.
    - `action="tabs"` before opening a new tab if retries/timeouts may have left windows behind.
 2. Prefer stable tab handles:
    - Open important tabs with `label`, for example `label="meet"`.
@@ -38,8 +38,44 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 5. Report real blockers:
    - Debug network failures with `action="requests"`, optional URL/type `filter`, and `limit` (default 50 recent entries). `clear=true` clears the collected log after reading. Use a managed profile; existing-session profiles do not support this log.
    - Debug page errors with `action="errors"` and `limit` (default 50 recent entries). `clear=true` clears the collected log after reading. Existing-session profiles do not support this log.
-   - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.
    - Do not claim the browser is not logged in just because the current page shows a permission or onboarding dialog. Inspect the visible UI first.
+
+## Route-local access recovery
+
+Incident: [#200327](https://github.com/openclaw/openclaw/pull/200327) — a running
+host profile failed to attach while an authorized paired-node route remained usable.
+
+An attach error (including macOS `EPERM` reading `DevToolsActivePort`), timeout,
+or login/permission dialog is evidence about one route, not every browser.
+Before claiming browser access is unavailable or asking the user to log in,
+change permissions, or complete 2FA:
+
+1. Record the failed `target`, `node`, `profile`, action, and error. Do not
+   repeat the same failure or replay a mutation on another route.
+2. Use `action="profiles"` to inspect the selected route and `nodeRoutes`.
+   `nodeRoutesUnavailable` means discovery was blocked/failed, not that no
+   other browser exists. If profiles itself fails, use the available node
+   discovery tool to inspect connected browser-capable nodes.
+3. Only inspect alternatives within the user's authorized machine/account scope.
+   A configured pin or explicit route/account request is intent, not permission
+   to switch. Do not cross users, bypass a policy denial, import cookies, start
+   a fresh isolated login, or change permissions just to avoid an attach error.
+4. For a relevant authorized candidate, explicitly call
+   `action="profiles", target="node", node="<id>"`. Discover its profile names;
+   the host's `user` and node's `chrome` may use different transports. Try each
+   relevant candidate once; stop on a policy denial rather than working around it.
+5. Verify actual access with fresh `tabs` and a `snapshot` on the intended tab,
+   using that same target/node/profile. Inspect the visible account and required
+   role before acting. A running profile, doctor success, or debugging banner
+   alone proves neither usable attachment nor login. Do not mutate to test access.
+6. Pin the successful `target`, `node` (when applicable), `profile`, and
+   `suggestedTargetId` on subsequent calls. Do not carry refs across routes.
+
+If no authorized route works, report the routes actually checked and their
+specific failures (distinguish unknown discovery from no candidates), then ask
+only for the smallest demonstrated human prerequisite: the named account's
+sign-in/2FA, the specific tab/extension sharing step, or the precise permission
+on the failing host. Never infer a missing login from an attach failure.
 
 ## Browser batch CLI
 

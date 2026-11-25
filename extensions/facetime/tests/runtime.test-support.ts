@@ -210,13 +210,13 @@ export const dialReply = (call_uuid = "outbound-call", extra: Record<string, unk
 
 export const createRuntime = (
   state: PluginStateKeyedStore<unknown, 2> = emptyState(),
-  ownerHandles = ["owner@example.com"],
+  allowedCallers = ["owner@example.com"],
   storeOpeners?: {
     openKeyedStoreV2: () => PluginStateKeyedStore<unknown, 2>;
   },
 ) =>
   createFaceTimeRuntime({
-    config: resolveFaceTimeConfig({ ownerHandles }),
+    config: resolveFaceTimeConfig({ allowedCallers }),
     fullConfig: {} as never,
     runtime: {
       system: { runCommandWithTimeout: mocks.systemRun },

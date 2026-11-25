@@ -192,6 +192,67 @@ it.each([1, 0.9])("defers bounded reveal at scale %s and cancels stale requests"
   expect(nativeScroll).not.toHaveBeenCalled();
 });
 
+it("waits for a section and reveals it once per destination", () => {
+  const section = div();
+  const revealSection = vi.spyOn(section, "scrollIntoView");
+  const [request, setRequest] = createSignal({ id: "accounts", ready: false });
+  createScrollPositionRoot(() => {
+    const { id, ready } = request();
+    return {
+      reveal: { identity: [id], block: "start", target: ready ? () => section : () => null },
+    };
+  });
+  flush();
+  expect(revealSection).not.toHaveBeenCalled();
+  for (const ready of [true, false, true]) {
+    setRequest({ id: "accounts", ready });
+    flush();
+    expect(revealSection).toHaveBeenCalledTimes(1);
+  }
+  expect(revealSection).toHaveBeenCalledWith({ block: "start" });
+  setRequest({ id: "identity", ready: true });
+  flush();
+  expect(revealSection).toHaveBeenCalledTimes(2);
+});
+
+it("reveals a late-mounted section without replaying it after reconnect", async () => {
+  const host = div();
+  const revealSection = vi.spyOn(Element.prototype, "scrollIntoView");
+  const [destination, setDestination] = createSignal("accounts");
+  createScrollPositionRoot(
+    () => {
+      const initialId = destination();
+      return {
+        reveal: {
+          identity: [initialId],
+          block: "start",
+          target: () => host.querySelector<HTMLElement>(`#${initialId}`),
+        },
+      };
+    },
+    { waitForRevealIn: () => host },
+  );
+  flush();
+  setDestination("identity");
+  flush();
+  const mount = (id: string) => {
+    const section = document.createElement("section");
+    section.id = id;
+    return host.appendChild(section);
+  };
+  mount("accounts");
+  await Promise.resolve();
+  expect(revealSection).not.toHaveBeenCalled();
+  const identity = mount("identity");
+  await Promise.resolve();
+  expect(revealSection.mock.contexts).toEqual([identity]);
+  expect(revealSection).toHaveBeenCalledWith({ block: "start" });
+  identity.remove();
+  mount("identity");
+  await Promise.resolve();
+  expect(revealSection).toHaveBeenCalledTimes(1);
+});
+
 it("resamples content on reveal and releases live external targets when disposed", () => {
   const [presented, setPresented] = createSignal(true);
   const [content, setContent] = createSignal("long path");

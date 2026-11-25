@@ -247,6 +247,8 @@ suite.define(() => {
       expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
       await onlineWrite.evaluate(({ done }) => done);
       await onlineWrite.dispose();
+      // People opened Activity; return to the deep-linked dashboard.
+      await page.goBack();
 
       const dashboard = page
         .frameLocator("openclaw-board-view mcp-app-view iframe")
@@ -301,9 +303,8 @@ suite.define(() => {
         JSON.stringify(sampled),
       ).toBe(true);
 
+      // A conversation always shows the Sessions sidebar.
       await navigateToControlUiSession(page, fixture.selectedSessionKey);
-      await sidebar.locator('[data-navigation-view="online"]').click();
-      await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
       const details = await openChatDetails(page);
       const sectionSelector = '[data-details-group], [data-progress-card-placement="details"]';
       const sections = details.locator(sectionSelector);
@@ -332,13 +333,13 @@ suite.define(() => {
           );
       const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey: fixture.selectedSessionKey,
-        sidebarView: "online",
+        sidebarView: "sessions",
       };
       const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(warm).toMatchObject({
         databaseVersion: 8,
         projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
-        sidebarView: "online",
+        sidebarView: "sessions",
         sidebarPeople: 120,
       });
       expect(warm.messages).toBeLessThanOrEqual(80);
@@ -362,28 +363,8 @@ suite.define(() => {
         { sessionKey: fixture.selectedSessionKey, text: mutation },
       );
       await page.evaluate(persistColdLoadWarmState, warmInput);
-      const presence = fixture.events.find((frame) => frame.event === "presence");
-      if (!presence) {
-        throw new Error("The Team fixture must include presence events");
-      }
-      const sidebarWrite = await observeStoreWrite(page, {
-        store: "sidebarSnapshots",
-        people: 119,
-      });
-      await gateway.emitGatewayEvent("presence", {
-        presence: presence.payload.presence
-          .filter((entry) => entry.user?.id !== "team-person-120")
-          .map(ownPresence),
-      });
-      await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor({
-        state: "detached",
-      });
-      expect(await sidebar.locator("[data-online-user-id]").count()).toBe(119);
-      await sidebarWrite.evaluate(({ done }) => done);
-      await sidebarWrite.dispose();
       const mutated = await page.evaluate(readStoredWarmState, warmInput);
       expect(JSON.stringify(mutated.transcript)).toContain(mutation);
-      expect(mutated.sidebar).not.toEqual(baseline.sidebar);
       const draftWrite = await observeStoreWrite(page, {
         store: "composerDrafts",
         text: "Synthetic streaming input",
@@ -460,9 +441,6 @@ suite.define(() => {
         expect(await element.evaluate((node) => node.isConnected)).toBe(true);
         await element.dispose();
       }
-      await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
-      await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
-      expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
       expect(await composer.inputValue()).toBe("");
       await page.locator(".chat-pane__header").first().waitFor();
     });

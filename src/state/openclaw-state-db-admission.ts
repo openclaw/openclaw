@@ -35,7 +35,11 @@ export function isStateSchemaVersionAtLeast(database: EngineConnection, version:
   );
 }
 
-export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
+export type StateSchemaVersionFacts = {
+  userVersion: number;
+  contentVersion: number;
+  minReader?: number;
+};
 
 const versionKey: SqliteDatabaseAdmissionKey<StateSchemaVersionFacts> = {
   name: "state.schema-version",
@@ -48,9 +52,16 @@ const versionKey: SqliteDatabaseAdmissionKey<StateSchemaVersionFacts> = {
       "userVersion" in value &&
       typeof value.userVersion === "number" &&
       "contentVersion" in value &&
-      typeof value.contentVersion === "number"
+      typeof value.contentVersion === "number" &&
+      (!("minReader" in value) || typeof value.minReader === "number")
     ) {
-      return { userVersion: value.userVersion, contentVersion: value.contentVersion };
+      return {
+        userVersion: value.userVersion,
+        contentVersion: value.contentVersion,
+        ...("minReader" in value && typeof value.minReader === "number"
+          ? { minReader: value.minReader }
+          : {}),
+      };
     }
     return undefined;
   },

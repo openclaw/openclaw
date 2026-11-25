@@ -123,6 +123,16 @@ const SessionOrganizationExpectations = {
   ),
 };
 
+/** Complete wire shape permitted by the target-bound permission-narrowing operation. */
+export const SessionPermissionNarrowingPatchFields = [
+  "key",
+  "agentId",
+  "expectedSessionId",
+  "expectedLifecycleRevision",
+  "expectedPermissionMode",
+  "permissionMode",
+] as const satisfies readonly (keyof Static<typeof SessionsPatchParamsSchema>)[];
+
 /** Mutable per-session preferences and routing metadata. */
 export const SessionsPatchParamsSchema = closedObject({
   key: NonEmptyString,

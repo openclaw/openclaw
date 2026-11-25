@@ -158,6 +158,9 @@ it("keeps ordinary input usable while the initial placement turn is pending", ()
 
 it("explains an unresolved initial turn while offline without blocking the outbox", () => {
   const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  // An established account keeps its offline outbox owner while disconnected.
+  assert(state.client);
+  Object.defineProperty(state.client, "offlineRecoveryScope", { get: () => "account:offline" });
   state.hasPendingInitialTurn = () => true;
   state.connected = false;
   try {
@@ -226,6 +229,90 @@ it.each(["Keep this suggestion", "/stop"])(
   },
 );
 
+it.each(["send", "suggest", "read"] as const)(
+  "routes invited %s composition with one identity and read-only scope",
+  async (access) => {
+    const fixture = createRecoveringComposer("Review the plan");
+    fixture.finishRecovery();
+    const { state, context, container } = fixture;
+    const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
+    pane.initialize(fixture);
+    pane.presence.update({ presence: [{ user: { id: "viewer" }, ts: 1 }] });
+    context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.sessions.read"]);
+    const hello = context.gateway.snapshot.hello;
+    assert(hello.auth && hello.features?.methods && state.client);
+    hello.auth.sessionCap = "invited";
+    hello.features.methods.push("session.suggestions.add", "session.suggestions.list");
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults,
+      sessions: [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          visibility: "shared",
+          invitedAccess: access,
+          invitedPermission: access === "send" ? "guarded" : undefined,
+          sharingRole: access === "send" ? "member" : "viewer",
+          permissionMode: "workspace",
+          createdActor: { type: "human", id: "owner", label: "Morgan" },
+        },
+      ],
+    };
+    const request = vi.spyOn(state.client, "request").mockResolvedValue({
+      suggestion: {
+        id: "suggestion-1",
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        text: "Review the plan",
+        author: { type: "human", id: "viewer" },
+        createdAt: 1,
+        state: "pending",
+      },
+    });
+    try {
+      pane.render();
+      const props = pane.chatProps;
+      assert(props);
+      renderComposerInto(container, props);
+      const input = container.querySelector<HTMLTextAreaElement>("textarea");
+      expect(input?.disabled).toBe(access === "read");
+      if (access === "send") {
+        expect(props.permissionPicker).toMatchObject({
+          participant: true,
+          mode: "guarded",
+        });
+      }
+      if (access === "read") {
+        input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      } else {
+        await props.onSend();
+      }
+      const suggestions = request.mock.calls.filter(
+        ([method]) => method === "session.suggestions.add",
+      );
+      if (access === "suggest") {
+        expect(suggestions).toEqual([
+          [
+            "session.suggestions.add",
+            {
+              sessionKey: state.sessionKey,
+              text: "Review the plan",
+            },
+          ],
+        ]);
+      } else {
+        expect(suggestions).toEqual([]);
+      }
+      expect(state.handleSendChat).toHaveBeenCalledTimes(access === "send" ? 1 : 0);
+    } finally {
+      disposeComposer(container);
+    }
+  },
+);
+
 it.each([
   { reason: "Your operator role requires a sandboxed session.", scope: "operator.write" },
   { reason: null, scope: "operator.read" },
@@ -286,7 +373,7 @@ it.each([
   { draft: "/models", allowed: true, restricted: true },
 ])(
   "admits $draft with no default (restricted: $restricted): $allowed",
-  ({ draft, allowed, restricted }) => {
+  async ({ draft, allowed, restricted }) => {
     const { pane, state, context } = createRefreshChatPane(
       createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
     );
@@ -313,8 +400,10 @@ it.each([
       expect(pane.chatProps.modelRequiredReason).toBe("No models are permitted by your admin.");
       const container = createComposerContainer();
       renderComposerInto(container, pane.chatProps);
-      expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
-        "No models are permitted by your admin.",
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
+          "No models are permitted by your admin.",
+        ),
       );
       expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
       disposeComposer(container);
@@ -415,11 +504,11 @@ it.each([
       expect(initial.modelRequiredReason).toBeUndefined();
       expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
       expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
-        "true",
+        "false",
       );
       expect(
         container.querySelector("[data-chat-model-select]")?.getAttribute("aria-label"),
-      ).toContain("Loading models…");
+      ).not.toContain("Loading models…");
       expect(container.textContent).not.toContain("primary-model");
       expect(container.textContent).not.toContain("cached-default");
       expect(container.querySelector("[data-chat-model-option]")).toBeNull();
@@ -518,7 +607,7 @@ describe("subagent composer", () => {
     { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
   ] satisfies { name: string; key: string; row?: Partial<GatewaySessionRow> }[])(
     "keeps copy but not Reply when $name replaces the composer",
-    ({ key, ...scenario }) => {
+    async ({ key, ...scenario }) => {
       installTranscriptDomMocks();
       const { pane, state, context } = createRefreshChatPane();
       state.sessionKey = key;
@@ -542,7 +631,9 @@ describe("subagent composer", () => {
       try {
         pane.render();
         renderChatPropsInto(container, pane.chatProps!, context);
-        expect(container.textContent).toContain("The workspace review is complete.");
+        await waitForSolid(() =>
+          expect(container.textContent).toContain("The workspace review is complete."),
+        );
         expect(container.querySelector("textarea")).toBeNull();
         expect(container.querySelector(".chat-reply-btn")).toBeNull();
         expect(container.querySelector(".chat-copy-btn")).not.toBeNull();
@@ -572,7 +663,7 @@ describe("subagent composer", () => {
     { lineage: null, parentLoaded: false },
   ] satisfies { lineage: Partial<GatewaySessionRow> | null; parentLoaded: boolean }[])(
     "replaces subagent input with parent navigation for %j",
-    ({ lineage, parentLoaded }) => {
+    async ({ lineage, parentLoaded }) => {
       const { pane, state } = createRefreshChatPane();
       const parent: GatewaySessionRow = {
         key: "agent:main:parent",
@@ -605,8 +696,12 @@ describe("subagent composer", () => {
       expect(
         container.querySelector('[aria-label="Stop"], [aria-label="Stop generating"]'),
       ).toBeNull();
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
+          "View-only subagent",
+        ),
+      );
       const banner = container.querySelector(".agent-chat__disabled-banner");
-      expect(banner?.textContent).toContain("View-only subagent");
       const navigate = banner?.querySelector<HTMLButtonElement>("button");
       expect(navigate?.disabled).toBe(lineage === null);
       if (parentLoaded) {
@@ -652,8 +747,11 @@ describe("subagent composer", () => {
         draw();
         expect(pane.chatProps?.canSend).toBe(true);
         expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
-        const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
-        expect(reply).not.toBeNull();
+        const reply = await waitForSolid(() => {
+          const button = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
+          expect(button).not.toBeNull();
+          return button;
+        });
         reply!.click();
         draw();
         await waitForSolid(() =>

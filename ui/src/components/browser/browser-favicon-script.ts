@@ -1,11 +1,39 @@
 // Page function serialized into native WebKit reading tabs.
-export const browserFaviconScript = String.raw`async function openclawReadBrowserFavicon(maxBytes, timeoutMs) {
+export const browserFaviconScript = String.raw`async function openclawReadBrowserFavicon(maxBytes, timeoutMs, colorScheme) {
   let timeout;
   try {
     const controller = new AbortController();
     timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // WebKit applies a new appearance to matchMedia() before it reports the change to the
+    // page's listeners, which update a script-chosen icon. A query made after the change
+    // already matches, so keep one query per document from its first read (when its load
+    // finishes) and wait until that query has reported the requested scheme.
+    const scheme = (globalThis.openclawFaviconColorScheme ??= (() => {
+      const query = matchMedia("(prefers-color-scheme: dark)");
+      const state = { query, reported: query.matches ? "dark" : "light" };
+      query.addEventListener("change", () => { state.reported = query.matches ? "dark" : "light"; });
+      return state;
+    })());
+    if (colorScheme && scheme.reported !== colorScheme) {
+      const ready = await new Promise((resolve) => {
+        const finish = (value) => {
+          scheme.query.removeEventListener("change", changed);
+          controller.signal.removeEventListener("abort", abort);
+          resolve(value);
+        };
+        // Let the page's own listeners for the same change update its icon link first.
+        const changed = () => { if (scheme.reported === colorScheme) setTimeout(() => finish(true), 0); };
+        const abort = () => finish(false);
+        scheme.query.addEventListener("change", changed);
+        controller.signal.addEventListener("abort", abort, { once: true });
+      });
+      if (!ready) return null;
+    }
     const icons = Array.from(document.querySelectorAll('link[rel~="icon"]'))
-      .filter((link) => link.getAttribute("href")?.trim());
+      .filter((link) => {
+        const media = link.getAttribute("media")?.trim();
+        return link.getAttribute("href")?.trim() && (!media || matchMedia(media).matches);
+      });
     const preferred = icons.find((link) => /(?:^|\s)32x32(?:\s|$)/i.test(link.getAttribute("sizes") || ""));
     const candidates = [
       ...(preferred ? [preferred.href] : []),

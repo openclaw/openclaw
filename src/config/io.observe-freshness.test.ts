@@ -34,6 +34,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as worker from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
@@ -42,7 +43,7 @@ import {
   patchConfigHealthEntryToStore as patchHealthEntry,
 } from "./io.health-state.js";
 import * as healthOwner from "./io.health-state.js";
-import { readConfigHealthStateInDatabase } from "./io.health-state.kernel.js";
+import * as healthKernel from "./io.health-state.kernel.js";
 import type { ConfigHealthState } from "./io.health-state.types.js";
 import { createConfigIO } from "./io.js";
 import * as observationState from "./io.observe-state.js";
@@ -157,9 +158,24 @@ describe("warnings", () => {
       const observationDeps = normalizeConfigIoDeps(options);
       await closeDatabase();
       const mainSql = observeMainThreadSql();
+      using filesystem = observeMainThreadFs();
+      const readReceipt = healthKernel.readConfigHealthReceipt;
+      let receiptFilesystemCalls = 0;
+      using receipts = vi
+        .spyOn(healthKernel, "readConfigHealthReceipt")
+        .mockImplementation((target) => {
+          const before = filesystem.count();
+          try {
+            return readReceipt(target);
+          } finally {
+            receiptFilesystemCalls += filesystem.count() - before;
+          }
+        });
       try {
         const store = captureHealth(deps, configPath);
         expect((await store.read())?.state).toEqual({});
+        expect(receipts).toHaveBeenCalled();
+        expect(receiptFilesystemCalls).toBe(0);
         expect(fs.existsSync(databasePath)).toBe(false);
         await observeConfigSnapshot(observationDeps, snapshot);
         const verification = captureHealth(deps, configPath);
@@ -387,13 +403,13 @@ describe("observation scope", () => {
     const before = await observe();
     expect(before.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
     expect(await observe()).toEqual(before);
-    expect(reads).toHaveBeenCalledTimes(1);
+    expect(reads).toHaveBeenCalledTimes(2);
 
     setSignature("sync commit");
     const after = await observe();
     expect(after.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("sync commit");
     expect(await observe()).toEqual(after);
-    expect(reads).toHaveBeenCalledTimes(2);
+    expect(reads).toHaveBeenCalledTimes(3);
 
     const owner = capture();
     const applied = await owner.update(signaturePatch("worker commit"), after);
@@ -403,8 +419,39 @@ describe("observation scope", () => {
     const stale = await owner.update(signaturePatch("stale"), before);
     expect(stale).toEqual({ status: "conflict" });
     expect(await observe()).toEqual(committed);
-    expect(reads).toHaveBeenCalledTimes(3);
+    expect(reads).toHaveBeenCalledTimes(4);
     expect(copies).not.toHaveBeenCalled();
+  });
+
+  it("leaves unpublished health receipts uncached until their own worker commits", async () => {
+    const left = createHealthFixture(directories.make("openclaw-health-unpublished-left-"));
+    const right = createHealthFixture(directories.make("openclaw-health-unpublished-right-"));
+    for (const deps of [left, right]) {
+      openOpenClawStateDatabase({ env: deps.env });
+    }
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const first = captureHealth(left, left.configPath);
+    const second = captureHealth(right, right.configPath);
+    const before = await first.read();
+    expect(before.state.entries ?? {}).toEqual({});
+    expect(await first.read()).toEqual(before);
+    expect(await second.read()).toEqual(before);
+    expect(await second.read()).toEqual(before);
+    expect(reads).toHaveBeenCalledTimes(4);
+
+    expect(await first.update(signaturePatch("worker commit"), before)).toEqual({
+      status: "applied",
+    });
+    reads.mockClear();
+    const committed = await first.read();
+    expect(committed.state.entries?.[left.configPath]).toMatchObject(
+      signaturePatch("worker commit"),
+    );
+    expect(await first.read()).toEqual(committed);
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(await second.read()).toEqual(before);
+    expect(await second.read()).toEqual(before);
+    expect(reads).toHaveBeenCalledTimes(3);
   });
 
   it("does not classify a failed read as a conditional-write conflict", async () => {
@@ -733,7 +780,7 @@ describe("observation freshness", () => {
         observationWork.run(() => {
           fs.writeFileSync(configPath, newerRaw);
           observeConfigSnapshotSync(deps, newer);
-          expected = readConfigHealthStateInDatabase(db);
+          expected = healthKernel.readConfigHealthStateInDatabase(db);
           if (suspicious) {
             expect(expected.entries?.[configPath]?.lastObservedSuspiciousSignature).toContain(
               hashConfigRaw(newerRaw),

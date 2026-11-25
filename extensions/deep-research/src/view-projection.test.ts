@@ -20,8 +20,8 @@ const job: ResearchJob = {
 
 describe("retained research view projection", () => {
   it("keeps unknown counts absent, distinguishes cancellation requests, and never resumes unknown submission", () => {
-    const queued = projectResearchJob(job);
-    expect(queued.counts).toBeUndefined();
+    const queued = projectResearchJob({ ...job, request: { question: `${"x".repeat(159)}🙂` } });
+    expect([queued.title, queued.counts]).toEqual(["x".repeat(159), undefined]);
     expect(queued.actions).toEqual(["cancel"]);
     const pending = projectResearchJob({ ...job, state: "paused", cancelRequested: true });
     expect(pending.state).toBe("paused");

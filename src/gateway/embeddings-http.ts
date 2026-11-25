@@ -269,10 +269,6 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         requestedProviderNeedsCleanup || isLocalEmbeddingProvider(cfg, createdProvider.id),
     );
     try {
-      if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
-        await handled.requestAuth.revalidate?.();
-        return true;
-      }
       const usage = { prompt_tokens: 0, total_tokens: 0 };
       let completeUsage = true;
       const embeddings = await provider.embedBatch(texts, {

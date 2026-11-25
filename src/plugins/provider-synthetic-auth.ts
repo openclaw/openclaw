@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { captureEnvironmentKey, resolveEnvironmentKey } from "../shared/environment-key.js";
 import type {
   ProviderResolveSyntheticAuthContext,
   ProviderSyntheticAuthResult,
@@ -41,7 +42,7 @@ function scopeFor(config: object | undefined, options: ScopeOptions, create = fa
     environments = new WeakMap();
     scopes.set(owner, environments);
   }
-  const env = options.env ?? process.env;
+  const env = create ? captureEnvironmentKey(options.env) : resolveEnvironmentKey(options.env);
   let workspaces = environments?.get(env);
   if (!workspaces && create) {
     workspaces = new Map();

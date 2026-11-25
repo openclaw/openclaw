@@ -1,15 +1,18 @@
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-selected.read.js";
 import {
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
@@ -17,6 +20,7 @@ import {
 import type {
   ReclamationDatabaseOptions,
   SessionEntryMaintenancePlan,
+  SessionMaintenanceMcpRelease,
   SessionMaintenanceMetadataCommand,
   SessionMaintenanceMetadataResult,
   SqliteSessionReclamationCallbacks,
@@ -137,11 +141,40 @@ export function finalizeSessionMaintenanceInDatabase(
     new Set(unchanged.map((entry) => entry.sessionKey)),
   );
   deletePlannedLifecycleArtifactEntries(database, unchanged);
+  let mcpRelease: SessionMaintenanceMcpRelease | undefined;
+  if (plan.retainedMcpSessionIds?.length) {
+    const removed = new Set(
+      unchanged
+        .filter(({ sessionKey }) => !isInternalSessionEffectsKey(sessionKey))
+        .map(({ expectedEntry }) => expectedEntry?.sessionId.trim()),
+    );
+    const sessionIds = plan.retainedMcpSessionIds.filter((id) => removed.has(id));
+    if (sessionIds.length) {
+      // Retained transcript windows, including their placeholder nodes, are not live entries.
+      const remaining = readSelectedSessionEntriesInDatabase(database, [], {
+        transcriptSessionIds: sessionIds,
+      });
+      const current = new Set(remaining.map(({ entry }) => entry.sessionId.trim()));
+      const retired = sessionIds.filter((id) => !current.has(id));
+      if (retired.length) {
+        const source = readOpenClawAgentDatabaseIdentity(database);
+        mcpRelease = {
+          sessionIds: retired,
+          source: {
+            agentId: database.agentId,
+            databaseIdentity: source.identity,
+            databaseBirthtime: source.birthtime,
+          },
+        };
+      }
+    }
+  }
   return {
     kind: plan.kind,
     value: {
       archivedTranscripts,
       committedEntryIndices,
+      ...(mcpRelease && { mcpRelease }),
     },
   };
 }

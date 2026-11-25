@@ -159,6 +159,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.tools",
       "gateway.uploads",
       "gateway.cliAgents",
+      "gateway.sessionControl",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
@@ -225,6 +226,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
     actions: ["reloadPlugins"],
   },
+  // Bundled plugins activated by this path (openclaw-id-access) load only through plugin selection.
+  { prefixes: ["gateway.openclawId.enabled"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
   { prefixes: ["transcripts", "cloudWorkers.profiles"], kind: "hot", actions: ["reloadPlugins"] },
@@ -492,7 +495,7 @@ export function buildGatewayReloadPlan(
 ): GatewayReloadPlan {
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
-  const roleModelPolicyOnly =
+  const roleLivePolicyOnly =
     haveSameOperatorRoleSourcePolicies(
       options.previousConfig?.gateway?.roles,
       options.candidateConfig?.gateway?.roles,
@@ -522,11 +525,12 @@ export function buildGatewayReloadPlan(
 
   for (const path of changedPaths) {
     if (
-      roleModelPolicyOnly &&
+      roleLivePolicyOnly &&
       matchesReloadPrefix(path, "gateway.roles") &&
       !forceChangedPaths.has(path)
     ) {
-      // The committed snapshot notifies model bindings without replacing permitted runtimes.
+      // The committed snapshot notifies model bindings without replacing permitted runtimes;
+      // project grants are read live from it.
       plan.noopPaths.push(path);
       continue;
     }

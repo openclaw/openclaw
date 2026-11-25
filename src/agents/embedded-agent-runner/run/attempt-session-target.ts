@@ -1,4 +1,5 @@
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
 import type { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
@@ -27,7 +28,6 @@ export function createPreparedSessionTargetAssertion(input: {
     | "attempt_inactive"
     | "session_identity_changed"
     | "target_changed"
-    | "source_authority_refused"
     | "scope_authority_refused";
   let refusalRecorded = false;
   const recordTargetRefusal = (reason: RefusalReason, field?: (typeof targetFields)[number]) => {
@@ -60,24 +60,20 @@ export function createPreparedSessionTargetAssertion(input: {
     }
     if (reason) {
       recordTargetRefusal(reason, field);
-      throw new Error("Session target preparation outlived its attempt");
+      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt");
     }
   };
-  return composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
-    assertTargetCurrent();
-    try {
-      assertSource();
-    } catch (cause) {
-      recordTargetRefusal("source_authority_refused");
-      throw new Error("Session target preparation outlived its attempt", { cause });
-    }
-    // Source callbacks can retire this attempt or replace its selected target.
+  // Admission checked the run's source once; here only Stop, the run lifetime and the
+  // selected target are current. Session row predicates still reach the writer.
+  return composeSessionSourceAssertion([assertActiveRun], () => {
     assertTargetCurrent();
     try {
       assertActiveRun.assertScopeCurrent();
     } catch (cause) {
       recordTargetRefusal("scope_authority_refused");
-      throw cause;
+      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
+        cause,
+      });
     }
   });
 }

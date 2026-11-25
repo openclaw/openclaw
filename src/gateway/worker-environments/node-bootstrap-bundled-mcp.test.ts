@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect, it } from "vitest";
 import { useNodeBootstrapArtifactFixtures, write } from "./node-bootstrap-artifact.test-support.js";
 

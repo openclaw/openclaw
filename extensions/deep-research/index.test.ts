@@ -8,7 +8,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
-it("registers lazily and scans bounded recovery state without network, invokes with unavailable providers, and retires the service", async () => {
+function createReadOnlyRuntime() {
   const runtime = createPluginRuntimeMock();
   const open = vi.mocked(runtime.state.openKeyedStoreV2);
   const unexpected = async (): Promise<never> => {
@@ -30,6 +30,70 @@ it("registers lazily and scans bounded recovery state without network, invokes w
     entriesInKeyRange: async () => [],
     moveEntriesFrom: unexpected,
   }));
+  return { runtime, open, unexpected };
+}
+
+it("reports an incompatible Gateway before opening state and preserves invocation checks", async () => {
+  const { runtime } = createReadOnlyRuntime();
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
+  const api = createTestPluginApi({ id: "deep-research", runtime, registerTool, registerService });
+  const scheduler = createTestPluginServiceScheduler();
+  try {
+    plugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+    const factory = registerTool.mock.calls[0]?.[0];
+    assert.ok(service && factory);
+    if (service.apiVersion !== 3 || typeof factory !== "object" || !("create" in factory)) {
+      throw new Error("Expected versioned registrations");
+    }
+    const incompatible =
+      "Deep research requires Gateway session-work support. Update OpenClaw and restart the Gateway.";
+    const unsupported = async (): Promise<never> => {
+      throw new Error("Unexpected session work");
+    };
+    const context = {
+      sessionWork: {
+        version: 1 as const,
+        withCurrent: unsupported,
+        admit: unsupported,
+        run: unsupported,
+      },
+      scheduler,
+      config: {},
+      stateDir: "/unused-research-state",
+      logger: api.logger,
+    };
+    // Reproduce a runtime host older than the typed SDK contract.
+    Reflect.deleteProperty(context, "sessionWork");
+    await expect(service.start(context)).rejects.toThrow(incompatible);
+    expect(runtime.state.openKeyedStoreV2).not.toHaveBeenCalled();
+    const current = vi.fn();
+    const tool = factory.create({
+      agentId: "main",
+      sessionKey: "agent:main:research-fixture",
+      sessionId: "generation-1",
+      assertInvocationCurrent: current,
+    });
+    assert.ok(tool && !Array.isArray(tool));
+    await expect(tool.execute("incompatible", { action: "capabilities" })).rejects.toThrow(
+      incompatible,
+    );
+    current.mockImplementation(() => {
+      throw new Error("Invocation revoked");
+    });
+    await expect(tool.execute("revoked", { action: "capabilities" })).rejects.toThrow(
+      "Invocation revoked",
+    );
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.gateway.request).not.toHaveBeenCalled();
+  } finally {
+    await scheduler.stop();
+  }
+});
+
+it("registers lazily and scans bounded recovery state without network, invokes with unavailable providers, and retires the service", async () => {
+  const { runtime, open, unexpected } = createReadOnlyRuntime();
   const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
   const api = createTestPluginApi({ id: "deep-research", runtime, registerTool, registerService });

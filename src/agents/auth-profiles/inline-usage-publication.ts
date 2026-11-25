@@ -4,7 +4,7 @@ import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import type { InlineAuthFailureReceipt } from "./inline-usage-kernel.js";
 import {
-  assertAuthProfileMigrationCandidates,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
@@ -31,7 +31,6 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import { buildPersistedAuthProfileState } from "./state.js";
 import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import type {
@@ -70,7 +69,7 @@ export async function publishInlineAuthFailure(
   if (entries.length === 0) {
     return;
   }
-  const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const readers = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   const read = async (databasePath: string, kind: "agent" | "shared-state") => {
     const revision = getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
     const nativeCurrent =
@@ -98,9 +97,8 @@ export async function publishInlineAuthFailure(
       rows = await readSharedAuthProfileRows(context);
       assertCurrent = () => context.admission.assertCurrent();
     } else {
-      const reader = prepareAgentAuthProfileRowsRead({
+      const reader = await prepareAgentAuthProfileRowsRead({
         databasePath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
         env: owner.env,
       });
       readers.add(reader);
@@ -146,23 +144,27 @@ export async function publishInlineAuthFailure(
               owner.location === "state-db" ? "shared-state" : "agent",
             );
       const local = await read(targetOwner.databasePath, "agent");
-      inherited?.assertCurrent();
-      local.assertCurrent();
-      assertAuthProfileMigrationCandidates({
+      await prepareAuthProfileMigrationCandidates({
         databasePath: targetOwner.databasePath,
         candidates:
           targetOwner.databasePath === targetOwner.sharedDatabasePath
             ? candidates.shared
             : candidates.local,
-        hasCredentials: () => Object.keys(local.store.profiles).length > 0,
+        hasCredentials: Object.keys(local.store.profiles).length > 0,
+        assertCurrent: local.assertCurrent,
       });
       if (inherited) {
-        assertAuthProfileMigrationCandidates({
+        await prepareAuthProfileMigrationCandidates({
           databasePath: targetOwner.sharedDatabasePath,
           candidates: candidates.shared,
-          hasCredentials: () => Object.keys(inherited.store.profiles).length > 0,
+          hasCredentials: Object.keys(inherited.store.profiles).length > 0,
+          assertCurrent: inherited.assertCurrent,
         });
       }
+      inherited?.assertCurrent();
+      local.assertCurrent();
+      assertAuthProfileMigrationStateAtDatabasePath(targetOwner.databasePath);
+      assertAuthProfileMigrationStateAtDatabasePath(targetOwner.sharedDatabasePath);
       const refreshed: AuthProfileStore = inherited
         ? mergeLocalAuthProfileStoreWithInheritedStore(local.store, inherited.store)
         : setRuntimeLocalProfileMetadata(local.store, listRuntimeLocalProfileIds(local.store));

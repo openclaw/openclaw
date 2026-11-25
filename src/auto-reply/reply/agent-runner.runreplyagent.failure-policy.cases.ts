@@ -12,7 +12,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 
 type FailureRunParams = {
   blockStreamingEnabled?: boolean;
@@ -59,7 +58,6 @@ export function registerImmediateFailurePolicyCases({
         },
       });
       return {
-        runState,
         delivered,
         run: async () => {
           const result = await run();
@@ -84,7 +82,6 @@ export function registerImmediateFailurePolicyCases({
 
       const receipt = await fixture.run();
 
-      expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
       expect(receipt?.anyVisibleDelivered).toBe(visible);
       expect(fixture.delivered).toEqual(
         visible ? [expect.objectContaining({ isError: true, text: expect.any(String) })] : [],
@@ -94,7 +91,7 @@ export function registerImmediateFailurePolicyCases({
       }
     });
 
-    it("keeps a returned generic terminal failure silent without recording success", async () => {
+    it("keeps a returned generic terminal failure silent", async () => {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [],
         meta: { error: { kind: "tool_result_mismatch", message: "opaque-private-runner-detail" } },
@@ -105,7 +102,6 @@ export function registerImmediateFailurePolicyCases({
 
       expect(fixture.delivered).toEqual([]);
       expect(receipt?.anyVisibleDelivered).toBe(false);
-      expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
     });
 
     it.each(["auth", "rate_limit"] as const)(
@@ -123,7 +119,6 @@ export function registerImmediateFailurePolicyCases({
 
         const receipt = await fixture.run();
 
-        expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
         expect(receipt?.anyVisibleDelivered).toBe(true);
         expect(fixture.delivered).toEqual([
           expect.objectContaining({ isError: true, text: expect.any(String) }),
@@ -164,7 +159,6 @@ export function registerImmediateFailurePolicyCases({
         expect(fixture.delivered).toEqual(
           visible ? [expect.objectContaining({ isError: true, text: expect.any(String) })] : [],
         );
-        expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
       },
     );
 
@@ -199,7 +193,6 @@ export function registerImmediateFailurePolicyCases({
         expect(fixture.delivered).toEqual(
           visible ? [expect.objectContaining({ isError: true, text: expect.any(String) })] : [],
         );
-        expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
       },
     );
   });

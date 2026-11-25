@@ -12,6 +12,7 @@ export function preserveResetSessionPresentation(entry: SessionEntry | undefined
     boardPresentation: entry?.boardPresentation,
     visibility: entry?.visibility,
     displayName: entry?.displayName,
+    topicName: entry?.topicName,
     pinnedAt: entry?.pinnedAt,
     sidebarRoot: entry?.sidebarRoot,
   };

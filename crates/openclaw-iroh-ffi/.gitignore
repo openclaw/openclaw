@@ -1,0 +1,6 @@
+/target/
+/dist/
+
+# The repository-wide bin/ ignore must not hide our host generator source.
+!/src/bin/
+!/src/bin/uniffi-bindgen.rs

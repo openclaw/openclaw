@@ -64,7 +64,7 @@ it("releases its listeners when native listen throws synchronously", async () =>
     listenGatewayHttpServer({ httpServer: server, bindHost: "127.0.0.1", port: 65_536 }),
   ).rejects.toMatchObject({
     name: "GatewayLockError",
-    cause: { code: "ERR_SOCKET_BAD_PORT" },
+    cause: expect.any(RangeError),
   });
 
   expect(server.listeners("error")).toEqual(errorListeners);

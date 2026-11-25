@@ -10,8 +10,14 @@ import {
   signStatement,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { applyMailboxMessage, startMailboxReader } from "./mailbox-reader.js";
-import { linkedClaw } from "./openclaw-id.test-support.js";
+import { createOpenClawIdAuthority } from "./authority.js";
+import { applyMailboxMessage, startMailboxReader, type MailboxSink } from "./mailbox-reader.js";
+import {
+  linkedClaw,
+  memoryStore,
+  ownerInvite,
+  redemptionMail,
+} from "./openclaw-id.test-support.js";
 
 const rootMail: MailboxMessage = {
   message_id: "m1",
@@ -61,6 +67,7 @@ describe("mailbox reader callbacks", () => {
       sink: {
         submit: async () => ({ ok: false, code: "seq_conflict", detail: "expected seq 3" }),
         redeem: vi.fn(),
+        redeemNode: vi.fn(),
         saveCursor: async () => {},
       },
       onEffects: async () => {},
@@ -78,6 +85,181 @@ describe("mailbox reader callbacks", () => {
     expect(client.ackMail).toHaveBeenCalledWith("c1", "2");
   });
 
+  it("quietly accepts an approved browser replay after reload and diagnoses new keys", async () => {
+    const store = memoryStore();
+    const write = vi.fn(store.write);
+    const claw = await linkedClaw({ ...store, write });
+    const invite = await ownerInvite(claw, { email: "bob@example.test" });
+    expect(
+      await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel"),
+    ).toMatchObject({ ok: true });
+    const params = {
+      clawId: claw.clawId,
+      inviteId: invite.inviteId,
+      proofKey: invite.proofKey,
+      accountId: "acct-bob",
+      email: "bob@example.test",
+    };
+    const mail = await redemptionMail(params);
+    const sink: Pick<MailboxSink, "submit" | "redeem" | "redeemNode"> = {
+      submit: (statement) => claw.authority.submit(statement, "mailbox"),
+      redeem: (redemption, sender) => claw.authority.redeem(redemption, sender),
+      redeemNode: (redemption) => claw.authority.redeemNode(redemption),
+    };
+    expect(await applyMailboxMessage(mail.message, sink)).toMatchObject([
+      { ok: true, status: "pending" },
+    ]);
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: params.accountId,
+          role: "operator",
+          peer_keys: [mail.peerKey],
+          invite_id: invite.inviteId,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const authority = createOpenClawIdAuthority({ ...store, write });
+    await authority.load();
+    const before = authority.current();
+    write.mockClear();
+    const changed = await redemptionMail(params);
+    const log = { info: vi.fn(), warn: vi.fn<(message: string) => void>() };
+    const onRefused = vi.fn(async () => {});
+    const onEffects = vi.fn(async () => {});
+    const settled = Promise.withResolvers<void>();
+    const ackMail = vi.fn(async () => {});
+    reader = startMailboxReader({
+      clawId: claw.clawId,
+      cursor: null,
+      client: {
+        receiveMail: vi
+          .fn()
+          .mockResolvedValueOnce({ messages: [mail.message, changed.message], cursor: "replayed" })
+          .mockImplementation(() => new Promise(() => {})),
+        ackMail,
+      } as never,
+      sink: {
+        ...sink,
+        redeem: (redemption, sender) => authority.redeem(redemption, sender),
+        saveCursor: async () => {
+          settled.resolve();
+        },
+      },
+      onEffects,
+      onRefused,
+      log,
+    });
+    await settled.promise;
+    expect(onEffects).toHaveBeenCalledExactlyOnceWith([]);
+    expect(onRefused).toHaveBeenCalledExactlyOnceWith(
+      changed.message,
+      expect.objectContaining({ ok: false, code: "invite_used" }),
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(authority.current()).toBe(before);
+    expect(ackMail).toHaveBeenCalledExactlyOnceWith(claw.clawId, "replayed");
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    const warning = log.warn.mock.calls[0]?.[0];
+    expect(warning).toContain(`invite_id=${invite.inviteId}`);
+    expect(warning).toContain("already_member=true");
+    expect(warning).toContain("keys_match=false");
+    expect(warning).not.toContain(mail.message.payload.redemption.body.proof);
+    expect(warning).not.toContain(params.email);
+  });
+
+  it.each(["node_redemption", "enrollment"] as const)(
+    "settles %s before acknowledging and saving its cursor",
+    async (kind) => {
+      const node = await generateEd25519Signer();
+      const message: MailboxMessage = {
+        ...rootMail,
+        from: {
+          ...rootMail.from,
+          account_id: null,
+          email: null,
+          display_name: null,
+          device_fp: await fingerprint(formatEd25519PublicKey(node.publicKey)),
+        },
+        payload: {
+          kind: "node_redemption",
+          redemption: await signStatement(
+            "NodeRedemption",
+            {
+              claw_id: "a".repeat(32),
+              invite_id: "b".repeat(32),
+              peer_key: formatIrohEndpointKey(node.publicKey),
+              requested_at: 0,
+              proof: "0".repeat(64),
+              description: { display_name: "node", platform: "linux", commands: [], caps: [] },
+            },
+            node,
+          ),
+        },
+      };
+      if (kind === "enrollment") {
+        message.payload = { kind, request_id: "request", step: "start", data: {} };
+      }
+      const order: string[] = [];
+      const redeemNode = vi.fn(async () => ({
+        ok: true as const,
+        status: "pending" as const,
+        events: [],
+      }));
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const submit = vi.fn();
+      const redeem = vi.fn();
+      const onRefused = vi.fn(async () => {
+        order.push("refused");
+      });
+      reader = startMailboxReader({
+        clawId: "c1",
+        cursor: null,
+        client: {
+          receiveMail: vi
+            .fn()
+            .mockResolvedValueOnce({ messages: [message], cursor: "2" })
+            .mockImplementation(() => new Promise(() => {})),
+          ackMail: async () => {
+            order.push("ack");
+          },
+        } as never,
+        sink: {
+          submit,
+          redeem,
+          redeemNode,
+          saveCursor: async () => {
+            order.push("cursor");
+            resolve();
+          },
+        },
+        onEffects: async () => {
+          order.push("pending");
+        },
+        onRefused,
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+      await promise;
+      if (message.payload.kind === "node_redemption") {
+        expect(redeemNode).toHaveBeenCalledExactlyOnceWith(message.payload.redemption);
+        expect(onRefused).not.toHaveBeenCalled();
+        expect(order).toEqual(["pending", "ack", "cursor"]);
+      } else {
+        expect(redeemNode).not.toHaveBeenCalled();
+        expect(onRefused).toHaveBeenCalledExactlyOnceWith(message, {
+          ok: false,
+          code: "unsupported",
+          detail: "mailbox kind enrollment is not for the Gateway",
+        });
+        expect(order).toEqual(["refused", "ack", "cursor"]);
+      }
+      expect(submit).not.toHaveBeenCalled();
+      expect(redeem).not.toHaveBeenCalled();
+    },
+  );
+
   it("applies nothing from a batch that arrives after stop", async () => {
     let release: (batch: unknown) => void = () => {};
     const client = {
@@ -94,7 +276,7 @@ describe("mailbox reader callbacks", () => {
       clawId: "c1",
       client: client as never,
       cursor: null,
-      sink: { submit, redeem: vi.fn(), saveCursor: vi.fn(async () => {}) },
+      sink: { submit, redeem: vi.fn(), redeemNode: vi.fn(), saveCursor: vi.fn(async () => {}) },
       onEffects: vi.fn(async () => {}),
       log: { info: vi.fn(), warn: vi.fn() },
     });
@@ -120,9 +302,13 @@ describe("mailbox reader callbacks", () => {
       .mockRejectedValueOnce(new Error("disk full"));
     const settled: unknown[] = [];
     await expect(
-      applyMailboxMessage(message, { submit, redeem: vi.fn() }, async (result) => {
-        settled.push(result);
-      }),
+      applyMailboxMessage(
+        message,
+        { submit, redeem: vi.fn(), redeemNode: vi.fn() },
+        async (result) => {
+          settled.push(result);
+        },
+      ),
     ).rejects.toThrow("disk full");
     expect(settled).toEqual([{ ok: true, status: "accepted", events: removal }]);
   });
@@ -140,7 +326,7 @@ describe("mailbox reader callbacks", () => {
     }));
     await applyMailboxMessage(
       message,
-      { submit, redeem: vi.fn() },
+      { submit, redeem: vi.fn(), redeemNode: vi.fn() },
       async () => {
         // Remote access is turned off while the first statement's effects settle.
         stop.abort();
@@ -148,6 +334,50 @@ describe("mailbox reader callbacks", () => {
       stop.signal,
     );
     expect(submit).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("settles accountless member redemptions as refused without blocking the next valid message", async () => {
+  const { message } = await redemptionMail({
+    clawId: "a".repeat(32),
+    inviteId: "b".repeat(32),
+    proofKey: new Uint8Array(32),
+    accountId: "acct-bob",
+    email: "bob@example.test",
+  });
+  const accountless: MailboxMessage = {
+    ...message,
+    from: {
+      ...message.from,
+      account_id: null,
+      email: null,
+      display_name: null,
+      device_fp: "fp:node",
+    },
+  };
+  const refused = {
+    ok: false,
+    code: "audience_mismatch",
+    detail: "redeeming account is not the invite audience",
+  };
+  const accepted = { ok: true as const, status: "pending" as const, events: [] };
+  const redeem = vi.fn(async () => accepted);
+  const submit = vi.fn();
+  const settle = vi.fn(async () => {});
+  expect(
+    await applyMailboxMessage(accountless, { redeem, submit, redeemNode: vi.fn() }, settle),
+  ).toEqual([refused]);
+  expect(settle).toHaveBeenCalledWith(refused);
+  expect(redeem).not.toHaveBeenCalled();
+  expect(submit).not.toHaveBeenCalled();
+  expect(
+    await applyMailboxMessage(message, { redeem, submit, redeemNode: vi.fn() }, settle),
+  ).toEqual([accepted]);
+  expect(redeem).toHaveBeenCalledExactlyOnceWith(message.payload.redemption, {
+    account_id: "acct-bob",
+    email: "bob@example.test",
+    display_name: "Bob",
+    location_hint: message.location_hint,
   });
 });
 
@@ -191,7 +421,11 @@ describe("mailbox revocation replay", () => {
       claw_id: claw.clawId,
       payload: { kind: "revocation" as const, revocation },
     };
-    const sink = { submit: (s: unknown) => claw.authority.submit(s, "mailbox"), redeem: vi.fn() };
+    const sink = {
+      submit: (s: unknown) => claw.authority.submit(s, "mailbox"),
+      redeem: vi.fn(),
+      redeemNode: vi.fn(),
+    };
     const [removed] = await applyMailboxMessage(message, sink);
     expect(removed).toMatchObject({ ok: true });
     expect(removed?.ok && removed.events).toContainEqual({

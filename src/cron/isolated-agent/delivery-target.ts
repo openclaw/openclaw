@@ -11,6 +11,7 @@ import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolv
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
@@ -92,7 +93,7 @@ const sessionGenerationRuntimeLoader = createLazyImportLoader(
 
 export type CronDeliverySourceGeneration = Awaited<
   ReturnType<
-    typeof import("../../config/sessions/session-delivery-generation.js").prepareSessionGenerationFactsBatch
+    typeof import("../../config/sessions/session-delivery-generation.js").prepareChatLeaseBatch
   >
 >[number];
 
@@ -107,14 +108,16 @@ export async function prepareCronDeliverySourceGenerations(
   if (requests.length === 0) {
     return [];
   }
-  const { prepareSessionGenerationFactsBatch } = await sessionGenerationRuntimeLoader.load();
-  return prepareSessionGenerationFactsBatch(
-    requests.map(({ agentId, sourceConversation }) => ({
-      agentId,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      ...sourceConversation,
-      lifecycleRevision: sourceConversation.lifecycleRevision ?? null,
-    })),
+  const { prepareChatLeaseBatch } = await sessionGenerationRuntimeLoader.load();
+  // The creating conversation is linked by key; edits, resets and compaction keep it.
+  return prepareChatLeaseBatch(
+    requests.map(({ agentId, sourceConversation }) =>
+      chatRef({
+        agentId,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+        sessionKey: sourceConversation.sessionKey,
+      }),
+    ),
   );
 }
 
@@ -184,12 +187,13 @@ export async function resolveDeliveryTarget(
         preparedGeneration?.value ??
         (await (
           await sessionGenerationRuntimeLoader.load()
-        ).prepareSessionGenerationFacts({
-          agentId,
-          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-          ...source,
-          lifecycleRevision: source.lifecycleRevision ?? null,
-        }));
+        ).prepareChatLease(
+          chatRef({
+            agentId,
+            storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+            sessionKey: source.sessionKey,
+          }),
+        ));
       try {
         generation.assertCurrent();
       } finally {
@@ -238,11 +242,12 @@ export async function resolveDeliveryTarget(
         directPolicy: jobPayload.directPolicy,
       },
     });
-    return resolved.channel !== "none" && resolved.to
+    const to = stripSelectedProviderPrefix({ channel: resolved.channel, to: resolved.to });
+    return resolved.channel !== "none" && to
       ? {
           ok: true,
           channel: resolved.channel,
-          to: resolved.to,
+          to,
           accountId: resolved.accountId,
           threadId: resolved.threadId,
           mode: "explicit",

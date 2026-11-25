@@ -5,29 +5,21 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
+import type { QueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
-import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { runContextEngineTurnMaintenance } from "./context-engine-turn-authority.js";
 import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
   drainContextEngineTurnOutbox,
-  type ContextEngineTurnRuntimeContext,
+  type ContextEngineTurnAttemptFacts,
 } from "./context-engine-turn-outbox.js";
+
+export type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-outbox.js";
 
 const ACCEPTED_TURN_MAX_EVENTS = 20_000;
 const ACCEPTED_TURN_MAX_BYTES = 8 * 1024 * 1024;
-
-export type ContextEngineTurnAttemptFacts = {
-  boundary: TranscriptTurnBoundary;
-  sessionIdUsed: string;
-  sessionKey?: string;
-  sessionTarget?: ContextEngineSessionTarget;
-  promptError: boolean;
-  aborted: boolean;
-  yieldAborted: boolean;
-  runtimeContext?: ContextEngineTurnRuntimeContext;
-};
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
   admission: TranscriptTurnBoundary["admission"] | undefined;
@@ -219,6 +211,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
       runtimeContext: params.facts.runtimeContext,
+      operatorSource: params.facts.operatorSource,
     };
     // Acceptance commits before the fallible read and publication, so their
     // failure leaves the turn accepted for the next recovery to advance.
@@ -233,9 +226,12 @@ export async function finalizeAcceptedContextEngineTurn(params: {
     }
     const maintenanceBySession = new Map<
       string,
-      Parameters<typeof runContextEngineMaintenance>[0]
+      Parameters<typeof runContextEngineTurnMaintenance>[0]
     >();
-    const onCommitted = (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]): void => {
+    const onCommitted = (
+      turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0],
+      operatorSource?: QueuedOperatorRecoverySource,
+    ): void => {
       // Retain only maintenance inputs, not the committed transcript batches.
       maintenanceBySession.set(turn.sessionId, {
         contextEngine: params.lease.engine,
@@ -245,6 +241,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         sessionFile: turn.admission.sessionKey,
         reason: "turn",
         runtimeContext: turn.runtimeContext,
+        operatorSource,
         runtimeSettings: turn.runtimeSettings,
         config: params.config,
         onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
@@ -278,7 +275,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
     // Finish draining before maintenance can read engine state. Replayed rows use their own
     // target and latest model facts; one offer per session lets the scheduler own coalescing.
     for (const maintenance of maintenanceBySession.values()) {
-      await runContextEngineMaintenance(maintenance);
+      await runContextEngineTurnMaintenance(maintenance);
     }
   } catch (error) {
     rethrowIncognitoSessionError(error);

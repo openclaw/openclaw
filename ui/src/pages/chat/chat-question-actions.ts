@@ -5,6 +5,7 @@ import type { ChatProps } from "./chat-view.tsx";
 export function createChatQuestionActions({
   state,
   questionState,
+  sendActions,
   canSend,
   isCurrent,
 }: {
@@ -13,6 +14,7 @@ export function createChatQuestionActions({
     "sessionKey" | "connectionEpoch" | "handleSendChat" | "lastError" | "chatQueue"
   >;
   questionState: Parameters<typeof submitQuestionPrompt>[0];
+  sendActions: Pick<ChatProps, "onSend" | "onPermissionRetry">;
   canSend: boolean;
   isCurrent: () => boolean;
 }): Pick<
@@ -21,12 +23,20 @@ export function createChatQuestionActions({
   | "onGatewayQuestionSubmit"
   | "onGatewayQuestionSkip"
   | "onAsyncQuestionSubmit"
+  | "onSend"
+  | "onPermissionRetry"
 > {
   const sessionKey = state.sessionKey;
   const connectionEpoch = state.connectionEpoch;
   const ownsSubmission = () =>
     state.sessionKey === sessionKey && state.connectionEpoch === connectionEpoch && isCurrent();
   return {
+    ...sendActions,
+    onSend: async (...args) => {
+      if (ownsSubmission()) {
+        return sendActions.onSend(...args);
+      }
+    },
     onGatewayQuestionChange: questionState.onChange,
     onGatewayQuestionSubmit: (id, answers) => submitQuestionPrompt(questionState, id, answers),
     onGatewayQuestionSkip: (id) => cancelQuestionPrompt(questionState, id),

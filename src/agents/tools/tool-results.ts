@@ -8,7 +8,7 @@ export function textResult<TDetails>(text: string, details: TDetails): AgentTool
 }
 
 export function jsonResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
-  return textResult(JSON.stringify(payload, null, 2), payload);
+  return textResult(JSON.stringify(payload), payload);
 }
 
 function stringifyToolPayload(payload: unknown): string {
@@ -16,7 +16,7 @@ function stringifyToolPayload(payload: unknown): string {
     return payload;
   }
   try {
-    const encoded = JSON.stringify(payload, null, 2);
+    const encoded = JSON.stringify(payload);
     if (typeof encoded === "string") {
       return encoded;
     }

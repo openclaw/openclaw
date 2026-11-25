@@ -112,6 +112,7 @@ function resolvePayloadTelegramControls(
     },
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
+      supportsDisabled: turn.richMessages,
       onDroppedControl: (control) => droppedControls.push(control),
       questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
@@ -258,7 +259,7 @@ async function adoptProgressDraft(
   // The retained draft now owns the card. Detach it from this turn so final
   // cleanup and late lane callbacks cannot edit or delete it.
   turn.answerLane.stream = undefined;
-  turn.progressContinuationAdopted = true;
+  turn.finalHandoff = "progress-continuation";
   resetLaneState(turn, turn.answerLane);
   resetReasoningStepState(turn);
   turn.deliveryState.markDelivered();
@@ -488,7 +489,7 @@ async function deliverReplyWithNormalization(
       if (!suppressProgressAnswerBlock) {
         turn.progressCompositor.resetActivity();
       }
-      return toTelegramReplyDeliveryResult(turn, true);
+      return toTelegramReplyDeliveryResult(turn, !suppressProgressAnswerBlock);
     }
 
     if (segment.lane === "answer" && info.kind === "block") {

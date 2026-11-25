@@ -6,20 +6,7 @@ import {
   getPluginRegistrationContracts,
   resolveWebFetchProviderContractEntriesForPluginId,
 } from "../../plugins/contracts/registry.js";
-import { resolveBundledExplicitWebFetchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
-import type { WebFetchProviderPlugin } from "../provider-web-fetch-contract.js";
 import { installWebFetchProviderContractSuite } from "./provider-contract-suites.js";
-
-function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unknown {
-  if (provider.requiresCredential === false) {
-    return `${provider.id}-no-key-needed`;
-  }
-  const envVar = provider.envVars.find((entry) => entry.trim().length > 0);
-  if (!envVar) {
-    return `${provider.id}-test`;
-  }
-  return envVar.toLowerCase().includes("api_key") ? `${provider.id}-test` : "sk-test";
-}
 
 /** Installs web fetch provider contract tests for all providers owned by one plugin. */
 export function describeWebFetchProviderContracts(pluginId: string) {
@@ -28,21 +15,10 @@ export function describeWebFetchProviderContracts(pluginId: string) {
       ?.webFetchProviderIds ?? [];
 
   let providerEntries:
-    | Array<{
-        pluginId: string;
-        provider: WebFetchProviderPlugin;
-        credentialValue: unknown;
-      }>
+    | ReturnType<typeof resolveWebFetchProviderContractEntriesForPluginId>
     | undefined;
   const resolveProviders = () =>
-    (providerEntries ??=
-      resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
-        onlyPluginIds: [pluginId],
-      })?.map((provider) => ({
-        pluginId: provider.pluginId,
-        provider,
-        credentialValue: resolveWebFetchCredentialValue(provider),
-      })) ?? resolveWebFetchProviderContractEntriesForPluginId(pluginId));
+    (providerEntries ??= resolveWebFetchProviderContractEntriesForPluginId(pluginId));
 
   describe(`${pluginId} web fetch provider contract registry load`, () => {
     it("loads bundled web fetch providers", () => {

@@ -29,11 +29,15 @@ describe("channel docs config examples", () => {
     for (const docPath of listChannelDocFiles()) {
       const fileName = path.basename(docPath);
       const markdown = fs.readFileSync(docPath, "utf8");
-      const blocks = markdown.matchAll(/```(?:json5|json)\n([\s\S]*?)```/g);
+      const blocks = markdown.matchAll(/```(json5|json)([ \t][^\n]*)?\n([\s\S]*?)```/g);
       for (const match of blocks) {
-        const code = match[1] ?? "";
+        // Opted-out JSON5 fences may contain illustrative fragments rather than one value.
+        if (match[1] === "json5" && /\bvalidate=false\b/.test(match[2] ?? "")) {
+          continue;
+        }
+        const code = match[3] ?? "";
         const location = `${fileName}:${lineNumberAt(markdown, match.index ?? 0)}`;
-        const isStrictJson = match[0].startsWith("```json\n");
+        const isStrictJson = match[1] === "json";
         try {
           if (isStrictJson) {
             JSON.parse(code);
@@ -55,9 +59,12 @@ describe("channel docs config examples", () => {
     for (const docPath of listChannelDocFiles()) {
       const fileName = path.basename(docPath);
       const markdown = fs.readFileSync(docPath, "utf8");
-      const blocks = markdown.matchAll(/```(?:json5|json)\n([\s\S]*?)```/g);
+      const blocks = markdown.matchAll(/```(json5|json)([ \t][^\n]*)?\n([\s\S]*?)```/g);
       for (const match of blocks) {
-        const code = match[1] ?? "";
+        if (/\bvalidate=false\b/.test(match[2] ?? "")) {
+          continue;
+        }
+        const code = match[3] ?? "";
         if (!/(^|\n)\s*(?:"channels"|channels)\s*:/.test(code)) {
           continue;
         }

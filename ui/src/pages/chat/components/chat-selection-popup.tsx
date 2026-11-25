@@ -12,6 +12,7 @@ export type ChatSelectionPopupActions = {
   paneId: string;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onAskSideChat: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+  onAskNewSession: (selection: ChatSelectionSource) => void;
 };
 
 let activeSelectionPopup: {

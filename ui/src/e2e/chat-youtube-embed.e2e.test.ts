@@ -1,7 +1,7 @@
 import type { Request } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-chat-history-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 

@@ -189,3 +189,5 @@ avoid timer overflow.
 `SIGINT` and `SIGTERM` cancel the polling wait promptly. If an evaluation is
 already running, watch waits for it to settle without printing another report,
 then exits with status `130` or `143`, respectively.
+When the output pipe closes (for example `| head -n 1`), watch stops the same
+way and exits with status `0`.

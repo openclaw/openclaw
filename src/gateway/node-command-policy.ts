@@ -222,20 +222,39 @@ const pluginPolicies = new WeakMap<
 >();
 
 export function canInvokeNodeMcpLocally(commands: readonly string[]): boolean {
+  const policy = getNodeMcpInvokePolicy();
   return (
     commands.includes(NODE_MCP_TOOLS_CALL_COMMAND) &&
-    !requiresGatewayNodeInvokePolicy(NODE_MCP_TOOLS_CALL_COMMAND)
+    getPreparedPluginNodePolicy()?.dangerous.has(NODE_MCP_TOOLS_CALL_COMMAND) !== true &&
+    (!policy || typeof policy.policy.allowLocalMcpTool === "function")
   );
 }
 
-/** A local transport cannot run the Gateway's registered node.invoke policy or its missing-policy check. */
-function requiresGatewayNodeInvokePolicy(command: string): boolean {
-  return (
-    getPreparedPluginNodePolicy()?.dangerous.has(command) === true ||
-    getActivePluginGatewayNodePolicyRegistry()?.nodeInvokePolicies.some((entry) =>
-      entry.policy.commands.includes(command),
-    ) === true
+function getNodeMcpInvokePolicy() {
+  return getActivePluginGatewayNodePolicyRegistry()?.nodeInvokePolicies.find((entry) =>
+    entry.policy.commands.includes(NODE_MCP_TOOLS_CALL_COMMAND),
   );
+}
+
+export function canInvokeNodeMcpToolLocally(subject: {
+  nodeId: string;
+  server: string;
+  tool: string;
+}): boolean {
+  if (getPreparedPluginNodePolicy()?.dangerous.has(NODE_MCP_TOOLS_CALL_COMMAND)) {
+    return false;
+  }
+  const entry = getNodeMcpInvokePolicy();
+  if (!entry) {
+    return true;
+  }
+  try {
+    return (
+      entry.policy.allowLocalMcpTool?.({ ...subject, pluginConfig: entry.pluginConfig }) === true
+    );
+  } catch {
+    return false;
+  }
 }
 
 function getPreparedPluginNodePolicy(): PreparedPluginNodePolicy | undefined {

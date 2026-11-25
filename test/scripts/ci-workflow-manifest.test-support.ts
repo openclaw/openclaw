@@ -58,6 +58,7 @@ type CiManifestFixtureOptions = {
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
   bunTestRuntime?: boolean;
+  runtimeJobs?: boolean;
   nativeBunInspection?: {
     report: {
       staleEntries: string[];
@@ -77,6 +78,7 @@ type CiManifestFixtureOptions = {
   publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
+  extensionLintCapability?: boolean;
   checkPlanSource?: string;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
@@ -111,6 +113,7 @@ type CiManifestFixtureOptions = {
   targetFiles?: string[];
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
+  uiNativeSharding?: boolean;
   uiReleaseTier?: boolean;
   uiTestGroupsSource?: string;
   uiE2eSelectorSource?: string;
@@ -178,11 +181,15 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       selectedTargetFiles.delete(missing);
     }
     writeFixtures(selectedTargetFiles);
+    writeFixture(
+      "scripts/ci-changed-scope.mjs",
+      reexport("hasMlxNativeProofInputs", "scripts/ci-changed-scope.mjs"),
+    );
     if (options.bunTestRuntime) {
       const inspection = options.nativeBunInspection;
       writeScript(
         "ci-test-runtime.mts",
-        `export { resolveCiTestRuntimePolicy } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
+        `export { resolveCiTestRuntimePolicy${options.runtimeJobs ? ", ciTestShardRuntimes" : ""} } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
         ${options.bunUiTestRuntime ? `import { ciTestShardRequiresBun as currentRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};` : ""}
         export const ciTestShardRequiresBun = (shard, policy) =>
           policy !== "node" && (shard.configs?.includes("fixture-bun.config.ts") ||
@@ -256,6 +263,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
         }));\n`,
       );
     }
+    writeScript("ci-ui-test-plan.mts", "export {};\n");
     if (options.uiReleaseTier || options.bundledPlanner) {
       const uiTargets = [
         ...new Set([
@@ -277,6 +285,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
           ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", includePatterns: ${JSON.stringify(uiTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
           e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: options.uiE2eFiles ? [...options.uiE2eFiles, ...${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}] : ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
         });\n`,
+        "ci-ui-test-plan.mts",
       );
       if (options.uiE2eSelectorSource) {
         appendPlanner(options.uiE2eSelectorSource);
@@ -294,6 +303,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
               includePatterns: group.includePatterns.filter((file) => file === ${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}[shard - 1]),
             })).filter((group) => group.includePatterns.length > 0),
           }));\n`,
+          "ci-ui-test-plan.mts",
         );
       }
     }
@@ -315,6 +325,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     if (options.changedCoreTestSupport) {
       copyFixtures([
         "scripts/changed-lanes.mts",
+        "scripts/lib/windows-test-targets.mts",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/release-changelog.mjs",
         "scripts/lib/arg-utils.mts",
@@ -327,6 +338,12 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
         "scripts/run-tsgo-core-test-shards.mts",
         "scripts/run-additional-boundary-checks.mts",
       ]);
+    }
+    if (options.extensionLintCapability) {
+      writeScript(
+        "ci-extension-lint-plan.mts",
+        "export async function resolveCiExtensionLintSelection() { return null; }\n",
+      );
     }
     if (options.checkFamilyScope) {
       writeFixture(
@@ -354,7 +371,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       if (!options.changedCoreTestSupport) {
         writeFixture(
           "scripts/changed-lanes.mts",
-          reexport("detectChangedLanes", "scripts/changed-lanes.mts"),
+          reexport("detectChangedLanes, detectChangedLanesForPaths", "scripts/changed-lanes.mts"),
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection
@@ -424,7 +441,9 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
           export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-qa-smoke-scope.mts")).href)};
           export { isCiDocumentationPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};
           export const createChangedNodeTestShards = (changedPaths, options = {}) => {
-            console.log("changed-node-plan-options:" + JSON.stringify(options));
+            console.log("changed-node-plan-options:" + JSON.stringify({ ...options,
+              volumeContext: options.volumeContext && { ...options.volumeContext, environment: undefined },
+            }));
             if (options.releaseFastLane && changedPaths.includes("scripts/lib/ci-node-test-plan.mts")) {
               options.onFallback("stub owner selection");
             }
@@ -505,6 +524,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     }
     if (options.bundledPlanner) {
       writeScript(
+        "vitest-runtime-selection.mts",
+        reexport("resolveCiVitestWorkerPreset", "scripts/lib/vitest-runtime-selection.mts"),
+      );
+      writeScript(
         "ci-docker-seed-plan.mts",
         options.dockerSeedPlannerSource ??
           reexport(
@@ -552,6 +575,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       ".github/workflows/ci.yml",
       [
         [options.formatCheck, "pnpm format:check\npnpm format:check"],
+        [
+          options.uiNativeSharding === true,
+          `OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${readCiWorkflow().jobs["checks-ui"].steps.find((step: WorkflowStep) => step.name === "Test Control UI")?.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON ?? ""}`,
+        ],
         [options.androidCiCapabilities, "android-ci-contract-v2"],
         [options.bundledPlanner, "openclawkit-tests-contract-v1"],
         [options.bundledPlanner, "docker-seed-e2e-contract-v1"],
@@ -583,15 +610,17 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "release-version.mjs",
       "ci-ios-smoke-plan.mjs",
       "ci-blacksmith-capacity.mjs",
+      "ci-node-test-capacity.mts",
+      "vitest-shard-metadata.mts",
       "ci-skills-python-plan.mjs",
+      "ci-test-observations.mjs",
       "changed-path-facts.mjs",
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);
     }
-    copyFixture(
-      ".ci-harness/scripts/lib/ci-node-test-plan.mts",
-      path.join(scriptsDir, "ci-node-test-plan.mts"),
-    );
+    for (const name of ["ci-node-test-plan.mts", "ci-ui-test-plan.mts"]) {
+      copyFixture(`.ci-harness/scripts/lib/${name}`, path.join(scriptsDir, name));
+    }
     const fixtureBin = path.join(root, "bin");
     let correctionBaseSha = "";
     if (options.remoteTagRefs) {

@@ -10,6 +10,24 @@ export const SessionsSearchParamsSchema = Object.assign(
   closedObject({
     agentId: Type.Optional(NonEmptyString),
     sessionKeys: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 200 })),
+    /** Agent recall filters transcript candidates, without listing the session inventory. */
+    recall: Type.Optional(
+      closedObject({
+        requesterAgentId: NonEmptyString,
+        requesterSessionKey: NonEmptyString,
+        sandboxed: Type.Optional(Type.Boolean()),
+        /** Pinned tool policy can restrict, never widen, current Gateway visibility. */
+        visibility: Type.Optional(stringLiteralUnion(["self", "tree", "agent", "all"])),
+        mainSessionKey: Type.Optional(NonEmptyString),
+        restrictToSpawned: Type.Optional(Type.Boolean()),
+        agentToAgent: Type.Optional(
+          closedObject({
+            enabled: Type.Boolean(),
+            allow: Type.Optional(Type.Array(Type.String())),
+          }),
+        ),
+      }),
+    ),
     /** Search the complete visible roster selected by these membership filters. */
     scope: Type.Optional(
       closedObject(
@@ -48,10 +66,24 @@ export const SessionsSearchParamsSchema = Object.assign(
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 25 })),
   }),
   {
-    not: {
-      required: ["scope"],
-      anyOf: [{ required: ["agentId"] }, { required: ["sessionKeys"] }],
-    },
+    allOf: [
+      {
+        not: {
+          required: ["scope"],
+          anyOf: [
+            { required: ["agentId"] },
+            { required: ["sessionKeys"] },
+            { required: ["recall"] },
+          ],
+        },
+      },
+      {
+        not: {
+          required: ["recall"],
+          anyOf: [{ required: ["agentId"] }, { required: ["sessionKeys"] }],
+        },
+      },
+    ],
   },
 );
 

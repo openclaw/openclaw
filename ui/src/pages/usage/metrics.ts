@@ -39,6 +39,13 @@ function formatUsageCost(n: number, decimals: 2 | 4 | 6 = 2): string {
   return formatUsd(n, decimals);
 }
 
+// Usage with no known price is unpriced, never free; a genuine zero stays $0.00.
+function formatHeadlineCost(totals: UsageTotals): string {
+  return totals.totalCost === 0 && totals.missingCostEntries > 0
+    ? t("usage.overview.unpriced")
+    : formatUsageCost(totals.totalCost);
+}
+
 export function formatAnalysisCost(value: number): string {
   const magnitude = Math.abs(value);
   const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
@@ -157,5 +164,6 @@ export {
   formatUsageCost,
   formatDayLabel,
   formatFullDate,
+  formatHeadlineCost,
   formatUsageTokens,
 };

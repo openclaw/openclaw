@@ -1,15 +1,83 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { afterAll, expect, it } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { requirePinnedBun } from "../../scripts/lib/pinned-bun.mjs";
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
 const directories = useAutoCleanupTempDirTracker(afterAll);
+let runtimeUrl: string;
 
-for (const runtime of ["node", "bun"] as const) {
-  it.skipIf(runtime === "bun" && process.platform === "win32")(
+beforeAll(async () => {
+  // The alias process must preserve symlinks without loading pnpm's source-loader
+  // dependency layout. Bundle the real owner and its worker like an installed CLI.
+  const runtime = directories.make("openclaw-retained-owner-");
+  const schemas = createStateSchemaInlinePlugin();
+  for (const [source, output] of [
+    ["update-retained-runtime.ts", "retained-runtime.mjs"],
+    ["update-candidate-state.worker.ts", "update-candidate-state.worker.mjs"],
+  ] as const) {
+    await build({
+      entryPoints: [fileURLToPath(new URL(source, import.meta.url))],
+      outfile: path.join(runtime, output),
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node22",
+      external: ["@openclaw/fs-safe", "@openclaw/fs-safe/*", "@resvg/resvg-js"],
+      plugins: [
+        {
+          name: schemas.name,
+          setup(bundle) {
+            bundle.onLoad({ filter: /./ }, ({ path: modulePath }) => {
+              const result = schemas.load.handler.call({ addWatchFile() {} }, modulePath);
+              return result ? { contents: result.code, loader: result.moduleType } : undefined;
+            });
+          },
+        },
+      ],
+      banner: {
+        js: 'import { createRequire as createFixtureRequire } from "node:module"; const require = createFixtureRequire(import.meta.url);',
+      },
+      logLevel: "silent",
+    });
+  }
+  const manifest = fileURLToPath(import.meta.resolve("@openclaw/fs-safe/package.json"));
+  const require = createRequire(manifest);
+  const copy = (source: string, name: string) =>
+    fs.cp(path.dirname(source), path.join(runtime, "node_modules", name), {
+      recursive: true,
+      dereference: true,
+    });
+  await copy(manifest, "@openclaw/fs-safe");
+  const metadata = JSON.parse(await fs.readFile(manifest, "utf8")) as {
+    optionalDependencies: Record<string, string>;
+  };
+  for (const name of Object.keys(metadata.optionalDependencies)) {
+    if (!name.startsWith("@openclaw/fs-safe-")) {
+      continue;
+    }
+    let native: string;
+    try {
+      native = require.resolve(name + "/package.json");
+    } catch {
+      continue;
+    }
+    await copy(native, name);
+  }
+  runtimeUrl = pathToFileURL(path.join(runtime, "retained-runtime.mjs")).href;
+});
+
+for (const runtime of ["node", "bun", "node-alias", "node-short-path"] as const) {
+  it.skipIf(
+    (runtime === "bun" && process.platform === "win32") ||
+      (runtime === "node-short-path" && process.platform !== "win32"),
+  )(
     `keeps ${runtime} late imports on the old generation through replacement and CLI teardown`,
     async () => {
       const base = directories.make("openclaw-retained-imports-");
@@ -39,7 +107,7 @@ for (const runtime of ["node", "bun"] as const) {
         "dist/late-old-hash.mjs":
           'import dependency from "fixture"; import conditional from "fixture-conditional"; import commonjs from "fixture-cjs"; import { named } from "fixture-commonjs-js"; import data from "./value.json" with { type: "json" }; import { existsSync } from "node:fs"; import { createRequire } from "node:module"; import path from "path"; import { shared } from "./shared.mjs"; const require = createRequire(import.meta.url); export { shared, commonjs, named, data, conditional }; export const requiredConditional = require("fixture-conditional"); export const required = require("fixture-cjs"); export const requiredJson = require("./value.json"); export const builtin = typeof existsSync === "function" && path.sep.length > 0; export const value = dependency; export const url = import.meta.url;',
         "dist/updater.mjs":
-          'import { fileURLToPath } from "node:url"; import preloaded from "fixture-preloaded"; export { preloaded }; export { shared } from "./shared.mjs"; export const late = () => import("./late-old-hash.mjs"); export const query = () => import("./late-old-hash.mjs?variant=1#x"); export const absolute = () => import(fileURLToPath(new URL("./absolute-old-hash.mjs", import.meta.url))); export const cleanup = () => import("./cleanup-old-hash.mjs");',
+          'import { fileURLToPath } from "node:url"; import preloaded from "fixture-preloaded"; export { preloaded }; export const url = import.meta.url; export { shared } from "./shared.mjs"; export const late = () => import("./late-old-hash.mjs"); export const query = () => import("./late-old-hash.mjs?variant=1#x"); export const absolute = () => import(fileURLToPath(new URL("./absolute-old-hash.mjs", import.meta.url))); export const cleanup = () => import("./cleanup-old-hash.mjs");',
         "dist/absolute-old-hash.mjs": 'export const value = "old absolute";',
         "dist/cleanup-old-hash.mjs": 'export const value = "cleanup retained";',
         "dist/tool-dependency.mjs": 'export const value = "old tooling";',
@@ -49,14 +117,35 @@ for (const runtime of ["node", "bun"] as const) {
         await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
         await fs.writeFile(path.join(root, file), content);
       }
+      let importRoot = root;
+      if (runtime === "node-short-path") {
+        const shortPath = spawnSync(
+          process.env.ComSpec ?? "cmd.exe",
+          ["/d", "/c", `for %I in ("${root}") do @echo %~sI`],
+          // cmd.exe owns the command string rather than CRT argument quoting.
+          { encoding: "utf8", windowsVerbatimArguments: true },
+        );
+        expect(shortPath.error, shortPath.stderr).toBeUndefined();
+        expect(shortPath.status, shortPath.stderr).toBe(0);
+        importRoot = shortPath.stdout.trim();
+        expect(importRoot, "malformed 8.3 alias output").not.toMatch(/["\r\n]/);
+        expect(path.isAbsolute(importRoot)).toBe(true);
+        expect(importRoot, "8.3 alias unavailable on fixture volume").not.toBe(root);
+        expect(await fs.realpath(importRoot)).toBe(await fs.realpath(root));
+      } else if (runtime === "node-alias") {
+        importRoot = path.join(base, "install-alias");
+        await fs.symlink(root, importRoot, process.platform === "win32" ? "junction" : "dir");
+      }
       const source = `import assert from "node:assert/strict";
      import fs from "node:fs/promises";
      import path from "node:path";
      import { pathToFileURL } from "node:url";
-     import { withRetainedUpdateRuntime } from ${JSON.stringify(new URL("./update-retained-runtime.ts", import.meta.url).href)};
+     import { withRetainedUpdateRuntime } from ${JSON.stringify(runtimeUrl)};
      const root = ${JSON.stringify(root)};
-     const url = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+     const importRoot = ${JSON.stringify(importRoot)};
+     const url = pathToFileURL(path.join(importRoot, "dist/updater.mjs")).href;
      const updater = await import(url);
+     assert.equal(updater.url, url, "fixture must retain the requested module identity");
      const jsonBaseline = await import(pathToFileURL(path.join(root, "dist/json-baseline.mjs")).href);
      await withRetainedUpdateRuntime(url, async retain => {
        await retain({ mutationRoots: [root], timeoutMs: 30000, assertCurrent() {} });
@@ -89,7 +178,7 @@ for (const runtime of ["node", "bun"] as const) {
        assert.equal(late.data === late.requiredJson, jsonBaseline.sharesIdentity);
        assert.equal(late.builtin, true);
        assert.equal(late.shared, updater.shared);
-       assert.equal(late.url, pathToFileURL(path.join(root, "dist/late-old-hash.mjs")).href);
+       assert.equal(late.url, pathToFileURL(path.join(importRoot, "dist/late-old-hash.mjs")).href);
        const queried = await updater.query();
        assert.equal(queried.value, "old dependency");
        assert.equal(queried.url, late.url + "?variant=1#x");
@@ -104,6 +193,7 @@ for (const runtime of ["node", "bun"] as const) {
         timeout: 30_000,
         env: {
           PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
           HOME: base,
           TMPDIR: base,
           OPENCLAW_STATE_DIR: path.join(base, "state"),
@@ -113,10 +203,10 @@ for (const runtime of ["node", "bun"] as const) {
         },
       };
       const result =
-        runtime === "node"
+        runtime !== "bun"
           ? spawnNodeEvalSync(source, {
               ...options,
-              imports: [new URL("../../scripts/tsx.mjs", import.meta.url).href],
+              execArgv: runtime === "node-alias" ? ["--preserve-symlinks"] : [],
             })
           : spawnSync(requirePinnedBun(), ["--eval", source], options);
       expect(result.error, result.stderr).toBeUndefined();

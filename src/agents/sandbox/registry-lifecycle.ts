@@ -1,6 +1,7 @@
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import {
   GatewayRetainedWorkScope,
   isAsyncWorkScopeActiveHere,
@@ -18,6 +19,9 @@ const lifetimes = new Map<string, ReturnType<typeof createLifetime>>();
 const HOUSEKEEPING_INTERVAL_MS = 5 * 60 * 1000;
 const log = createSubsystemLogger("sandbox");
 
+export type SandboxPruneCursor = { afterContainerName?: string };
+type Housekeeping = (cursor: SandboxPruneCursor) => Promise<void>;
+
 type RuntimeUseTarget =
   | { scopeKey: string; workspaceDir?: string }
   | { scopeKey?: string; workspaceDir: string };
@@ -27,12 +31,11 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
   const key = admission.identity.canonicalPath;
   const work = new GatewayRetainedWorkScope();
   const slots = new Map<string, RuntimeSlot>();
+  const pruneCursor: SandboxPruneCursor = {};
   let housekeeping: Promise<void> | undefined;
   let housekeepingRequested = false;
   let lastHousekeepingAtMs = -Infinity;
-  let recurringHousekeeping:
-    | { run: () => Promise<void>; onError: (error: unknown) => void }
-    | undefined;
+  let recurringHousekeeping: { run: Housekeeping; onError: (error: unknown) => void } | undefined;
   let housekeepingTimer: ReturnType<typeof setInterval> | undefined;
   const stopHousekeepingTimer = () => {
     clearInterval(housekeepingTimer);
@@ -169,7 +172,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
           pending.resolve();
         });
     },
-    maybeRunHousekeeping(run: () => Promise<void>): Promise<void> {
+    maybeRunHousekeeping(run: Housekeeping): Promise<void> {
       if (housekeeping) {
         return housekeeping;
       }
@@ -181,28 +184,31 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
         return Promise.resolve();
       }
       lastHousekeepingAtMs = now;
+      const broker = getSpawnBroker();
       housekeeping = runInDetachedAsyncContext(() =>
-        work.scope.track(async () => {
-          do {
-            housekeepingRequested = false;
-            await run();
-          } while (housekeepingRequested);
-        }),
+        runWithSpawnBroker(broker, () =>
+          work.scope.track(async () => {
+            do {
+              housekeepingRequested = false;
+              await run(pruneCursor);
+            } while (housekeepingRequested);
+          }),
+        ),
       ).finally(() => {
         housekeeping = undefined;
       });
       return housekeeping;
     },
-    startHousekeeping(
-      run: () => Promise<void>,
-      onError: (error: unknown) => void,
-      request = false,
-    ): void {
+    startHousekeeping(run: Housekeeping, onError: (error: unknown) => void, request = false): void {
       if (work.isClosing && !isAsyncWorkScopeActiveHere(work.scope)) {
         throw new Error("Sandbox registry admission is closed");
       }
       if (!recurringHousekeeping) {
-        recurringHousekeeping = { run, onError };
+        const broker = getSpawnBroker();
+        recurringHousekeeping = {
+          run: (cursor) => runWithSpawnBroker(broker, () => run(cursor)),
+          onError,
+        };
         armHousekeepingTimer();
       }
       housekeepingRequested ||= request;
@@ -248,8 +254,8 @@ export function prepareSandboxRegistryClose() {
   const owner = lifetime(context);
   const gateway = owner.retainGateway();
   owner.startHousekeeping(
-    async () =>
-      (await import("./prune.js")).runSandboxPrune(() => context.admission.assertCurrent()),
+    async (cursor) =>
+      (await import("./prune.js")).runSandboxPrune(() => context.admission.assertCurrent(), cursor),
     (error) => log.error(`Sandbox recovery failed: ${String(error)}`),
   );
   return gateway;
@@ -286,7 +292,7 @@ export function withSandboxRuntimePrune(
 
 /** Background housekeeping has state-root lifetime, not the initiating turn's async context. */
 export function maybeRunSandboxRegistryHousekeeping(
-  run: () => Promise<void>,
+  run: Housekeeping,
   context = captureOpenClawStateWorkerContext(),
 ): Promise<void> {
   context.admission.assertCurrent();
@@ -295,7 +301,7 @@ export function maybeRunSandboxRegistryHousekeeping(
 
 /** Revisit idle runtimes even when no later turn arrives to request another pass. */
 export function startSandboxRegistryHousekeeping(
-  run: () => Promise<void>,
+  run: Housekeeping,
   onError: (error: unknown) => void,
   context = captureOpenClawStateWorkerContext(),
   request = false,

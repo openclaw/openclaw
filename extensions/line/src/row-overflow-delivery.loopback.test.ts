@@ -15,7 +15,8 @@ import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { LINE_PRESENTATION_CAPABILITIES, prepareLineReplyPayload } from "./rich-messages.js";
 import { setLineRuntime } from "./runtime.js";
-import { createFlexMessage, pushMessagesLine, replyMessageLine } from "./send.js";
+import { pushMessagesLine, replyMessageLine } from "./send.js";
+import { createFlexMessage } from "./template-messages.js";
 import type { LineChannelData } from "./types.js";
 
 type WireMessage = {
@@ -169,6 +170,52 @@ afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
+});
+
+it.each([
+  { name: "all-space", source: "`   `", value: "   " },
+  { name: "oversized", source: `\`  ${"x".repeat(6000)}  \``, value: ` ${"x".repeat(6000)} ` },
+  {
+    name: "embedded oversized",
+    source: `prefix \`  ${"x".repeat(6000)}  \` suffix`,
+    value: `prefix  ${"x".repeat(6000)}  suffix`,
+  },
+])("retains the complete $name code cell on push and reply", async ({ source, value }) => {
+  const rows = Array.from({ length: 12 }, (_, i) => `| row ${i} | ok |`);
+  const table = ["| ID | Value |", "| --- | --- |", ...rows, `| last | ${source} |`].join("\n");
+  const expected = [...rows.map((_, i) => `row ${i}\n• Value: ok`), `last\n• Value: ${value}`].join(
+    "\n\n",
+  );
+  await sendPayload("Utable", table);
+  createDeps({ processLineMessage, chunkMarkdownText, pushMessagesLine, replyMessageLine });
+  await deliverLineAutoReply({
+    ...baseDeliveryParams,
+    cfg: LINE_TEST_CFG,
+    accountId: "default",
+    payload: { text: table },
+    lineData: {},
+  });
+
+  for (const operation of ["push", "reply"]) {
+    const messages = requests
+      .filter((request) => request.path === `/v2/bot/message/${operation}`)
+      .flatMap((request) => request.body.messages);
+    expect(
+      messages.every((message) => message.type === "text" && (message.text?.length ?? 0) <= 5000),
+    ).toBe(true);
+    expect(messages.map((message) => message.text).join("")).toBe(expected);
+  }
+});
+
+it("trims a prose push chunk even when a later table retains code spaces", async () => {
+  const prose = "p".repeat(4995);
+  const table = ["| ID | Value |", "|---|---|", ...Array(13).fill("| next | `  go  ` |")].join(
+    "\n",
+  );
+  await sendPayload("Umixed", `${prose}       next paragraph\n\n${table}`);
+  const messages = requests.flatMap((request) => request.body.messages);
+  expect(messages[0]?.text).toBe(prose);
+  expect(messages.at(-1)?.text).toMatch(/• Value: {2}go $/);
 });
 
 it.each(["push", "reply"] as const)(

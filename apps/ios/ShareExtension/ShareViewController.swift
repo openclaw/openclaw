@@ -155,20 +155,10 @@ final class ShareViewController: UIViewController {
             credentials: GatewayNodeSessionCredentials(
                 token: config.token,
                 password: config.password),
-            connectOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: "OpenClaw Share",
-                deviceIdentityProfile: .shareExtension,
-                includeDeviceIdentity: true,
-                allowStoredDeviceAuth: config.gatewayStableID != nil,
-                deviceAuthGatewayID: config.gatewayStableID),
-            sessionBox: nil,
+            connectOptions: ShareGatewayRelaySettings.connectOptions(gatewayStableID: config.gatewayStableID),
+            sessionBox: ShareGatewayRelaySettings.webSocketSessionBox(
+                tlsFingerprintSHA256: config.tlsFingerprintSHA256),
+            extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: config) },
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { req in

@@ -2,13 +2,12 @@
 import { expect, it } from "vitest";
 import {
   appendTerminalAssistantMessage as appendTerminal,
-  historyReplacedVisibleStream as historyReplaced,
+  historyReplacedVisibleStream,
   materializeVisibleStreamState,
   visibleAssistantStreamParts as visibleParts,
   visibleCurrentAssistantStreamTail as currentTail,
 } from "./stream-reconciliation.ts";
 import {
-  pruneHistoryReplacedStreamSegments as pruneHistoryReplaced,
   prunePersistedAssistantStreamSegments as prunePersistedAssistant,
   prunePersistedToolStreamMessages as prunePersistedTools,
 } from "./stream-segment-pruning.ts";
@@ -26,6 +25,14 @@ const visibleStreamOptions = {
   isHiddenStreamText: () => false,
   persistCommentary: true,
 };
+
+function reconcileHistory(
+  messages: unknown[],
+  state: StreamReconciliationState,
+  options = visibleStreamOptions,
+) {
+  return historyReplacedVisibleStream(messages, visibleParts(state, options), options);
+}
 
 function user(content: string, timestamp?: number, key?: string, target?: string) {
   return {
@@ -219,19 +226,34 @@ it("does not prune keyed preambles by live tool index", () => {
   expect(state.toolStreamById.size).toBe(0);
 });
 
-it("retains the cumulative baseline after history replaces an earlier displayed prefix", () => {
+it("only retires a cumulative pre-tool occurrence when its own tool reaches history", () => {
+  const runId = "active-run";
+  const first = toolIdentity(runId, "call-first");
+  const second = toolIdentity(runId, "call-second");
   const state = idle({
+    chatRunId: runId,
     chatStreamSegments: [
-      streamSegment("Before steer.", 1, { runId: "active-run" }),
-      streamSegment("Before steer. After steer.", 2, { runId: "active-run" }),
+      streamSegment("Before steer.", 1, { runId, toolCallId: "call-first" }),
+      streamSegment("Before steer. After steer.", 2, { runId, toolCallId: "call-second" }),
     ],
+    toolStreamOrder: [first, second],
+    toolStreamById: new Map([
+      [first, createToolStreamEntry("call-first", runId)],
+      [second, createToolStreamEntry("call-second", runId)],
+    ]),
   });
-  pruneHistoryReplaced(
-    [{ role: "assistant", content: "Before steer.", timestamp: 1 }],
-    state,
-    visibleStreamOptions,
-  );
-  expect(visibleParts(state, visibleStreamOptions)).toMatchObject([{ text: "After steer." }]);
+  const matchingProse = [assistant("Before steer.", 1)];
+  expect(reconcileHistory(matchingProse, state)).toBe(false);
+  prunePersistedTools(state, persistedToolIds(matchingProse, state));
+  expect(visibleParts(state, visibleStreamOptions).map((part) => part.text)).toEqual([
+    "Before steer.",
+    "After steer.",
+  ]);
+  const result = { role: "toolResult", runId, toolCallId: "call-first", content: "done" };
+  prunePersistedTools(state, persistedToolIds([result], state));
+  expect(visibleParts(state, visibleStreamOptions).map((part) => part.text)).toEqual([
+    "After steer.",
+  ]);
   expect(
     currentTail({ ...state, chatStream: "Before steer. After steer. Continued." }, () => false),
   ).toBe("Continued.");
@@ -340,7 +362,7 @@ it("reconciles a stream segment only inside its persisted ordinary-user interval
     },
     user("Steer prompt", 1, "steer-run:user"),
   ];
-  expect(historyReplaced(messages, state, visibleStreamOptions)).toBe(false);
+  expect(reconcileHistory(messages, state)).toBe(false);
   expectTexts(
     materialize(messages, state, { includeCurrent: false }),
     "Original prompt",
@@ -355,7 +377,7 @@ it("does not treat matching terminal text as a keyed preamble replacement", () =
   });
   const terminalMessage = assistant("before tool\nfinal answer", 3);
   const messages = [user("latest ask", 1), terminalMessage];
-  expect(historyReplaced(messages, state, visibleStreamOptions)).toBe(false);
+  expect(reconcileHistory(messages, state)).toBe(false);
   const materialized = materialize(messages.slice(0, 1), state, {
     replacementMessages: [terminalMessage],
     includeCurrent: false,
@@ -375,7 +397,7 @@ it("does not require transient keyed commentary to be present in history", () =>
   });
   const messages = [user("latest ask", 1), assistant("final answer", 3)];
   expect(
-    historyReplaced(messages, state, {
+    reconcileHistory(messages, state, {
       ...visibleStreamOptions,
       persistCommentary: false,
     }),

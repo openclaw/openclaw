@@ -222,6 +222,36 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each([
+    [
+      "https://chatgpt.com/apps/google-drive/connector_5f3c8c41",
+      "https://chatgpt.com/apps/google-drive/connector\uff3f5f3c8c41",
+      true,
+    ],
+    ["https://a.example/@everyone*x*", "https://a.example/\uff20everyone\u2217x\u2217", false],
+  ])(
+    "keeps line breaks and only a markup-free own URL line literal: %s",
+    async (url, escaped, literal) => {
+      const gateway = createAnsweringGateway([{ continue: ["Decline"] }]);
+      await gateway.request(
+        "url",
+        formParams({
+          mode: "url",
+          message: `Reconnect <Drive> at ${url}.`,
+          requestedSchema: undefined,
+          url,
+          elicitationId: "auth-1",
+        }),
+      );
+      const body = `Reconnect &lt;Drive&gt; at ${escaped}.\n\n${literal ? url : escaped}\n\nOpen the link and complete the step in your browser. Then select "I've completed this step".`;
+      const payload = vi.mocked(gateway.params.onBlockReply!).mock.calls[0]?.[0];
+      expect(payload?.text).toBe(
+        `Codex needs confirmation:\n\nBrowser step\n${body}\n1. I've completed this step\n2. Decline\n\nReply with the number or option text.`,
+      );
+      expect(payload?.presentation?.blocks[0]).toEqual({ type: "text", text: body });
+    },
+  );
+
   it("rejects inherited and accessor thread correlation without invoking getters", async () => {
     const gateway = createAnsweringGateway([]);
     const inherited = formParams();

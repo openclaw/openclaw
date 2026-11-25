@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questions.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
@@ -39,7 +40,11 @@ import {
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
-import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import {
+  resetToolStream,
+  resetToolStreamRun,
+  retireToolStreamLiveState,
+} from "./tool-stream-state.ts";
 
 registerChatQuestionsEnglish();
 
@@ -367,11 +372,19 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   const access = readChatSessionActionAccess(
     { client, hello: host.hello, phase: "connected" },
     true,
-    { session, sessionAbortable: intent.sessionAbortable },
+    { session, sessionAbortable: intent.sessionAbortable, runId: intent.runId },
   ).abort;
-  if (!access.allowed && access.cause === "session-not-owned" && !session) {
-    // Reconnect can precede the canonical row. Its publication retries this
-    // one exact intent; absence must neither authorize it nor discard it.
+  if (
+    !access.allowed &&
+    !session &&
+    (access.cause === "session-not-owned" ||
+      (access.cause === "missing-scope" &&
+        intent.invitedSend &&
+        host.hello?.auth &&
+        hasOperatorSelfReadAccess(host.hello.auth)))
+  ) {
+    // Reconnect can precede ownership or invitation evidence on the canonical row.
+    // Its publication retries this exact intent; absence cannot authorize it.
     return false;
   }
   // Consume before sending so repeated publications cannot duplicate the
@@ -545,6 +558,9 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
 
   if (options.clearIndicators ?? true) {
     clearRunIndicators(host, runId);
+  }
+  if (options.outcome && runId) {
+    retireToolStreamLiveState(host, runId);
   }
   if (options.clearLocalRun) {
     host.chatStream = null;

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
 import type { GatewayClientInfo } from "../../packages/gateway-protocol/src/client-info.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -9,9 +10,11 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -36,7 +39,7 @@ export function recoveryFixture(
 export function pairedOperator(): PairedDevice {
   return {
     deviceId: "recovery-device",
-    publicKey: "fixture-public-key",
+    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     roles: ["operator"],
     approvedScopes: ["operator.admin"],
     tokens: {
@@ -74,14 +77,33 @@ export async function createOperatorRecoveryFixture(params: {
   tokenlessDevice?: boolean;
   gatewayAccessGrant?: GatewayAccessGrantRef;
   sharedGeneration?: string;
+  /** Proxy-verified identity of a tokenless trusted-proxy handshake. */
+  trustedProxyUser?: string;
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
   openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
 }) {
   let config = params.config;
+  const trustedProxyUser =
+    params.trustedProxyUser ??
+    (params.tokenlessDevice && !params.openclawIdPrincipal ? "fixture-proxy-operator" : undefined);
+  if (trustedProxyUser && !config.gateway?.auth) {
+    config = {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-fixture-user", allowUsers: [trustedProxyUser] },
+        },
+      },
+    };
+  }
   const context = params.context;
   context.getRuntimeConfig = () => config;
+  // Production contexts resolve their owning Gateway; detached work restores against it.
+  context.resolveGatewayContext ??= () => context;
   const client = createOperatorClient({
     profileId: params.profileId,
     scopes: params.scopes ?? ["operator.admin"],
@@ -102,7 +124,11 @@ export async function createOperatorRecoveryFixture(params: {
   };
   client.authPolicy = captureGatewayAuthPolicy(config, {
     role: "operator",
-    authMethod: params.tokenlessDevice || params.openclawIdPrincipal ? "trusted-proxy" : "token",
+    authMethod:
+      params.tokenlessDevice || params.openclawIdPrincipal || params.trustedProxyUser
+        ? "trusted-proxy"
+        : "token",
+    verifiedIdentity: trustedProxyUser,
   });
   if (params.sharedGeneration !== undefined) {
     client.usesSharedGatewayAuth = true;
@@ -121,6 +147,7 @@ export async function createOperatorRecoveryFixture(params: {
       signedAt: 1,
       nonce: "fixture-nonce",
     };
+    client.internal.operatorDeviceScopeCeiling = [...(params.scopes ?? ["operator.admin"])];
     client.internal.operatorDeviceTokenIdentity = params.tokenlessDevice
       ? null
       : expectDefined(
@@ -137,7 +164,7 @@ export async function createOperatorRecoveryFixture(params: {
         );
   }
   const captured = expectDefined(
-    await captureGatewayOperatorRunAuthority({
+    await prepareGatewayOperatorRunAuthority({
       client: expectDefined(captureAgentTurnPrincipal(client), "fresh typed operator principal"),
       context,
       sourceAuthority: params.gatewayAccessGrant
@@ -182,12 +209,41 @@ export async function createOperatorRecoveryFixture(params: {
     entry,
     sourceAuthority,
     snapshot,
+    assertCurrent,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
     retire: () => {
       current = false;
     },
-    restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
+    restore: () => restoreGatewayOperatorSource({ snapshot, context, assertCurrent }),
   };
+}
+
+export function expectCurrent(authority: { signal?: AbortSignal }) {
+  expect(authority.signal?.aborted).not.toBe(true);
+}
+
+export type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>;
+export function withRecovery(
+  run: (
+    fixture: RecoveryFixture,
+    stateDir: string,
+    profile: ReturnType<typeof ensureProfileForEmail>,
+  ) => Promise<void>,
+  overrides: Partial<Parameters<typeof createOperatorRecoveryFixture>[0]> = {},
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    const profile = ensureProfileForEmail("recovery@example.test");
+    await run(
+      await recoveryFixture(stateDir, profile.id, { device: pairedOperator(), ...overrides }),
+      stateDir,
+      profile,
+    );
+  });
+}
+
+export async function restoreFixture(fixture: RecoveryFixture) {
+  const source = expectDefined(await fixture.restore(), "restored operator source");
+  return { ...source, [Symbol.dispose]: source.release };
 }

@@ -86,8 +86,6 @@ it.each([
           expectedExistingSessionId: sessionId,
           agentId,
           request: preflight.request,
-          canUseCronRunContinuation: false,
-          lifecycleGeneration: getAgentRunLifecycleGeneration(),
           respond: vi.fn(),
         });
         assert(prepared, "prepared requester session");

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import * as sqliteInspection from "./sqlite-readonly-location.js";
+import * as sqliteInspection from "./sqlite-schema-header-inspection.js";
 import { readUpdateStateSchemaVersionsInProcess } from "./update-candidate-state.js";
 
 vi.mock("node:path", async (importOriginal) => {

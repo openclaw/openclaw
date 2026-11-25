@@ -1,12 +1,12 @@
 // Rotated same-document aging comparison with an independent identical-build control.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { webkit, type Browser, type BrowserContext, type Page } from "playwright";
+import { firefox, webkit, type Browser, type BrowserContext, type Page } from "playwright";
 import { expect } from "playwright/test";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
@@ -21,11 +21,12 @@ import {
   type MockGatewayWindow,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
-import { countDetachedWebKitShimmers } from "../ui/src/test-helpers/control-ui-webkit-animations.ts";
+import { readWebKitAnimations } from "../ui/src/test-helpers/control-ui-webkit-animations.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { controlUiBenchOrder } from "./lib/control-ui-bench-order.ts";
 import { createEngineActionTiming } from "./lib/control-ui-engine-action-timing.ts";
 import { workingDayScenario } from "./lib/control-ui-engine-memory-scenarios.ts";
+import { createEngineMemoryCollector } from "./lib/control-ui-engine-memory.ts";
 import { startEngineMeasurement } from "./lib/control-ui-engine-metrics.ts";
 import { frames, navigation } from "./lib/control-ui-interaction-navigation.ts";
 import {
@@ -33,6 +34,10 @@ import {
   interactionScenarios,
   settingsSection,
 } from "./lib/control-ui-interaction-scenarios.ts";
+import {
+  installControlUiResourceCounts,
+  readControlUiResourceCounts,
+} from "./lib/control-ui-resource-counts.ts";
 import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 
 const { values } = parseArgs({
@@ -41,6 +46,14 @@ const { values } = parseArgs({
     "head-bundle": { type: "string" },
     output: { type: "string", default: ".artifacts/aged-tab/compare" },
     "native-census": { type: "boolean", default: false },
+    engines: { type: "string", default: "chromium,webkit" },
+    samples: { type: "string", default: "20" },
+    actions: { type: "string" },
+    "ablate-scrollbar": { type: "boolean", default: false },
+    "park-inactive-content": { type: "boolean", default: false },
+    resources: { type: "boolean", default: false },
+    trace: { type: "boolean", default: false },
+    heap: { type: "boolean", default: false },
   },
 });
 if (!values["base-bundle"] || !values["head-bundle"]) {
@@ -52,7 +65,16 @@ if (!path.resolve(values.output).startsWith("/Volumes/Clawstudio-Storage/")) {
 const output = createControlUiE2eArtifactDir("three-arm", values.output);
 const json = (name: string, value: unknown) =>
   writeFile(path.join(output, name), JSON.stringify(value, null, 2));
-const samples = 20;
+const samples = Number(values.samples);
+const engines = values.engines.split(",").map((engine) => {
+  if (engine !== "chromium" && engine !== "webkit" && engine !== "firefox") {
+    throw new Error("Expected chromium, webkit or firefox");
+  }
+  return engine;
+});
+if (!Number.isInteger(samples) || samples < 1) {
+  throw new Error("Expected positive samples");
+}
 const pane = ".chat-pane-cache__pane--active";
 const text = "Synthetic typing 0123456789";
 const rows: unknown[] = [];
@@ -76,6 +98,7 @@ const buildA = await readBuild(values["base-bundle"]),
 await json("manifest.json", {
   started: new Date().toISOString(),
   samples,
+  options: values,
   revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
   harnessSha256: createHash("sha256")
     .update(await readFile(new URL(import.meta.url)))
@@ -85,11 +108,10 @@ await json("manifest.json", {
     B: { bundle: values["base-bundle"], build: buildA },
     C: { bundle: values["head-bundle"], build: buildC },
   },
-  contract:
-    "Independent processes A/B identical base, C candidate; initial and aged n20 rotated triples. Each ages through 200 session navigations plus ten /new parks, one in-page batch per round. Five native actions; no trace/native inspector during timing. Chromium threadTicks; WebKit application elapsed, no process CPU claim. No mock request array serialization inside measured actions.",
+  contract: `Independent processes A/B identical base, C candidate; initial and aged n${samples} rotated triples. Each ages through 200 session navigations plus ten /new parks, one in-page batch per round. Native actions: ${values.actions ?? "typing,session-switch,route-switch,sidebar-toggle,model-picker"}. ${values.trace ? "Instrumented Timeline diagnostics" : "Untraced timing"}; native animation/heap enumeration only after timing. Chromium threadTicks; WebKit/Firefox application elapsed, no process CPU claim. No mock request array serialization inside measured actions.`,
   host: { platform: os.platform(), arch: os.arch(), load: os.loadavg() },
 });
-type Engine = "chromium" | "webkit";
+type Engine = "chromium" | "webkit" | "firefox";
 type Arm = {
   name: "A" | "B" | "C";
   engine: Engine;
@@ -167,7 +189,7 @@ async function matchState(arm: Arm) {
   }
   return state;
 }
-const actions = [
+const allActions = [
   {
     id: "typing",
     prepare: async (a: Arm) => {
@@ -246,6 +268,13 @@ const actions = [
     },
   },
 ];
+const selectedActions = values.actions?.split(",");
+const actions = selectedActions
+  ? allActions.filter((action) => selectedActions.includes(action.id))
+  : allActions;
+if (!actions.length || selectedActions?.some((id) => !actions.some((action) => action.id === id))) {
+  throw new Error("Unknown action");
+}
 async function createArm(engine: Engine, name: Arm["name"]): Promise<Arm> {
   const bundle = name === "C" ? values["head-bundle"]! : values["base-bundle"]!,
     build = name === "C" ? buildC : buildA;
@@ -257,7 +286,9 @@ async function createArm(engine: Engine, name: Arm["name"]): Promise<Arm> {
   let close: (() => Promise<void>) | undefined;
   try {
     const native = engine === "chromium" ? await launchTalkObservationBrowser(output, false) : null;
-    const browser = native?.browser ?? (await webkit.launch({ headless: true }));
+    const browser =
+      native?.browser ??
+      (await (engine === "firefox" ? firefox : webkit).launch({ headless: true }));
     const closeBrowser = native?.close ?? (() => browser.close());
     close = closeBrowser;
     const context =
@@ -273,6 +304,9 @@ async function createArm(engine: Engine, name: Arm["name"]): Promise<Arm> {
     page.setDefaultTimeout(30_000);
     await page.addInitScript("globalThis.__name = (fn) => fn");
     await page.addInitScript(() => Reflect.set(window, "__agedDocumentId", crypto.randomUUID()));
+    if (values.resources) {
+      await page.addInitScript(installControlUiResourceCounts);
+    }
     await page.addInitScript(
       ({ key, url }) =>
         localStorage.setItem(key, JSON.stringify({ gatewayUrl: url, lobsterPetVisits: false })),
@@ -331,6 +365,30 @@ async function createArm(engine: Engine, name: Arm["name"]): Promise<Arm> {
     page.on("pageerror", (e) => errors.push(String(e)));
     await page.goto(server.baseUrl + "/new");
     await waitForControlUiInitialRoster(page, 30_000);
+    if (name === "C" && values["ablate-scrollbar"]) {
+      const removed = await page.evaluate(() => {
+        let count = 0;
+        for (const sheet of document.styleSheets) {
+          for (const rule of sheet.cssRules) {
+            if (rule instanceof CSSStyleRule && rule.selectorText === "::-webkit-scrollbar") {
+              rule.style.removeProperty("width");
+              rule.style.removeProperty("height");
+              count++;
+            }
+          }
+        }
+        return count;
+      });
+      if (removed !== 1) {
+        throw new Error(`Expected one scrollbar dimension rule, found ${removed}`);
+      }
+    }
+    if (name === "C" && values["park-inactive-content"]) {
+      await page.addStyleTag({
+        content:
+          ".chat-pane-cache__pane:not(.chat-pane-cache__pane--visible) { content-visibility: hidden; }",
+      });
+    }
     const arm: Arm = {
       name,
       engine,
@@ -345,7 +403,7 @@ async function createArm(engine: Engine, name: Arm["name"]): Promise<Arm> {
       errors,
       documentId: await page.evaluate(() => String(Reflect.get(window, "__agedDocumentId"))),
     };
-    for (const action of actions) {
+    for (const action of allActions) {
       await action.prepare(arm);
       await action.run(arm);
     }
@@ -380,9 +438,12 @@ async function sample(arm: Arm, stage: string, index: number, action: (typeof ac
       requestMethod,
     );
   const beforeRequests = requestMethod ? await requestCount() : undefined;
+  const beforeResources = values.resources
+    ? await readControlUiResourceCounts(arm.page)
+    : undefined;
   const timing = await arm.page.evaluateHandle(createEngineActionTiming, false);
   await timing.evaluate((t) => t.start());
-  const measurement = await startEngineMeasurement(arm.page, arm.engine, { trace: false });
+  const measurement = await startEngineMeasurement(arm.page, arm.engine, { trace: values.trace });
   const start = performance.now();
   await action.run(arm);
   const actionWallMs = performance.now() - start;
@@ -390,6 +451,9 @@ async function sample(arm: Arm, stage: string, index: number, action: (typeof ac
   await timing.evaluate((t) => t.endScenario());
   const observed = await timing.evaluate((t) => t.finish());
   await timing.dispose();
+  if (values.trace) {
+    await json(`${arm.engine}-${arm.name}-${stage}-${action.id}-${index}-trace.json`, measured);
+  }
   if (action.id === "typing") {
     await expect(arm.page.locator(pane + " textarea").first()).toHaveValue(text);
   }
@@ -418,6 +482,9 @@ async function sample(arm: Arm, stage: string, index: number, action: (typeof ac
     timing: observed,
     actionWallMs,
     metrics: measured.metrics,
+    resources: values.resources
+      ? { before: beforeResources, after: await readControlUiResourceCounts(arm.page) }
+      : undefined,
     load: os.loadavg(),
   });
   await json("observations.json", rows);
@@ -426,8 +493,16 @@ async function checkpoint(arms: Arm[], stage: string) {
   console.log(JSON.stringify({ engine: arms[0]!.engine, stage }));
   const states: Array<{ arm: Arm["name"]; state: Awaited<ReturnType<typeof matchState>> }> = [];
   for (const arm of arms) {
+    await matchState(arm);
+    // Churn evicts the probe pane. Match its previously used lazy picker as well
+    // as session keys before comparing an initial and retained document.
+    const picker = allActions.find((action) => action.id === "model-picker")!;
+    await picker.prepare(arm);
+    await picker.run(arm);
+    await closePicker(arm);
     states.push({ arm: arm.name, state: await matchState(arm) });
   }
+  await json(`${arms[0]!.engine}-${stage}-state.json`, states);
   if (states.some((s) => JSON.stringify(s.state.rows) !== JSON.stringify(states[0]!.state.rows))) {
     throw new Error("Sidebar row identities differ across arms");
   }
@@ -436,9 +511,39 @@ async function checkpoint(arms: Arm[], stage: string) {
   if (
     states.some((s) => JSON.stringify(panes(s.state)) !== JSON.stringify(panes(states[0]!.state)))
   ) {
+    for (const arm of arms) {
+      await arm.page.screenshot({
+        path: path.join(output, `${arm.engine}-${arm.name}-mismatch.png`),
+      });
+    }
     throw new Error("Retained pane contents differ across arms");
   }
-  await json(`${arms[0]!.engine}-${stage}-state.json`, states);
+  for (const arm of arms) {
+    await json(`${arm.engine}-${arm.name}-${stage}-census.json`, {
+      resources: values.resources ? await readControlUiResourceCounts(arm.page) : undefined,
+      structure: await arm.page.evaluate(() => {
+        const rules = (list: CSSRuleList): number =>
+          [...list].reduce(
+            (n, rule) => n + 1 + (rule instanceof CSSGroupingRule ? rules(rule.cssRules) : 0),
+            0,
+          );
+        const classes: Record<string, number> = {};
+        for (const node of document.querySelectorAll(".chat-pane-cache__pane *")) {
+          const key = `${node.tagName}.${node.getAttribute("class") ?? ""}`;
+          classes[key] = (classes[key] ?? 0) + 1;
+        }
+        return {
+          nodes: document.querySelectorAll("*").length,
+          renderedPaneDescendants: [
+            ...document.querySelectorAll(".chat-pane-cache__pane *"),
+          ].filter((node) => node.checkVisibility()).length,
+          sheets: document.styleSheets.length,
+          rules: [...document.styleSheets].reduce((n, sheet) => n + rules(sheet.cssRules), 0),
+          paneClasses: classes,
+        };
+      }),
+    });
+  }
   for (const action of actions) {
     for (let index = 0; index < samples; index++) {
       for (const arm of controlUiBenchOrder(arms, index)) {
@@ -464,7 +569,21 @@ async function age(arm: Arm) {
     checkpoints,
   });
 }
-for (const engine of ["chromium", "webkit"] as const) {
+async function captureMemory(arm: Arm, label: string) {
+  const file = path.join(output, `${arm.engine}-${label}.heapsnapshot`);
+  const collector = await createEngineMemoryCollector(arm.page, arm.engine);
+  try {
+    await json(`${arm.engine}-${label}-memory.json`, await collector.capture(file));
+  } finally {
+    await collector.dispose();
+    await unlink(file).catch((error: unknown) => {
+      if (!isRecord(error) || error.code !== "ENOENT") {
+        throw error;
+      }
+    });
+  }
+}
+for (const engine of engines) {
   const arms: Arm[] = [];
   try {
     for (const name of ["A", "B", "C"] as const) {
@@ -479,8 +598,26 @@ for (const engine of ["chromium", "webkit"] as const) {
       for (const arm of arms) {
         await json(
           `webkit-${arm.name}-native-animations.json`,
-          await countDetachedWebKitShimmers(arm.page),
+          await readWebKitAnimations(arm.page),
         );
+      }
+    }
+    if (values.heap && engine !== "firefox") {
+      // Forced GC and native wrapper inspection run only after all timing.
+      for (const arm of arms) {
+        await captureMemory(arm, `${arm.name}-aged`);
+      }
+      const fresh = await createArm(engine, "A");
+      try {
+        const picker = allActions.find((action) => action.id === "model-picker")!;
+        await picker.prepare(fresh);
+        await picker.run(fresh);
+        await closePicker(fresh);
+        await matchState(fresh);
+        await captureMemory(fresh, "fresh");
+      } finally {
+        await fresh.close();
+        await fresh.server.close();
       }
     }
     for (const arm of arms) {

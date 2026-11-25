@@ -4,7 +4,47 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
+import { verifyReleaseQualificationOperators } from "../release-qualification-admission.mjs";
+import {
+  runReleaseToolingGh,
+  verifyReleaseToolingIdentity,
+  verifyReleaseWorkflowRun,
+} from "../release-tooling-identity.mjs";
+
+export const RECEIPT_RECOVERY_WORKFLOW = ".github/workflows/full-release-receipt-recovery.yml";
+
+export function verifyReceiptRecoveryAuthority(
+  repository,
+  producer,
+  completed = true,
+  runGh = runReleaseToolingGh,
+) {
+  if (producer.fullRef !== "refs/heads/main") {
+    throw new Error("Receipt recovery: recovery must execute trusted P on main");
+  }
+  verifyReleaseToolingIdentity({
+    repository,
+    workflowRef: "main",
+    workflowFullRef: producer.fullRef,
+    workflowSha: producer.sha,
+    runGh,
+  });
+  const run = verifyReleaseWorkflowRun({
+    repository,
+    workflowRef: "main",
+    workflowFullRef: producer.fullRef,
+    workflowSha: producer.sha,
+    runId: producer.runId,
+    runAttempt: String(producer.runAttempt),
+    workflowPath: RECEIPT_RECOVERY_WORKFLOW,
+    workflowEvent: "workflow_dispatch",
+    runStatePolicy: completed ? "success" : "active",
+    runGh,
+  });
+  verifyReleaseQualificationOperators(repository, run.actor, run.triggering_actor, runGh);
+  return run;
+}
+
 const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
   /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
@@ -50,9 +90,54 @@ export function normalizeWorkflowPathRef(ref) {
   return `refs/heads/${ref}`;
 }
 
+// Projection only: the strict verifier authenticates recovery producer authority
+// and the unchanged original plan before any publication decision.
+export function releaseEvidenceProducerTuple(manifest) {
+  return manifest.recovery?.producer ?? manifest;
+}
+
 // This projects an eligible retained producer context. Only the strict FRV
 // verifier authenticates both admissions and the unchanged artifact descriptors.
 export function retainedPublicationArtifactSource(manifest) {
+  const selected = manifest?.publicationArtifactSource;
+  if (selected !== undefined) {
+    const current = manifest.sourceAdmission;
+    const selector = JSON.parse(current?.coverage?.publication_artifact_source_json ?? "null");
+    if (
+      !selector ||
+      String(selected.runId) !== selector.runId ||
+      selected.candidateSha !== manifest.targetSha ||
+      current?.candidateSha !== manifest.targetSha ||
+      String(current?.runId) !== String(manifest.runId ?? manifest.parentRunId) ||
+      current?.workflow?.sha !== manifest.workflowSha ||
+      !current?.qualificationAdmission ||
+      !selected.qualificationAdmission ||
+      !/^[a-f0-9]{40}$/u.test(selected.workflow?.sha ?? "")
+    ) {
+      throw new Error("Selected publication artifact source differs from its immutable admission");
+    }
+    return selected;
+  }
+
+  const recovery = manifest?.receiptRecovery;
+  if (
+    recovery?.schema === "openclaw.full-release-receipt-recovery/v1" &&
+    recovery.candidateBinding?.request?.targetSha === manifest.targetSha &&
+    /^[a-f0-9]{40}$/u.test(recovery.candidateBinding?.request?.toolingSha ?? "") &&
+    manifest.sourceAdmission?.candidateSha === manifest.targetSha &&
+    String(manifest.sourceAdmission?.runId) === String(manifest.runId)
+  ) {
+    return {
+      runId: recovery.originalParent.runId,
+      candidateSha: manifest.targetSha,
+      workflow: {
+        // A reused normal-CI child can retain a different transport. The npm
+        // artifact owner records the original qualification transport itself.
+        ref: manifest.publicationArtifacts?.npmPreflight?.producer?.workflowRef?.split("@")[1],
+        sha: recovery.candidateBinding.request.toolingSha,
+      },
+    };
+  }
   const reuse = manifest?.evidenceReuse;
   const current = manifest?.sourceAdmission;
   const retained = reuse?.publication?.sourceAdmission;
@@ -62,7 +147,6 @@ export function retainedPublicationArtifactSource(manifest) {
     reuse.changedPaths.length !== 0 ||
     String(reuse.runId) !== String(reuse.selectedRunId) ||
     !/^[a-f0-9]{40}$/u.test(manifest?.targetSha ?? "") ||
-    manifest.targetSha !== manifest.workflowSha ||
     reuse.evidenceSha !== manifest.targetSha ||
     String(retained?.runId) !== String(reuse.runId) ||
     String(current?.runId) !== String(manifest.runId) ||
@@ -77,111 +161,6 @@ export function retainedPublicationArtifactSource(manifest) {
     return null;
   }
   return retained;
-}
-
-export function validateTrustedProducerIdentity(
-  evidence,
-  client,
-  verifier,
-  trustedWorkflowRef,
-  trustedWorkflowFullRef,
-  trustedWorkflowSha,
-) {
-  const { manifest, parentRun } = evidence;
-  const trustedIdentity = resolveTrustedWorkflowIdentity(
-    trustedWorkflowRef,
-    trustedWorkflowFullRef,
-    trustedWorkflowSha,
-  );
-  const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
-  const protectedTagRoute = trustedIdentity.type === "tag";
-  let protectedTagWorkflowRefProof = "manifest-v3-protected-tag-exact-sha";
-  if (protectedTagRoute) {
-    let liveTag;
-    try {
-      liveTag = client.getRef(trustedIdentity.fullRef);
-    } catch (error) {
-      throw new Error(
-        `protected tooling tag is unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        { cause: error },
-      );
-    }
-    if (liveTag?.object?.sha !== trustedIdentity.sha) {
-      throw new Error("protected tooling tag moved after release validation was sealed");
-    }
-    if (!shaPinned) {
-      throw new Error("protected-tag release evidence must use a canonical release-ci branch");
-    }
-    if (manifest.workflowSha !== trustedIdentity.sha) {
-      const comparison = client.compareCommitLineage(manifest.workflowSha, trustedIdentity.sha);
-      if (
-        !["ahead", "identical"].includes(String(comparison.status)) ||
-        comparison.merge_base_commit?.sha !== manifest.workflowSha
-      ) {
-        throw new Error(
-          "protected-tag release evidence producer is not on the trusted tooling lineage",
-        );
-      }
-      protectedTagWorkflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
-    }
-  } else if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
-    throw new Error(
-      `release evidence producer must run from trusted workflow ref: ${trustedWorkflowRef}`,
-    );
-  }
-  if (shaPinned) {
-    if (manifest.version < 3) {
-      throw new Error("SHA-pinned release evidence requires a v3+ manifest");
-    }
-    if (!manifest.workflowRef.startsWith(`release-ci/${manifest.workflowSha.slice(0, 12)}-`)) {
-      throw new Error("SHA-pinned release evidence branch does not match its workflow SHA");
-    }
-    if (manifest.targetRef !== manifest.targetSha) {
-      throw new Error("SHA-pinned release evidence target ref must equal its target SHA");
-    }
-  }
-  const expectedFullRef = `refs/heads/${manifest.workflowRef}`;
-  const runPath = String(parentRun.path ?? "");
-  const [runWorkflowPath, runWorkflowFullRef] = runPath.split("@", 2);
-  if (runWorkflowPath !== ".github/workflows/full-release-validation.yml") {
-    throw new Error("release evidence producer workflow path is not trusted");
-  }
-  if (runWorkflowFullRef && normalizeWorkflowPathRef(runWorkflowFullRef) !== expectedFullRef) {
-    throw new Error("release evidence producer workflow full ref is not trusted");
-  }
-
-  let workflowRefProof = "legacy-v2-main-ancestry";
-  if (manifest.version >= 3) {
-    if (manifest.workflowRefType !== "branch" || manifest.workflowFullRef !== expectedFullRef) {
-      throw new Error("release evidence producer workflow full ref is not trusted");
-    }
-    workflowRefProof = protectedTagRoute
-      ? protectedTagWorkflowRefProof
-      : shaPinned
-        ? "manifest-v3-sha-pinned-main-ancestry"
-        : "manifest-v3-branch";
-  }
-
-  if (!protectedTagRoute) {
-    const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
-    if (
-      !["ahead", "identical"].includes(String(comparison.status)) ||
-      comparison.merge_base_commit?.sha !== manifest.workflowSha
-    ) {
-      throw new Error("release evidence producer is not on the trusted main verifier lineage");
-    }
-  }
-
-  return {
-    producerOnTrustedMainLineage: !protectedTagRoute,
-    workflowFullRef: expectedFullRef,
-    workflowQualifiedPath: `${runWorkflowPath}@${expectedFullRef}`,
-    workflowRefProof,
-    workflowRefType: "branch",
-    workflowRunPath: runPath,
-  };
 }
 
 export function resolveVerifierIdentity(

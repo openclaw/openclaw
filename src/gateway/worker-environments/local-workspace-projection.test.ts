@@ -29,24 +29,25 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
+import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
   proveArchivedInputRetention,
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
-import { proveGitIgnoredWorkspaceOutputs } from "./local-workspace-generated-paths.test-support.js";
+import {
+  proveGitIgnoredWorkspaceOutputs,
+  proveLegacyGitIgnoredWorkspaceOutputs,
+} from "./local-workspace-generated-paths.test-support.js";
 import {
   expectMissing,
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
-  proveAbsentProjectionCheckpoints,
   proveHostAdmittedBuildInputs,
-  proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
   proveSandboxMutationCheckpoints,
   proveSharedSandboxCheckpoints,
@@ -55,6 +56,7 @@ import {
   proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { registerLocalWorkspaceReconciliationTests } from "./local-workspace-reconciliation.test-support.js";
 import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
   proveConcurrentWorkspacePreparation,
@@ -73,6 +75,19 @@ import {
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+
+const checkpointLog = vi.hoisted(() => vi.fn<(message: string) => void>());
+// mock-isolation: capture checkpoint diagnostics before imports create the owner logger.
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      info: checkpointLog,
+    }),
+  };
+});
 
 let root: string;
 let stateRoot: string;
@@ -185,6 +200,8 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
+registerSandboxCheckpointTests(() => owner, checkpointLog);
+
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",
   (target) => proveRejectedWorkspaceCheckpoint(owner, target),
@@ -194,7 +211,7 @@ it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(
 
 it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
 
-it("attributes sandbox projection custody and joined preparation waits", () =>
+it("attributes cold sandbox preparation, projection custody, and joined waits", () =>
   proveWorkspaceWaitAttribution(owner));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
@@ -203,26 +220,15 @@ it("coalesces concurrent cold and warm sandbox preparations without retaining co
 it("observes edits made before a later preparation while an earlier scan is in flight", () =>
   provePreparationObservationBoundary(owner));
 
-it.each([
-  "cancel waiter",
-  "revoke waiter",
-  "cancel producer",
-  "failed producer",
-  "other session",
-] as const)("retains independent preparation authority: %s", (mode) =>
-  provePreparationWaiterAuthority(owner, mode),
+it.each(["cancel waiter", "cancel producer", "failed producer", "other session"] as const)(
+  "retains independent preparation authority: %s",
+  (mode) => provePreparationWaiterAuthority(owner, mode),
 );
 
-it.each(["read", "authority", "observation", "cancel"] as const)(
+it.each(["read", "observation", "cancel"] as const)(
   "retries only read failures during warm reuse (%s)",
-  (failure) =>
-    proveWarmWorkspaceReuseFailure(owner, failure, () => {
-      revoked = true;
-    }),
+  (failure) => proveWarmWorkspaceReuseFailure(owner, failure),
 );
-
-it("avoids lease requests for absent projections and checkpoints a later projection", () =>
-  proveAbsentProjectionCheckpoints(owner));
 
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
   proveSharedSandboxCheckpoints(owner, signal));
@@ -311,21 +317,10 @@ it.each([false, true])("settles command checkpoints (parent disposed: %s)", asyn
   await proveStoppedLocalWorkspaceCheckpoint(owner, disposed);
 });
 
-it.each(["operator", "gateway"] as const)(
-  "rejects canonical checkpoint writes after original %s authority ends",
-  async (authority) => {
-    const { proveStoppedSandboxAuthority } =
-      await import("./local-workspace-cancellation.test-support.js");
-    await proveStoppedSandboxAuthority(owner, authority);
-  },
-);
-
-it("denies guest filesystem writes after role revocation and a late involvement receipt", async ({
-  signal,
-}) => {
+it("settles admitted checkpoints until the Gateway closes", async () => {
   const { proveStoppedSandboxAuthority } =
     await import("./local-workspace-cancellation.test-support.js");
-  await proveStoppedSandboxAuthority(owner, "guest-involvement", signal);
+  await proveStoppedSandboxAuthority(owner, "gateway");
 });
 
 it("reconciles during shared state reads without caller-thread store SQL", () =>
@@ -397,7 +392,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
+  const capture = vi.spyOn(manifests, "captureInitialLocalWorkspaceManifest");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
@@ -428,6 +423,9 @@ it.each([false, true])(
 
 it("checkpoints Git changes without ignored build outputs or guest Git metadata", () =>
   proveGitIgnoredWorkspaceOutputs(owner, root));
+
+it("recaptures pre-fix accepted build output without publishing or deleting ignored bytes", () =>
+  proveLegacyGitIgnoredWorkspaceOutputs(owner));
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";
@@ -590,8 +588,7 @@ it.each(["archive", "interrupted eviction"] as const)(
 it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
-it("resumes an interrupted base refresh from the files it already applied", () =>
-  proveResumedBaseRefresh({ owner, root, repo, canonical }));
+registerLocalWorkspaceReconciliationTests(() => ({ owner, root, repo, canonical }), checkpointLog);
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();
@@ -621,20 +618,6 @@ it("replaces rejected v31 storage when a full rescan matches the unchanged accep
   ).toBe(0);
   await expectText(canonical, "source.txt", "original\n");
   await expectText(projection, "source.txt", "original\n");
-});
-
-it.each([
-  "reservation",
-  "v31 reservation",
-  "v31 rejected conversion",
-  "v31 rejected staged conversion",
-  "acceptance",
-  "accepted-result cleanup",
-  "legacy accepted-result cleanup",
-] as const)("recovers durable state when authority closes during %s", async (phase) => {
-  await proveInterruptedWorkspaceCheckpoint(owner, phase, (value) => {
-    revoked = value;
-  });
 });
 
 it.for([false, true])(
@@ -783,6 +766,7 @@ it.for([false, true])(
       usePty: false,
     });
     events.length = 0;
+    await writeText(projection.workspaceDir, "source.txt", "accepted command output\n");
     const finalize = (spec: typeof accepted) =>
       backend.finalizeExec!({
         status: "completed",
@@ -863,10 +847,10 @@ it("reports successful native eviction and restores accepted workspace contents"
   const authored = "accepted guest edit before native eviction\n";
   await writeText(projection, "source.txt", authored);
   await synchronize();
-  const { withWorktreeAllocationLease } = await import("../../agents/worktrees/allocation.js");
+  const { withWorktreeMutationLease } = await import("../../agents/worktrees/allocation.js");
   const { evictManagedWorktree } = await import("../../agents/worktrees/eviction.js");
   await expect(
-    withWorktreeAllocationLease({ env: process.env }, (guard) =>
+    withWorktreeMutationLease({ env: process.env, id: owner.worktree.id }, (guard) =>
       evictManagedWorktree({
         env: process.env,
         record: owner.worktree,

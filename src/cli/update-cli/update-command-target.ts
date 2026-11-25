@@ -1,19 +1,15 @@
 import path from "node:path";
 import { withNodeRuntimePath } from "../../../node-runtime-env.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
-import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { describePackageStagingShortfall } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
-import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
-  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -29,9 +25,9 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import { resolveNativePackageProjectRoot } from "../../infra/update-native-package-owner.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
+import { describeUnsupportedGit } from "../../infra/update-runner-git-commands.js";
 import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
@@ -46,7 +42,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
-import { CLI_NAME } from "../cli-name.js";
+import { formatGatewayServiceRootRedirect } from "../daemon-cli/shared.js";
 import {
   DEFAULT_PACKAGE_NAME,
   assertGlobalUpdateOwner,
@@ -63,19 +59,22 @@ import {
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
+import type { UpdateCommandExecutor } from "./update-command-executor.js";
+import { admitUpdatePackageRoot } from "./update-command-package-activation.js";
 import {
-  captureUpdateCommandExecutorAuthority,
-  type UpdateCommandExecutor,
-} from "./update-command-executor.js";
-import { readUpdateCandidateSource } from "./update-command-managed-context.js";
-import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
-import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
+  inspectCheckoutLinkPackageSwitch,
+  inspectNpmGlobalDestination,
+} from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
-import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
+import {
+  logManagedServicePackageUpdatePlan,
+  resolveManagedServicePackageUpdatePlan,
+} from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
+import { checkUpdateTargetSnapshotSpace } from "./update-command-target-space.js";
 
 export async function resolveUpdateCommandTarget(
   opts: UpdateCommandOptions,
@@ -132,6 +131,7 @@ export async function resolveUpdateCommandTarget(
       if (prepared.nodeSecurityWarning) {
         recordNodeSecurityWarning(prepared.nodeSecurityWarning);
       }
+      prepared.packageActivationSteps?.forEach(recordPreflightStep);
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
         if (malformedConfig) {
           return updateInstallKind === "git" ? "git" : "unknown";
@@ -299,13 +299,22 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
+      if (updateInstallKind === "git" && !opts.dryRun) {
+        const unsupportedGit = await describeUnsupportedGit(runCommandWithTimeout, {
+          cwd: root,
+          timeoutMs: updateStepTimeoutMs,
+        });
+        if (unsupportedGit) {
+          await refuseUpdate("git-version-unsupported", unsupportedGit);
+          return undefined;
+        }
+      }
+
       const unsupportedMain = updateInstallKind === "package" && isMainPackageTarget(explicitTag);
-      if ((channel === "extended-stable" && explicitTag) || unsupportedMain) {
+      if (unsupportedMain) {
         await refuseUpdate(
-          unsupportedMain ? "unsupported-package-target" : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-          unsupportedMain
-            ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
-            : undefined,
+          "unsupported-package-target",
+          "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow.",
         );
         return undefined;
       }
@@ -320,6 +329,7 @@ export async function resolveUpdateCommandTarget(
       let packageAlreadyCurrent = false;
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
+      let packageUnpackedSize: number | undefined;
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
@@ -335,43 +345,11 @@ export async function resolveUpdateCommandTarget(
         managedServiceRoot = managedServicePlan.serviceRoot;
         managedServiceNodeRunner = managedServicePlan.nodeRunner;
         root = managedServiceRootRedirect?.root ?? discoveredRoot;
+        if (managedServiceRootRedirect) {
+          warn(formatGatewayServiceRootRedirect(managedServiceRootRedirect));
+        }
         if (!opts.json) {
-          const { rootRedirect, nodeRunner } = managedServicePlan;
-          if (rootRedirect) {
-            defaultRuntime.log(
-              theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
-            );
-            defaultRuntime.log(
-              theme.warn(
-                `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-              ),
-            );
-            defaultRuntime.log(
-              theme.muted(
-                `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
-              ),
-            );
-            if (nodeRunner) {
-              defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
-            }
-          } else if (managedServicePlan.serviceRoot) {
-            defaultRuntime.log(
-              theme.muted(
-                `Updating this installation and rebinding the managed Gateway from ${managedServicePlan.serviceRoot} after ownership and runtime verification.`,
-              ),
-            );
-          } else if (nodeRunner) {
-            defaultRuntime.log(
-              theme.warn(
-                `Current runtime (${resolveNodeRunner()}) differs from the managed gateway service runtime (${nodeRunner}).`,
-              ),
-            );
-            defaultRuntime.log(
-              theme.muted(
-                "Using the managed service runtime for this update so the gateway can start after the upgrade.",
-              ),
-            );
-          }
+          logManagedServicePackageUpdatePlan(managedServicePlan);
         }
         packageUpdateNodeRunner =
           managedServiceRoot && !process.versions.bun
@@ -381,20 +359,8 @@ export async function resolveUpdateCommandTarget(
 
       // Read-only native/root admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
-      if (updateInstallKind === "package" && !opts.dryRun) {
-        assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
-        const fence = await executor.enter(root, {
-          preflight: true,
-          serviceRoot: managedServiceRoot,
-        });
-        if (opts.run) {
-          opts.run.executorFence = fence;
-        }
-        fence.assertCurrent();
-        assertUpdatePackageActivationAdmission(
-          captureUpdateCommandExecutorAuthority(fence).installKey,
-          { serviceRoot: managedServiceRoot },
-        );
+      if (updateInstallKind === "package" && !switchToPackage && !opts.dryRun) {
+        await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
       }
 
       const currentVersion = await readPackageVersion(root);
@@ -423,7 +389,10 @@ export async function resolveUpdateCommandTarget(
             ...reportOptions,
             controlPlaneUpdateSentinelMeta,
           };
-          throw new UnreportedUpdateAdmissionOutcome(report, { exitCode: 0 });
+          throw new UnreportedUpdateAdmissionOutcome(
+            report,
+            error.reason === "git-version-unsupported" ? undefined : { exitCode: 0 },
+          );
         });
         if (manager) {
           packageManager = manager;
@@ -451,29 +420,36 @@ export async function resolveUpdateCommandTarget(
             packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
           }
           if (packageInstallTarget.manager === "npm") {
-            const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
+            const destination = await inspectNpmGlobalDestination(root, packageInstallTarget, opts);
             if (destination.kind !== "owned" && destination.kind !== "empty") {
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
             }
+            if (destination.kind === "owned" && destination.interruptedLink) {
+              warn(
+                `${opts.dryRun ? "Would restore" : "Restored"} the npm package link an interrupted update left at ${destination.interruptedLink}.`,
+              );
+            }
+            if (destination.kind === "owned" && destination.releaseBoundService) {
+              warn(destination.releaseBoundService.warning);
+              packageInstallTarget = destination.releaseBoundService.installTarget;
+            }
           }
-          const diskWarning = createLowDiskSpaceWarning({
-            targetPath: packageInstallTarget.packageRoot
-              ? path.dirname(packageInstallTarget.packageRoot)
-              : root,
-            purpose: "global package update",
-          });
-          if (diskWarning) {
-            warn(diskWarning);
-            opts.run?.executorFence?.assertCurrent();
-            recordPreflightStep({
-              name: "disk-space-preflight",
-              command: "disk-space-preflight",
-              cwd: root,
-              durationMs: 0,
-              exitCode: 0,
-              warnings: [diskWarning],
-            });
+          if (switchToPackage && packageInstallTarget.packageRoot) {
+            // A switch from Git updates the package destination, which owns this update's
+            // lease and publication recovery; the installed target's continuation checks them.
+            if (
+              packageInstallTarget.manager === "npm" &&
+              managedServicePlan?.service &&
+              prepared.shouldRestart &&
+              process.platform !== "win32"
+            ) {
+              managedServiceRoot ??= discoveredRoot;
+            }
+            root = packageInstallTarget.packageRoot;
+            if (!opts.dryRun) {
+              await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
+            }
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
           if (npmLifecycleGate.error) {
@@ -500,7 +476,7 @@ export async function resolveUpdateCommandTarget(
               env: packageInstallEnv,
             });
           let targetMetadata: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>> | undefined;
-          if (channel === "extended-stable") {
+          if (channel === "extended-stable" && !explicitTag) {
             const extendedStable = await resolveExtendedStablePackage({
               installKind: updateInstallKind,
               timeoutMs,
@@ -575,6 +551,7 @@ export async function resolveUpdateCommandTarget(
               return undefined;
             }
             packageTargetSchemaVersions = targetMetadata.schemaVersions;
+            packageUnpackedSize = targetMetadata.unpackedSize;
             // Keep the selected version and its metadata together when a dist-tag moves.
             packageRuntimeTarget = {
               version: targetVersion,
@@ -587,6 +564,26 @@ export async function resolveUpdateCommandTarget(
             if (canResolveRegistryVersionForPackageTarget(tag)) {
               packageInstallSpec = packageSpec(targetVersion);
             }
+          }
+          const unsafeSwitch =
+            switchToPackage &&
+            (await inspectCheckoutLinkPackageSwitch({
+              checkoutRoot: discoveredRoot,
+              installTarget: packageInstallTarget,
+              // The plan records a service only when it runs this same installation.
+              serviceRunsCheckout: Boolean(managedServicePlan?.service) && !managedServiceRoot,
+              targetSpec: packageInstallSpec,
+              storedChannel,
+              requestedChannel: channel,
+            }));
+          if (unsafeSwitch) {
+            await refuseUpdate(
+              unsafeSwitch.reason,
+              unsafeSwitch.message,
+              unsafeSwitch.failureFacts,
+              unsafeSwitch.recoverySteps,
+            );
+            return undefined;
           }
         }
       }
@@ -644,35 +641,37 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
-      // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
-      if (
-        updateInstallKind === "package" &&
-        !packageAlreadyCurrent &&
-        !opts.dryRun &&
-        (!usesCandidateUpdateAdmission(opts, installKind) ||
-          (configSnapshot.valid && !configReadFailure))
-      ) {
-        const env = opts.run?.env ?? process.env;
-        const source = await readUpdateCandidateSource(env, legacyConfigPlan);
-        const backupProject =
-          packageInstallTarget &&
-          resolveNativePackageProjectRoot(packageInstallTarget, packageInstallEnv ?? env);
-        const snapshot = await assessInitialUpdateSnapshotCapacity({
-          config: source.config,
-          stateDir: resolveStateDir(env),
-          env,
-          backupDirectory: backupProject
-            ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
-            : (packageInstallTarget?.globalRoot ?? path.dirname(root)),
-        });
-        opts.run?.executorFence?.assertCurrent();
-        recordPreflightStep(snapshot);
-        if (snapshot.exitCode !== 0) {
-          await refuseUpdate("snapshot-capacity-insufficient", snapshot.stderrTail ?? undefined);
+      const refusedSnapshot = await checkUpdateTargetSnapshotSpace({
+        opts,
+        updateInstallKind,
+        packageAlreadyCurrent,
+        sourceReadable:
+          !usesCandidateUpdateAdmission(opts, installKind) ||
+          (configSnapshot.valid && !configReadFailure),
+        legacyConfigPlan,
+        root,
+        packageInstallTarget,
+        packageInstallEnv,
+        recordPreflightStep,
+        warn,
+      });
+      if (refusedSnapshot) {
+        await refuseUpdate(
+          "snapshot-capacity-insufficient",
+          refusedSnapshot.stderrTail ?? undefined,
+        );
+        return undefined;
+      }
+
+      // Only package targets read dist.unpackedSize; registries without it skip this check.
+      if (!opts.dryRun && !packageAlreadyCurrent && packageUnpackedSize) {
+        const diskShortfall = describePackageStagingShortfall(
+          packageInstallTarget?.packageRoot ? path.dirname(packageInstallTarget.packageRoot) : root,
+          packageUnpackedSize,
+        );
+        if (diskShortfall) {
+          await refuseUpdate("preflight-insufficient-space", diskShortfall);
           return undefined;
-        }
-        for (const warning of snapshot.warnings ?? []) {
-          warn(warning);
         }
       }
 

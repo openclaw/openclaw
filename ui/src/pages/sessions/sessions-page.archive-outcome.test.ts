@@ -310,6 +310,7 @@ async function setupTree(childCount: number, active = false) {
       makeRow(`tree-child-${index}`, { parentSessionKey: root.key }),
     ),
   ];
+  root.childSessions = rows.slice(1).map((row) => row.key);
   const serverRows = structuredClone(rows);
   const failed = rows[1]!;
   const failureMessage = "Child placement changed after confirmation";
@@ -504,13 +505,13 @@ describe("sessions command outcomes", () => {
         hidden: false,
       }),
     );
-    await waitForFast(() => expect(page.textContent).toContain("Working…"));
+    await waitForFast(() => expect(page.textContent).toContain("Working"));
     pending.reject(failure);
     await waitForFast(() => {
       const alerts = page.querySelectorAll('[role="alert"]');
       expect(alerts).toHaveLength(1);
       expect(alerts[0]?.textContent).toContain(failure.message);
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
     });
 
     const refreshCalls = managed.refreshList.mock.calls.length;

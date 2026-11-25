@@ -7,10 +7,10 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
 } from "./full-release-validation-policy.mjs";
+import { npmPreparationJobName } from "./lib/full-release-publication-inputs.mjs";
 import { authenticateOriginalExecutionPlanDigest } from "./release-ci-summary.mjs";
 
 const ARTIFACT_JOBS = [
-  ["Prepare release npm artifacts", "npm"],
   ["Prepare release Docker artifacts", "docker"],
   ["Acquire full release candidate", "candidate"],
   ["Prepare exact plugin npm artifacts", "plugin-npm"],
@@ -176,7 +176,10 @@ export async function cancelReleaseTree(runId, client, options = {}) {
       failures.push(error.message);
     }
   }
-  for (const [name, stage] of ARTIFACT_JOBS) {
+  for (const [name, stage] of [
+    [npmPreparationJobName(plan.qualificationInputs), "npm"],
+    ...ARTIFACT_JOBS,
+  ]) {
     const matches = jobs.filter(
       (job) => job.name === name && Number(job.run_attempt) === plan.parentRunAttempt,
     );

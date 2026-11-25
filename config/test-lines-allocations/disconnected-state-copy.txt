@@ -1,2 +1,0 @@
-# Preserve the existing Meetings privacy assertion while wrapping the longer reconnect message.
-2

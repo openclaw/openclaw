@@ -46,8 +46,8 @@ released.
 
 ## Configuration
 
-`ownerHandles` is the only caller list. Every accepted identity receives owner
-authority. `realtime.toolPolicy` is one of `safe-read-only`, `owner`, or `none`;
+`allowedCallers` lists who may call or be dialed. Owner tools follow
+`commands.ownerAllowFrom` (`facetime:<handle>`). `realtime.toolPolicy` is one of `safe-read-only`, `owner`, or `none`;
 invalid explicit values fail validation.
 `realtime.provider`, `realtime.model`, and `realtime.voice` are optional
 session overrides. Registered realtime providers own auto-selection,

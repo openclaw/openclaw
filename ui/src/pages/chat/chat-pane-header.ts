@@ -9,6 +9,7 @@ import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-con
 import { resolveChatPaneDesktopTarget } from "../../components/desktop/desktop-source.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../components/session-menu-data.ts";
+import { resolveWorkspaceIconSource } from "../../components/workspace-icon-source.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -25,10 +26,7 @@ import { createChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { readChatPaneHeaderAccess } from "./chat-pane-header-access.ts";
-import {
-  resolveChatPaneWorkspaceIcon,
-  resolveChatPaneWorkspace,
-} from "./chat-pane-header-identity.ts";
+import { resolveChatPaneWorkspace } from "./chat-pane-header-identity.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { ChatPaneHeaderPeople } from "./chat-pane-header-people.ts";
 import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
@@ -226,7 +224,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         catalog,
         currentLayout,
         Boolean(panelControls),
-        ...panelDefinitions.flatMap(({ slot, label, available }) => [slot, label, available]),
+        ...panelDefinitions.flatMap(({ slot, label, icon, available }) => [
+          slot,
+          label,
+          icon,
+          available,
+        ]),
         i18n.getLocale(),
       ],
       () => {
@@ -315,7 +318,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             addPanelAction(slot, {
               id: `session-${slot}`,
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
-              icon: subagents ? "bot" : "terminal",
+              icon: subagents ? "bot" : "listTree",
               active: subagents ? subagentsVisible : processesVisible,
               onActivate: () => this.requestBackgroundPanel(slot, "toggle"),
             });
@@ -370,6 +373,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.headerPeople.read({
         host: this.state,
         session: row,
+        sharing: row
+          ? this.collaboration.sharingStates.get(this.sessionSharingCacheKey(row.key))?.result
+          : undefined,
         ownerCount: this.state?.sessionsResult?.owners?.length ?? 0,
         presence: this.presence.snapshot,
         selfUser: sharingSnapshot.selfUser,
@@ -402,7 +408,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         Boolean(this.state?.chatRunId),
       ).branchSwitch;
       if (!access.allowed) {
-        this.publishHeaderError(access.reason);
+        this.publishHeaderError(access.reason, undefined, true);
         return;
       }
       void this.switchToBranch(leafEntryId);
@@ -498,8 +504,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameValue: headerState.renameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
-      workspaceIcon: resolveChatPaneWorkspaceIcon({
-        sessionKey:
+      workspaceIcon: resolveWorkspaceIconSource({
+        route: "workspaceIcon",
+        value:
           workspace.root && this.state?.connected && !this.routeResolutionPending
             ? row?.key
             : undefined,

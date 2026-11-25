@@ -199,6 +199,25 @@ describe("cli tool result events", () => {
     },
   );
 
+  it("publishes Claude content blocks as the tool result's content", () => {
+    const context = buildContext("spawn-receipt");
+    const { handlers, events } = eventFixture(context);
+    const parser = displayParser(handlers);
+    // Claude reports a successful MCP result as bare blocks without `is_error`.
+    const receipt = { status: "accepted", childSessionKey: "agent:main:subagent:child" };
+    const blocks = [{ type: "text", text: JSON.stringify(receipt) }];
+    parser.push(startRecord("spawn", "mcp__openclaw__sessions_spawn", { label: "Child" }));
+    parser.push(
+      JSON.stringify({
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "spawn", content: blocks }] },
+      }) + "\n",
+    );
+    const result = events.find((event) => event.stream === "tool" && event.data.phase === "result")
+      ?.data.result;
+    expect(result).toEqual({ content: blocks });
+  });
+
   it.each([undefined, "side-question"] as const)(
     "keeps input progress separate from execution in %s mode",
     (executionMode) => {

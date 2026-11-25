@@ -42,12 +42,14 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   PullRequestRefreshHost &
   Omit<SessionWorkspaceHost, "handleOpenSidebar"> & {
+    inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandPresentation;
+    prepareInlineCommands: (isCurrent: () => boolean, onReady: () => void) => Promise<void>;
+    clearInlineCommandError: () => void;
     handleOpenSidebar: (content: SidebarSelection | null) => SidebarOpenResult;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
     accessPreferences?: DraftPreferenceState;
-    accessPreferenceRevision?: number;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;

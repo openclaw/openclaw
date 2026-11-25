@@ -1,4 +1,5 @@
 import type { AssistantMessage, Context, ProviderReplayState } from "@openclaw/llm-core";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
@@ -15,10 +16,17 @@ import {
 import type { OpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
 import { createReplayState } from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
+import { replaceCompactionReplayOwnerContent as replaceOwnerContent } from "./provider-compaction-checkpoint.js";
+import {
+  createCompactionReplayWindowFactCollector,
+  preserveCompactionReplayWindow as preserveWindow,
+  replaceCompactionReplayWindowFactContent,
+  resolveCompactionReplayWindow,
+} from "./provider-compaction-replay-kernel.js";
 import {
   CompactionReplayRefreshRequiredError,
-  preserveCompactionReplayWindow as preserveWindow,
-  replaceCompactionReplayOwnerContent as replaceOwnerContent,
+  createCompactionReplayWindowFactCollector as createTransportFactCollector,
+  preserveCompactionReplayWindow as preserveTransportWindow,
   requiresCompactionReplayRefresh as requiresRefresh,
   resolveCompactionReplayEligibility as resolveEligibility,
   resolveCompactionReplayPressure as measurePressure,
@@ -30,7 +38,7 @@ const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   contextWindow: 1_000_000,
   maxTokens: 8192,
 });
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const wire = (messages: Context["messages"]) =>
   convertResponsesMessages(model, { messages }, new Set(["openai"]), replayIdentity);
@@ -197,7 +205,7 @@ describe("bounded compaction replay projection", () => {
     if (kind === "malformed") {
       barrier.providerReplay = { ...barrier.providerReplay, data: "" };
     } else if (kind === "mismatched") {
-      barrier.providerReplay = { ...barrier.providerReplay, model: "different-model" };
+      barrier.providerReplay = { ...barrier.providerReplay, sessionHash: "different-session" };
     } else {
       suppressCompaction(barrier, model, replayIdentity);
     }
@@ -245,6 +253,118 @@ describe("bounded compaction replay projection", () => {
   });
 });
 
+describe("payload-free compaction checkpoint facts", () => {
+  const collect = createCompactionReplayWindowFactCollector(model, replayIdentity);
+
+  it("keeps transport adapters and payload-free readers on the same checkpoint decisions", () => {
+    const owner = createAssistant([text("covered")], 1);
+    const retained = createAssistant([], 0);
+    captureWindow(retained, [{ type: "compaction", encrypted_content: "opaque-window" }]);
+    const refresh = createAssistant([], 0);
+    refresh.providerReplay.type = "openai-responses-retained-compaction";
+    delete refresh.providerReplay.replayIndex;
+    const suppressed = createAssistant([], 0);
+    suppressCompaction(suppressed, model, replayIdentity);
+    const invalid = createAssistant([], -1);
+    const latest = { role: "user" as const, content: "latest", timestamp: 1 };
+    const transportCollect = createTransportFactCollector(model, replayIdentity);
+    for (const checkpoint of [owner, retained, refresh, suppressed, invalid]) {
+      expect(collect(checkpoint)).toEqual(transportCollect(checkpoint));
+      const source = [owner, checkpoint, latest];
+      expect(project(source, [latest])).toEqual(
+        preserveTransportWindow(source, [latest], model, replayIdentity),
+      );
+    }
+  });
+
+  it("selects and projects the same owner using facts with no replay or message payload", () => {
+    const owner = createAssistant([text("covered owner payload")], 1);
+    const latest = { role: "user" as const, content: "latest user payload", timestamp: 2 };
+    const prelude = { role: "user" as const, content: "covered prelude", timestamp: 0 };
+    const source = [prelude, owner, latest];
+    const facts = source.map((message) => ({ checkpoint: collect(message) }));
+    const projection = resolveCompactionReplayWindow(
+      facts,
+      [expectDefined(facts[0], "prelude fact"), expectDefined(facts[2], "latest fact")],
+      (row) => row.checkpoint,
+    );
+    expect(projection).toEqual({
+      ownerIndex: 1,
+      projectedFact: collect(
+        expectDefined(project(source, [prelude, latest])[0], "projected checkpoint owner"),
+      ),
+      suffix: [facts[2]],
+    });
+    expect(JSON.stringify(facts)).not.toMatch(/payload|opaque-replay|covered prelude/);
+    expect(resolveCompactionReplayWindow(facts, facts, (row) => row.checkpoint)).toBeUndefined();
+  });
+
+  it("shares removal and same-position rewrite decisions using only block identities", () => {
+    const covered = text("covered");
+    const suffix = text("suffix");
+    const owner = createAssistant([covered, suffix], 1);
+    const fact = collect(owner);
+    expect(replaceCompactionReplayWindowFactContent(fact, [0, 1], [1])).toEqual(
+      collect(replaceOwnerContent(owner, [suffix])),
+    );
+    expect(replaceCompactionReplayWindowFactContent(fact, [0, 1], [0, 2])).toEqual(
+      collect(replaceOwnerContent(owner, [covered, { ...suffix }])),
+    );
+    expect(replaceCompactionReplayWindowFactContent(fact, [0, 1], [2, 1])).toBeUndefined();
+    expect(replaceCompactionReplayWindowFactContent(fact, [0, 1], [])).toBeUndefined();
+  });
+
+  it("keeps retained-user refresh and item-recovery barriers without retaining their bodies", () => {
+    const retained = createAssistant([text("owner output")], 0);
+    retained.providerReplay.type = "openai-responses-retained-compaction";
+    delete retained.providerReplay.replayIndex;
+    const fact = collect(retained);
+    expect(fact).toEqual({ mode: "refresh-required", rewrite: { retained: true } });
+    expect(replaceCompactionReplayWindowFactContent(fact, [0], [])).toBe(fact);
+    const recovered = createAssistant([], 0);
+    suppressCompaction(recovered, model, replayIdentity, undefined, "private-recovery-anchor");
+    const rows = [collect(retained), collect(recovered)];
+    expect(rows[1]).toEqual({ mode: "barrier" });
+    expect(resolveCompactionReplayWindow(rows, [], (row) => row)).toBeUndefined();
+  });
+
+  it("retains the first merged envelope and can repair an invalid numeric checkpoint index", () => {
+    const first = createAssistant([text("first")], -1);
+    const second = createAssistant([text("second")], 0);
+    const merged = { ...first, content: [...first.content, ...second.content] };
+    expect(collect(merged)).toEqual(collect(first));
+    expect(collect(merged)?.mode).toBe("barrier");
+    expect(replaceCompactionReplayWindowFactContent(collect(merged), [0, 1], [1])).toEqual(
+      collect(
+        replaceOwnerContent(merged, [expectDefined(second.content[0], "second content block")]),
+      ),
+    );
+  });
+
+  it("accounts for index bytes when a rewrite crosses the canonical window storage limit", () => {
+    const owner = createAssistant(
+      Array.from({ length: 12 }, (_, index) => text(String(index))),
+      10,
+    );
+    const item = { type: "compaction" as const, encrypted_content: "opaque" };
+    captureCompaction(owner, item, 10, model, replayMetadata, [item]);
+    Object.assign(owner.providerReplay, { padding: "" });
+    Object.assign(owner.providerReplay, {
+      padding: "x".repeat(
+        16 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(owner.providerReplay)) + 1,
+      ),
+    });
+    const fact = collect(owner);
+    const rewritten = replaceOwnerContent(owner, owner.content.slice(1));
+    const identities = owner.content.map((_, index) => index);
+    expect(fact?.mode).toBe("refresh-required");
+    expect(collect(rewritten)?.mode).toBe("complete-window");
+    expect(replaceCompactionReplayWindowFactContent(fact, identities, identities.slice(1))).toEqual(
+      collect(rewritten),
+    );
+  });
+});
+
 const estimator = {
   text: (value: string) => value.length,
   image: () => 100,
@@ -282,7 +402,7 @@ describe("prepared compaction replay eligibility", () => {
 });
 
 describe("canonical compaction replay pressure", () => {
-  it("counts the returned prefix once after restart and an auth A to B to A round trip", () => {
+  it("counts the returned prefix once after restart, including checkpoints with a legacy auth hash", () => {
     const owner = createAssistant([text("covered")], 1);
     const output = [
       { type: "message", role: "user", content: [{ type: "input_text", text: "canonical" }] },
@@ -297,11 +417,10 @@ describe("canonical compaction replay pressure", () => {
       { role: "user", content: "raw".repeat(100_000), timestamp: 1 },
       owner,
     ];
-    const requestB = convertResponsesMessages(model, { messages: source }, new Set(["openai"]), {
-      ...replayIdentity,
-      authProfileId: "profile-b",
-    });
-    expect(requestB.some((item) => item.type === "compaction")).toBe(false);
+    // Checkpoints saved before the credential path left the fence still replay.
+    expect(owner.providerReplay).toBeDefined();
+    Object.assign(owner.providerReplay ?? {}, { authProfileHash: "legacy-profile-hash" });
+    expect(wire(source).some((item) => item.type === "compaction")).toBe(true);
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
     const resumed: Context["messages"] = JSON.parse(JSON.stringify([...source, later]));
     expect(wire(resumed).slice(0, output.length)).toEqual(output);

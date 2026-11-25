@@ -43,12 +43,15 @@ afterEach(() => {
   }
 });
 
-function mountComments(count: number, top: number) {
+function mountComments(count: number, top: number, editable = false) {
   container.style.cssText = `position: fixed; right: 32px; top: ${top}px`;
   comments?.unmount();
   comments = mountSolid(
     () => (
-      <CommentPreviewChip count={count}>
+      <CommentPreviewChip
+        count={count}
+        removal={editable ? { onRemove: () => {}, disabled: false } : undefined}
+      >
         <ol class="chat-comment-preview__list" role="list">
           {Array.from({ length: count }, () => (
             <CommentPreviewRow comment={{ text: longSelection, comment: longComment }} />
@@ -108,6 +111,49 @@ function contrast(element: HTMLElement) {
 }
 
 describe("annotation chip and hovercard", () => {
+  it.each(["light", "dark"])(
+    "keeps composer comments compact with an explicit word gap in %s",
+    async (theme) => {
+      document.documentElement.dataset.themeMode = theme;
+      container.className = "chat-attachments-preview";
+      await page.viewport(390, 900);
+      for (const count of [1, 3, 10]) {
+        const chip = mountComments(count, 430, true);
+        await expect.poll(() => chip.getBoundingClientRect().height).toBe(30);
+        const gap = chip.querySelector<HTMLElement>(".chat-comment-count-gap")!;
+        expect(gap.getBoundingClientRect().width).toBe(4);
+        const number = document.createRange();
+        number.selectNodeContents(gap.previousSibling!);
+        const word = document.createRange();
+        word.selectNodeContents(gap.nextSibling!);
+        expect(word.getBoundingClientRect().left - number.getBoundingClientRect().right).toBe(4);
+        const icon = chip.querySelector<HTMLElement>(".chat-attachment-preview-icon")!;
+        expect(icon.getBoundingClientRect().width).toBe(16);
+        expect(icon.getBoundingClientRect().height).toBe(16);
+        const label = chip.querySelector<HTMLElement>(".chat-selection-annotations__label")!;
+        expect(label.getBoundingClientRect().left - icon.getBoundingClientRect().right).toBe(6);
+        expect(getComputedStyle(label).fontSize).toBe("12px");
+        expect(getComputedStyle(label).lineHeight).toBe("16px");
+        expect(Number.parseFloat(getComputedStyle(chip).borderRadius)).toBe(
+          10 *
+            Number.parseFloat(
+              getComputedStyle(chip).getPropertyValue("--openclaw-corner-radius-scale"),
+            ),
+        );
+        expect(
+          page
+            .getByRole("button", {
+              name: `${count} ${count === 1 ? "comment" : "comments"}`,
+              exact: true,
+            })
+            .element(),
+        ).toBe(chip.querySelector(".chat-selection-annotations__trigger"));
+        expect(chip.textContent).toBe(`${count} ${count === 1 ? "comment" : "comments"}`);
+        expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(390);
+      }
+    },
+  );
+
   it("keeps comment rows adjacent for list numbering and spacing", () => {
     mountComments(3, 430);
     const list = container.querySelector(".chat-comment-preview__list")!;

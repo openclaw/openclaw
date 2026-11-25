@@ -1,16 +1,10 @@
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimistic,
-  createOptimisticStore,
-  createSignal,
-  refresh,
-} from "solid-js";
-import type { CronJob } from "../../api/types.ts";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { action, createMemo, createOptimistic, createSignal } from "solid-js";
+import { tryResolveCronJobEffectiveAgentId } from "../../../../src/cron/agent-id.js";
+import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
-import type { CronState } from "../../lib/cron/types.ts";
+import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -27,99 +21,62 @@ type CronPresentationDeps = {
   connection: ReturnType<typeof createGatewayConnectionLifecycle>;
   context: () => ApplicationContext;
   active: () => boolean;
+  modelAgentId: (state: CronState) => string | undefined;
   publish: (state: CronState) => void;
 };
+
+export function resolveCronModelAgentId(
+  form: CronFormState,
+  config: Record<string, unknown> | null,
+  roster: AgentsListResult | null | undefined,
+) {
+  const defaults = asNullableRecord(asNullableRecord(config?.agents)?.defaults);
+  const configuredOwner = normalizeOptionalString(asNullableRecord(defaults?.systemAgent)?.agentId);
+  // The Gateway can expose a UI fallback ID even when cron has no implicit owner.
+  const rosterOwner =
+    roster &&
+    (roster.selectionRequired === false ||
+      (roster.selectionRequired === undefined && roster.agents.length === 1))
+      ? roster.defaultId
+      : undefined;
+  return tryResolveCronJobEffectiveAgentId(
+    { agentId: form.clearAgent ? undefined : form.agentId, sessionKey: form.sessionKey },
+    configuredOwner ?? rosterOwner,
+  );
+}
 
 /** Presents admitted cron work; the plain owners retain every request decision. */
 export function createCronPresentation(deps: CronPresentationDeps) {
   type ModelReceipt = { state: CronState; agentId: string; result: Promise<void> };
   const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
   const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
-  const cronModelSuggestions = createMemo(
+  const cronModelCatalog = createMemo(
     () => {
       const state = deps.readState();
-      const agentId = deps.context().agentSelection.state.selectedId;
+      const agentId = deps.modelAgentId(state);
       const receipt = modelReceipt();
       if (receipt?.state !== state || receipt.agentId !== agentId) {
-        return [];
+        return undefined;
       }
-      return readAgentModelCatalog(state.client, agentId)
-        .models.filter((entry) => entry.manualSelectionAllowed !== false)
-        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+      return readAgentModelCatalog(state.client, agentId);
     },
     { lazy: true },
   );
-  let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
-  let stopModelSuggestions: (() => void) | undefined;
-  // Receipts describe work already admitted by the plain owner. Reading them
-  // never starts an RPC or transfers its cancellation/publication authority.
-  type ReadReceipt = { state: CronState; epoch: number; result: Promise<unknown> };
-  const [jobsReceipt, setJobsReceipt] = createSignal<ReadReceipt | null>(null);
-  const [statusReceipt, setStatusReceipt] = createSignal<ReadReceipt | null>(null);
+  let modelRequest: { state: CronState; agentId: string } | null = null;
+  let stopModelCatalog: (() => void) | undefined;
   let presentationLifetime = Promise.withResolvers<void>();
   const ownerScope = createMemo(() => deps.readState());
-  const ownerJobs = createMemo(() => deps.readState().cronJobs);
-  const ownerJobsError = createMemo(() => {
-    const state = deps.readState();
-    return state.cronJobsSnapshotRevision ? null : state.cronJobsError;
-  });
-  const ownerStatus = createMemo(() => deps.readState().cronStatus);
   const connectionEpoch = createMemo(() => {
     deps.readState();
     return deps.connection.epoch;
-  });
-  // Read computations outlive their scope so replacement does not retire a
-  // pending child while its parent is waiting to publish the new scope.
-  const jobsRead = createMemo(() => {
-    const state = ownerScope();
-    const epoch = connectionEpoch();
-    ownerJobs();
-    ownerJobsError();
-    const receipt = jobsReceipt();
-    return receipt?.state === state && receipt.epoch === epoch
-      ? receipt.result.then(() => {
-          // Keep last-good data on refresh failure; only a failed first read
-          // has no content to retain and belongs to the error boundary.
-          if (!state.cronJobsSnapshotRevision && state.cronJobsError) {
-            throw new Error(state.cronJobsError);
-          }
-          return state.cronJobs;
-        })
-      : Promise.resolve(state.cronJobs);
-  });
-  const statusRead = createMemo(() => {
-    const state = ownerScope();
-    const epoch = connectionEpoch();
-    ownerStatus();
-    const receipt = statusReceipt();
-    return receipt?.state === state && receipt.epoch === epoch
-      ? receipt.result.then(() => state.cronStatus)
-      : Promise.resolve(state.cronStatus);
   });
   // A reconnect retires presentation too: guesses and pending reads from the
   // previous connection must not attach to a same-ID job on its successor.
   const presentation = createMemo(() => {
     const state = ownerScope();
     const epoch = connectionEpoch();
-    const [jobs, setOptimisticJobs] = createOptimisticStore(
-      () => {
-        ownerJobs();
-        return state.cronJobs;
-      },
-      [],
-      { key: "id" },
-    );
     const [saving, setSaving] = createOptimistic(false);
-    return {
-      state,
-      epoch,
-      jobsRead,
-      statusRead,
-      jobs,
-      setOptimisticJobs,
-      saving,
-      setSaving,
-    };
+    return { state, epoch, saving, setSaving };
   });
   const [toggle, setToggle] = createSignal<{
     view: ReturnType<typeof presentation>;
@@ -138,44 +95,18 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     }
   }
 
-  function runCronRead<T>(kind: "jobs" | "status", task: (state: CronState) => Promise<T>) {
-    const state = deps.currentState();
-    const epoch = deps.connection.epoch;
-    const joinsJobsRead = kind === "jobs" && (state.cronLoading || state.cronJobsLoadingMore);
-    const result = runCronTask(task);
-    // Jobs' owner queues overlapping refreshes behind the original promise.
-    if (!joinsJobsRead) {
-      (kind === "jobs" ? setJobsReceipt : setStatusReceipt)({ state, epoch, result });
-    }
-    return result;
-  }
-
   const presentMutation = action(function* (
     view: ReturnType<typeof presentation>,
     pending: Promise<unknown>,
     retired: Promise<void>,
-    expected?: Pick<CronJob, "id" | "enabled">,
   ) {
     try {
       if (isCurrentPresentation(view)) {
         view.setSaving(true);
-        if (expected) {
-          view.setOptimisticJobs((rows) => {
-            const row = rows.find((entry) => entry.id === expected.id);
-            if (row) {
-              row.enabled = expected.enabled;
-            }
-          });
-          // The Gateway supplies updated revisions and next-run state.
-          affects(view.jobsRead);
-        }
       }
       // Retiring this presentation never cancels the owner's admitted write.
-      yield Promise.race([pending, retired]);
       // Admission/publication belong to the owner, outside this transaction.
-      if (isCurrentPresentation(view)) {
-        void refresh(view.jobs);
-      }
+      yield Promise.race([pending, retired]);
     } catch (error) {
       reportActionError(view, error);
     }
@@ -196,44 +127,54 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     }
   }
 
-  async function loadModelSuggestions(cronState: CronState) {
+  function ensureModels(state: CronState, forceRefresh: boolean) {
+    const agentId = deps.modelAgentId(state);
+    if (!agentId) {
+      if (modelRequest) {
+        resetModels();
+      }
+    } else if (forceRefresh || modelRequest?.state !== state || modelRequest.agentId !== agentId) {
+      void loadModels(state, agentId);
+    }
+  }
+
+  async function loadModels(cronState: CronState, agentId: string) {
     const client = cronState.client;
-    const agentId = deps.context().agentSelection.state.selectedId;
     // Last-good suggestions belong to one agent, including when its successor has no catalog.
-    if (modelSuggestionsRequest?.agentId !== agentId) {
-      modelSuggestionsRequest = null;
+    if (modelRequest?.agentId !== agentId) {
+      modelRequest = null;
       setModelReceipt(null);
       deps.publish(cronState);
     }
-    if (!client || !agentId || !isGatewayAvailable(deps.context().gateway.snapshot)) {
+    if (!client || !isGatewayAvailable(deps.context().gateway.snapshot)) {
       return;
     }
     const connectionScope = deps.connection.capture();
     if (!connectionScope) {
       return;
     }
-    stopModelSuggestions ??= subscribeModelCatalogCache(
+    stopModelCatalog ??= subscribeModelCatalogCache(
       client,
       (update) => {
         if (deps.active() && deps.currentState().client === client) {
           if (update.type === "invalidated") {
-            void loadModelSuggestions(deps.currentState());
+            ensureModels(deps.currentState(), true);
           } else {
             deps.publish(deps.currentState());
           }
         }
       },
-      () => ({ agentId: deps.context().agentSelection.state.selectedId ?? undefined }),
+      () => ({ agentId: deps.modelAgentId(deps.currentState()) }),
     );
     const request = { state: cronState, agentId };
-    modelSuggestionsRequest = request;
+    modelRequest = request;
     // Only the latest catalog request may publish rows or errors.
     const isCurrent = () =>
       deps.active() &&
       deps.currentState() === cronState &&
       deps.connection.isCurrent(connectionScope) &&
-      modelSuggestionsRequest === request &&
-      deps.context().agentSelection.state.selectedId === agentId;
+      modelRequest === request &&
+      deps.modelAgentId(cronState) === agentId;
     const result = loadModelCatalog(client, { agentId })
       .then((catalog) => {
         if (isCurrent()) {
@@ -255,10 +196,10 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   }
 
   function resetModels() {
-    stopModelSuggestions?.();
-    stopModelSuggestions = undefined;
+    stopModelCatalog?.();
+    stopModelCatalog = undefined;
     setModelReceipt(null);
-    modelSuggestionsRequest = null;
+    modelRequest = null;
   }
 
   return {
@@ -270,17 +211,13 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     },
     dispose() {
       presentationLifetime.resolve();
-      stopModelSuggestions?.();
-      modelSuggestionsRequest = null;
+      stopModelCatalog?.();
+      modelRequest = null;
     },
-    modelSuggestions: cronModelSuggestions,
-    get modelRequest() {
-      return modelSuggestionsRequest;
-    },
-    loadModels: loadModelSuggestions,
+    modelCatalog: cronModelCatalog,
+    ensureModels,
     resetModels,
     runTask: runCronTask,
-    read: runCronRead,
     async mutate(
       view: ReturnType<typeof presentation>,
       pending: Promise<unknown>,
@@ -295,7 +232,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       }
       try {
         await Promise.resolve();
-        return await presentMutation(view, pending, retired, expected);
+        return await presentMutation(view, pending, retired);
       } finally {
         setToggle((current) => (current === intent ? null : current));
       }
@@ -306,13 +243,6 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       const intent = toggle();
       return intent?.view === presentation() ? intent.jobId : null;
     },
-    reads: {
-      models: modelRead,
-      modelRequest: modelReceipt,
-      jobs: () => presentation().jobsRead(),
-      rows: () => presentation().jobs,
-      status: () => presentation().statusRead(),
-      scope: presentation,
-    },
+    reads: { models: modelRead, modelRequest: modelReceipt },
   };
 }

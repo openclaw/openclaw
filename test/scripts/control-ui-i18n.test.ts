@@ -25,7 +25,6 @@ import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescrip
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
-import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
@@ -311,7 +310,6 @@ describe("control-ui-i18n generated ownership", () => {
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
       registerChatMessageMetadataEnglish.catalog,
-      registerChatFailedMessageEditEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,
       registerChatSessionSharingEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
@@ -329,18 +327,6 @@ describe("control-ui-i18n generated ownership", () => {
     const sessionKeys = [...source.keys()]
       .filter((key) => key.startsWith("sessionsView."))
       .map((key) => key.slice("sessionsView.".length));
-    expect(
-      sessionKeys.slice(
-        sessionKeys.indexOf("personalGroupAdd"),
-        sessionKeys.indexOf("personalGroupEdit") + 1,
-      ),
-    ).toEqual([
-      "personalGroupAdd",
-      "personalGroupReferenceAdded",
-      "personalGroups",
-      "personalGroupNew",
-      "personalGroupEdit",
-    ]);
     expect(
       sessionKeys.slice(sessionKeys.indexOf("assignToMe"), sessionKeys.indexOf("assignTo") + 1),
     ).toEqual(["assignToMe", "searchPeople", "noPeopleMatch", "assignTo"]);
@@ -382,7 +368,6 @@ describe("control-ui-i18n generated ownership", () => {
       "linkSharing",
       "anyoneWithLink",
       "publicLinkDescription",
-      "publicDraftDescription",
       "linkUnavailable",
       "permissions",
       "creator",
@@ -392,7 +377,6 @@ describe("control-ui-i18n generated ownership", () => {
       "searchPeople",
       "closeSearch",
       "noPeopleFound",
-      "tryAnotherName",
       "sharingOptions",
       "menu",
       "current",

@@ -49,14 +49,10 @@ const GROUP_RECORD_MARKER = /"code:local_[a-f0-9-]+":"cg-|"id":"cg-[a-f0-9-]+","
 const LEVELDB_VALUE_KIND = 1;
 const EMPTY_VALUE = new Uint8Array();
 
-/**
- * Chromium stores a Local Storage value as UTF-16 whenever it holds a character that
- * Latin-1 cannot represent, so ASCII JSON arrives with interleaved NUL bytes. Dropping
- * them yields one scannable form for both encodings; without this a single emoji in any
- * group name hides every record in that value.
- */
+// Chromium's StorageFormat byte is 0 for UTF-16LE or 1 for Latin-1.
 function localStorageText(value: Uint8Array): string {
-  return Buffer.from(value).toString("latin1").replaceAll("\0", "");
+  const bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  return bytes.toString(value[0] === 0 ? "utf16le" : "latin1", 1);
 }
 
 function readVarint(bytes: Uint8Array, offset: number): [number, number] {
@@ -244,8 +240,7 @@ function collectLevelDbValues(block: Uint8Array, values: Map<string, LevelDbValu
   });
 }
 
-function scanGroupRecords(raw: Uint8Array, parsed: ParsedGroups): void {
-  const text = localStorageText(raw);
+function scanGroupRecords(text: string, parsed: ParsedGroups): void {
   for (const match of text.matchAll(/"id":"(cg-[a-f0-9-]+)","name":"([^"\\]{1,500})"/gi)) {
     const [, id, name] = match;
     if (id && name && !containsAsciiControlCharacter(name) && !parsed.groups.has(id)) {
@@ -315,7 +310,10 @@ async function readClaudeDesktopCustomGroups(
       continue;
     }
     if (!file.filePath.endsWith(".ldb")) {
-      scanGroupRecords(raw, parsed);
+      // WAL values can begin at either byte alignment; its header is not a string prefix.
+      scanGroupRecords(raw.toString("latin1"), parsed);
+      scanGroupRecords(raw.toString("utf16le"), parsed);
+      scanGroupRecords(raw.toString("utf16le", 1), parsed);
       continue;
     }
     try {
@@ -331,7 +329,7 @@ async function readClaudeDesktopCustomGroups(
   // it seeds the result first and wins on conflict. It is scanned raw rather than replayed,
   // so its own internal ordering stays best-effort; SSTables then fill in the rest.
   for (const { value } of levelDbValues.values()) {
-    scanGroupRecords(value, parsed);
+    scanGroupRecords(localStorageText(value), parsed);
   }
   const assignments = new Map<string, string>();
   for (const [sessionId, groupId] of parsed.assignments) {

@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { readPluginControlUiAssets } from "./control-ui-assets.js";
+import { normalizeManifestControlUi } from "./manifest-control-ui.js";
 
 const tempDirs: string[] = [];
 function makeRepoRoot(prefix: string): string {
@@ -89,6 +91,40 @@ function theme(source: string, beret: string) {
 afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("copyBundledPluginMetadata", () => {
+  it.each([false, true])(
+    "keeps declared panel artwork readable by the Gateway after generated=%s packaging",
+    async (generated) => {
+      const controlUi = {
+        entry: "dist/control-ui/fixture/index.js",
+        panelIcon: "artwork/panel.svg",
+      };
+      const { repoRoot, pluginDir, distDir } = fixture("panel-fixture", { controlUi });
+      const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4Z"/></svg>';
+      writeFiles(pluginDir, { "artwork/panel.svg": svg });
+      // The browser-build owner publishes JS separately from metadata/artwork.
+      writeFiles(distDir, { [controlUi.entry]: "export default {};" });
+      if (generated) {
+        writeJsonFile(path.join(pluginDir, "package.json"), {
+          name: "@openclaw/panel-fixture",
+          openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
+        });
+        writeJsonFile(path.join(pluginDir, "dist/openclaw.plugin.json"), { controlUi });
+      }
+
+      copyBundledPluginMetadata({ repoRoot });
+
+      const declaration = normalizeManifestControlUi(
+        readBundledManifest(repoRoot, "panel-fixture").controlUi,
+      );
+      if (!declaration.ok || !declaration.value) {
+        throw new Error("Bundled Control UI declaration is missing");
+      }
+      const assets = await readPluginControlUiAssets(distDir, declaration.value);
+      expect(assets.panelIcon?.body.toString("utf8")).toBe(svg);
+      expect(assets.panelIcon?.dataUrl.startsWith("data:image/svg+xml")).toBe(true);
+    },
+  );
   it.each([false, true])(
     "copies owned channel Settings declarations from generated=%s metadata without touching siblings",
     (generated) => {

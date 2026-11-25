@@ -24,7 +24,6 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { importSkillLibrary, uploadSkillLibrary } from "../../skills/library/import.js";
 import {
   assertPreparedSkillLibrarySelection,
   changeSkillLibrarySelection,
@@ -37,6 +36,7 @@ import {
 import { captureSkillLibraryAccess } from "../../skills/library/store-access.js";
 import { projectSkillLibraryList, type SkillLibraryAuthority } from "../../skills/library/store.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
+import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
@@ -65,9 +65,12 @@ export function libraryAuthority(
   assertFileMutationAllowed?: () => void,
 ): SkillLibraryAuthority {
   const { client, context } = options;
+  // A linked owner device keeps the owner's scopes under its person's profile (OCF-510).
+  const ownerDevice = currentOwnerDevicePrincipal(client) !== undefined;
   return {
     profileId: client?.authenticatedUserProfile?.profileId,
     scopes: client?.connect.scopes ?? [],
+    ...(ownerDevice ? { ownerDevice } : {}),
     getConfig: context.getRuntimeConfig,
     assertFileMutationAllowed,
     assertCurrent: composeSessionSourceAssertion(
@@ -166,6 +169,12 @@ function assertPluginMutationCurrent(
   }
 }
 
+const sessionNotFound = () =>
+  new SkillLibraryError(
+    "NOT_FOUND",
+    "Session not found. A session starts with its first message; send one, then retry.",
+  );
+
 async function selectedSession(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
@@ -179,7 +188,13 @@ async function selectedSession(
   if (!isIncognitoSessionKey(sessionKey)) {
     const profiles = await prepareSessionSharingProfiles(options.client);
     const { agentId } = resolveSessionStoreIdentity({ cfg: sourceCfg, sessionKey });
-    const facts = await prepareSessionMutationFacts({ cfg: sourceCfg, sessionKey, agentId });
+    // A session row exists only after its first message; name that instead of a storage retry.
+    const facts = await prepareSessionMutationFacts({
+      cfg: sourceCfg,
+      sessionKey,
+      agentId,
+      allowMissing: true,
+    });
     let entryRead:
       | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
       | undefined;
@@ -196,6 +211,9 @@ async function selectedSession(
     };
     try {
       const identity = facts.readCurrent(sourceCfg).target;
+      if (!identity) {
+        throw sessionNotFound();
+      }
       entryRead = await captureSessionEntryCurrentCheckAsyncInternal({
         agentId: identity.agentId,
         sessionKey: identity.storeKey,
@@ -207,7 +225,7 @@ async function selectedSession(
       const entry = entryRead.entry;
       const readSource = identity.readSource;
       if (!entry || !readSource || typeof readSource.databaseIdentity !== "string") {
-        throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+        throw sessionNotFound();
       }
       pins = retainPreparedSessionEntryPredicate({
         databaseIdentity: `file:${readSource.databaseIdentity}`,
@@ -284,7 +302,7 @@ async function selectedSession(
     },
   );
   if (!actorFacts) {
-    throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+    throw sessionNotFound();
   }
   const assertRouting = captureSessionMutationRouting(sourceCfg);
   const resolve = (): SessionSharingTarget => {
@@ -292,7 +310,7 @@ async function selectedSession(
     assertRouting(cfg);
     const { target, membership } = actorFacts.readCurrent();
     if (!target) {
-      throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+      throw sessionNotFound();
     }
     const sharing = prepareProjectedSessionSharing({
       cfg,
@@ -413,7 +431,7 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
         const listed = await access.read("list", {});
         const result = projectSkillLibraryList(listed.value, params);
         if (session) {
-          const pins = session.target.entry.skillLibrarySelections ?? [];
+          const pins = structuredClone(session.target.entry.skillLibrarySelections ?? []);
           const selected = await access.read("pins", pins);
           listed.assertCurrent();
           selected.assertCurrent();
@@ -510,11 +528,19 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
   "skills.library.import": libraryHandler(
     "skills.library.import",
     validateSkillsLibraryImportParams,
-    (authority, params) => importSkillLibrary(authority, params),
+    async (authority, params) => {
+      const { importSkillLibrary } = await import("../../skills/library/import.js");
+      authority.assertCurrent();
+      return importSkillLibrary(authority, params);
+    },
   ),
   "skills.library.upload": libraryHandler(
     "skills.library.upload",
     validateSkillsLibraryUploadParams,
-    (authority, params) => uploadSkillLibrary(authority, params),
+    async (authority, params) => {
+      const { uploadSkillLibrary } = await import("../../skills/library/import.js");
+      authority.assertCurrent();
+      return uploadSkillLibrary(authority, params);
+    },
   ),
 };

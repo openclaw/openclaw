@@ -12,6 +12,8 @@ import {
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
+import * as logging from "../logging/logger.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -22,8 +24,11 @@ import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { removeTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingDirectorySync } from "./sqlite-snapshot-staging.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
 import {
   captureUpdateCandidateDeadline,
   inventoryUpdateCandidateStateWorker,
@@ -256,6 +261,88 @@ function isMetadataInventoryCommand(argv: readonly string[]): boolean {
     (arg) => path.basename(arg) === runtimeProcessScriptEntrypoints.updateStateSizes.fileName,
   );
 }
+
+it.each([
+  { warnOnly: false, readError: false },
+  { warnOnly: true, readError: false },
+  { warnOnly: true, readError: true },
+])(
+  "preserves parent cleanup policy (warnOnly=$warnOnly, readError=$readError)",
+  async ({ warnOnly, readError }) => {
+    const staging = await fs.mkdtemp(path.join(root, "parent-staging-"));
+    const original = new Error("schema inspection failed");
+    const logger = logging.getChildLogger({ subsystem: "infra/sqlite-snapshot" });
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+    const remove = fsSync.rmSync;
+    let injected = false;
+    const fault = vi.spyOn(fsSync, "rmSync").mockImplementation((file, options) => {
+      if (String(file) !== staging) {
+        return remove(file, options);
+      }
+      injected = true;
+      throw Object.assign(new Error("parent snapshot removal denied"), { code: "EACCES" });
+    });
+    try {
+      const outcome = await capture(
+        withStateInspectionCleanup(
+          staging,
+          async () => {
+            if (readError) {
+              throw original;
+            }
+            return "inspected";
+          },
+          warnOnly ? { cleanupFailure: "warn" } : undefined,
+        ),
+      );
+      expect(injected).toBe(true);
+      if (warnOnly) {
+        expect(outcome).toEqual(readError ? { error: original } : { value: "inspected" });
+        expect(warn).toHaveBeenCalledWith(
+          expect.objectContaining({ path: staging, errorCode: "EACCES" }),
+          expect.stringContaining("snapshot cleanup failed"),
+        );
+      } else {
+        expect(outcome).toMatchObject({
+          error: { message: expect.stringContaining("snapshot cleanup failed") },
+        });
+        expect(warn).not.toHaveBeenCalled();
+      }
+      expect(fsSync.existsSync(staging)).toBe(true);
+    } finally {
+      fault.mockRestore();
+      expect(removeTempDirectory(staging)).toBe(true);
+    }
+  },
+);
+
+it.each(["payload", "unsettled"] as const)(
+  "retains interrupted inspection staging when %s custody is unresolved",
+  async (reason) => {
+    const staging = createSqliteSnapshotStagingDirectorySync(root);
+    const nested = await fs.mkdtemp(path.join(staging, "openclaw-sqlite-readonly-v2-"));
+    const payload = path.join(nested, "database.sqlite");
+    if (reason === "payload") {
+      await fs.writeFile(payload, "unowned payload");
+    }
+    await expect(
+      withStateInspectionCleanup(staging, async () => {
+        if (reason === "unsettled") {
+          throw new CommandProcessCleanupError();
+        }
+      }),
+    ).rejects.toThrow(
+      reason === "payload" ? "snapshot cleanup failed" : "Confirm that update workers have stopped",
+    );
+    expect(await fs.readdir(nested)).toEqual(reason === "payload" ? ["database.sqlite"] : []);
+    if (reason === "payload") {
+      expect(await fs.readFile(payload, "utf8")).toBe("unowned payload");
+    }
+    await fs.rm(nested, { recursive: true });
+    expect(removeTempDirectory(staging)).toBe(true);
+  },
+);
 
 function inspectionResult(
   value: unknown,

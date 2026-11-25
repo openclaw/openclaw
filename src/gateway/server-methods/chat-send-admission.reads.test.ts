@@ -24,6 +24,7 @@ import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadat
 import * as sessionControllerLifecycle from "../../sessions/session-controller.lifecycle.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -141,7 +142,7 @@ async function withServingMetadata(cfg: OpenClawConfig, run: () => Promise<void>
   }
 }
 
-it.each(["absent", "admitted"] as const)(
+it.each(["absent", "admitted", "cold-registration"] as const)(
   "prepares and authorizes a first chat turn without caller-thread SQL with an %s agent store",
   (store) =>
     withAdmissionTest(
@@ -167,6 +168,29 @@ it.each(["absent", "admitted"] as const)(
           expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(
             store === "admitted",
           );
+          if (store === "cold-registration") {
+            // Release the actual cold opener only when chat joins startup readiness.
+            const publish = createDeferred();
+            let pending = true;
+            const opening = publish.promise.then(async () => {
+              await prepareOpenClawAgentDatabaseExecution(
+                { agentId: "main", path: resolveOpenClawAgentSqlitePath({ agentId: "main" }) },
+                () => {},
+              );
+              pending = false;
+            });
+            context.agentDatabaseStartup = {
+              get hasPendingAgents() {
+                return pending;
+              },
+              registerInputRecovery() {},
+              isAgentInputRecoveryPending: () => false,
+              waitForAgentPreparation() {
+                publish.resolve();
+                return opening;
+              },
+            };
+          }
           await withoutHostSql(async () => {
             const authorized = await resolveSessionMutationAuthorizationAsync({
               client,
@@ -259,6 +283,67 @@ it.each([
     });
   }),
 );
+
+it.each(["missing", "replaced", "same"] as const)(
+  "checks an opted-in physical destination before preparing a %s session",
+  (state) =>
+    withAdmissionTest("chat-send-explicit-session-" + state, async (f) => {
+      const expectedSessionId = "resolved-incarnation";
+      if (state !== "missing") {
+        f.seed({ sessionId: state === "same" ? expectedSessionId : "replacement" });
+      }
+      const request = await normalizeChatSendRequest({
+        client: null,
+        params: { ...f.scope, expectedSessionId, message: "Hello", idempotencyKey: f.runId },
+      });
+      assert(request.ok, "request normalization failed");
+      const prepared = await prepareChatSendSession({
+        request: request.value,
+        client: null,
+        context: f.context,
+      });
+      expect(prepared).toMatchObject(
+        state === "same"
+          ? { ok: true, value: { entry: { sessionId: expectedSessionId } } }
+          : {
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                details: { reason: "session-incarnation-changed" },
+              },
+            },
+      );
+    }),
+);
+
+it("refuses a replacement at the same key after send preparation", () =>
+  withAdmissionTest("chat-send-incarnation-race", async (f) => {
+    const original = f.seed();
+    const admission = await f.prepare({ params: { expectedSessionId: original.sessionId } });
+    replaceSessionEntrySync(f.scope, {
+      ...original,
+      sessionId: "replacement",
+      updatedAt: original.updatedAt + 1,
+    });
+    const respond = vi.fn();
+    let admitted: Admission | undefined;
+    try {
+      admitted = await admitChatSend({ ...admission, respond });
+      expect(admitted.ok).toBe(false);
+      expectAdmissionError(respond, {
+        code: "INVALID_REQUEST",
+        details: { reason: "session-incarnation-changed" },
+      });
+      expect(
+        await sessionAccessor.readSessionSubmittedInput(
+          { ...f.scope, sessionId: "replacement" },
+          f.runId,
+        ),
+      ).toBeUndefined();
+    } finally {
+      cleanupAdmission(admitted, f.runId);
+    }
+  }));
 
 it("uses current worker-prepared admission settings without host SQL", () =>
   withAdmissionTest(

@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
-import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
-import { capturePostgresBackup, fingerprintPostgresBackup } from "../snapshot/database-backup.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
+import { isPrivateDoctorPostgresStore } from "../infra/update-doctor-private-store.js";
+import {
+  capturePostgresBackup,
+  fingerprintPostgresBackup,
+  prunePostgresSchemaCaptures,
+} from "../snapshot/database-backup.js";
+import { doctorMigrationBackupPath } from "./doctor-migration-backup-names.js";
 
 /** Retain the exact predecessor under the same custody as the version runner. */
 export async function backupDoctorPostgresMigration(
@@ -9,8 +15,25 @@ export async function backupDoctorPostgresMigration(
   input: NonNullable<DatabaseEngineInput>,
   maintenance: { assertAdmission(): void },
 ): Promise<{ changes: string[]; generation?: string }> {
-  const directory = `${sourcePath}.pre-startup-migration-${randomUUID()}.postgres.bak`;
+  maintenance.assertAdmission();
+  if (isPrivateDoctorPostgresStore(sourcePath)) {
+    // This namespace is already a private startup copy. Keep migration attribution
+    // for credential custody, but do not capture another recovery copy of it.
+    const generation = hasUpdateDoctorMigrationCapture()
+      ? undefined
+      : await fingerprintPostgresBackup(sourcePath, {
+          database: { engine: "postgres", postgres: input },
+        });
+    maintenance.assertAdmission();
+    return { changes: [], generation };
+  }
+  const prefix = `${sourcePath}.pre-startup-migration-`;
+  const captureId = randomUUID();
+  const directory = doctorMigrationBackupPath(sourcePath, captureId, "postgres");
   const config = { database: { engine: "postgres" as const, postgres: input } };
+  maintenance.assertAdmission();
+  // Server captures outlive the setting; drop the ones whose backup was removed.
+  const pruned = await prunePostgresSchemaCaptures(sourcePath, config, prefix);
   maintenance.assertAdmission();
   const before = hasUpdateDoctorMigrationCapture()
     ? undefined
@@ -19,6 +42,9 @@ export async function backupDoctorPostgresMigration(
     sourcePath,
     directory,
     profile: "exact",
+    ...(input.serverRecoveryCaptures
+      ? { carrier: "postgres-schema" as const, prune: { directoryPrefix: prefix, captureId } }
+      : {}),
     config,
     assertCurrent: () => maintenance.assertAdmission(),
   });
@@ -28,5 +54,14 @@ export async function backupDoctorPostgresMigration(
   if (before !== undefined && before !== generation) {
     throw new Error(`PostgreSQL changed during its pre-migration backup: ${sourcePath}`);
   }
-  return { changes: [`Saved pre-migration PostgreSQL backup: ${directory}`], generation };
+  return {
+    changes: [
+      ...pruned.map(
+        (schema) =>
+          `Dropped PostgreSQL capture schema ${schema}; its pre-migration backup was removed.`,
+      ),
+      `Saved pre-migration PostgreSQL backup: ${directory}`,
+    ],
+    generation,
+  };
 }

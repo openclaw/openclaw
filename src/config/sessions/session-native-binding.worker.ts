@@ -28,7 +28,7 @@ import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worke
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
 import { collectReclamationEntryReplacement } from "./session-accessor.sqlite-reclamation-publication.js";
 import { reclaimSqliteSessionInTransaction } from "./session-accessor.sqlite-reclamation.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type {

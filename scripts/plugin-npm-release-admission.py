@@ -155,8 +155,8 @@ if os.environ["NPM_DIST_TAG"] == "extended-stable":
         fail(f"Extended-stable plugin source must equal the exact {extended_branch} branch tip.")
     if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true":
         raise SystemExit(0)
-    # Nonpublishing preflight accepts the canonical branch, main, or an
-    # immutable release-ci transport whose pinned tooling is on main.
+    # Nonpublishing preflight accepts the canonical branch and its immutable
+    # transport. Different tooling must retain the trusted-main ancestry check.
     workflow_ref = os.environ["WORKFLOW_REF"]
     if workflow_ref in (f"refs/heads/{extended_branch}", "refs/heads/main"):
         raise SystemExit(0)
@@ -168,13 +168,14 @@ if os.environ["NPM_DIST_TAG"] == "extended-stable":
         workflow_sha = os.environ["WORKFLOW_SHA"]
         if not workflow_sha.startswith(release_ci.group(1)):
             fail("Extended-stable release-ci ref does not match the workflow SHA.")
-        require_current_main_tooling(
-            "Extended-stable release-ci workflow revision is not reachable from current main."
-        )
+        if not exact_ref_match("HEAD", workflow_sha):
+            require_current_main_tooling(
+                "Extended-stable release-ci workflow revision is not reachable from current main."
+            )
         raise SystemExit(0)
     fail(
         f"Extended-stable plugin npm preflights must run from {extended_branch} "
-        "trusted main, or a main-pinned release-ci ref, targeting the exact canonical branch tip."
+        "trusted main, or a candidate/main-pinned release-ci ref, targeting the exact canonical branch tip."
     )
 
 if candidate_branch.strip():

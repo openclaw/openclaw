@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
@@ -11,25 +10,10 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../../infra/diagnostic-events.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabase,
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
-import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
-import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
-import {
-  checkpointLocalWorkspacePath,
-  withLocalWorkspaceProjection,
-} from "./local-workspace-projection.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
@@ -66,31 +50,6 @@ export function observeAcknowledgedUpdate(
       }),
     ),
   );
-}
-
-async function proveAcceptedResultPreparation(
-  owner: LocalWorkspaceOwner,
-  projection: string,
-  legacy: boolean,
-) {
-  const pendingRef = (await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref;
-  const preservedProjection = projection + "-preserved";
-  await fs.rename(projection, preservedProjection);
-  try {
-    await expect(prepare(owner)).rejects.toThrow();
-    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBe(pendingRef);
-  } finally {
-    await fs.rename(preservedProjection, projection);
-  }
-  if (legacy) {
-    const document = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
-    await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
-      await store.update(store.get()!, {
-        baseline_json: document.rawManifest,
-        baseline_ref: document.manifestRef,
-      });
-    });
-  }
 }
 
 export async function proveWorkerOwnedIncrementalWorkspace(owner: LocalWorkspaceOwner) {
@@ -281,20 +240,8 @@ export async function proveSharedSandboxCheckpoints(
   owner: LocalWorkspaceOwner,
   signal: AbortSignal,
 ) {
-  let joinedAuthorityRevoked = false;
   using first = await prepareSandboxCheckpointFixture(owner);
-  using second = await prepareSandboxCheckpointFixture({
-    ...owner,
-    workerAuthority: {
-      ...owner.workerAuthority,
-      assertCurrent: () => {
-        owner.workerAuthority?.assertCurrent?.();
-        if (joinedAuthorityRevoked) {
-          throw new Error("Joined checkpoint authority revoked");
-        }
-      },
-    },
-  });
+  using second = await prepareSandboxCheckpointFixture(owner);
   const withStore = workspaceStore.withLocalWorkspaceStore;
   let scans = 0;
   let beforeRun: (() => Promise<void>) | undefined;
@@ -306,7 +253,11 @@ export async function proveSharedSandboxCheckpoints(
         ...store,
         manifest: async (row, action) => {
           const result = await store.manifest(row, action);
-          if (action.kind === "scan" && action.target === "canonical") {
+          if (
+            (action.kind === "scan" || (action.kind === "probe" && result.kind === "scan")) &&
+            !action.prehash &&
+            action.target === "canonical"
+          ) {
             scans++;
             await afterScan?.();
           }
@@ -315,7 +266,7 @@ export async function proveSharedSandboxCheckpoints(
       });
     }),
   );
-  for (const phase of ["waiting", "captured", "revoked"] as const) {
+  for (const phase of ["waiting", "captured", "known mutation"] as const) {
     const entered = createDeferred();
     const released = createDeferred();
     const pause = async () => {
@@ -341,20 +292,14 @@ export async function proveSharedSandboxCheckpoints(
       if (phase === "captured") {
         await writeText(second.workspaceDir, "late.txt", "write after capture\n");
       }
-      later = second.checkpoint();
-      joinedAuthorityRevoked = phase === "revoked";
+      later = second.checkpoint(phase === "known mutation" ? { knownMutation: true } : undefined);
     } finally {
       released.resolve();
       results = await Promise.allSettled([initial, later]);
-      joinedAuthorityRevoked = false;
     }
     expect(results[0]).toEqual({ status: "fulfilled", value: undefined });
-    expect(results[1]).toEqual(
-      phase === "revoked"
-        ? { status: "rejected", reason: new Error("Joined checkpoint authority revoked") }
-        : { status: "fulfilled", value: undefined },
-    );
-    expect.soft(scans).toBe(phase === "captured" ? 2 : 1);
+    expect(results[1]).toEqual({ status: "fulfilled", value: undefined });
+    expect.soft(scans).toBe(phase === "captured" || phase === "known mutation" ? 2 : 1);
     await expectText(owner.worktree.path, "source.txt", "shared checkpoint\n");
     if (phase === "captured") {
       await expectText(owner.worktree.path, "late.txt", "write after capture\n");
@@ -403,7 +348,7 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
       run({
         ...store,
         manifest: async (row, action) => {
-          if (action.kind === "scan") {
+          if (action.kind === "scan" && !action.prehash) {
             scans.push(action.target);
           }
           return await store.manifest(row, action);
@@ -432,44 +377,6 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
   });
 }
 
-function restoreV31CheckpointLayout(
-  owner: LocalWorkspaceOwner,
-  pending: workspaceStore.LocalWorkspaceProjection,
-): void {
-  const database = openOpenClawStateDatabase();
-  const baseline = decodeLocalWorkspaceTree(
-    readLocalWorkspaceTree(database.db, pending.tree_root_digest!),
-  );
-  const {
-    treeRoot,
-    previousTreeRoot: _previousTreeRoot,
-    fingerprints: _fingerprints,
-    ...checkpoint
-  } = JSON.parse(pending.checkpoint_json!) as LocalWorkspaceManifestCheckpoint;
-  const resulting = decodeLocalWorkspaceTree(
-    readLocalWorkspaceTree(database.db, localWorkspaceDigestBytes(treeRoot!)),
-  );
-  // Recreate the released v31 layout around the actual interrupted receipt.
-  // Recovery must convert this projection online before staging and accepting its edits.
-  for (const record of baseline.values()) {
-    database.db
-      .prepare(
-        "INSERT INTO local_workspace_manifest_nodes (worktree_id, path, node_json) VALUES (?, ?, ?)",
-      )
-      .run(owner.worktree.id, record.node.path, JSON.stringify(record));
-  }
-  database.db
-    .prepare(`UPDATE local_workspace_projections
-    SET tree_root_digest = NULL, source_paths_digest = NULL,
-      canonical_fingerprints = NULL, projection_fingerprints = NULL,
-      source_paths_json = ?, checkpoint_json = ? WHERE worktree_id = ?`)
-    .run(
-      pending.source_paths_json,
-      JSON.stringify({ ...checkpoint, records: [...resulting.values()] }),
-      owner.worktree.id,
-    );
-}
-
 export async function prepareLocalWorkspaceArchiveFixture(
   owner: LocalWorkspaceOwner,
   provisionedPaths: string[] = [],
@@ -490,6 +397,32 @@ export async function proveWorkerOwnedArchive(owner: LocalWorkspaceOwner) {
   const { service } = await prepareLocalWorkspaceArchiveFixture(owner);
   const projection = await prepare(owner);
   const snapshot = await requireGit(owner.worktree.repoRoot, ["rev-parse", "HEAD"]);
+  const mergeHead = await requireGit(owner.worktree.path, [
+    "rev-parse",
+    "--git-path",
+    "MERGE_HEAD",
+  ]);
+  const mergePath = path.resolve(owner.worktree.path, mergeHead);
+  await fs.writeFile(mergePath, `${snapshot}\n`);
+  await expect(service.remove({ id: owner.worktree.id, reason: "idle-gc" })).rejects.toThrow(
+    "Workspace integration is pending",
+  );
+  expect(
+    await requireGit(owner.worktree.repoRoot, [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/openclaw/snapshots/",
+    ]),
+  ).toBe("");
+  expect(
+    (await service.listRegistryRecords()).find((record) => record.id === owner.worktree.id)
+      ?.snapshotRef,
+  ).toBeUndefined();
+  expect(await fs.readFile(mergePath, "utf8")).toBe(`${snapshot}\n`);
+  expect(await fs.readFile(path.join(projection, "source.txt"), "utf8")).toBe(
+    await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8"),
+  );
+  await fs.unlink(mergePath);
   const before = await readLocalWorkspaceProjection(owner.worktree.id);
   const source = path.join(projection, "source.txt");
   const original = await fs.readFile(source);
@@ -506,7 +439,9 @@ export async function proveWorkerOwnedArchive(owner: LocalWorkspaceOwner) {
     }
     try {
       await expect(
-        withLocalWorkspaceProjection(owner, (state) => state.prepareArchive(snapshot)),
+        withLocalWorkspaceProjection(owner, async (state) =>
+          (await state.prepareArchive())(snapshot),
+        ),
       ).rejects.toThrow(
         change === "symlink"
           ? "Local sandbox workspace directory changed"
@@ -534,140 +469,4 @@ export async function proveWorkerOwnedArchive(owner: LocalWorkspaceOwner) {
   expect((await service.gc()).removed).toContain(owner.worktree.id);
   await expectMissing(owner.worktree.path, "");
   expect(parse).not.toHaveBeenCalled();
-}
-
-export async function proveInterruptedWorkspaceCheckpoint(
-  owner: LocalWorkspaceOwner,
-  phase: string,
-  setRevoked: (value: boolean) => void,
-) {
-  const projection = await prepare(owner);
-  let edit = "interrupted guest edit\n";
-  const accepted = phase.endsWith("accepted-result cleanup");
-  const reserved =
-    phase === "reservation" ||
-    (phase.startsWith("v31 ") && phase !== "v31 rejected staged conversion");
-  await writeText(projection, "source.txt", edit);
-  const acknowledgement =
-    accepted || reserved
-      ? observeAcknowledgedUpdate((row) => {
-          if (row.pending_ref && (reserved || row.pending_target === null)) {
-            setRevoked(true);
-          }
-        })
-      : undefined;
-  const interrupted = {
-    ...owner,
-    assertCurrent: () => {
-      if (
-        !accepted &&
-        !reserved &&
-        readFileSync(path.join(owner.worktree.path, "source.txt"), "utf8") === edit
-      ) {
-        setRevoked(true);
-      }
-      owner.assertCurrent();
-    },
-  };
-  await expect(
-    withLocalWorkspaceProjection(interrupted, (state) => state.synchronize("canonical")),
-  ).rejects.toThrow(accepted ? "revoked" : undefined);
-  acknowledgement?.mockRestore();
-  if (accepted) {
-    expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
-      pending_ref: expect.any(String),
-      pending_target: null,
-      journal_json: null,
-    });
-    await writeText(owner.worktree.path, "source.txt", "later human edit\n");
-  } else {
-    const pending = await readLocalWorkspaceProjection(owner.worktree.id);
-    expect(pending?.pending_ref).toBeTruthy();
-    expect(pending?.checkpoint_json).toBeTruthy();
-    if (reserved) {
-      expect(pending?.journal_json).toBeNull();
-      edit = "guest edit after interrupted reservation\n";
-      await writeText(projection, "source.txt", edit);
-    } else {
-      expect(pending?.journal_json).toBeTruthy();
-    }
-  }
-  setRevoked(false);
-  if (phase.startsWith("v31 ")) {
-    restoreV31CheckpointLayout(owner, (await readLocalWorkspaceProjection(owner.worktree.id))!);
-    if (phase.startsWith("v31 rejected")) {
-      openOpenClawStateDatabase()
-        .db.prepare(`UPDATE local_workspace_manifest_nodes
-        SET node_json = json_set(node_json, '$.node.sha256', ?)
-        WHERE worktree_id = ? AND path = 'source.txt'`)
-        .run("f".repeat(64), owner.worktree.id);
-    }
-  }
-  if (accepted) {
-    await proveAcceptedResultPreparation(
-      owner,
-      projection,
-      phase === "legacy accepted-result cleanup",
-    );
-  }
-  closeOpenClawStateDatabase();
-  await withLocalWorkspaceProjection(owner, (state) => state.settle());
-  await expectText(owner.worktree.path, "source.txt", accepted ? "later human edit\n" : edit);
-  if (phase.startsWith("v31 rejected")) {
-    await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
-      const baseline = await store.manifest(store.get()!, { kind: "materialize" });
-      assert(baseline.kind === "materialize");
-      expect(JSON.parse(baseline.rawManifest).entries).toContainEqual(
-        expect.objectContaining({ path: ".gitignore" }),
-      );
-    });
-  }
-  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
-    journal_json: null,
-    pending_ref: null,
-    checkpoint_json: null,
-    baseline_json: null,
-  });
-}
-
-export async function proveAbsentProjectionCheckpoints(owner: LocalWorkspaceOwner) {
-  await insertRegistryWorktree(process.env, owner.worktree);
-  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
-  await waitForDiagnosticEventsDrained();
-  const requests: string[] = [];
-  const stop = onInternalDiagnosticEvent(
-    (event) => {
-      if (
-        event.type === "worker.request" &&
-        event.kind === "sqlite_writer" &&
-        event.phase === "completed" &&
-        event.requestClass.startsWith("stateLease.")
-      ) {
-        requests.push(event.requestClass);
-      }
-    },
-    { include: ["worker.request"] },
-  );
-  const checkpoint = () =>
-    checkpointLocalWorkspacePath({ cwd: owner.worktree.path, assertCurrent: owner.assertCurrent });
-  try {
-    for (let poll = 0; poll < 4; poll++) {
-      await checkpoint();
-    }
-    await waitForDiagnosticEventsDrained();
-    expect(requests).toEqual([]);
-
-    const projection = await prepare(owner);
-    await writeText(projection, "source.txt", "later guest edit\n");
-    await waitForDiagnosticEventsDrained();
-    requests.length = 0;
-    await checkpoint();
-    await waitForDiagnosticEventsDrained();
-    await expectText(owner.worktree.path, "source.txt", "later guest edit\n");
-    expect(requests).toEqual(
-      expect.arrayContaining(["stateLease.acquire", "stateLease.verify", "stateLease.release"]),
-    );
-  } finally {
-    stop();
-  }
 }

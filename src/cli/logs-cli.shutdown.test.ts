@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -49,7 +50,7 @@ vi.mock("./logs-cli.runtime.js", () => ({
 
 vi.mock("./gateway-rpc.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCli: mocks.callGateway,
+  callGatewayFromCliWithTransport: mocks.callGateway,
 }));
 
 let delayStarted = createDeferred<{ ms: number; signal?: AbortSignal }>();
@@ -206,7 +207,11 @@ it.each([
     });
   }
   const { command, dispose, admitted } = startLogs(
-    mode === "retry" ? ["--url", "ws://localhost:18789"] : [],
+    mode === "retry"
+      ? ["--url", "ws://localhost:18789"]
+      : mode === "poll"
+        ? ["--interval", "2147483648"]
+        : [],
   );
   const activeSignal =
     mode === "rpc"
@@ -215,6 +220,12 @@ it.each([
   expect(activeSignal).toBeDefined();
   if (mode !== "rpc") {
     expect((await delayStarted.promise).ms).toBeGreaterThan(0);
+    if (mode === "poll") {
+      expect(mocks.delay).toHaveBeenCalledOnce();
+      expect(mocks.delay).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS, undefined, {
+        signal: activeSignal,
+      });
+    }
   } else {
     expect({ stdout, stderr }).toEqual({ stdout: [], stderr: [] });
   }

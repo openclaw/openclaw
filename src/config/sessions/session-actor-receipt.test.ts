@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -8,7 +9,10 @@ import {
   appendTranscriptEventInTransaction,
   appendTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
-import type { SessionActorHotState } from "./session-actor-contract.js";
+import type {
+  SessionActorHotState,
+  SessionActorPendingFinalDelivery,
+} from "./session-actor-contract.js";
 import {
   createSessionActorCommittedOutcome,
   projectSessionActorCommittedOutcome,
@@ -22,8 +26,11 @@ import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-tu
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:v8")>();
-  return { ...actual, serialize: vi.fn(actual.serialize) };
+  const actual = await importOriginal<
+    typeof import("node:v8") & { default: typeof import("node:v8") }
+  >();
+  const overrides = { serialize: vi.fn(actual.serialize) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 // mock-isolation: The fixture owns its database lifetime without background maintenance.
@@ -403,11 +410,11 @@ it.each([false, true])("restores only an exact preimage (delta=%s)", (changed) =
 });
 
 it.each(["append", "tool", "patch", "adopt"] as const)(
-  "bounds receipts against the exact preimage held by a %s command",
+  "bounds receipts against the resident or admitted preimage of a %s command",
   (phase) =>
     withActor(async (f) => {
       f.participant({ identity: { type: "agent", id: "peer" }, promptedAt: 1 });
-      const prompt = "synthetic instructions ".repeat(1600);
+      const prompt = "synthetic instructions ".repeat(12000);
       f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
       assert(f.target.database.kind === "file");
       const handle = createSessionActorReplica({
@@ -474,8 +481,17 @@ it.each(["append", "tool", "patch", "adopt"] as const)(
                     }),
                   },
                 };
+        while (f.receipt() !== undefined) {
+          /* Drain preceding commands. */
+        }
         await f.prepare(selected);
         const outcome = f.mutate(selected);
+        let native: unknown;
+        while ((native = f.receipt()) !== undefined) {
+          if (isRecord(native) && native.kind === "native-commit" && isRecord(native.committed)) {
+            expect(serialize(native.committed.facts).byteLength).toBeLessThan(16 * 1024);
+          }
+        }
         assert(outcome.kind === "committed");
         if (mode !== "stale") {
           expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
@@ -492,6 +508,132 @@ it.each(["append", "tool", "patch", "adopt"] as const)(
         expect(f.read().entry?.skillsSnapshot?.prompt).toBe(prompt);
         expect(f.nativeEntry()?.skillsSnapshot?.prompt).toBe(prompt);
         expect(f.nativeEntry()?.updatedAt).toBe(updatedAt);
+      }
+    }),
+);
+
+it.each(["acceptInput", "adoptRun", "appendToolResult", "completeTurn"] as const)(
+  "preserves immutable entry fields through a native %s turn receipt",
+  (phase) =>
+    withActor(async (f) => {
+      const delivery: SessionActorPendingFinalDelivery = {
+        kind: "replayable",
+        text: "original response",
+        createdAt: 1,
+        intentId: "original-intent",
+        deliveries: [{ id: "original-payload", state: "prepared" }],
+      };
+      f.writeEntry({
+        ...f.nativeEntry()!,
+        skillsSnapshot: { prompt: "retained instructions", skills: [] },
+        toolOverrides: { mcpToolsDeny: { synthetic: ["unchanged-tool"] } },
+        pendingFinalDelivery: delivery,
+      });
+      assert(f.target.database.kind === "file");
+      const handle = createSessionActorReplica({
+        target: { ...f.target, database: f.target.database },
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        currentGeneration: () => readOpenClawAgentDatabaseIdentity(f.database).incarnation,
+      });
+      using replica = { ...handle, [Symbol.dispose]: () => handle.close() };
+      expect(replica.beginRead()(f.read())).toBe(true);
+      for (const replaceDelivery of [false, true]) {
+        const pending = replica.beginCommand();
+        const reference = pending.preimage;
+        assert(reference?.entry);
+        assert(reference.entry.pendingFinalDelivery?.kind === "replayable");
+        expect(Object.isFrozen(reference.entry.skillsSnapshot)).toBe(true);
+        expect(Object.isFrozen(reference.entry.pendingFinalDelivery?.deliveries)).toBe(true);
+        const replacement = { ...delivery, text: "replacement response" };
+        const expectedState = buildSessionTranscriptTurnExpectedState(reference.entry);
+        const updatedAt = replaceDelivery ? 30 : 20;
+        using clock = vi.spyOn(Date, "now");
+        clock.mockReturnValue(updatedAt);
+        const input = {
+          target: f.target,
+          commandId: `${phase}-${updatedAt}`,
+          phaseId: "turn",
+          entryReference: reference.writeToken,
+          reducers: [{ kind: "activity" as const, updatedAt }],
+          turn: {
+            agentId: "main",
+            sessionKey: f.target.sessionKey,
+            options: {
+              expectedSessionId: f.scope.sessionId,
+              expectedSessionState: expectedState,
+              sessionLifecyclePatch: replaceDelivery
+                ? { pendingFinalDelivery: replacement }
+                : undefined,
+              sessionFile: "synthetic.jsonl",
+              messages: [
+                {
+                  eventId: `${phase}-${updatedAt}`,
+                  message: { role: "assistant", content: `response ${updatedAt}` },
+                },
+              ],
+            },
+          },
+        };
+        const command: Mutation =
+          phase === "acceptInput"
+            ? {
+                type: "session.actor.acceptInput",
+                input: { ...input, expectedState, lifecycle: {} },
+              }
+            : phase === "adoptRun"
+              ? {
+                  type: "session.actor.adoptRun",
+                  input: { ...input, sessionId: f.scope.sessionId, expectedState, lifecycle: {} },
+                }
+              : { type: `session.actor.${phase}`, input };
+        await f.prepare(command);
+        const outcome = f.mutate(command);
+        assert(outcome.kind === "committed");
+        const metadata = (outcome.receipt.entryMetadata ?? []).flatMap((receipt) => {
+          const fact = receipt.facts.get(f.target.sessionKey);
+          return fact?.kind === "postimage"
+            ? [{ value: fact.value, serialized: JSON.stringify(fact.value.entry) }]
+            : [];
+        });
+        expect(metadata.length).toBeGreaterThan(0);
+        const restored = restoreSessionActorCommittedOutcome(outcome, reference);
+        const entry = restored.receipt.postimage.entry;
+        assert(entry);
+        assert(entry.pendingFinalDelivery?.kind === "replayable");
+        expect(entry.updatedAt).toBe(updatedAt);
+        expect.soft(entry.skillsSnapshot).toBe(reference.entry.skillsSnapshot);
+        for (const { value, serialized } of metadata) {
+          expect(JSON.stringify(value.entry)).toBe(serialized);
+          expect(value.entry).not.toHaveProperty("skillsSnapshot");
+          expect(value.fullEntry).toBe(entry);
+          expect.soft(value.entry.toolOverrides).toBe(entry.toolOverrides);
+          expect.soft(value.entry.pendingFinalDelivery).toBe(entry.pendingFinalDelivery);
+        }
+        if (replaceDelivery) {
+          expect(entry.pendingFinalDelivery).toEqual(replacement);
+          expect(reference.entry.pendingFinalDelivery?.text).toBe(delivery.text);
+        } else {
+          expect.soft(entry.pendingFinalDelivery).toBe(reference.entry.pendingFinalDelivery);
+        }
+        const value = restored.value;
+        const turn =
+          value && "kind" in value && value.kind === "session-turn"
+            ? value
+            : value && "turn" in value
+              ? value.turn
+              : undefined;
+        assert(turn?.result.sessionEntry?.skillsSnapshot);
+        assert(turn.result.sessionEntry.pendingFinalDelivery?.kind === "replayable");
+        expect(turn.result.appendedMessages).toMatchObject([{ appended: true }]);
+        expect(turn.result.sessionEntry).toEqual(entry);
+        expect(pending.settle(restored)).toBe(true);
+        turn.result.sessionEntry.skillsSnapshot.prompt = "caller edit";
+        turn.result.sessionEntry.pendingFinalDelivery!.text = "caller delivery edit";
+        expect(entry.skillsSnapshot?.prompt).toBe("retained instructions");
+        expect(entry.pendingFinalDelivery?.text).toBe(
+          replaceDelivery ? replacement.text : delivery.text,
+        );
+        expect(f.nativeEntry()).toEqual(entry);
       }
     }),
 );
