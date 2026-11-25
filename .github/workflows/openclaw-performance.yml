@@ -2023,6 +2023,7 @@ jobs:
       - publish
       - artifact_only_guard
       - gateway_concurrency
+      - node_cache_diagnostics
       - vitest_pair
       - vitest_pair_guard
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.mode != 'gateway-cold-turn-calibration' && inputs.mode != 'node-cache-diagnostics' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
