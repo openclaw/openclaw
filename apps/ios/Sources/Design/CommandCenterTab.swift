@@ -18,17 +18,6 @@ struct CommandCenterTab: View {
     var openAutomations: () -> Void
     var openUsage: () -> Void
 
-    struct WorkItem {
-        let icon: String
-        let title: String
-        let detail: String
-        let state: String
-        let color: Color
-        let isUnread: Bool
-        let isPinned: Bool
-        var sessionColor: String?
-    }
-
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -383,7 +372,7 @@ struct CommandCenterTab: View {
                 } else {
                     VStack(spacing: 8) {
                         ForEach(self.recentSessionPreviewSessions) { session in
-                            let item = Self.sessionWorkItem(
+                            let item = SessionPresentation.workItem(
                                 for: session,
                                 currentSessionKey: self.appModel.chatSessionKey)
                             Button {
@@ -454,9 +443,9 @@ struct CommandCenterTab: View {
         return self.appModel.gatewayAgents.count.formatted()
     }
 
-    private var defaultChatWorkItem: WorkItem {
+    private var defaultChatWorkItem: SessionPresentation.WorkItem {
         let isOpen = self.appModel.chatSessionKey == self.appModel.mainSessionKey
-        return WorkItem(
+        return SessionPresentation.WorkItem(
             icon: isOpen ? "bubble.left.and.text.bubble.right.fill" : "bubble.left.fill",
             title: self.appModel.activeAgentName,
             detail: self.defaultChatActivityText,
@@ -473,7 +462,7 @@ struct CommandCenterTab: View {
         guard let activityAt, activityAt > 0 else {
             return String(localized: "No recent activity")
         }
-        return Self.relativeTimeText(forMilliseconds: activityAt)
+        return SessionPresentation.relativeTimeText(forMilliseconds: activityAt)
     }
 
     private var recentSessionPreviewSessions: [OpenClawChatSessionEntry] {
@@ -550,102 +539,15 @@ struct CommandCenterTab: View {
         }
     }
 
-    static func sessionWorkItem(
-        for session: OpenClawChatSessionEntry,
-        currentSessionKey: String,
-        now: Date = .now) -> WorkItem
+    /// All Sessions includes the resolved main row; Overview still keeps it separate.
+    /// Keep the configured base when an incomplete roster cannot resolve main.
+    nonisolated static func isListedChatSession(
+        _ key: String,
+        mainSessionKey: String,
+        defaultSessionKey: String) -> Bool
     {
-        let isCurrent = session.key == currentSessionKey
-        return WorkItem(
-            icon: isCurrent ? "bubble.left.and.text.bubble.right.fill" : "bubble.left.fill",
-            title: Self.sessionTitle(session),
-            detail: Self.sessionDetail(session, now: now),
-            state: isCurrent ? "open" : "recent",
-            color: isCurrent ? OpenClawBrand.accent : OpenClawBrand.ok,
-            isUnread: session.unread == true,
-            isPinned: session.pinned == true,
-            sessionColor: session.color)
-    }
-
-    static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
-        if let label = session.label?.trimmedNonEmpty {
-            return label
-        }
-        if let displayName = session.displayName?.trimmedNonEmpty {
-            return Self.redactedSessionTitle(for: displayName) ?? displayName
-        }
-        if let autoLabel = session.autoLabel?.trimmedNonEmpty {
-            return autoLabel
-        }
-        if let subject = session.subject?.trimmedNonEmpty {
-            return Self.redactedSessionTitle(for: subject) ?? subject
-        }
-        // Generic key placeholders only after real topic names are absent.
-        return self.redactedSessionTitle(for: session.key) ?? session.key
-    }
-
-    fileprivate static func redactedSessionTitle(for key: String) -> String? {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lowercased = trimmed.lowercased()
-        guard !trimmed.isEmpty else { return nil }
-        if lowercased.contains(":ios-") {
-            return String(localized: "iOS chat")
-        }
-        if lowercased.hasPrefix("telegram:") {
-            return String(localized: "Telegram chat")
-        }
-        if lowercased.hasPrefix("user:+") {
-            return String(localized: "Direct chat")
-        }
-        if lowercased.hasPrefix("cron:") {
-            return Self.humanizedSessionKey(String(trimmed.dropFirst("cron:".count)))
-        }
-        return nil
-    }
-
-    fileprivate static func humanizedSessionKey(_ key: String) -> String? {
-        let words = key
-            .replacingOccurrences(of: "_", with: "-")
-            .split(separator: "-")
-        guard !words.isEmpty else { return nil }
-
-        return words
-            .map { word in
-                switch word.lowercased() {
-                case "ai", "api", "ios", "qmd", "url":
-                    word.uppercased()
-                default:
-                    word.prefix(1).uppercased() + String(word.dropFirst())
-                }
-            }
-            .joined(separator: " ")
-    }
-
-    static func sessionDetail(_ session: OpenClawChatSessionEntry, now: Date = .now) -> String {
-        if session.archived != true, session.isSnoozed(at: now), let milliseconds = session.snoozedUntil {
-            let wake = OpenClawChatSessionSnooze.wakeDescription(
-                Date(timeIntervalSince1970: milliseconds / 1000), now: now)
-            return String(format: String(localized: "Wakes %@"), wake)
-        }
-        let activityAt = session.lastActivityAt ?? session.updatedAt
-        if let activityAt, activityAt > 0 {
-            return self.relativeTimeText(forMilliseconds: activityAt, relativeTo: now)
-        }
-        return session.key
-    }
-
-    static func relativeTimeText(
-        forMilliseconds milliseconds: Double,
-        relativeTo now: Date = .now) -> String
-    {
-        let date = Date(timeIntervalSince1970: milliseconds / 1000)
-        guard now.timeIntervalSince(date) >= 60 else {
-            return String(localized: "just now")
-        }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.dateTimeStyle = .numeric
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: now)
+        key.caseInsensitiveCompare(mainSessionKey) == .orderedSame ||
+            self.isRecentChatSession(key, defaultSessionKey: defaultSessionKey)
     }
 
     nonisolated static func isRecentChatSession(_ key: String, defaultSessionKey: String) -> Bool {
@@ -813,7 +715,9 @@ struct CommandSessionsScreen: View {
     }
 
     private var sessionsPanel: some View {
-        ProCard(padding: 0) {
+        let mainKey = self.resolvedMainSessionKey
+        let currentKey = self.resolvedCurrentSessionKey
+        return ProCard(padding: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Text(verbatim: self.panelTitle)
@@ -913,7 +817,7 @@ struct CommandSessionsScreen: View {
                                 }
                                 if !self.isCollapsed(section) {
                                     ForEach(section.entries) { session in
-                                        self.sessionRow(session)
+                                        self.sessionRow(session, currentSessionKey: currentKey, mainSessionKey: mainKey)
                                     }
                                 }
                             }
@@ -945,17 +849,38 @@ struct CommandSessionsScreen: View {
     }
 
     private var visibleSessions: [OpenClawChatSessionEntry] {
-        self.sessions
-            .filter { CommandCenterTab.isRecentChatSession(
+        let mainKey = self.resolvedMainSessionKey
+        let currentKey = self.resolvedCurrentSessionKey
+        return self.sessions
+            .filter { CommandCenterTab.isListedChatSession(
                 $0.key,
+                mainSessionKey: mainKey,
                 defaultSessionKey: self.appModel.mainSessionKey) }
             // A stale list must still obey the selected scope while its replacement loads.
             .filter {
                 self.statusScope.includes(
                     $0,
                     at: self.now,
-                    currentSessionKey: self.appModel.chatSessionKey)
+                    currentSessionKey: currentKey)
             }
+    }
+
+    private var resolvedMainSessionKey: String {
+        ChatSessionSidebarModel.selectedSessionKey(
+            sessions: self.sessions,
+            currentSessionKey: self.appModel.mainSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
+    }
+
+    private var resolvedCurrentSessionKey: String {
+        ChatSessionSidebarModel.selectedSessionKey(
+            sessions: self.sessions,
+            currentSessionKey: self.appModel.chatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
     private var sessionSections: [CommandSessionSection] {
@@ -1032,10 +957,14 @@ struct CommandSessionsScreen: View {
         return self.appModel.sessionGroups.collapsed.contains(name)
     }
 
-    private func sessionRow(_ session: OpenClawChatSessionEntry) -> some View {
-        let item = CommandCenterTab.sessionWorkItem(
+    private func sessionRow(
+        _ session: OpenClawChatSessionEntry,
+        currentSessionKey: String,
+        mainSessionKey: String) -> some View
+    {
+        let item = SessionPresentation.workItem(
             for: session,
-            currentSessionKey: self.appModel.chatSessionKey,
+            currentSessionKey: currentSessionKey,
             now: self.now)
         return Button {
             self.openSessionKey(session.key)
@@ -1043,15 +972,17 @@ struct CommandSessionsScreen: View {
             CommandSessionRow(item: item)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("SessionDashboard.Session.\(session.key)")
         .commandSessionActions(
             session: session,
-            mainSessionKey: self.appModel.mainSessionKey,
+            mainSessionKey: mainSessionKey,
             categories: self.sessionCategories,
             isArchived: session.archived == true,
             isEnabled: self.sessionControlsAvailable,
             canArchive: ChatSessionSidebarModel.canArchiveSession(
                 session,
-                mainSessionKey: self.appModel.mainSessionKey),
+                mainSessionKey: mainSessionKey),
+            canDelete: ChatSessionSidebarModel.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey),
             archivesSession: { self.statusScope != .archived && session.archived != true },
             performMutation: self.performMutation,
             fork: { self.forkSession(session) })

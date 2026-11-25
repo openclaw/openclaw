@@ -1,8 +1,10 @@
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 
 export type UserTranscriptContext = {
   runtimeMessage: AgentMessage;
   transcriptMessage: AgentMessage;
+  recorder?: UserTurnTranscriptRecorder;
 };
 
 export type CurrentUserTimestampMatch = {

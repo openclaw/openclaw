@@ -17,6 +17,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -27,9 +28,9 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { collectOption } from "../program/helpers.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set([
@@ -157,6 +158,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const agent = resolveCapabilityAgentOption(command, opts.agent);
         const run = async (
           gateway?: <R>(params: Record<string, unknown>, modelOverride: boolean) => Promise<R>,
+          localGatewayAbsent?: true,
         ): Promise<CapabilityEnvelope> => {
           const files = opts.file as string[] | undefined;
           const requestedModel = opts.model as string | undefined;
@@ -175,6 +177,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             ? await resolveLocalCapabilityRuntimeConfig({
                 commandName: "infer model run",
                 targetIds: getModelsCommandSecretTargetIds(),
+                ...(localGatewayAbsent ? { localGatewayAbsent } : {}),
               })
             : await captureRuntimeConfigAsyncReader()();
           const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model run");
@@ -188,7 +191,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
           const imageFiles = await Promise.all(
             (files ?? []).map(async (filePath) => {
-              const resolvedPath = path.resolve(filePath);
+              const resolvedPath = resolveFilesystemPath(filePath);
               const buffer = await fs.readFile(resolvedPath);
               const mimeType = normalizeMimeType(
                 await detectMime({
@@ -462,7 +465,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             ? "refuse"
             : ({ requestOwner }) =>
                 run((params) => requestOwner("agent", params, { expectFinal: true })),
-          runLocal: () => run(),
+          runLocal: ({ localGatewayAbsent }) => run(undefined, localGatewayAbsent),
         });
       }),
     );

@@ -1,29 +1,13 @@
-import {
-  cliHistoryWriterFacts,
-  getCliHistoryWriter,
-} from "../../config/sessions/cli-history-boundary.js";
 import type {
   SessionMetadataMessageControl,
   SessionMetadataOperations,
 } from "../../config/sessions/session-manager-write-contract.js";
 
-/** Both backends receive the same prepared CLI and pending-input custody facts. */
+/** Both backends receive the same prepared pending-input custody facts. */
 export function prepareSessionManagerMetadataCommand<Key extends keyof SessionMetadataOperations>(
   command: { type: Key; input: SessionMetadataOperations[Key]["input"] },
-  path: string,
   control: SessionMetadataMessageControl,
 ) {
-  const cliWriter = getCliHistoryWriter({ ...command.input.scope, storePath: path });
-  if (
-    command.type === "session.transcript.appendMessage" ||
-    command.type === "session.metadata.append"
-  ) {
-    command.input = {
-      ...command.input,
-      // The worker asks the host to confirm the owner inside its transaction.
-      cliWriter: cliWriter && cliHistoryWriterFacts(cliWriter),
-    };
-  }
   if (command.type === "session.transcript.appendMessage") {
     Object.assign(command.input, control);
   }
@@ -41,5 +25,4 @@ export function prepareSessionManagerMetadataCommand<Key extends keyof SessionMe
   ) {
     command.input.message = { ...command.input.message, ...control };
   }
-  return cliWriter;
 }

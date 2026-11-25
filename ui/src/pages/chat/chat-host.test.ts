@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { expect, it, onTestFinished, vi } from "vitest";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -10,7 +11,10 @@ it("retires queued and committed fixture effects and rejects late scheduling", a
   const cleanup = vi.fn();
   const committedCancel = vi.fn();
   const completedCancel = vi.fn();
-  const pendingCancel = vi.fn();
+  const pendingCancel = vi.fn(() => {
+    expect(host.connected).toBe(false);
+    expect(ownsConnection()).toBe(false);
+  });
   const pendingEffect = vi.fn();
   const cancelFrame = vi.spyOn(globalThis, "cancelAnimationFrame");
   let queuedCommit: VoidFunction | undefined;
@@ -35,6 +39,7 @@ it("retires queued and committed fixture effects and rejects late scheduling", a
     expect(lateCancel).toHaveBeenCalledOnce();
   });
   const host = makeChatHost();
+  const ownsConnection = captureChatConnectionOwner(host, false);
   host.renderLifecycle.afterCommit(() => cleanup, committedCancel);
   host.renderLifecycle.afterCommit((complete) => complete(), completedCancel);
   scheduleChatScroll(host);

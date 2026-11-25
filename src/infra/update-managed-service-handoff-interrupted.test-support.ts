@@ -16,7 +16,11 @@ import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
-import { createUpdateRun } from "./update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunVerification,
+} from "./update-run-ledger.js";
 import { loadPluginCohortRecovery } from "./update-run-recovery-store.js";
 
 export async function prepareInterruptedManagedServiceFixture(params: {
@@ -27,10 +31,19 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   runId: string;
   updaterStopped?: "native" | "legacy";
   operatorRestart?: "before-recovery" | "service-inspection";
-  cut: "before" | "prepared" | "publishing" | "after" | "risk";
+  cut: "before" | "prepared" | "exchanging" | "publishing" | "after" | "risk";
   pluginCohort?: "own" | "foreign" | "risk";
+  /** An earlier run carries a false mark that post-core repair verifies. */
+  olderMark?: true;
   finalizeFailure?: true;
 }) {
+  const olderMarkRunId = params.olderMark
+    ? seedFalseDataAtRiskMark({
+        ...process.env,
+        OPENCLAW_STATE_DIR: params.root,
+        OPENCLAW_CONFIG_PATH: path.join(params.root, "openclaw.json"),
+      })
+    : undefined;
   const fixture = await createPackageSwapFixture(params.root);
   const installRoot = fixture.packageRoot;
   const installedRecovery = path.join(installRoot, "dist/cli/daemon-cli.js");
@@ -76,6 +89,11 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       fence.assertCurrent();
       ${managedServiceStateUpdateScript(params.statePath, "state.postCoreRepaired = true; state.repairRunId = runId;")};
       ledger.recordUpdateRunStep(runId, {step:"finalize:doctor",status:"completed"});
+      ${
+        olderMarkRunId
+          ? `ledger.recordUpdateRunStep(runId, {step:${JSON.stringify(`finalize:data-at-risk-verified:${olderMarkRunId}`)},status:"completed"});`
+          : ""
+      }
     });
     ${
       params.finalizeFailure
@@ -178,7 +196,13 @@ export async function prepareInterruptedManagedServiceFixture(params: {
           ? ""
           : params.cut === "after"
             ? "await createPublicationOwner(prepared.anchor, prepared.journal, fence.assertCurrent).publish();"
-            : `
+            : params.cut === "exchanging"
+              ? `
+      // An exchange publication records its intent, then the candidate takes the previous name.
+      prepared.journal.transition(prepared.journal.read(),"publishing",{kind:"publish"},fence.assertCurrent);
+      fs.renameSync(prepared.anchor + "/candidate", prepared.anchor + "/previous");
+      `
+              : `
       const record = prepared.journal.read();
       prepared.journal.transition(record,"publishing",{kind:"displace"},fence.assertCurrent);
       fs.renameSync(${JSON.stringify(installRoot)}, prepared.anchor + "/previous");
@@ -280,4 +304,25 @@ function reservePluginCohort(env: NodeJS.ProcessEnv, runId: string, installRoot:
     },
     { env },
   );
+}
+
+/** An earlier update with a false mark, dated before the interrupted run. */
+function seedFalseDataAtRiskMark(env: NodeJS.ProcessEnv): string {
+  const { runId } = createUpdateRun(
+    { trigger: "cli", accepted: { startedAtMs: Date.now() - 60_000 } },
+    { env },
+  );
+  recordUpdateRunVerification(
+    runId,
+    {
+      recovery: {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk: "rollback-state-unverified",
+      },
+    },
+    { env },
+  );
+  finishUpdateRun(runId, { status: "failed", reason: "state-migration-started" }, { env });
+  return runId;
 }

@@ -1,6 +1,6 @@
 // Covers JSON merge-patch behavior for config mutations.
 import { describe, expect, it } from "vitest";
-import { applyMergePatch } from "./merge-patch.js";
+import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 
 const agentListBase = {
   agents: {
@@ -60,5 +60,19 @@ describe("applyMergePatch", () => {
     expect(applyMergePatch(base, patch, { mergeObjectArraysById: true })).toEqual({
       channels: { telegram: { allowFrom: ["333"] } },
     });
+  });
+});
+
+describe("createMergePatch", () => {
+  it("diffs id-keyed rows without dropping unchanged nulls", () => {
+    const base = {
+      models: [{ id: "m", name: "Old", contextTokens: 1, thinkingLevelMap: { off: null } }],
+    };
+    const target = { models: [{ id: "m", name: "New", thinkingLevelMap: { off: null } }] };
+
+    const patch = createMergePatch(base, target, { mergeObjectArraysById: true });
+
+    expect(patch).toEqual({ models: [{ id: "m", name: "New", contextTokens: null }] });
+    expect(applyMergePatch(base, patch, { mergeObjectArraysById: true })).toEqual(target);
   });
 });

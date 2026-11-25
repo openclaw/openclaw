@@ -54,6 +54,22 @@ partitioning finishes before the reporter and dependency-recording options are
 added. Native Bun tests retain their existing command and are not represented by
 Vitest observations. The pilot never skips a test or changes a required check.
 
+Scheduled canonical CI also rotates one separate audit capture across eligible
+CLI-process and Bun Gateway invocations. The Gateway allowlist covers
+`gateway-methods` and `gateway-database-workers`, alone or in their existing
+ordered pairs with `gateway-methods-isolated` and `gateway-server-isolated`,
+respectively. Only the methods or database-workers configuration writes the
+capture; its companion still executes normally. Other mixed commands are
+ineligible. Runtime-generated Node exclusions stay intact; caller-supplied
+Vitest overrides remain ineligible. One combined capture budget applies across both families and all
+runtimes, independently of ordinary `unit-fast` collection.
+
+These audit exports keep the existing `ci-test-observations-audit-cli-*` artifact
+namespace for compatibility, seven-day retention, and payload limits. They do
+not record dependencies or contribute prior snapshots, graph decisions, or model
+scores. An audit capture alone does not establish a full-versus-selected failure
+recall denominator.
+
 Each observed invocation uses a fresh Vite cache directory. This prevents native
 dependency records from leaking between configurations or runtimes, but also
 changes optimizer and transform-cache identity. Compare complete paired job
@@ -210,6 +226,22 @@ unhandled-error, and missing-result runs remain unknown. Failure-tail replays
 are ignored; conflicting receipts are rejected.
 
 ## Current coverage
+
+PR canonical plans can carry optional `volume` provenance. The planner captures
+each supported config's eligible file inventory using the original PR flags and
+changed paths, before projecting selected files. It records counts and SHA-256
+digests only. The runner emits `[shard:volume]` records for the scheduled config,
+runtime, engine and timing profile; these describe planned files, not outcomes.
+
+Count a shared `full.id` once across split shards. Node and Bun copies have
+different identities. Named worker, memory and watchdog settings do not change
+this logical identity. Scenario variables still do. The runner separately
+records `admittedProfile` after environment merging and worker fallback; a
+semantic environment or argument mismatch leaves the denominator unknown.
+Missing ownership, eligibility context or a matching runtime/profile also
+remains unknown (`full: null`); it is never a zero denominator.
+These are file counts for scheduled configurations, not case counts or a
+whole-repository inventory. They establish neither failure recall nor savings.
 
 Resource-reporter users receive the additional versioned inventory and case
 counts. This includes existing UI and diagnostic lanes. Ordinary Node shard CI

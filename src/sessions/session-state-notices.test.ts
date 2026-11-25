@@ -162,9 +162,12 @@ it("keeps the first deadline and acknowledges coalesced store notices only upon 
   expect(mocks.enqueue).toHaveBeenCalledTimes(1);
   const options = mocks.enqueue.mock.calls[0]![1];
   expect(options).toMatchObject({
+    source: "session_state",
+    replyExpectation: "optional",
     expectedTarget: { sessionId: "original", generation: "current" },
     occurrences: targets.map(() => ({ sessionStorePath: watcherStorePath })),
   });
+  expect(mocks.enqueue.mock.calls[0]![0]).toContain("reply exactly NO_REPLY");
   expect(mocks.acknowledge).not.toHaveBeenCalled();
   await options.onAdopted?.();
   expect(mocks.acknowledge).toHaveBeenCalledWith(

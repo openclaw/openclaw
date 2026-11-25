@@ -69,7 +69,6 @@ const withPersistFixture = (
       maintenanceConfig: undefined,
       assertGatewayWorkAdmissionAllowed: vi.fn(),
       respondToGatewayAdmissionOutcome: () => false,
-      setCronContinuationClaim: vi.fn(),
       respond: vi.fn(),
     };
     await body(params, profile.id);
@@ -174,7 +173,6 @@ it.each([
           initialEntry: entry,
           normalizedSpawned: {},
           requestDeliveryHint: undefined,
-          hasRestoredCronContinuation: false,
           resetPolicy: resolveSessionResetPolicy({
             sessionCfg: { reset: mode === "idle" ? { mode, idleMinutes: 1 } : { mode, atHour: 4 } },
             resetType: "direct",

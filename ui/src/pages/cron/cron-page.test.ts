@@ -15,7 +15,7 @@ import {
   getButtonByText,
   openCronMenu,
   scheduledJob,
-  selectSegmented,
+  chooseSchedule,
 } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
@@ -34,7 +34,7 @@ function expectRpc(request: unknown, method: string, params: unknown) {
 }
 
 function expectHistoryTab(page: ParentNode) {
-  expect(dom.attribute(page, dom.testId("cron-detail-tab-history"), "aria-selected")).toBe("true");
+  expect(page.querySelector('.cron-page[data-view="detail"] .cron-history')).not.toBeNull();
 }
 
 function pacedJob(id: string, overrides: Partial<CronJob> = {}) {
@@ -59,7 +59,7 @@ async function submitWhenReady(page: ReturnType<typeof harness.createPage>) {
 }
 
 async function chooseOneTime(page: ReturnType<typeof harness.createPage>) {
-  selectSegmented(page.querySelector(dom.testId("cron-schedule-kind-at")) as HTMLElement);
+  chooseSchedule(page, "at");
   await page.settle();
   dom.fillInput(page, "#cron-schedule-at", "2099-01-01T12:00");
 }
@@ -83,8 +83,9 @@ it("allows offline drafting but disables submission without a live connection", 
     page.patchForm({ name: "Offline draft", payloadText: "Review the garden" });
     await page.settle();
     expect(page.cron.cronFieldErrors).toEqual({});
-    expect(page.querySelector<HTMLInputElement>("#cron-name")!.matches(":disabled")).toBe(false);
-    for (const id of ["cron-submit", "cron-submit-run"]) {
+    expect(page.querySelector("#cron-name")).toBeNull();
+    expect(page.querySelector<HTMLElement>("#cron-payload-text")!.matches(":disabled")).toBe(false);
+    for (const id of ["cron-submit"]) {
       const button = page.querySelector<HTMLButtonElement>(dom.testId(id))!;
       expect(button.disabled, id).toBe(true);
       button.click();
@@ -106,7 +107,7 @@ it("does not treat an accepted edit as completion of a newer clone", async () =>
   });
   const { page } = mountCronPage(request);
   try {
-    (await dom.waitForElement(page, dom.testId("cron-row-earlier-edit"))).click();
+    await harness.editJob(page, job.id);
     await dom.waitForElement(page, "#cron-name");
     dom.click(page, dom.testId("cron-submit"));
     await waitFor(() => expect(request).toHaveBeenCalledWith("cron.update", expect.anything()));
@@ -114,7 +115,6 @@ it("does not treat an accepted edit as completion of a newer clone", async () =>
     expect(editor.disabled).toBe(true);
     expect(editor.getAttribute("aria-busy")).toBe("true");
     expect(page.querySelector<HTMLInputElement>("#cron-name")!.matches(":disabled")).toBe(true);
-    expect(page.querySelector<HTMLButtonElement>(dom.testId("cron-back"))!.disabled).toBe(true);
     const submit = page.querySelector<HTMLButtonElement>(dom.testId("cron-submit"))!;
     expect(submit.disabled).toBe(true);
     expect(submit.textContent).toContain("Saving");
@@ -160,41 +160,6 @@ it("keeps the recurring interval focused as validation changes while typing", as
   expect(dom.attribute(page, selector, "aria-invalid")).toBe("false");
 });
 
-it.each([1, 2])("scopes %i attached jobs and opens a sole match", async (count) => {
-  const jobs = Array.from({ length: count }, (_, index) =>
-    createCronViewJob(`linked-${index}`, { name: `Linked ${index}` }),
-  );
-  const fallback = harness.createRequest();
-  const request = vi.fn(async (method: string, _params?: unknown) =>
-    method === "cron.list" ? harness.cronListResponse(jobs) : fallback(method),
-  );
-  const { page } = mountCronPage(request);
-  if (count === 2) {
-    await dom.waitForElement(page, "[data-test-id=cron-list-tab-activity]");
-    page
-      .querySelector<HTMLElement>("[data-test-id=cron-list-tab-activity]")!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, detail: 1 }));
-    await page.settle();
-  }
-  page.routeSearch = "?session=agent%3Aops%3Anight-watch&agent=ops";
-  await waitFor(() => expect(page.cron.cronJobsTotal).toBe(count));
-  await waitFor(() => expect(page.cron.cronJobsSnapshotRevision).not.toBeNull());
-  await page.settle();
-  expect(request).toHaveBeenCalledWith(
-    "cron.list",
-    expect.objectContaining({ sessionKey: "agent:ops:night-watch", sessionAgentId: "ops" }),
-  );
-  expect(page.cron.cronEditingJob?.id ?? null).toBe(count === 1 ? "linked-0" : null);
-  if (count === 2) {
-    await waitFor(() =>
-      expect(dom.attribute(page, "[data-test-id=cron-tab-all]", "aria-selected")).toBe("true"),
-    );
-  }
-  expect(dom.text(page, ".page-subtitle")).toContain("attached to this session");
-  page.routeSearch = "";
-  await waitFor(() => expect(page.cron.cronSessionFilter).toBeUndefined());
-  expect(page.cron.cronEditingJob).toBeNull();
-});
 it.each(["visible", "later page"])("opens linked history for a job on %s", async (placement) => {
   const job = scheduledJob("linked-job", { agentId: "main", name: "Linked automation" });
   const entry = (runId: string, ts: number, summary: string) =>
@@ -234,23 +199,23 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   const inventory = harness.cronListResponse(
     placement === "visible"
       ? [job]
-      : Array.from({ length: 50 }, (_, index) => ({
-          ...job,
-          id: `other-${index}`,
-          name: `Other automation ${index}`,
-        })),
+      : [
+          ...Array.from({ length: 50 }, (_, index) => ({
+            ...job,
+            id: `earlier-${index}`,
+            name: `Earlier automation ${index}`,
+          })),
+          job,
+        ],
   );
-  if (placement === "later page") {
-    inventory.total = 51;
-    inventory.hasMore = true;
-    inventory.nextOffset = 50;
-  }
   jobs.resolve(inventory);
   await waitFor(() => {
     expect(page.cron.cronEditingJob?.id).toBe(job.id);
     expectHistoryTab(page);
     expect(dom.text(page, ".cron-run-entry--highlighted")).toContain("Linked run");
+    expect(page.cron.cronJobsSnapshotRevision).not.toBeNull();
   });
+  expect(page.cron.cronJobs.some((row) => row.id === job.id)).toBe(placement === "visible");
   expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
   expect(dom.callsFor(request, "models.list")).toHaveLength(0);
   expect(request).toHaveBeenCalledWith(
@@ -269,8 +234,6 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   updateCronRunsFilter(page.cron, previousFilters);
   page.routeSearch = "?job=linked-job";
   await page.settle();
-  dom.click(page, dom.testId("cron-detail-tab-history"));
-  await page.settle();
   expect(dom.callsFor(request, "cron.runs").at(-1)).toEqual([
     "cron.runs",
     expect.objectContaining({
@@ -281,6 +244,9 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       deliveryStatuses: ["not-delivered"],
     }),
   ]);
+  // The model catalog loads only for the settings.
+  expect(dom.callsFor(request, "models.list")).toHaveLength(0);
+  dom.click(page, dom.testId("cron-edit"));
   await waitFor(() => expect(dom.callsFor(request, "models.list")).toHaveLength(1));
 });
 
@@ -298,9 +264,9 @@ it.each(["selecting another job", "changing agent scope", "opening another link"
     const { page, gateway, context } = mountCronPage(request);
     page.routeSearch = "?job=linked-job";
     await expectRpc(request, "cron.get", { id: linked.id });
-    await dom.waitForElement(page, dom.testId("cron-row-selected-job"));
+    const held = await harness.heldJob(page, selected.id);
     if (action === "selecting another job") {
-      dom.click(page, dom.testId("cron-row-selected-job"));
+      page.selectJob(held);
     } else if (action === "changing agent scope") {
       context.agentSelection.setScope("writer");
     } else if (action === "opening another link") {
@@ -320,6 +286,16 @@ it.each(["selecting another job", "changing agent scope", "opening another link"
     expect(page.cron.cronError).toBeNull();
   },
 );
+
+it("opens an explicitly linked automation directly in its settings", async () => {
+  const job = createCronViewJob("linked-job", { state: {} });
+  const { page } = mountCronPage(cronRpc({ "cron.get": () => job }));
+  page.routeSearch = "?job=linked-job&tab=settings";
+  await waitFor(() => {
+    expect(page.cron.cronEditingJob?.id).toBe(job.id);
+    expect(page.querySelector("#cron-payload-text")).not.toBeNull();
+  });
+});
 
 it("clears a failed job link when opening another link", async () => {
   const job = createCronViewJob("current-job", { state: {} });
@@ -347,17 +323,12 @@ it("drops pending automation scratch when admin access is removed", async () => 
     sessionTarget: "main",
   });
   const scratch = createDeferred<object>();
-  const request = vi.fn(async (method: string) =>
-    method === "cron.list"
-      ? harness.cronListResponse([job])
-      : method === "cron.scratch.get"
-        ? scratch.promise
-        : {},
-  );
+  const request = cronRpc({
+    "cron.list": () => harness.cronListResponse([job]),
+    "cron.scratch.get": () => scratch.promise,
+  });
   const { page, gateway } = mountCronPage(request);
-  const row = `[data-test-id="cron-row-${job.id}"]`;
-  await dom.waitForElement(page, row);
-  dom.click(page, `${row} .cron-table__name-text`);
+  await harness.editJob(page, job.id);
   await dom.waitForElement(page, "openclaw-cron-scratch-editor");
   expect(dom.callsFor(request, "cron.scratch.get")).toHaveLength(0);
   getButtonByText(page, "Load scratch").click();
@@ -382,14 +353,15 @@ it.each(["operator.write", "operator.read"])(
     const job = scheduledJob("access-job");
     const request = cronRpc({ "cron.list": () => harness.cronListResponse([job]) });
     const { page, gateway } = mountCronPage(request);
-    const staleRunButton = await dom.waitForElement(page, dom.testId("cron-row-run-access-job"));
+    await harness.openJob(page, job.id);
+    const staleRunButton = await dom.waitForElement(page, dom.testId("cron-run-now"));
     gateway.emitSnapshot({ hello: harness.operatorHello([scope]) });
     staleRunButton.click();
     await page.settle();
     expect(page.textContent).toContain(
       "Only the owner with automation access or an admin can change this automation.",
     );
-    expect(page.querySelector(dom.testId("cron-row-run-access-job"))).toBeNull();
+    expect(page.querySelector(dom.testId("cron-run-now"))).toBeNull();
     expect(
       request.mock.calls.some(([method]) =>
         ["cron.add", "cron.update", "cron.run", "cron.remove"].includes(method),
@@ -399,121 +371,31 @@ it.each(["operator.write", "operator.read"])(
 );
 
 it.each([
-  ["a suggested task for the selected agent", "writer", true],
-  ["a new task from the all-agents view", null, false],
+  ["the selected agent", "writer"],
+  ["the all-agents view", null],
 ] as const)(
-  "creates %s with its intended agent ownership",
-  async (_scenario, scopeId, suggested) => {
+  "creates a new task from %s with its intended agent ownership",
+  async (_scenario, scopeId) => {
     const request = harness.createRequest();
     const { page } = mountCronPage(request, { scopeId, selectedId: "writer" });
     await page.settle();
     expect(dom.callsFor(request, "models.list")).toHaveLength(0);
-    const createSelector = suggested
-      ? '[data-suggestion="repoPulse"]'
-      : dom.testId("cron-new-task");
-    (await dom.waitForElement(page, createSelector)).click();
+    (await dom.waitForElement(page, dom.testId("cron-new-task"))).click();
     await expectRpc(request, "models.list", { agentId: "writer", view: "configured" });
-    await waitFor(() => {
-      expect(page.querySelector("#cron-name")).not.toBeNull();
-      expect(page.querySelector("#cron-payload-text")).not.toBeNull();
-    });
-    dom.fillInput(page, "#cron-name", "Agent-scoped task");
+    await waitFor(() => expect(page.querySelector("#cron-payload-text")).not.toBeNull());
+    // New automations have no name field; the Gateway names them from the prompt.
+    expect(page.querySelector("#cron-name")).toBeNull();
     dom.fillInput(page, "#cron-payload-text", "Run for the selected agent");
     await submitWhenReady(page);
     await expectRpc(
       request,
       "cron.add",
       expect.objectContaining({
-        name: "Agent-scoped task",
         agentId: "writer",
         delivery: { mode: "none" },
       }),
     );
-  },
-);
-
-it.each([
-  { destination: "another page", accepted: true },
-  { destination: "another automation", accepted: true },
-  { destination: "another automation", accepted: false },
-  { destination: "the submitted editor", accepted: false },
-] as const)(
-  "settles create-and-run at $destination (accepted: $accepted)",
-  async ({ destination, accepted }) => {
-    const addRequested = createDeferred();
-    const added = createDeferred<{ id: string }>();
-    const selected = createCronViewJob("selected-job", { name: "Selected automation" });
-    const request = cronRpc(
-      {
-        "cron.add": () => {
-          addRequested.resolve();
-          return added.promise;
-        },
-        "cron.list": () => harness.cronListResponse([]),
-        "cron.get": () => selected,
-        "cron.runs": () => cronRunsResponse(),
-        "cron.run": () => ({ ok: true, enqueued: true, runId: "run-fresh" }),
-        "models.list": () => ({ models: [] }),
-      },
-      () => ({}),
-    );
-    const { page, gateway } = mountCronPage(request, { scopeId: "writer" });
-    let currentPage = page;
-    try {
-      (await dom.waitForElement(page, '[data-suggestion="repoPulse"]')).click();
-      (await dom.waitForElement(page, dom.testId("cron-submit-run"))).click();
-      await addRequested.promise;
-      const submittedState = page.cron;
-      if (destination === "another page") {
-        page.remove();
-        currentPage = harness.createPage(harness.createContext(gateway, "writer"));
-      }
-      if (destination === "another automation") {
-        page.routeSearch = `?job=${selected.id}`;
-        await waitFor(() => expect(dom.inputValue(page, "#cron-name")).toBe(selected.name));
-      }
-      await currentPage.settle();
-      if (accepted) {
-        added.resolve({ id: "job-fresh" });
-      } else {
-        added.reject(new Error("Creation rejected"));
-      }
-      await waitFor(() => expect(submittedState.cronBusy).toBe(false));
-      await currentPage.settle();
-      if (destination === "another automation") {
-        expect.soft(currentPage.cron).toMatchObject({
-          cronEditingJob: { id: selected.id },
-          cronRunsJobId: selected.id,
-          cronRunsScope: "job",
-        });
-        expect.soft(dom.inputValue(currentPage, "#cron-name")).toBe(selected.name);
-      }
-      if (!accepted) {
-        expect(request.mock.calls.some(([method]) => method === "cron.run")).toBe(false);
-        expect(currentPage.cron.cronError).toBe(
-          destination === "the submitted editor" ? "Creation rejected" : null,
-        );
-        expect(currentPage.cron.cronCreateOpen).toBe(destination === "the submitted editor");
-        return;
-      }
-      await waitFor(() => {
-        const methods = request.mock.calls.map((call) => call[0]);
-        expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
-      });
-      expect(request).toHaveBeenCalledWith(
-        "cron.add",
-        expect.objectContaining({ agentId: "writer" }),
-      );
-      expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
-      await waitFor(() => expect(submittedState.cronCreateOpen).toBe(false));
-      if (destination === "another page") {
-        expect(currentPage.cron).not.toBe(submittedState);
-        expect(currentPage.cron.cronError).toBeNull();
-      }
-    } finally {
-      added.resolve({ id: "job-fresh" });
-      currentPage.remove();
-    }
+    expect(dom.callsFor(request, "cron.add")[0]?.[1]).toHaveProperty("name", undefined);
   },
 );
 
@@ -546,17 +428,13 @@ it.each([
   gateway.emitSnapshot({ hello: harness.operatorHello(["operator.admin"]) });
   const page = harness.createPage(harness.createContext(gateway), { render: true });
   try {
-    (await dom.waitForElement(page, dom.testId("cron-row-run-alpha"))).click();
+    await harness.openJob(page, alpha.id);
+    (await dom.waitForElement(page, dom.testId("cron-run-now"))).click();
     await expectRpc(request, "cron.run", { id: alpha.id, mode: "force" });
-    // Run actions stop propagation; the overview still permits selecting another row.
-    dom.click(page, '[data-test-id="cron-row-beta"] .cron-table__name');
-    await waitFor(() => {
-      expect(betaReads).toBe(0);
-      expect(page.querySelector(dom.testId("cron-detail-tab-history"))).not.toBeNull();
-    });
-    (page.querySelector(dom.testId("cron-detail-tab-history")) as HTMLElement).dispatchEvent(
-      new MouseEvent("click", { detail: 1, bubbles: true }),
-    );
+    // Another automation can open while the run is still being acknowledged.
+    await harness.openJob(page, beta.id);
+    // The automation opens on its history.
+    await waitFor(() => expect(betaReads).toBe(1));
     await page.settle();
     // A notification queued before the acknowledgement must not rescue the stale target.
     expect(page.querySelector(".cron-history")).not.toBeNull();
@@ -596,7 +474,7 @@ it("syncs form enabled after header pause", async () => {
     () => ({}),
   );
   const { page } = mountCronPage(request);
-  (await dom.waitForElement(page, ".cron-table__row")).click();
+  await harness.openJob(page, job.id);
   await waitFor(() => expect(page.cron.cronEditingJob?.id).toBe("job-1"));
   expect(page.cron.cronRunsScope).toBe("job");
   expect(page.cron.cronForm.enabled).toBe(true);
@@ -628,9 +506,11 @@ it.each([
     "cron.add": () => ({ id: "paced-copy" }),
   });
   const { page } = mountCronPage(request);
+  await harness.openJob(page, source.id);
   await dom.waitForElement(page, ".cron-job-menu");
   await openCronMenu(page, ".cron-job-menu");
   dom.click(page, '.cron-job-menu [data-value="clone"]');
+  // A copy shows its name field, prefilled from the source.
   await dom.waitForElement(page, "#cron-name");
   expect((page.querySelector("#cron-name") as HTMLInputElement).value).toBe("Daily ping copy");
   if (once) {
@@ -670,7 +550,7 @@ it.each([false, true])("preserves valid pacing when editing (once: %s)", async (
     "cron.update": () => saved,
   });
   const { page } = mountCronPage(request);
-  (await dom.waitForElement(page, ".cron-table__row")).click();
+  await harness.editJob(page, source.id);
   await dom.waitForElement(page, "#cron-name");
   dom.fillInput(page, "#cron-name", saved.name);
   await page.settle();
@@ -684,7 +564,8 @@ it.each([false, true])("preserves valid pacing when editing (once: %s)", async (
   await waitFor(() => expect(page.cron.cronEditingJob?.configRevision).toBe("saved-revision"));
   await waitFor(() => expect(page.cron.cronBusy).toBe(false));
   expect(page.cron.cronEditingJob?.name).toBe(saved.name);
-  expect(page.querySelector<HTMLButtonElement>(dom.testId("cron-submit"))!.disabled).toBe(false);
+  // A saved edit returns to the automation's prompt and history.
+  await waitFor(() => expect(page.querySelector('.cron-page[data-view="detail"]')).not.toBeNull());
   const submitted = request.mock.calls.find(([method]) => method === "cron.update")?.[1];
   expect(submitted).toMatchObject({
     id: source.id,

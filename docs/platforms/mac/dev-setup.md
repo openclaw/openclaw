@@ -266,6 +266,10 @@ runtime for the Gateway itself.
 
 ## Run native tests safely
 
+For the account-menu sign-in return path, see
+[OpenClaw ID sign-in testing](/platforms/mac/openclaw-id-sign-in-testing) for
+the focused WebKit regression, Tart/Actions commands, and full-app checks.
+
 Run the full macOS app test suite in a disposable macOS VM or CI worker with
 no operator credentials, config, or running Gateway. AppKit tests can show
 windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or

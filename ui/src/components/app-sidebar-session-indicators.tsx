@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
@@ -9,7 +9,6 @@ import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalog
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sidebarSessionMetaId, sidebarSessionStateId } from "./app-sidebar-session-types.ts";
-import { ElapsedTime } from "./elapsed-time.tsx";
 import { describeSessionState } from "./session-leading-indicator.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { Icon, sessionIcon } from "./solid/icon.tsx";
@@ -130,16 +129,8 @@ export function renderSidebarSessionIndicators(
       (host().sessionsStatusFilter === "snoozed" || host().sessionsStatusFilter === "all") &&
       isSessionSnoozed(readSession(), Date.now()),
   );
-  const hasTrail = createMemo(
-    () =>
-      snoozed() ||
-      // A finished child's duration is history; the row keeps only live elapsed time.
-      (readSession().isChild &&
-        readSession().hasActiveRun &&
-        (readSession().runtimeMs != null || readSession().startedAt != null)),
-  );
   const metaId = createMemo(() =>
-    hasTrail() ? sidebarSessionMetaId(readSession().key) : undefined,
+    snoozed() ? sidebarSessionMetaId(readSession().key) : undefined,
   );
   const stateId = createMemo(() =>
     stateDescription() ? sidebarSessionStateId(readSession().key) : undefined,
@@ -183,43 +174,20 @@ export function renderSidebarSessionIndicators(
       ) : undefined}
     </>
   );
-  const [clockOffscreen, setClockOffscreen] = createSignal(false);
-  const trail = createMemo(() => {
-    const currentSession = readSession();
-    return hasTrail() ? (
+  const trail = createMemo(() =>
+    snoozed() ? (
       <span
-        ref={[sessionRunVisibility(setClockOffscreen)]}
-        class={["session-row-trail", { "session-row-trail--snooze": snoozed() }]}
-        style={snoozed() ? undefined : { "min-width": "7ch", "justify-content": "flex-start" }}
+        class="session-row-trail session-row-trail--snooze"
         id={metaId()}
-        title={
-          snoozed()
-            ? t("sessionsView.snoozeWakes", {
-                time: formatSessionSnoozeWakeTime(readSession().snoozedUntil!),
-              })
-            : undefined
-        }
+        title={t("sessionsView.snoozeWakes", {
+          time: formatSessionSnoozeWakeTime(readSession().snoozedUntil!),
+        })}
       >
-        {snoozed() ? (
-          <>
-            {sessionIcon("moon", 13, 2)}
-            {formatSessionSnoozeWakeTime(readSession().snoozedUntil!, new Date(), true)}
-          </>
-        ) : currentSession.runtimeMs != null ? (
-          <ElapsedTime
-            startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs}
-            paused={clockOffscreen()}
-          />
-        ) : (
-          <ElapsedTime
-            startMs={readSession().startedAt!}
-            endMs={readSession().endedAt ?? null}
-            paused={clockOffscreen()}
-          />
-        )}
+        {sessionIcon("moon", 13, 2)}
+        {formatSessionSnoozeWakeTime(readSession().snoozedUntil!, new Date(), true)}
       </span>
-    ) : undefined;
-  });
+    ) : undefined,
+  );
   return {
     running,
     stateId,

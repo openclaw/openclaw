@@ -33,14 +33,16 @@ import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { normalizeProxyIp } from "./proxy-ip.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
-import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
+import {
+  acceptRealtimeInboundRequest,
+  getRealtimeTwimlParams,
+} from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
@@ -263,10 +265,10 @@ export class VoiceCallWebhookServer {
         listRealtimeTranscriptionProviders(pluginConfig, Object.keys(streaming.providers)),
       resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
         provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
-      isProviderConfigured: ({ provider, cfg, providerConfig }) =>
+      isProviderConfigured: ({ provider, ...ctx }) =>
         provider.isConfiguredAsync
-          ? provider.isConfiguredAsync({ cfg, providerConfig })
-          : (provider.isConfigured?.({ cfg, providerConfig }) ?? false),
+          ? provider.isConfiguredAsync(ctx)
+          : (provider.isConfigured?.(ctx) ?? false),
     });
     if (!resolution.ok) {
       this.logger.warn(
@@ -663,20 +665,14 @@ export class VoiceCallWebhookServer {
 
         const realtimeParams =
           this.realtimeHandler && this.provider.name === "twilio"
-            ? new URLSearchParams(ctx.rawBody)
+            ? getRealtimeTwimlParams(ctx)
             : null;
-        const direction = realtimeParams?.get("Direction");
-        const callStatus = realtimeParams?.get("CallStatus");
-        // Only initial TwiML fetches without gathered input enter realtime handling.
-        if (
-          realtimeParams &&
-          (!direction || direction === "inbound" || direction.startsWith("outbound")) &&
-          ctx.query?.type !== "status" &&
-          ctx.query?.type !== "amd" &&
-          (!callStatus || !isProviderStatusTerminal(callStatus)) &&
-          !realtimeParams.get("SpeechResult") &&
-          !realtimeParams.get("Digits")
-        ) {
+        if (realtimeParams) {
+          const callSid = realtimeParams.get("CallSid")?.trim();
+          if (!callSid) {
+            return buildTwilioResponse('<Reject reason="rejected" />');
+          }
+          const direction = realtimeParams.get("Direction");
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
             isInboundRealtimeRequest &&
@@ -696,7 +692,7 @@ export class VoiceCallWebhookServer {
           this.logger.info(
             `Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
           );
-          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
+          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams, callSid);
         }
 
         const parsed = this.provider.parseWebhookEvent(ctx, {

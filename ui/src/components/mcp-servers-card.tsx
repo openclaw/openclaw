@@ -15,7 +15,7 @@ import {
 import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import type { ToolsEffectiveResult } from "../api/types.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
-import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
+import { registerMcpManagementEnglish } from "../i18n/locales/en-mcp-management.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   resolveReadMcpServerRuntime,
@@ -56,7 +56,7 @@ import {
 import { createWizardLogin, WizardLogin } from "./wizard-login-controller.tsx";
 import "../styles/exec-approval-card.css";
 
-registerMcpEnglish();
+registerMcpManagementEnglish();
 
 export type McpServerEditorRenderer = (
   server: McpServerSummary,

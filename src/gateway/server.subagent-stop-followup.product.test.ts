@@ -627,6 +627,12 @@ it("confirms a stopped child's kill without losing either of two overlapping con
         confirmations.mock.settledResults.filter((result) => result.type === "rejected"),
         "an overlapping confirmation never loses the kill it confirms",
       ).toEqual([]);
+      // Kill bookkeeping can publish before the cancelled mailbox inputs finish retiring.
+      await Promise.all(
+        children.flatMap((child) =>
+          owedControllerInputs(child.runId).map((input) => input.settlement.promise),
+        ),
+      );
       for (const child of children) {
         expect(owedControllerInputs(child.runId), "the stopped child owes nothing").toEqual([]);
       }

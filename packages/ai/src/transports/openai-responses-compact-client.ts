@@ -95,7 +95,6 @@ export async function postOpenAIResponsesCompaction(params: {
     modelUsage,
     model: params.model,
     replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {
-      authProfileId: params.options?.authProfileId,
       sessionId: params.options?.sessionId,
     }),
   } as OpenAIResponsesCompactEndpointResult & { modelUsage: Usage }; // SAFETY: Output, trailing item, and usage passed the endpoint guards above.

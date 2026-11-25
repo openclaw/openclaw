@@ -434,21 +434,23 @@ export class TooltipOwner {
         },
         true,
       );
-      const stopInput = listen(
-        view,
-        "input",
-        (event) => {
-          const target = event.composedPath()[0];
-          // Layout can move a hovered action under the pointer while another field is typing.
-          if (target instanceof view.Node && !this.#containsInteractionTarget(target)) {
-            this.#close();
-          }
-        },
-        true,
+      const stopOutsideInteractions = ["input", "contextmenu"].map((type) =>
+        listen(
+          view,
+          type,
+          (event) => {
+            const target = event.composedPath()[0];
+            // Cancel stale hover intent before another field or context menu takes input.
+            if (target instanceof view.Node && !this.#containsInteractionTarget(target)) {
+              this.#close();
+            }
+          },
+          true,
+        ),
       );
       this.#stopDismissal = () => {
         stopEscape();
-        stopInput();
+        stopOutsideInteractions.forEach((stop) => stop());
       };
     }
   }
@@ -653,7 +655,8 @@ export class TooltipOwner {
     if (this.#shouldRemainOpen(pointerExit)) {
       return;
     }
-    if (!this.#richContentText) {
+    // Only a visible rich card needs time for the pointer to cross into it.
+    if (this.#pending || !this.#richContentText) {
       this.#close();
       return;
     }

@@ -51,7 +51,7 @@ function fitsModelOutput(text: string, budget: ToolResultBudget): boolean {
  * first lines and names the `read` call that continues it, instead of letting a
  * generic output cap remove the middle without a way to recover it.
  */
-function formatSkillInstructionsForModel(
+export function formatSkillInstructionsForModel(
   instructions: SkillInstructionResult,
   budget: ToolResultBudget | undefined,
   readCallable: boolean,
@@ -158,7 +158,11 @@ export function createInstalledSkillTools(
             content: [{ type: "text" as const, text }],
             details: instructions,
           };
-          if (relativePath === undefined && whole) {
+          if (
+            relativePath === undefined &&
+            whole &&
+            skills.find((skill) => skill.name === name)?.instructionDelivery !== "forwarded"
+          ) {
             rememberSkillInstructionDelivery(result, instructions.content);
           }
           return result;

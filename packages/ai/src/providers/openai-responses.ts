@@ -98,7 +98,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
         replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
         sessionId: options?.sessionId,
-        authProfileId: options?.authProfileId,
         mutableInput: Boolean(options?.onPayload),
         replayMode,
       });
@@ -115,7 +114,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
           cacheRetention === "none" || !compat.supportsPromptCacheKey
             ? undefined
             : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-        ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
+        ...resolveOpenAIPromptCacheParams(
+          model,
+          cacheRetention,
+          compat,
+          options?.promptCacheTtl,
+          options?.cachePrewarm,
+        ),
         store: false,
       };
 

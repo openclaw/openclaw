@@ -452,6 +452,8 @@ describe("gateway lock namespaces", () => {
   it.each(["missing", "null", "malformed"])(
     "does not reclaim an expired owner with a %s namespace record",
     async (kind) => {
+      // macOS and Windows reclaim a provably exited owner without a namespace.
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const env = await makeEnv();
       const paths = resolveGatewayLockPaths(env, resolveTestLockDir(env));
       const payload = {

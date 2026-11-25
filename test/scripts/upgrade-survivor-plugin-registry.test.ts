@@ -1,6 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -423,6 +431,7 @@ it("isolates each projects-doctor run from retained evidence and preserves a fai
     if (exitCode !== "0") {
       expect(result.stderr).toContain("Preserved failed synthetic worker-cell state:");
       for (const runtime of runtimes) {
+        expect(statSync(join(directory, runtime)).mode & 0o1777).toBe(0o1777);
         expect(read(join(directory, runtime), "runtime/state-marker")).toBe("synthetic state");
       }
     }
@@ -549,6 +558,62 @@ test "$LIVE_GEMINI_API_KEY" = fixture-google
     expect(receipt.models.map((entry: { model: string }) => entry.model)).toEqual(expectedModels);
   },
 );
+
+it("keeps the preserved Anthropic fixture out of the later mock OpenAI restart", () => {
+  const root = tempDirs.make("upgrade-survivor-restart-inference-");
+  const result = runInner(
+    root,
+    `
+trap - ERR EXIT HUP INT TERM
+openclaw_e2e_start_mock_openai() { echo fixture-pid; }
+openclaw_e2e_wait_mock_openai() { return 0; }
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+openclaw() { printf "%s\n" "$*" >> "$FIXTURE_ROOT/calls"; }
+printf '{}\n' > "$OPENCLAW_CONFIG_PATH"
+prepare_restart_inference
+test "$restart_inference" = mock-openai
+grep -Fx "config set plugins.entries.anthropic.enabled false --strict-json" "$FIXTURE_ROOT/calls"
+`,
+    {
+      PATH: process.env.PATH,
+      HOME: root,
+      FIXTURE_ROOT: root,
+      OPENCLAW_CONFIG_PATH: join(root, "openclaw.json"),
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+});
+
+it("keeps legacy mock auth out of provider discovery and persists it for restarts", () => {
+  const root = tempDirs.make("upgrade-survivor-legacy-env-");
+  const result = runInner(
+    root,
+    `
+trap - ERR EXIT HUP INT TERM
+test -z "\${OPENAI_API_KEY+x}"
+test -z "\${ANTHROPIC_API_KEY+x}"
+test -z "\${GEMINI_API_KEY+x}"
+test -n "$OPENCLAW_UPGRADE_SURVIVOR_API_KEY"
+mkdir -p "$OPENCLAW_STATE_DIR"
+printf 'OPENCLAW_UPGRADE_SURVIVOR_API_KEY=stale\nPRESERVED_FIXTURE=value\n' >"$OPENCLAW_STATE_DIR/.env"
+write_update_restart_service_env
+write_update_restart_service_env
+test "$(grep -c '^OPENCLAW_UPGRADE_SURVIVOR_API_KEY=' "$OPENCLAW_STATE_DIR/.env")" = 1
+grep -qx "OPENCLAW_UPGRADE_SURVIVOR_API_KEY=$OPENCLAW_UPGRADE_SURVIVOR_API_KEY" "$OPENCLAW_STATE_DIR/.env"
+grep -qx 'PRESERVED_FIXTURE=value' "$OPENCLAW_STATE_DIR/.env"
+`,
+    {
+      PATH: process.env.PATH,
+      HOME: root,
+      OPENAI_API_KEY: "fixture-openai",
+      ANTHROPIC_API_KEY: "fixture-anthropic",
+      GEMINI_API_KEY: "fixture-google",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+      OPENCLAW_STATE_DIR: join(root, "state"),
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+});
 
 it("fails closed before Docker when the opted-in key is missing", () => {
   const { captureDir, result } = runSurvivor({

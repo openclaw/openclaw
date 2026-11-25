@@ -98,11 +98,11 @@ export function ChatContextBreakdown(
 
 /** Shares the breakdown's usage read, so the popover issues one request for both. */
 export function ChatSessionCost(
-  props: ContextReportProps & { children: (cost: () => SessionCostTotal) => Element },
+  props: ContextReportProps & { children: (cost: () => SessionCostTotal | null) => Element },
 ) {
   return (
     <ChatContextReport {...props}>
-      {(result) => <Show when={result().cost}>{(cost) => props.children(cost)}</Show>}
+      {(result) => props.children(() => result().cost)}
     </ChatContextReport>
   );
 }

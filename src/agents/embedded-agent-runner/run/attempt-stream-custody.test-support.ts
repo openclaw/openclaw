@@ -167,6 +167,7 @@ export async function createStreamCustodyFixture(
       onRejectedProviderReplayRepaired: repaired,
       onIdleTimeout: options.onIdleTimeout ?? (() => {}),
       diagnosticOwner,
+      isToolBoundarySafe: () => false,
     });
   };
   if (!options.deferStreamGuards) {

@@ -25,7 +25,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
 
 const BACKEND_DELEGATED_WARNING =
-  "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
+  "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend chat history and are not included in this export.";
 
 const MAX_DEFAULT_FILENAME_ATTEMPTS = 100;
 
@@ -82,7 +82,7 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
       : "";
   const entryDescription =
     summary.count === 1 ? "row that was not a session entry" : "rows that were not session entries";
-  return `⚠️ Skipped ${summary.count.toLocaleString()} malformed transcript ${entryDescription}.${rows}`;
+  return `⚠️ Skipped ${summary.count.toLocaleString()} malformed chat history ${entryDescription}.${rows}`;
 }
 
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {

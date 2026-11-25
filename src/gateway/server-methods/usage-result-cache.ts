@@ -45,7 +45,11 @@ const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
   return dayBucket
     ? dayBucket.mode === "time-zone"
-      ? `time-zone:${dayBucket.timeZone}`
+      ? JSON.stringify([
+          dayBucket.timeZone,
+          dayBucket.civilDays?.from,
+          dayBucket.civilDays?.through,
+        ])
       : `utc-offset:${dayBucket.utcOffsetMinutes}`
     : "gateway";
 }
@@ -100,9 +104,9 @@ export async function loadSessionsUsageSnapshotCached(
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
     revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef)?.revision ?? ""}`,
-    revisionOnly: params.overview,
+    revisionOnly: true,
     load: params.load,
-    // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
+    // Incomplete snapshots must be retried even when no revision changes.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
   });
 }

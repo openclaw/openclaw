@@ -3,7 +3,6 @@ import type {
   ClientVoiceSessionRecord,
 } from "../../talk/client-voice-session-store.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
@@ -114,7 +113,6 @@ export type SessionTurnPlan = {
   ownerSources?: SessionSourcePredicate[];
   custody?: SessionPendingInputWorkerFacts;
   relocation?: string;
-  cliWriter?: CliHistoryWriterFacts;
 };
 export type SessionTurnCommitted = {
   kind: "session-turn";

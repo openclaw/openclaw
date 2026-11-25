@@ -111,6 +111,18 @@ struct OpenClawIDNodeEnrollmentTests {
         }
         #expect(try OpenClawIDNodeEnrollmentLink.discoveryOrigin("https://discovery.example")
             .host == "discovery.example")
+        #expect(try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link).discoveryOrigin == nil)
+        let carried = fixture.node_invite.link + "&d=https%3A%2F%2Fdiscovery.example"
+        #expect(try OpenClawIDNodeEnrollmentLink(carried).discoveryOrigin?.host == "discovery.example")
+        for origin in [
+            "",
+            "http%3A%2F%2Fdiscovery.example",
+            "https%3A%2F%2Fdiscovery.example%2Fpath",
+            "https%3A%2F%2Fu%40discovery.example",
+        ] {
+            #expect(throws: (any Error).self) { try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link + "&d=" + origin) }
+        }
+        #expect(throws: (any Error).self) { try OpenClawIDNodeEnrollmentLink(carried + "&d=https%3A%2F%2Fother.example") }
         #expect(throws: (any Error).self) { try OpenClawIDNodeEnrollmentDescription(
             displayName: "bad\nname",
             platform: "ios",

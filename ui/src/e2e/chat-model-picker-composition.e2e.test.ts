@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { installMockGateway } from "./chat-flow.test-support.ts";
 import {
   polledAttribute,
@@ -26,6 +27,77 @@ const authStatus = (profileId: string, email: string) =>
   modelAuthStatus([{ profileId, type: "oauth", status: "ok", displayName: accountLabel, email }]);
 
 suite.define(() => {
+  it("loads accounts independently of the catalog and only enables the picker when ready", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [{ id: "shared-alpha", name: "OpenAI Standard", provider: "openai" }];
+      const modelResult = {
+        models,
+        accountSelection: { kind: "automatic", label: "Automatic account selection" },
+      };
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models,
+        methodResponses: {
+          "models.list": { models },
+        },
+      });
+      await page.goto(new URL("chat", suite.server.baseUrl).href);
+      const { picker, trigger } = modelPicker(page);
+      await trigger.waitFor();
+      await gateway.waitForRequest("models.list");
+      const rpc = "users.listModelAccounts";
+      const catalogReads = await gateway.deferNext("models.list");
+      const accountReads = await gateway.deferNext(rpc, {});
+      await gateway.emitGatewayEvent("chat.metadata.changed", { modelCatalogChanged: true });
+      await gateway.waitForRequest("models.list", { after: catalogReads });
+      expect(await gateway.getRequests(rpc)).toHaveLength(accountReads);
+      await trigger.click();
+      expect((await gateway.waitForRequest(rpc, { after: accountReads })).params).toEqual({});
+      await gateway.resolveDeferred("models.list", modelResult);
+      const accountToggle = picker.getByRole("button", { name: "Account", exact: true });
+      await polledText(accountToggle).toContain("Account: Auto");
+      await expect.poll(() => accountToggle.isDisabled()).toBe(true);
+      await polledVisible(accountToggle.locator(".chat-controls__account-spinner")).toBe(true);
+      const popover = picker.locator(".chat-controls__account-popover:popover-open");
+      expect(await popover.isVisible()).toBe(false);
+      const loadingWidth = await accountToggle.evaluate((button) => button.clientWidth);
+      expect(await gateway.getRequests(rpc)).toHaveLength(accountReads + 1);
+      await gateway.rejectDeferred(rpc, { message: "Saved accounts are temporarily unavailable" });
+      await expect.poll(() => accountToggle.isEnabled()).toBe(true);
+      await accountToggle.press("Enter");
+      await polledText(popover.getByRole("alert")).toContain(
+        "Saved accounts are temporarily unavailable",
+      );
+      const retryReads = await gateway.deferNext(rpc, {});
+      await popover.getByRole("button", { name: "Retry", exact: true }).click();
+      await gateway.waitForRequest(rpc, { after: retryReads });
+      expect(await accountToggle.isEnabled()).toBe(true);
+      await gateway.resolveDeferred(rpc, {
+        profileId: "test-person",
+        accounts: [
+          {
+            authProfileId: "openai:work",
+            label: "Work account",
+            provider: "openai",
+            authType: "oauth",
+            selected: false,
+          },
+        ],
+        links: [],
+      });
+      await expect.poll(() => accountToggle.isEnabled()).toBe(true);
+      await polledVisible(accountToggle.locator("svg")).toBe(true);
+      expect(await accountToggle.evaluate((button) => button.clientWidth)).toBe(loadingWidth);
+      const alternate = popover.getByRole("option", { name: "Work account" });
+      await polledVisible(alternate).toBe(true);
+      await accountToggle.click();
+      await polledVisible(popover).toBe(false);
+      await accountToggle.click();
+      await polledVisible(alternate).toBe(true);
+      expect(await gateway.getRequests(rpc)).toHaveLength(accountReads + 2);
+    });
+  });
+
   it("refreshes the mounted composer's account identity after an auth publication", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];
@@ -106,6 +178,9 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           agentModel: "openai/shared-alpha",
           models,
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
+          bootstrapPreferences: { profileId: "synthetic-operator", entries: {} },
           methodResponses: {
             "models.list": catalog(models, "openai:siwc"),
             "models.authStatus": authStatus("openai:siwc", "long-account-name+siwc@example.test"),
@@ -128,7 +203,25 @@ suite.define(() => {
         await auth.waitFor({ state: "visible" });
         await accountToggle.click();
         await openai.click({ trial: true });
+        const star = alpha.locator("[data-chat-model-favorite]");
+        await star.click();
+        await polledAttribute(star, "aria-pressed").toBe("true");
+        const favorites = picker.locator('[data-chat-model-provider-toggle="$favorites"]');
+        const favoriteIconFill = () =>
+          favorites.locator("svg").evaluate((icon) => getComputedStyle(icon).fill);
+        await expect.poll(favoriteIconFill).not.toBe("none");
+        await favorites.click();
+        await expect.poll(favoriteIconFill).not.toBe("none");
+        await search.press("Escape");
+        await polledAttribute(picker, "open").toBeNull();
+        await trigger.click();
+        await polledAttribute(favorites, "aria-selected").toBe("true");
+        await openai.click();
         await polledVisible(alpha).toBe(true);
+        await polledVisible(accountToggle).toBe(true);
+        await accountToggle.click();
+        await polledAttribute(accountToggle, "aria-expanded").toBe("true");
+        await accountToggle.click();
         expect(await beta.isVisible()).toBe(false);
         expect(await openai.getAttribute("aria-selected")).toBe("true");
         await openai.focus();
@@ -153,13 +246,19 @@ suite.define(() => {
         await polledAttribute(openai, "aria-selected").toBe("true");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
-        await picker.locator('[data-chat-model-provider-toggle="anthropic"]').click();
+        const anthropic = picker.locator('[data-chat-model-provider-toggle="anthropic"]');
+        await anthropic.click();
         await polledVisible(alpha).toBe(false);
+        await search.fill("shared");
+        await search.press("Escape");
+        expect(await search.inputValue()).toBe("");
+        await polledAttribute(anthropic, "aria-selected").toBe("true");
         await search.press("Escape");
         await polledAttribute(picker, "open").toBeNull();
         await trigger.click();
-        await polledVisible(alpha).toBe(false);
-        expect(await openai.getAttribute("aria-selected")).toBe("false");
+        // A browsed provider without the selected model never survives closing.
+        await polledVisible(alpha).toBe(true);
+        expect(await openai.getAttribute("aria-selected")).toBe("true");
         expect(await search.inputValue()).toBe("");
         await search.fill("shared");
         if (width === 1280) {

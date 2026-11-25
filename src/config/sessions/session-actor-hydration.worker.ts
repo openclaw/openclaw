@@ -9,6 +9,7 @@ import {
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { parseReadableSessionEntryData } from "./session-accessor.sqlite-entry-read.js";
 import {
   readParticipantRecord,
@@ -33,6 +34,7 @@ import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import { sessionEntryWindowColumns } from "./session-entry-window.types.js";
+import { sessionMemberWithAccess } from "./session-member-access-facts.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -201,7 +203,7 @@ export function hydrateSessionActorState(
           database.db,
           db
             .selectFrom("session_members")
-            .select(["added_at", "added_by", "identity_id", "session_key"])
+            .select(["added_at", "added_by", "identity_id", "session_key", "access"])
             .where("session_members.session_key", "=", eb.ref("session_nodes.session_key"))
             .orderBy("identity_id"),
           ["identity_id"],
@@ -225,6 +227,18 @@ export function hydrateSessionActorState(
                   "session_key",
                   "state",
                 ])
+                .select((pending) =>
+                  (tableHasColumn(database.db, "session_pending_inputs", "end_cause")
+                    ? pending.ref("end_cause")
+                    : pending.val(null)
+                  ).as("end_cause"),
+                )
+                .select((pending) =>
+                  (tableHasColumn(database.db, "session_pending_inputs", "origin_source_json")
+                    ? pending.ref("origin_source_json")
+                    : pending.val(null)
+                  ).as("origin_source_json"),
+                )
                 .where(
                   "session_pending_inputs.session_key",
                   "=",
@@ -452,11 +466,16 @@ export function hydrateSessionActorState(
   }
   const entry = entryRows.get(target.sessionKey)?.entry;
   const members = selected
-    ? decodeJsonProjection(selected.actor_members).map((member) => ({
-        identityId: member.identity_id,
-        addedBy: member.added_by,
-        addedAt: member.added_at,
-      }))
+    ? decodeJsonProjection(selected.actor_members).map((member) =>
+        sessionMemberWithAccess(
+          {
+            identityId: member.identity_id,
+            addedBy: member.added_by,
+            addedAt: member.added_at,
+          },
+          member.access,
+        ),
+      )
     : [];
   const pendingInputs = new Map(
     (selected ? decodeJsonProjection(selected.actor_pending) : []).map((row) => [

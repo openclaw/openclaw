@@ -20,7 +20,7 @@ import { Worker } from "node:worker_threads";
 import { parsePkgAndParentSelector, type PackageSelector } from "@pnpm/parse-overrides";
 import pMap from "p-map";
 import semver from "semver";
-import { list as listTar } from "tar";
+import { list as listTar } from "tar/raw";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { resolveRuntimeToolingEntrypointUrl } from "../src/infra/runtime-process-manifest.ts";
@@ -206,8 +206,7 @@ function pnpmPackageKeys(packageKey: string, metadata: unknown) {
   ].map((version) => `${parsed.name}@${version}`);
 }
 
-function readPnpmLockPackages() {
-  const lockfile = readPnpmLock();
+function readPnpmLockPackages(lockfile = readPnpmLock()) {
   const packages = recordAt(lockfile, "packages");
   if (!packages) {
     throw new Error("pnpm-lock.yaml is missing package resolution data.");
@@ -217,8 +216,7 @@ function readPnpmLockPackages() {
   );
 }
 
-function readPnpmLockPackageIntegrities() {
-  const lockfile = readPnpmLock();
+function readPnpmLockPackageIntegrities(lockfile = readPnpmLock()) {
   const packages = recordAt(lockfile, "packages") ?? {};
   const integrities = new Map<string, Set<string>>();
   for (const [packageKey, metadata] of Object.entries(packages)) {
@@ -675,8 +673,8 @@ function readNpmLockOverrides(
   packageJson: UnknownRecord,
   packageDir: string,
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
+  lockfile = readPnpmLock(),
 ) {
-  const lockfile = readPnpmLock();
   // npm can merge sibling override contexts at their common ancestor. Unrelated
   // workspace versions must not turn an exact runtime pin into nested-only rules.
   const runtimeLockfile = runtimePnpmLock(lockfile, packageJson, packageDir, localPackageArtifacts);
@@ -1629,8 +1627,10 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
   return lockfile;
 }
 
-function normalizeNpmRegistryIntegrities(lockfile: unknown) {
-  const pnpmIntegrities = readPnpmLockPackageIntegrities();
+function normalizeNpmRegistryIntegrities(
+  lockfile: unknown,
+  pnpmIntegrities: ReadonlyMap<string, ReadonlySet<string>>,
+) {
   for (const [lockPath, metadata] of Object.entries(recordAt(lockfile, "packages") ?? {})) {
     if (
       !isRecord(metadata) ||
@@ -1687,7 +1687,14 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     );
     const localPackageArtifacts = options.localPackageArtifacts ?? [];
     validateLocalPackageArtifacts(packageDir, localPackageArtifacts);
-    const installOverrides = readNpmLockOverrides(packageJson, packageDir, localPackageArtifacts);
+    // One source snapshot per generation; the next generation reads fresh policy.
+    const pnpmLock = readPnpmLock();
+    const installOverrides = readNpmLockOverrides(
+      packageJson,
+      packageDir,
+      localPackageArtifacts,
+      pnpmLock,
+    );
     const normalizedPackageJson = packageJsonForNpmLock(
       packageJson,
       installOverrides,
@@ -1718,7 +1725,8 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
       ),
     );
-    normalizeNpmRegistryIntegrities(generated);
+    const pnpmIntegrities = readPnpmLockPackageIntegrities(pnpmLock);
+    normalizeNpmRegistryIntegrities(generated, pnpmIntegrities);
     let npmBundleTarball: Buffer | undefined;
     const npmVersion = recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version;
     if (typeof npmVersion === "string" && NPM_BUNDLED_DEPENDENCY_POLICIES.has(npmVersion)) {
@@ -1729,7 +1737,13 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
       );
       npmBundleTarball = readFileSync(path.join(tempDir, `npm-${npmVersion}.tgz`));
     }
-    assertNpmLockMatchesPnpmLock(generated, localPackageArtifacts, npmBundleTarball);
+    assertNpmLockMatchesPnpmLock(
+      generated,
+      pnpmLock,
+      pnpmIntegrities,
+      localPackageArtifacts,
+      npmBundleTarball,
+    );
     return `${JSON.stringify(generated, null, 2)}\n`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -1741,7 +1755,7 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
 function verifiedNpmBundlePackages(
   packages: UnknownRecord,
   tarball: Buffer | undefined,
-  pnpmIntegrities: Map<string, Set<string>>,
+  pnpmIntegrities: ReadonlyMap<string, ReadonlySet<string>>,
 ) {
   const manifests = new Map<string, { name: string; version: string }>();
   if (!tarball) {
@@ -1809,7 +1823,7 @@ function verifiedNpmBundlePackages(
 function collectPnpmLockViolations(
   npmLock: unknown,
   pnpmLockPackages = readPnpmLockPackages(),
-  pnpmLockIntegrities = readPnpmLockPackageIntegrities(),
+  pnpmLockIntegrities: ReadonlyMap<string, ReadonlySet<string>> = readPnpmLockPackageIntegrities(),
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
   npmBundleTarball?: Buffer,
 ) {
@@ -1978,6 +1992,8 @@ function collectPnpmLockPlatformViolations(npmLock: unknown, pnpmLock = readPnpm
 
 function assertNpmLockMatchesPnpmLock(
   npmLock: unknown,
+  pnpmLock: unknown,
+  pnpmIntegrities: ReadonlyMap<string, ReadonlySet<string>>,
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
   npmBundleTarball?: Buffer,
 ) {
@@ -1998,12 +2014,12 @@ function assertNpmLockMatchesPnpmLock(
   }
   const violations = collectPnpmLockViolations(
     npmLock,
-    undefined,
-    undefined,
+    readPnpmLockPackages(pnpmLock),
+    pnpmIntegrities,
     localPackageArtifacts,
     npmBundleTarball,
   );
-  const platformViolations = collectPnpmLockPlatformViolations(npmLock);
+  const platformViolations = collectPnpmLockPlatformViolations(npmLock, pnpmLock);
   if (violations.length === 0 && platformViolations.length === 0) {
     return;
   }

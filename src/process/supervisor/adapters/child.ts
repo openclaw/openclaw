@@ -100,6 +100,8 @@ const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 type ChildAdapterInput = ProcessAdapterConstruction & {
   /** Retain a local tree owner independently of Gateway service markers. */
   ownProcessTree?: true;
+  /** A tree owner hands off descendants after the root exits normally. */
+  releaseOnRootExit?: true;
   terminateOnHostLoss?: true;
   /** Preserve an owner-materialized Windows shell invocation without parsing it again. */
   windowsShell?: true;
@@ -199,6 +201,7 @@ export async function createChildAdapter(
       stderrDestination: params.stderrDestination,
       stdoutConsumption: params.stdoutConsumption,
       terminateOnHostLoss: params.terminateOnHostLoss,
+      releaseOnRootExit: params.releaseOnRootExit,
     });
   }
 
@@ -207,7 +210,10 @@ export async function createChildAdapter(
   const useDetached = process.platform !== "win32";
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
-  using secretDelivery = prepareSecretInputStdio(stdio, params.secretInput);
+  // Readiness delivers the secret after stdin input and Windows Job readiness, both awaited;
+  // construction failures before that release the pipe here.
+  using secretOwner = new DisposableStack();
+  const secretDelivery = secretOwner.use(prepareSecretInputStdio(stdio, params.secretInput));
   if (params.ownedWorker !== undefined) {
     stdio.push("ipc");
   }
@@ -694,6 +700,7 @@ export async function createChildAdapter(
     params.onSpawnCleanup?.(adapter.waitForExtinction?.() ?? cleanup.promise);
   }
   launchGate.resolve();
+  const readyOwner = secretOwner.move();
   const ready = (async () => {
     try {
       if (windowsJob) {
@@ -731,7 +738,7 @@ export async function createChildAdapter(
       }
       throw error;
     }
-  })();
+  })().finally(() => readyOwner.dispose());
   void ready.catch(() => {});
   return { adapter, ready };
 }

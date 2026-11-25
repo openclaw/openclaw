@@ -44,8 +44,8 @@ function localSnapshot() {
 }
 
 describe("Cloud environments", () => {
-  it.each(["rejection", "reconnect"])(
-    "retains pool drafts across %s and retires stale feedback",
+  it.each(["rejection", "reconnect", "access loss"])(
+    "handles a pending pool save across %s without stale feedback",
     async (mode) => {
       const pending = createDeferred<unknown>();
       let hold = true;
@@ -58,8 +58,14 @@ describe("Cloud environments", () => {
       await configPatch(request);
       await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(true));
       expect(input(page, "Pool limit").value).toBe("6");
-      if (mode === "reconnect") {
-        harness.publish(false, client, null);
+      if (mode !== "rejection") {
+        if (mode === "access loss") {
+          harness.publish(true, client, gatewayHelloForMethods(methods, ["operator.read"]));
+          flush();
+          expect(input(page, "Pool limit").value).not.toBe("6");
+        } else {
+          harness.publish(false, client, null);
+        }
         harness.publish(true, client, gatewayHelloForMethods(methods));
         await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
         pending.reject(new Error("Synthetic save failure"));
@@ -82,6 +88,47 @@ describe("Cloud environments", () => {
     },
   );
 
+  it("keeps snapshot absence unknown after a pending or failed first image read", async () => {
+    const first = createDeferred<unknown>();
+    const retry = createDeferred<unknown>();
+    let reads = 0;
+    const { page, harness, client } = mountTestPage([...methods, "environments.prepare"], {
+      config: {
+        cloudWorkers: {
+          profiles: { "linux-build": machineProfile() },
+          projectProfiles: { "github.com/acme/app": "linux-build" },
+        },
+      },
+      response: (method) =>
+        method === "crabbox.images.list"
+          ? ++reads === 1
+            ? first.promise
+            : retry.promise
+          : undefined,
+    });
+    try {
+      await waitText(() => sheet(page), "github.com/acme/app");
+      expect
+        .soft(page.querySelector(".cloud-environments__row")?.textContent)
+        .not.toContain("Cold only");
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
+      expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+      expect.soft(button(sheet(page), "Rebuild").parentElement?.getAttribute("title")).toBeNull();
+      first.reject(new Error("Snapshot list unavailable"));
+      await waitText(() => page, "Snapshot list unavailable");
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
+      harness.publish(false, client, null);
+      harness.publish(true, client, gatewayHelloForMethods([...methods, "environments.prepare"]));
+      await waitForSolid(() => expect(reads).toBe(2));
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
+      retry.resolve({ ...snapshotListFixture(), images: [] });
+      await waitText(() => sheet(page), "Cold only");
+    } finally {
+      first.resolve(localSnapshot());
+      retry.resolve(localSnapshot());
+    }
+  });
+
   it("shows accepted inventory before images settle and retains details through a refresh", async () => {
     const inventory = createDeferred<unknown>();
     const images = createDeferred<unknown>();
@@ -102,6 +149,10 @@ describe("Cloud environments", () => {
       inventory.resolve({ environments: [buildEnvironmentFixture("failed")], profiles: [] });
       await waitText(() => sheet(page), "github.com/acme/app");
       expect(page.textContent).toContain("Advanced");
+      expect(page.querySelector(".cloud-environments__row")?.textContent).toContain(
+        "Needs attention",
+      );
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
       expect(button(sheet(page), "Rebuild").disabled).toBe(true);
       images.resolve(result);
       await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));

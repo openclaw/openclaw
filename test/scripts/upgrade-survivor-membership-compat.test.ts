@@ -85,7 +85,9 @@ function runRecovery(
   mode: string,
   receipt: "none" | "valid" | "wrong-run" | "missing-history" = "none",
   failAt = "",
+  resident = false,
 ) {
+  writeJson(join(root, "package.json"), { version: resident ? "2100.0.0" : "2100.1.0" });
   writeJson(join(root, "recovery-update.json"), {
     status: "ok",
     runId: "fixture-run",
@@ -109,7 +111,17 @@ function runRecovery(
       [
         "set -euo pipefail",
         recovery,
+        runner.slice(
+          runner.indexOf("read_installed_version()"),
+          runner.indexOf("\nstorage_preflight()"),
+        ),
+        runner.slice(
+          runner.indexOf("assert_survival()"),
+          runner.indexOf("\nprobe_gateway_endpoint()"),
+        ),
         "SCENARIO=base; UPDATE_RESTART_MODE=auto-auth; COMMAND_TIMEOUT=1; update_repair_required=0",
+        "baseline_version=2099.1.0; candidate_version=2100.0.0",
+        'package_root() { printf "%s" "$ARTIFACT_ROOT"; }',
         "restart_fixture_package=fixture.tgz; restart_fixture_version=2100.1.0",
         'phase() { printf "%s\\n" "$1" >> "$EVENTS"; shift; "$@"; }',
         "stop_update_restart_probe_gateway() { :; }",
@@ -117,12 +129,12 @@ function runRecovery(
         'install_update_restart_systemctl_shim() { printf "containment:%s\\n" "$1" >> "$EVENTS"; }',
         'run_update_restart_probe_gateway() { [ "$1" = start ]; }',
         'check_gateway_status() { [ "$FAIL_AT" != auth ]; }',
-        'update_candidate() { [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$FAIL_AT" != update ]; }',
+        'update_candidate() { [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$FAIL_AT" != update ] || return 1; if [ "$RESIDENT" = 1 ]; then last_update_restart_route=resident; fi; }',
         'openclaw_e2e_maybe_timeout() { shift; "$@"; }',
-        'openclaw() { [ "$*" = "update status --json" ]; cat "$ARTIFACT_ROOT/status.json"; }',
-        'node() { if [ "$1" = --input-type=module ]; then command node "$@"; else [ "$2" = assert-restart-serving-turn ] && [ "$FAIL_AT" != serving ]; fi; }',
-        'assert_survival() { [ "$survival_assert_stage" = post-inference ]; printf "survival\\n" >> "$EVENTS"; }',
+        'openclaw() { if [ "$*" = --version ] && [ "$RESIDENT" = 1 ]; then printf "OpenClaw 2100.1.0 (fixture)\\n"; else [ "$*" = "update status --json" ] && cat "$ARTIFACT_ROOT/status.json"; fi; }',
+        'node() { case "$1" in --input-type=module|-p) command node "$@" ;; *) case "$2" in assert-restart-serving-turn) [ "$FAIL_AT" != serving ] ;; assert-exec-approvals|assert-config) : ;; assert-state) [ "$OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE" = post-inference ] && printf "survival\\n" >> "$EVENTS" ;; *) return 1 ;; esac ;; esac; }',
         "repair_update_restart_auth",
+        'if [ "$RESIDENT" = 1 ]; then assert_survival; fi',
       ].join("\n"),
     ],
     {
@@ -131,6 +143,7 @@ function runRecovery(
       ARTIFACT_ROOT: root,
       EVENTS: events,
       FAIL_AT: failAt,
+      RESIDENT: resident ? "1" : "0",
       [flag]: mode,
     },
   );
@@ -150,6 +163,16 @@ function expectMode(fixture: ReturnType<typeof target>, mode: string, env?: Node
 }
 
 describe.skipIf(process.platform === "win32")("frozen managed membership contract", () => {
+  it("checks resident release identity through recovery and repeated survival", () => {
+    const f = target(true);
+    const run = runRecovery(f.root, "absent", "none", "", true);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.events.slice(-3)).toEqual(["assert-restart-serving-turn", "survival", "survival"]);
+    expect(JSON.parse(readFileSync(join(f.root, "package.json"), "utf8"))).toEqual({
+      version: "2100.0.0",
+    });
+  });
+
   it("uses the committed pre-warning containment contract", () => {
     const f = target(false);
     // A dirty working file is not a capability of the frozen commit.

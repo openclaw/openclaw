@@ -263,6 +263,9 @@ suite.define(() => {
             after: subscriptions,
           },
         );
+        const replacementSubscriptions = (
+          await gateway.getRequests("sessions.messages.subscribe", { key: sessionKey })
+        ).length;
         await gateway.resolveDeferred(
           "sessions.messages.subscribe",
           {
@@ -291,8 +294,13 @@ suite.define(() => {
           await gateway.deferNext("chat.startup");
           await gateway.resolveDeferred("chat.startup");
         }
-        const scopedRefill = await gateway.waitForRequest("chat.startup");
-        expect(scopedRefill.params).not.toHaveProperty("cursor");
+        // The authenticated owner refresh carries history in its subscription reply.
+        const scopedRefill = await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: sessionKey },
+          after: replacementSubscriptions,
+        });
+        expect(scopedRefill.params).toHaveProperty("initialHistory");
+        expect(scopedRefill.params).not.toHaveProperty("initialHistory.cursor");
         for (const text of ["Next question", "Next answer"]) {
           expect(await page.locator(".chat-thread").getByText(text, { exact: true }).count()).toBe(
             0,
@@ -304,7 +312,7 @@ suite.define(() => {
           page,
           otherMessages.map((entry) => entry.content),
         );
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.startup")).toEqual([]);
         return;
       }
       await expectTranscript(page, ["Saved question", "Saved answer"]);

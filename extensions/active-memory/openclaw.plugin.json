@@ -166,7 +166,7 @@
     },
     "agents": {
       "label": "Target Agents",
-      "help": "Advanced: explicit agent IDs that may use configured Active Memory recall. Agents with Remember across conversations enabled are automatically targeted for private-conversation transcript recall."
+      "help": "Advanced: explicit agent IDs that may use configured Active Memory recall. Agents with Remember across conversations enabled are automatically targeted for private chat recall."
     },
     "model": {
       "label": "Memory Model",
@@ -194,7 +194,7 @@
     },
     "timeoutMs": {
       "label": "Timeout (ms)",
-      "help": "Recall work budget on the main lane. Defaults to 15000 ms, or 45000 ms when the recall is eligible for CLI-backend dispatch on subscription-only claude-cli auth (CLI-backed recalls include process startup); API-key routes keep 15000 ms. Explicit values always win. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
+      "help": "Recall work budget on the main lane. Defaults to 15000 ms, or 45000 ms when the recall is eligible for CLI-backend dispatch on subscription-only claude-cli auth (CLI-backed recalls include process startup); API-key routes keep 15000 ms. Explicit values always win. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and chat history recovery."
     },
     "setupGraceTimeoutMs": {
       "label": "Setup Grace Timeout (ms)",
@@ -245,12 +245,12 @@
       "help": "How long to skip recall after the timeout limit is reached, in milliseconds. A timeout after the cooldown immediately renews the pause. Default: 60000 (1 minute)."
     },
     "persistTranscripts": {
-      "label": "Persist Transcripts",
-      "help": "Keep blocking memory sub-agent session transcripts on disk in a separate plugin-owned directory."
+      "label": "Save Chat History",
+      "help": "Keep blocking memory sub-agent chat history on disk in a separate plugin-owned directory."
     },
     "transcriptDir": {
-      "label": "Transcript Directory",
-      "help": "Relative artifact directory under the plugin-owned per-agent transcript directory in the OpenClaw state directory. The agent id is URI-encoded; the default subdirectory is active-memory."
+      "label": "Chat History Directory",
+      "help": "Relative artifact directory under the plugin-owned per-agent chat history directory in the OpenClaw state directory. The agent id is URI-encoded; the default subdirectory is active-memory."
     }
   },
   "recommendedPrompts": [

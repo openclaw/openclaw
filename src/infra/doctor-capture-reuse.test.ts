@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import type { DoctorMaintenanceParams } from "../commands/doctor-maintenance-types.js";
@@ -22,6 +23,7 @@ import * as discoveryWorker from "./update-candidate-state.inspection.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import * as backupReader from "./update-recovery-backup-reader.js";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -156,6 +158,29 @@ it("reuses a sealed standalone baseline only while the complete source is unchan
   expect(await f.capture(true), "explicit full integrity verification does not reuse").toHaveLength(
     3,
   );
+});
+
+it("captures declared SQLite sidecar roots through their database image and reuses it", async () => {
+  const f = await fixture();
+  // Mirrors memory-core's legacy index declarations: the database plus every sidecar suffix.
+  const legacy = path.join(f.stateDir, "memory", "main.sqlite");
+  await fs.mkdir(path.dirname(legacy));
+  {
+    using db = new DatabaseSync(legacy);
+    db.exec("CREATE TABLE chunks (id INTEGER PRIMARY KEY); INSERT INTO chunks VALUES (1)");
+  }
+  const sidecars = ["-wal", "-shm", "-journal"].map((suffix) => `${legacy}${suffix}`);
+  f.resources.push(
+    { path: legacy, kind: "file" },
+    ...sidecars.map((sidecar) => ({ path: sidecar, kind: "file" as const })),
+  );
+  const first = await f.capture();
+  expect(first).toHaveLength(1);
+  const { ref } = await f.capturedFile(legacy, true);
+  const manifest = parseUpdateRecoveryBackupManifest(await fs.readFile(ref.manifestPath, "utf8"));
+  expect(manifest.roots).toContain(legacy);
+  expect(manifest.roots.filter((root) => sidecars.includes(root))).toEqual([]);
+  expect(await f.capture(), "an unchanged sidecar declaration reuses the baseline").toEqual(first);
 });
 
 it("rejects an ineligible retained capture before verifying its payloads", async () => {
@@ -339,15 +364,51 @@ it.each(["selection", "discovery", "comparison"] as const)(
         return pending;
       });
     } else {
+      const preload = path.join(f.root, "interrupt-snapshot-allocation.mjs");
+      if (phase === "discovery") {
+        // Stop the real child between mkdir and native-token creation, rather than
+        // depending on signal delivery racing those adjacent filesystem calls.
+        await fs.writeFile(
+          preload,
+          `import fs from "node:fs";
+           import path from "node:path";
+           const allocated = (directory) => {
+             if (path.dirname(directory) !== process.env.XDG_CACHE_HOME ||
+                 !path.basename(directory).startsWith("openclaw-sqlite-readonly-v2-")) return;
+             fs.writeSync(2, ${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)} +
+               JSON.stringify({phase: "snapshot directory allocated", path: ${JSON.stringify(shared)}}) + "\\n");
+             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+           };
+           const mkdtemp = fs.mkdtempSync;
+           fs.mkdtempSync = (...args) => {
+             const directory = mkdtemp(...args);
+             allocated(directory);
+             return directory;
+           };
+           const mkdir = fs.mkdirSync;
+           fs.mkdirSync = (...args) => {
+             const result = mkdir(...args);
+             allocated(String(args[0]));
+             return result;
+           };`,
+        );
+      }
       const runWorker = discoveryWorker.runUpdateStateInspectionWorker;
       // Cancel the real child at progress, without replacing its work or settlement.
       vi.spyOn(discoveryWorker, "runUpdateStateInspectionWorker").mockImplementation((params) =>
         runWorker({
           ...params,
+          ...(phase === "discovery"
+            ? { sourceEnv: withRuntimePreload(params.sourceEnv, preload) }
+            : {}),
           onProgress: (progress) => {
             params.onProgress?.(progress);
             const mode = phase === "comparison" ? "database-backup" : "discover";
-            if (params.input.mode === mode && progress.path === shared) {
+            if (
+              params.input.mode === mode &&
+              progress.path === shared &&
+              (phase !== "discovery" || progress.phase === "snapshot directory allocated")
+            ) {
               staging = params.stagingRoot;
               controller.abort(cancellation);
             }

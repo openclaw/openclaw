@@ -9,8 +9,8 @@ import type {
 } from "../config/sessions/session-sharing-authority.types.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import type {
-  PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";

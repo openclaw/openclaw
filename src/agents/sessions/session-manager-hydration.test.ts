@@ -32,8 +32,10 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
+import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -85,6 +87,7 @@ it("shares physical text strings with active history across reloads without shar
       import { closeOpenClawAgentDatabaseByPathAsync } from ${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabase).href)};
       import { SessionManager } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.sessionManager).href)};
       const sessionManagerReadInitialContext = Symbol.for(${JSON.stringify(Symbol.keyFor(sessionManagerReadInitialContext))});
+      const readBranch = Symbol.for(${JSON.stringify(Symbol.keyFor(sessionManagerReadTranscriptBranch))});
       setFlagsFromString("--allow-natives-syntax");
       const same = new Function("a", "b", "return %IsSameHeapObject(a, b)");
       const control = Buffer.alloc(65536, 120).toString();
@@ -95,6 +98,10 @@ it("shares physical text strings with active history across reloads without shar
       const target = ${JSON.stringify(target)};
       const ids = ${JSON.stringify(ids)};
       const manager = await SessionManager.openAsync(target, undefined, { maxBytes: 1024 * 1024, maxEvents: 20 });
+      const sealed = manager[readBranch]().find((entry) => entry.id === ids[0]).message;
+      await manager.reloadPersistedTranscriptAsync();
+      assert.equal(manager[readBranch]().find((entry) => entry.id === ids[0]).message, sealed,
+        "reload detached unchanged sealed history before any SDK exposure");
       const context = await manager[sessionManagerReadInitialContext]();
       const active = context.messages.find((message) => message.role === "toolResult");
       assert(active);
@@ -502,6 +509,17 @@ it("keeps absent storage absent, lazy headers unpersisted, and malformed retarge
   await withOpenClawTestState({ label: "session-hydration-empty" }, async (state) => {
     const target = canonicalTarget(state, "empty");
     await expect(SessionManager.openAsync(target)).rejects.toThrow("storage");
+    expect(fs.existsSync(target.storePath)).toBe(false);
+    const consumeCohort = vi.fn();
+    await expect(
+      SessionManager[sessionManagerOpenTranscriptCohort](
+        target,
+        { maxBytes: 4096, maxEvents: 5 },
+        { sessionKey: target.sessionKey, entryIds: [] },
+        consumeCohort,
+      ),
+    ).rejects.toThrow("storage");
+    expect(consumeCohort).not.toHaveBeenCalled();
     expect(fs.existsSync(target.storePath)).toBe(false);
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const empty = await SessionManager.openAsync(target);

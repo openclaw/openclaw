@@ -54,7 +54,7 @@ it.each([
       provider: "example",
       model,
       purpose: "composer-prediction",
-      thinkLevel: "off",
+      thinkLevel: "low",
       answerTokenBudget: 160,
       timeoutMs: 8_000,
       prompt: params.conversation,

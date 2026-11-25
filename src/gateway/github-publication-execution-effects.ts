@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
 type GitHubPublicationMutableFacts = {
@@ -65,4 +67,18 @@ export function githubPublicationEffectFacts(
       };
   }
   throw new Error("Unknown GitHub publication effect transition.");
+}
+
+/** Decode the creation response before recording the observed PR effect. */
+export function readCreatedGitHubPullRequestUrl(stdout: string): string | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error("GitHub pull request creation returned invalid JSON", { cause: error });
+  }
+  if (!isRecord(value)) {
+    throw new Error("GitHub pull request creation returned an invalid response");
+  }
+  return readNonBlankString(value.html_url);
 }

@@ -169,6 +169,7 @@ it("verifies already-published registry bytes alongside qualified publishers in 
 it.each([
   "prepared",
   "candidate-prepared",
+  "independent-q-prepared",
   "retained-qualification",
   "retained-publisher",
   "retained-plan",
@@ -194,7 +195,9 @@ it.each([
   ["direct", "conflicting-bytes", "bytes differ"],
   ["direct", "archive-identity", "qualified artifact"],
   ["direct", "source", "approved package or source"],
-  ["candidate-prepared", "workflow", "approved package or source"],
+  ["candidate-prepared", "workflow", "immutable publication tuple"],
+  ["independent-q-prepared", "producer-sha", "immutable publication tuple"],
+  ["independent-q-prepared", "source-policy", "canonically bind"],
   ["candidate-prepared", "producer-sha", "immutable publication tuple"],
   ["candidate-prepared", "policy", "canonically bind"],
   ["candidate-prepared", "source-policy", "canonically bind"],

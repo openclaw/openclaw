@@ -177,17 +177,24 @@ export async function measureRestoredAnthropicSession(options: {
   };
   let wire = new Uint8Array();
   let payload: unknown;
-  let encodedAsBlob = false;
+  let encodedBodyKind = "";
   configureAiTransportHost({
     transformTransportMessages,
     immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
     buildModelFetch: () => async (_url, init) => {
-      assert(init?.body instanceof Blob || typeof init?.body === "string");
-      encodedAsBlob = init.body instanceof Blob;
+      assert(
+        init?.body instanceof Blob ||
+          typeof init?.body === "string" ||
+          init?.body instanceof Uint8Array,
+      );
+      encodedBodyKind =
+        typeof init.body === "string" ? "string" : init.body instanceof Blob ? "blob" : "bytes";
       wire =
         init.body instanceof Blob
           ? new Uint8Array(await init.body.arrayBuffer())
-          : new TextEncoder().encode(init.body);
+          : typeof init.body === "string"
+            ? new TextEncoder().encode(init.body)
+            : new Uint8Array(init.body);
       return new Response(responseBody, { headers: { "content-type": "text/event-stream" } });
     },
   });
@@ -272,7 +279,7 @@ export async function measureRestoredAnthropicSession(options: {
       secondRequestMessages: second.length,
       messageEncodes,
       wholePayloadEncodes,
-      encodedAsBlob,
+      encodedBodyKind,
       reusedFragments: wholePayloadEncodes ? 0 : second.length - messageEncodes,
     };
     // Warm imports/JIT on a separate history so the measured session starts cold.

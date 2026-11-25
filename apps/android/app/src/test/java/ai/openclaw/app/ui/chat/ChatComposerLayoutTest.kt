@@ -5674,7 +5674,7 @@ class ChatComposerLayoutTest {
       .performScrollTo()
       .assertIsDisplayed()
       .assertIsNotEnabled()
-    composeRule.onNodeWithText(nativeString("Full access requires operator.admin access."), useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("You don’t have permission to turn on Full access."), useUnmergedTree = true).assertIsDisplayed()
   }
 
   @Test

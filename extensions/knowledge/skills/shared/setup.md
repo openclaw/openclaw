@@ -11,9 +11,9 @@
 2. Call `knowledge_ontology({})`, then
    `knowledge_ontology({view: "definitions", name: "<type>"})` for each type you
    will write. Use the canonical type name and only its declared fields. Keep the
-   fingerprint for `expectedOntologyFingerprint`. Every write receipt returns the
-   current `ontologyFingerprint`; use the latest one for the next write instead
-   of calling status or ontology again.
+   fingerprint for writes whose input includes `expectedOntologyFingerprint`.
+   When a receipt returns `ontologyFingerprint`, use that value for the next
+   write that accepts it instead of calling status or ontology again.
 
 If a tool is missing or disabled, report the limitation. Never write vault files
 directly or change configuration to work around it.

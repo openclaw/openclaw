@@ -23,7 +23,6 @@ import {
 import { engineStringPosition } from "../infra/database-engine/scalar.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { projectTranscriptSession } from "./read.js";
 import {
   meetingTranscriptDb,
@@ -32,7 +31,7 @@ import {
   sessionFromRow,
 } from "./store-sqlite.js";
 import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
-import type { TranscriptsSummary } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptsSummary } from "./types.js";
 
 export class TranscriptLibraryError extends Error {
   constructor(

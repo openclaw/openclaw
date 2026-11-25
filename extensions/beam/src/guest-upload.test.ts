@@ -2,6 +2,7 @@ import { assert, expect, it } from "vitest";
 import type { BeamPublisher } from "../upload-operation-api.js";
 import { sampleUpload, staffReceipt } from "./beam-store.test-support.js";
 import { persistentBeamTestStore } from "./beam.test-support.js";
+import { packetDigest, snapshotBytes } from "./packet-state.js";
 import { BEAM_MAX_SESSIONS } from "./types.js";
 
 const id = (index: number) => index.toString(16).padStart(32, "0");
@@ -139,6 +140,60 @@ it("never lets a guest evict a full catalog, including concurrent last-slot crea
     expect(await keyedStore.entries()).toHaveLength(500);
     expect(await store.get(id(603))).toBeDefined();
     expect(await store.get(id(1))).toBeUndefined();
+  } finally {
+    await close();
+  }
+});
+
+it("evicts the same snapshot and image for staff writes through either protocol", async () => {
+  const { store, keyedStore, imageStore, close } = await persistentBeamTestStore();
+  const image = { digest: "fixture-digest", png: "fixture-bytes", name: "diagram.png" };
+  const publish = (index: number, includeImage: boolean) => {
+    const upload = sampleUpload({ beamId: id(index) });
+    const packetText = snapshotBytes(upload);
+    return store.putSnapshot(
+      {
+        upload,
+        packetText,
+        digest: packetDigest(packetText),
+        ifMatch: null,
+        requestId: id(index),
+        receivedAt: 1,
+        publisher: { kind: "staff" },
+        image: includeImage ? image : undefined,
+      },
+      () => {},
+    );
+  };
+  try {
+    // Seed both namespaces at their real limits. Only the session store chooses the victim.
+    const keys = Array.from({ length: BEAM_MAX_SESSIONS }, (_, i) => id(i));
+    const seedSnapshot = (key: string) =>
+      keyedStore.register(key, {
+        ...sampleUpload({ beamId: key }),
+        presentationDigest: image.digest,
+        createdAt: 1,
+        receivedAt: 1,
+      });
+    for (const key of keys.slice(0, 3)) {
+      await seedSnapshot(key);
+    }
+    await Promise.all(keys.slice(3).map(seedSnapshot));
+    await Promise.all(keys.toReversed().map((key) => imageStore.register(key, image)));
+
+    expect(await publish(500, true)).toMatchObject({ disposition: "applied" });
+    expect(await publish(501, false)).toMatchObject({ disposition: "applied" });
+    expect(await store.upload(sampleUpload({ beamId: id(502) }), staffReceipt(2))).toMatchObject({
+      applied: true,
+    });
+    for (const key of keys.slice(0, 3)) {
+      expect(await keyedStore.lookup(key)).toBeUndefined();
+      expect(await imageStore.lookup(key)).toBeUndefined();
+    }
+    expect(await keyedStore.entries()).toHaveLength(500);
+    expect(await imageStore.entries()).toHaveLength(498);
+    expect(await store.getScreenshot?.(id(499), image.digest)).toEqual(image);
+    expect(await store.getScreenshot?.(id(500), image.digest)).toEqual(image);
   } finally {
     await close();
   }

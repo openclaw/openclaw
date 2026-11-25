@@ -1,24 +1,26 @@
-import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { formatGitHubItemReference } from "../../../components/github-link-target.ts";
-import { orderSessionPullRequests } from "../../../lib/session-pull-request-presentation.ts";
+import {
+  orderSessionPullRequests,
+  type SessionDisplayPullRequest,
+} from "../../../lib/session-pull-request-presentation.ts";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 
 export type PullRequestRowEntry = {
   url: string;
   branch: string;
   reference: string;
-  details?: ControlUiSessionPullRequest;
+  request?: SessionDisplayPullRequest;
 };
 
 export function chatPullRequestRows(
   props: Pick<ChatPullRequestsProps, "pullRequests" | "publishedOnly" | "publication">,
 ): PullRequestRowEntry[] {
   const rows: PullRequestRowEntry[] = orderSessionPullRequests(props.pullRequests).map(
-    (details) => ({
-      url: details.url,
-      branch: details.branch,
-      reference: formatGitHubItemReference(details),
-      details,
+    (request) => ({
+      url: request.url,
+      branch: request.branch,
+      reference: formatGitHubItemReference(request),
+      request,
     }),
   );
   const receipt =

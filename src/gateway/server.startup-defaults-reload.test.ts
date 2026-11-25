@@ -66,7 +66,9 @@ it("preserves computed defaults from cold startup through a live config reload",
     const nextSourceConfig: OpenClawConfig = { ...sourceConfig, logging: { level: "warn" } };
     await state.writeConfig(nextSourceConfig);
     await expect.poll(() => getRuntimeConfig().logging?.level, { timeout: 30_000 }).toBe("warn");
-    await expect.poll(() => kernel.gatewayRequestContext.isConfigReloadSettled()).toBe(true);
+    await expect
+      .poll(() => kernel.gatewayRequestContext.isConfigReloadSettled(), { timeout: 30_000 })
+      .toBe(true);
     const reloadedConfig = getRuntimeConfig();
     expect.soft(kernel.gatewayRequestContext.getCommittedRuntimeConfig?.()).toBe(reloadedConfig);
     expect

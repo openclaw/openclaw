@@ -9,7 +9,7 @@ import type {
   GatewayIngressPrincipalRecovery,
 } from "../plugins/gateway-ingress.types.js";
 import { createOpenClawIdAuthority } from "./openclaw-id/authority.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import { captureGatewayIngressPersonPrincipal } from "./remote-ingress-principal-admission.js";
@@ -114,7 +114,7 @@ it("keeps the original app admission through recovery without revoking independe
     for (const invalid of corruptions) {
       grants.set("malformed", JSON.stringify(invalid));
       await expect(restore("malformed")).rejects.toMatchObject({
-        name: "GatewayOperatorRecoveryAuthorizationError",
+        name: "OperatorRefusalError",
       });
     }
     expect(
@@ -127,18 +127,18 @@ it("keeps the original app admission through recovery without revoking independe
     expect(original.signal.aborted).toBe(true);
     expect(original.assertCurrent).toThrow();
     await expect(restore()).rejects.toMatchObject({
-      name: "GatewayOperatorRecoveryAuthorizationError",
+      name: "OperatorRefusalError",
     });
 
     // Reapproving the same key is a new listing, not a revival of the old app approval.
     expect(await claw.authority.submit(await add(), "tunnel")).toMatchObject({ ok: true });
     await reloadAuthority();
     await expect(restore()).rejects.toMatchObject({
-      name: "GatewayOperatorRecoveryAuthorizationError",
+      name: "OperatorRefusalError",
     });
     setOpenClawIdTunnelPrincipalLookup(undefined);
     await expect(restore()).rejects.toMatchObject({
-      name: "GatewayOperatorRecoveryAuthorizationError",
+      name: "OperatorRefusalError",
     });
     const independent = await restore("independent");
     recovered.push(independent);

@@ -136,26 +136,40 @@ Each owned database can have a regular file named `<database>.seal` beside it,
 for example `openclaw.sqlite.seal`. The database admission owner writes this file
 after the final accepted writer settles, a `TRUNCATE` checkpoint completes, and
 the native database closes successfully. Failed or unfinished cleanup cannot
-publish a seal. The seal contains the admitted schema and integrity facts, a
+publish a seal. The Gateway owner-lease release seals only when no read still
+borrows the shared handle; a restart whose startup outlived its stop budget
+keeps that handle open, releases its lease, and the next startup validates
+instead. The seal contains the admitted schema and integrity facts, a
 schema identity, the time and kind of the accepted verification, and the final
 physical file metadata. A recovery-quick receipt remains distinct from a full
 verification. The seal is reconstructible verification metadata, not database state
 or a backup.
+
+Shutdown publishes seals during database close, before process exit. A slow close
+step's diagnostic grace does not skip later retirement: shutdown awaits its actual
+settlement, bounded by the process watchdog. A watchdog report of no pending steps
+does not establish successful close; a rejected step can leave later steps unrun.
 
 During shutdown, idle session-reader pools retire without their normal warm-cache
 delay. Accepted reads and writes settle through their existing owners before the
 last writer closes. A reader that fails to retire retains its cleanup custody;
 it cannot cause an incomplete checkpoint to be recorded as a clean close.
 
-Completed memory index schema receipts also survive a clean close. They remain
-scoped to the cache, FTS, and tokenizer settings that were validated, so an
-unchanged restart skips memory schema setup and the resulting agent schema
-refresh. Owner-controlled FTS and vector replacements republish that receipt
-after commit when they preserve the admitted table contracts. Rollback cannot
-publish a replacement receipt. Changed settings, other in-process DDL, or a
-missing or invalid seal take the ordinary memory schema admission path. An
-unclean shutdown leaves full verification to startup's background owner;
-ordinary current-schema admission remains bounded. Imported-row backfills still run.
+Completed memory index schema receipts remain valid across native closes in the
+same process, even if the restart seal is missing. They remain scoped to the
+physical database and the cache, FTS, and tokenizer settings that were validated.
+Changed settings, other in-process DDL, explicit revocation, or file replacement
+require ordinary memory schema admission. Owner-controlled FTS and vector
+replacements republish the receipt after commit when they preserve the admitted
+table contracts. Rollback cannot publish a replacement receipt.
+
+A fresh process must load a valid clean-close seal to reuse those completed
+receipts. A missing or invalid seal takes the ordinary memory schema admission
+path; an unchanged compatible seal avoids repeated memory schema setup and the
+resulting agent schema refresh. An unclean shutdown leaves full verification to
+startup's background owner; ordinary current-schema admission remains bounded.
+Imported-row backfills still run, and completed data repair is reused only for
+the same write receipt.
 
 At startup, admission accepts the seal only when its JSON parses, its short
 checksum matches, and all of the following match the current database: device,
@@ -299,6 +313,14 @@ native reader. SQLite's full check has no resumable cursor in the current bindin
 an interrupted check must restart from the beginning. Low process priority is not
 an I/O bandwidth limit; the bounded concurrency and inspection deadline do not
 provide page-level pacing or resumability.
+
+Background verification releases its own reader when a checkpoint is blocked and
+the WAL exceeds both twice the main database size and 64 MiB. The checkpoint
+owner publishes this byte-pressure fact; repeated blocked warnings alone do not
+cancel verification. Cancellation joins the native child and leaves verification
+inconclusive, without a seal or a corruption refusal. Foreground reads and writes
+continue. This reclaims a maintenance reader; it is not a WAL size cap and does
+not end user or external readers.
 
 This policy accepts the interval between bounded admission and a background
 corruption finding: previously untouched damaged pages can exist while ordinary
@@ -670,8 +692,12 @@ and ownership), the snapshot child checks the exact database's recorded Gateway
 or embedded-writer owner. A verified live process uses the existing online-backup
 owner in one read transaction while writes continue. Native SQLite may update SHM
 read marks; it does not change stored rows or the WAL. An absent, dead, or
-unverifiable owner retains the artifact-preserving copy path. Explicit inherited
-snapshots and offline maintenance/recovery remain byte-neutral. Snapshot failures
+unverifiable owner retains the artifact-preserving copy path. If a live writer
+moves a complete WAL family (main, WAL, and index present) through every copy
+attempt, that path takes one read transaction instead; only a live connection can
+keep checkpointing, so the index is current and its 96-byte commit header stays
+unchanged. Explicit inherited snapshots and offline maintenance/recovery remain
+byte-neutral whenever no writer is active. Snapshot failures
 remain errors with their original diagnostics; they never become empty inventory.
 Migration publication rechecks the current generation inside the same native
 write transaction that protects synchronous publication. Empty historical state
@@ -686,7 +712,10 @@ still use private snapshots. Neither optimization changes schemas, stored record
 retention, or update migrations.
 
 Live snapshots use SQLite's online-backup owner and a read transaction to pin
-committed pages while writers continue. Native readers may update existing SHM
+committed pages only during acquisition while writers continue. Integrity and
+caller validation inspect the raw private image before journal normalization,
+transforms, or compaction, so verification does not prolong the live read pin.
+The final published image is checked separately. Native readers may update existing SHM
 read marks, so artifact-preserving planning and Doctor scopes use raw copies
 instead. A WAL copy captures main first, then a bounded WAL prefix, and verifies
 both within the same pinned WAL generation. Appended frames are allowed; resets,
@@ -705,8 +734,8 @@ Verified snapshot publication retains the original image digest through an owned
 same-file transfer and verifies the final published bytes. Distinct physical copies
 also receive their own byte comparison before publication. Moving a verified
 snapshot into the original capture's payload directory preserves its digest without
-rehashing the rename. Source and output integrity checks, durable backup publication,
-and recovery ownership remain unchanged.
+rehashing the rename. Raw-image and output integrity checks, durable backup publication,
+and recovery ownership remain intact.
 Doctor's legacy transcript-label inspection uses stored navigation metadata to skip
 expanding compressed events outside user and assistant messages. A detected repair
 still reads the complete exact transcript and revalidates it before writing;
@@ -1207,8 +1236,8 @@ session validation once instead of reusing the original identity receipt.
 
 ## Planner statistics maintenance
 
-The shared-state writer maintains SQLite planner statistics once during its
-30-minute WAL maintenance pass, after a successful checkpoint. It uses
+Shared-state and agent writers maintain SQLite planner statistics once during
+each database's 30-minute WAL maintenance pass, after a successful checkpoint. They use
 `PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;` under the existing writer
 admission and transaction authority, with no busy wait. SQLite analyzes only
 tables with missing or stale statistics, including tables this maintenance
@@ -1219,14 +1248,21 @@ later periodic maintenance retries. Checkpoint-only ticks, database admission,
 opens, and ordinary writes do not analyze tables. Vacuum continuation units do
 not repeat the analysis. Shutdown joins accepted maintenance before native close.
 
+Default periodic WAL maintenance starts 30–60 minutes after each connection opens,
+then repeats every 30 minutes. The initial random offset spreads the first
+statistics refresh across databases instead of concentrating it after a restart.
+Checkpoint-only ticks and explicitly selected maintenance intervals keep their
+existing deadlines.
+
 The limit bounds sampling per index, not total work or elapsed time across the
 database. Statistics are SQLite-owned, derived data: application records,
 retention, and schema versions are unchanged. Updates and rollback require no
 migration. Existing read snapshots remain intact. Newly opened readers use the
 latest statistics; retained connections can keep older selectivity after later
-refreshes until their normal retirement. This policy does not add recurring
-analysis to agent databases; Doctor's stopped-writer same-version media repair
-uses the same bounded statistics primitive.
+refreshes until their normal retirement. Periodic agent maintenance covers growth
+even when session retention has deleted nothing. Bulk session deletion retains
+its separate bounded analysis to refresh estimates after shrinkage. Doctor's
+stopped-writer same-version media repair uses the same statistics primitive.
 Modern version migrations leave unrelated planner statistics unchanged.
 
 ## Historical import evidence

@@ -24,7 +24,7 @@ on:
       preflight_phase:
         type: choice
         default: all
-        options: [all, prepare]
+        options: [all, prepare, build-only]
       release_candidate_branch:
         type: string
         default: ""
