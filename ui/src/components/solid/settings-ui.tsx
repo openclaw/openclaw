@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { children, For, onSettled, Show } from "solid-js";
 import type { ControlUiSettingId } from "../../../../src/shared/control-ui-settings/index.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import type { ConfigSettingPath } from "../../lib/config-form-utils.ts";
+import type { ConfigSettingPath } from "../../lib/config-setting-id.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { PluginSettingId } from "../../plugins/plugin-setting-id.ts";

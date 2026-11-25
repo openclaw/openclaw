@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
-import { configSettingId, objectFormOfUnion } from "../lib/config-form-utils.ts";
+import { objectFormOfUnion } from "../lib/config-form-utils.ts";
+import { configSettingId } from "../lib/config-setting-id.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";

@@ -14,7 +14,8 @@ import { hintForPath, pathKey } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { configSettingId, type JsonSchema } from "../../lib/config-form-utils.ts";
+import { type JsonSchema } from "../../lib/config-form-utils.ts";
+import { configSettingId } from "../../lib/config-setting-id.ts";
 import type { ConfigSecretFields } from "../../lib/config/config-secret-fields.ts";
 import {
   currentConfigObject,

@@ -1,10 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import {
-  configSettingId,
-  configSettingTitleId,
-  copyWithPathPatch,
-} from "../lib/config-form-utils.ts";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
+import { configSettingId, configSettingTitleId } from "../lib/config-setting-id.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
   ConfigCollectionDraft,

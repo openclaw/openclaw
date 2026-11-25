@@ -2,8 +2,19 @@ import { CONTROL_UI_SETTING_ID_ALIASES } from "../../../src/shared/control-ui-se
 import { listen } from "./reactive/listener.ts";
 import { resolveScrollBehavior } from "./scroll-behavior.ts";
 
-/** Marks the setting a link brought the reader to; settings-controls.css draws the mark. */
+/** Marks the setting a link brought the reader to. */
 const SETTINGS_ARRIVAL_ATTRIBUTE = "data-settings-arrival";
+// The mark is inset because a settings group clips overflow. It is drawn inline rather than in
+// a stylesheet, which every Settings page would otherwise load for a rare arrival.
+const ARRIVAL_BAR = "inset 3px 0 0 color-mix(in srgb, var(--accent) 75%, transparent)";
+const ARRIVAL_WASH = "color-mix(in srgb, var(--accent) 11%, transparent)";
+const ARRIVAL_STYLES = [
+  "box-shadow",
+  "outline",
+  "background-color",
+  "margin-inline",
+  "padding-inline",
+];
 
 /** Frames a row holds its place before its scroll counts as finished. */
 const SETTLED_FRAMES = 4;
@@ -98,8 +109,13 @@ function arriveAtSettingsTarget(target: HTMLElement, onRead: () => void): () => 
   const view = target.ownerDocument.defaultView;
   let frame: number | undefined;
   let stopListening: Array<() => void> = [];
+  let wash: Animation | undefined;
   const clear = () => {
     target.removeAttribute(SETTINGS_ARRIVAL_ATTRIBUTE);
+    wash?.cancel();
+    for (const property of ARRIVAL_STYLES) {
+      target.style.removeProperty(property);
+    }
     for (const stop of stopListening) {
       stop();
     }
@@ -108,6 +124,28 @@ function arriveAtSettingsTarget(target: HTMLElement, onRead: () => void): () => 
   const mark = () => {
     frame = undefined;
     target.setAttribute(SETTINGS_ARRIVAL_ATTRIBUTE, "");
+    const style = target.style;
+    style.boxShadow = ARRIVAL_BAR;
+    style.outline = "none";
+    // A row flush with its container, such as in a channel detail, gets room for the bar.
+    if (view?.getComputedStyle(target).paddingInlineStart === "0px") {
+      style.marginInline = "calc(-1 * var(--space-3))";
+      style.paddingInline = "var(--space-3)";
+    }
+    // The wash fades while the bar stays; without motion the wash stays with the bar.
+    if (behavior === "smooth" && target.animate) {
+      wash = target.animate(
+        [
+          { backgroundColor: "transparent" },
+          { backgroundColor: ARRIVAL_WASH, offset: 0.12 },
+          { backgroundColor: ARRIVAL_WASH, offset: 0.45 },
+          { backgroundColor: "transparent" },
+        ],
+        { duration: 2400, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
+      );
+    } else {
+      style.backgroundColor = ARRIVAL_WASH;
+    }
     // Focus lands on the row, never inside its control: no key press can change the value.
     // A row that is a control itself, such as a disclosure's summary, already takes focus
     // and names itself.

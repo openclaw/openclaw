@@ -12,6 +12,9 @@ const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
 const SettingsSaveStatus = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSaveStatus",
 });
+const SettingsTargetArrival = lazy(() => import("../lib/reactive/settings-target-arrival.ts"), {
+  export: "SettingsTargetArrival",
+});
 export type SettingsSidebarFallbackProps = Pick<
   SettingsSidebarProps,
   | "presentation"
@@ -34,6 +37,21 @@ export function LazySettingsSaveStatus(
     <Errored fallback={null}>
       <Loading fallback={null}>
         <SettingsSaveStatus host={props.host} />
+      </Loading>
+    </Errored>
+  );
+}
+
+/** A link's arrival loads with Settings; it finds rows the page already drew when it mounts. */
+export function LazySettingsTargetArrival(
+  props: Parameters<
+    typeof import("../lib/reactive/settings-target-arrival.ts").SettingsTargetArrival
+  >[0],
+) {
+  return (
+    <Errored fallback={null}>
+      <Loading fallback={null}>
+        <SettingsTargetArrival router={props.router} host={props.host} />
       </Loading>
     </Errored>
   );

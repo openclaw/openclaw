@@ -3,14 +3,13 @@ import { describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import {
-  configSettingId,
-  configSettingSection,
   hintForPath,
   localizedHintForPath,
   removePathValue,
   pruneEmptyConfigForm,
   setPathValue,
 } from "./config-form-utils.ts";
+import { configSettingId, configSettingSection } from "./config-setting-id.ts";
 
 describe("configSettingId", () => {
   it("uses the config path, which is unique for every setting", () => {

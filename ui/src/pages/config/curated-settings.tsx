@@ -13,7 +13,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { configSettingId } from "../../lib/config-form-utils.ts";
+import { configSettingId } from "../../lib/config-setting-id.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import {

@@ -4,6 +4,7 @@ import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
 import {
   LazySettingsSaveStatus,
+  LazySettingsTargetArrival,
   LazySettingsSidebar,
 } from "../components/settings-sidebar-lazy.tsx";
 import { GatewayConnectionView } from "../components/solid/gateway-connection-view.tsx";
@@ -22,7 +23,6 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { SettingsTargetArrival } from "../lib/reactive/settings-target-arrival.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
@@ -514,7 +514,7 @@ export function ApplicationShell(props: {
               notFoundRecoveryReady={view().gatewayConnected}
             />
             <Show when={view().settingsTakeover}>
-              <SettingsTargetArrival
+              <LazySettingsTargetArrival
                 router={view().runtime.router}
                 host={() => props.host.routeOutlet}
               />

@@ -51,24 +51,6 @@ describe("config route data", () => {
     });
   });
 
-  it("opens the section and advanced group that hold a linked setting", () => {
-    expect(
-      configRouteData({
-        pathname: "/settings/infrastructure",
-        search: "",
-        hash: "#gateway.publicOrigin",
-      }),
-    ).toMatchObject({ section: "gateway", advanced: true, targetBlockId: "gateway.publicOrigin" });
-    // An explicit section wins, and a block anchor reveals nothing by itself.
-    expect(
-      configRouteData({
-        pathname: "/settings/infrastructure",
-        search: "?section=browser",
-        hash: "#config-section-browser",
-      }),
-    ).toMatchObject({ section: "browser", advanced: false });
-  });
-
   it("carries the hub tab a settings-search destination asks for", () => {
     expect(
       configRouteData({

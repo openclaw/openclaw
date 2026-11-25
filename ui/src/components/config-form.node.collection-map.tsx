@@ -1,11 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import {
-  configSettingId,
-  configSettingTitleId,
-  containsRedactedSentinel,
-  copyWithPathPatch,
-} from "../lib/config-form-utils.ts";
+import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
+import { configSettingId, configSettingTitleId } from "../lib/config-setting-id.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
 import { createProgressiveList } from "../lib/reactive/progressive-list.ts";

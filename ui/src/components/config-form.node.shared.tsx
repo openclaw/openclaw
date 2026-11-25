@@ -2,11 +2,8 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
-import {
-  configSettingId,
-  configSettingTitleId,
-  REDACTED_SENTINEL,
-} from "../lib/config-form-utils.ts";
+import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
+import { configSettingId, configSettingTitleId } from "../lib/config-setting-id.ts";
 import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 import { getLocale, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createNativeDraft } from "../lib/reactive/native-draft.ts";
