@@ -802,6 +802,9 @@ class NodeRuntime internal constructor(
   private val gatewayLifecycleIntentLock = Any()
   private val gatewayLifecycleIntentSeq = AtomicLong()
 
+  // Guarded by gatewayLifecycleIntentLock; cleared by the next Gateway intent or backgrounding.
+  private var foregroundDiscoveryReconnectId: String? = null
+
   // Retain one pending request while reconciliation awaits cleanup; equal desired values can
   // still require new work after a synchronous retirement or lifecycle invalidation.
   // Initialize before NetworkMonitor can request work during construction.
@@ -3009,6 +3012,7 @@ class NodeRuntime internal constructor(
         gateways.collect { list ->
           seedLastDiscoveredGateway(list)
           autoConnectIfNeeded()
+          reconnectAfterForegroundDiscovery()
         }
       }
       scope.launch(Dispatchers.Default) {
@@ -3108,7 +3112,10 @@ class NodeRuntime internal constructor(
       synchronized(gatewayLifecycleIntentLock) {
         (_isForeground.value != value).also {
           _isForeground.value = value
-          if (!value) disconnectSecondaryGatewayConnections()
+          if (!value) {
+            foregroundDiscoveryReconnectId = null
+            disconnectSecondaryGatewayConnections()
+          }
           requestBackgroundGatewayReconciliation()
         }
       }
@@ -3126,7 +3133,7 @@ class NodeRuntime internal constructor(
     if (value) {
       refreshNodePermissionSurface()
       refreshVoiceWakeCapabilitySurfaceIfChanged()
-      reconnectPreferredGatewayOnForeground()
+      reconnectPreferredGatewayOnForeground(waitForDiscovery = visibilityChanged)
       scope.launch {
         refreshExecApprovalsFromGateway()
       }
@@ -3491,7 +3498,7 @@ class NodeRuntime internal constructor(
     launchConnect(endpoint, explicitAuth = null, intent = operation)
   }
 
-  private fun reconnectPreferredGatewayOnForeground() =
+  private fun reconnectPreferredGatewayOnForeground(waitForDiscovery: Boolean) =
     synchronized(gatewayLifecycleIntentLock) {
       if (preferredGatewayReconnectSuppressed || gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null) return@synchronized
       if (connectedEndpoint != null) {
@@ -3504,9 +3511,37 @@ class NodeRuntime internal constructor(
           refreshGatewayConnection()
         }
       } else {
-        resolvePreferredGatewayEndpoint()?.let { connect(it) }
+        val preferred = prefs.gatewayRegistry.activeEntry() ?: return@synchronized
+        val endpoint = resolveRegistryEndpoint(preferred)
+        if (endpoint != null) {
+          connect(endpoint)
+        } else if (waitForDiscovery && _isForeground.value &&
+          gatewayConnectionOperation == null && gatewayLifecycleIntentSeq.get() != 0L &&
+          preferred.kind == GatewayRegistryEntryKind.DISCOVERED
+        ) {
+          // A resumed scan clears cached addresses before the first fresh advertisement arrives.
+          // Cold startup (intent 0) already has its own discovery-driven connection attempt.
+          foregroundDiscoveryReconnectId = preferred.stableId
+        }
       }
     }
+
+  private fun reconnectAfterForegroundDiscovery() {
+    synchronized(gatewayLifecycleIntentLock) {
+      val pendingId = foregroundDiscoveryReconnectId ?: return
+      val preferred = prefs.gatewayRegistry.activeEntry()
+      if (!_isForeground.value || preferredGatewayReconnectSuppressed || preferred == null || preferred.stableId != pendingId ||
+        gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null || connectedEndpoint != null ||
+        gatewayConnectionOperation != null
+      ) {
+        foregroundDiscoveryReconnectId = null
+        return
+      }
+      val endpoint = resolveRegistryEndpoint(preferred) ?: return
+      foregroundDiscoveryReconnectId = null
+      connect(endpoint)
+    }
+  }
 
   /**
    * Reconnect a live node only when Android authority changed since its last connect.
@@ -4481,6 +4516,7 @@ class NodeRuntime internal constructor(
   }
 
   private fun advanceGatewayRequestIntent(): Long {
+    foregroundDiscoveryReconnectId = null
     gatewayConnectionOperation
       ?.takeUnless { acceptedConnectAttempt.value?.operation === it }
       ?.let { finishGatewayConnectionOperation(it) }

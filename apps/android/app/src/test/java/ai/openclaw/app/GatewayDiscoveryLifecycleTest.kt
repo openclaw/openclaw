@@ -9,6 +9,7 @@ import ai.openclaw.app.gateway.ServiceInfoNsdShadow
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -16,8 +17,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,6 +34,90 @@ import java.net.InetAddress
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [ServiceInfoNsdShadow::class])
 class GatewayDiscoveryLifecycleTest {
+  @Test
+  fun foregroundReconnectWaitsForAFreshDiscoveredAddress() = verifyReconnectAfterRediscovery(stopBeforeRediscovery = false)
+
+  @Test
+  fun stopRetiresForegroundReconnectBeforeRediscovery() = verifyReconnectAfterRediscovery(stopBeforeRediscovery = true)
+
+  private fun verifyReconnectAfterRediscovery(stopBeforeRediscovery: Boolean) =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val storage = app.getSharedPreferences("discovery-reconnect-$stopBeforeRediscovery", Context.MODE_PRIVATE)
+      val prefs = SecurePrefs(app, securePrefsOverride = storage)
+      val primaryId = "_openclaw-gw._tcp.|local.|Primary"
+      prefs.gatewayRegistry.upsert(GatewayRegistryEntry(primaryId, GatewayRegistryEntryKind.DISCOVERED, "Primary"))
+      prefs.gatewayRegistry.setActive(primaryId)
+      prefs.saveGatewayTlsFingerprint(primaryId, "aa".repeat(32))
+      val nsd = shadowOf(app.getSystemService(NsdManager::class.java)) as ServiceInfoNsdShadow
+      val firstProbeStarted = CompletableDeferred<Unit>()
+      val firstProbe = CompletableDeferred<GatewayTlsProbeResult>()
+      val runtime =
+        NodeRuntime(
+          app,
+          prefs,
+          initialForeground = false,
+          tlsFingerprintProbe = { host, _ ->
+            if (host == "127.0.0.1") {
+              firstProbeStarted.complete(Unit)
+              firstProbe.await()
+            } else {
+              GatewayTlsProbeResult(fingerprintSha256 = "bb".repeat(32), systemTrusted = true)
+            }
+          },
+        )
+
+      fun listeners() = nsd.getDiscoveryListeners("_openclaw-gw._tcp.").orEmpty()
+
+      fun advertise(host: String) {
+        val service =
+          NsdServiceInfo().apply {
+            serviceName = "Primary"
+            serviceType = "_openclaw-gw._tcp."
+            port = 18789
+            hostAddresses = listOf(InetAddress.getByName(host))
+            setAttribute("gatewayTls", "1")
+          }
+        listeners().single().onServiceFound(service)
+        nsd.registrations.last().deliver { onServiceUpdated(service) }
+      }
+
+      try {
+        // An interrupted TLS probe leaves no accepted address. A normal network error with
+        // a valid saved pin would instead fall back to a pinned connection attempt.
+        advertise("127.0.0.1")
+        withTimeout(5_000) { firstProbeStarted.await() }
+        assertTrue(runtime.gatewayConnectionHandoff.value.pending)
+        firstProbe.cancel()
+        val settled = withTimeout(5_000) { runtime.gatewayConnectionHandoff.first { !it.pending } }
+        assertNull(settled.focusedStableId)
+        runtime.setForeground(false)
+        assertEquals(0, listeners().size)
+        runtime.setForeground(true)
+        assertEquals(1, listeners().size)
+        assertTrue(runtime.gateways.value.isEmpty())
+
+        if (stopBeforeRediscovery) runtime.disconnect()
+        advertise("127.0.0.2")
+        assertEquals(
+          "127.0.0.2",
+          runtime.gateways.value
+            .single()
+            .host,
+        )
+        if (stopBeforeRediscovery) {
+          assertNull(withTimeoutOrNull(500) { runtime.pendingGatewayTrust.first { it != null } })
+        } else {
+          val prompt = withTimeout(5_000) { runtime.pendingGatewayTrust.first { it != null } }!!
+          assertEquals(primaryId, prompt.endpoint.stableId)
+          assertEquals("127.0.0.2", prompt.endpoint.host)
+        }
+      } finally {
+        runtime.setForeground(false)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
   @Test
   fun discoveryServesRecoveryAndVisibleConsumersWithoutRevivingStaleEndpoints() =
     runBlocking {
