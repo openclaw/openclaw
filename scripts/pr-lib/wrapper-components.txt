@@ -374,6 +374,7 @@ src/agents/tool-display-call.ts
 src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
+src/agents/tool-search-protocol.ts
 src/agents/tools/automations-tool-name.ts
 src/agents/utility-model-setting.ts
 src/agents/utils/git.ts
@@ -2536,6 +2537,7 @@ src/config/sessions/session-accessor.sqlite-participant-projection.ts
 src/config/sessions/session-actor-entry-publication.worker.ts
 src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
+src/config/sessions/session-participation-source.ts
 packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts

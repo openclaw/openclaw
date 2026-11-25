@@ -112,18 +112,14 @@ Agent questions appear above the message box. You can keep writing or queue a
 follow-up while the question is expanded; sending a chat message does not answer
 the question. Use its choices and **Submit**, or **Skip**, to resolve it.
 
-## Edit a failed message
+<a id="edit-a-failed-message" />
 
-If a model rejects a message (for example, because it contains too many images),
-choose **Edit message** on the latest failed reply. Confirm the rewind to return
-that message and its attachments to the composer, remove or change attachments,
-and send again. The rejected turn remains in a saved conversation branch, but is
-excluded from the active model context.
+## Rewind and fork
 
-Send or clear any existing composer draft first; recovery never replaces it.
-Editing requires permission to rewind the conversation and is unavailable while
-a run is active. **Try again** still continues the existing conversation without
-replaying the original message, because earlier actions may already have run.
+To edit a failed message, hover over your original message and choose **Rewind**,
+or right-click it and choose **Rewind to here**. Confirm to load the message and
+its attachments into the composer. Rewind replaces any draft already there.
+
 Rewinding does not undo external actions. Rewinding and switching branches keep
 the existing conversation and move only its active branch, so neither copies the
 transcript. Both still read its history navigation, and a selection far from the
@@ -522,7 +518,9 @@ with a reported zero exit code still shows **failed** in its summary and expande
 result. Nonzero exit codes remain visible as diagnostics; captured output and
 reported exit facts are unchanged.
 
-Failed replies show **Try again** at the right of the heading. A compact
+Failed replies show one action at the right of the heading: **Open Models** when
+the provider rejects the saved key or reports a billing problem, **Start a new
+session** when the harness needs an update, and **Try again** otherwise. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
 stays visible on touch devices. **Details** appears only when the diagnostic
 contains more than the visible summary. To change models, use the model picker

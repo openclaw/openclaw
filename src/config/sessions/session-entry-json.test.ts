@@ -7,6 +7,29 @@ import { projectPublicSessionEntry } from "./session-entry-projection.js";
 import { preserveGenerationPrivateFields } from "./session-entry-public-patch.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 
+describe("persisted delegated operator sources", () => {
+  const read = (delegatedOperatorSource: unknown) =>
+    parseCanonicalSqliteSessionEntry({
+      entry_json: JSON.stringify({ sessionId: "child", updatedAt: 1, delegatedOperatorSource }),
+    });
+  it.each([
+    null,
+    {},
+    { kind: "gateway" },
+    { kind: "unavailable", extra: true },
+    { kind: "unavailable", reason: "invalid" },
+  ])("rejects malformed bindings before typed metadata (%#)", (value) => {
+    expect(() => read(value)).toThrow(/operator recovery source/);
+  });
+  it("retains explicit unavailable bindings and leaves ordinary entries unbound", () => {
+    expect(read({ kind: "unavailable", reason: "no-source" })?.delegatedOperatorSource).toEqual({
+      kind: "unavailable",
+      reason: "no-source",
+    });
+    expect(read(undefined)).not.toHaveProperty("delegatedOperatorSource");
+  });
+});
+
 describe("canonical session numeric metadata", () => {
   it.each([
     { field: "spawnDepth", value: "2" },

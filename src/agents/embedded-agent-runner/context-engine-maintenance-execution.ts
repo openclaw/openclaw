@@ -17,6 +17,10 @@ import { SessionManager } from "../sessions/session-manager.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 import { log } from "./logger.js";
+import {
+  attachCompactionAccountingRecorder,
+  readCompactionAccountingRecorder,
+} from "./run/compaction-accounting-bridge.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 function buildContextEngineMaintenanceRuntimeContext(
@@ -25,7 +29,7 @@ function buildContextEngineMaintenanceRuntimeContext(
   },
 ): ContextEngineRuntimeContext {
   const { abortSignal, assertActive } = params;
-  return {
+  const runtimeContext = {
     ...params.runtimeContext,
     ...resolveContextEngineCapabilities({
       config: params.config,
@@ -95,7 +99,12 @@ function buildContextEngineMaintenanceRuntimeContext(
       }
       return result;
     },
-  };
+  } satisfies ContextEngineRuntimeContext;
+  const source = readCompactionAccountingRecorder(params.runtimeContext);
+  if (source) {
+    attachCompactionAccountingRecorder(runtimeContext, source);
+  }
+  return runtimeContext;
 }
 
 export async function executeContextEngineMaintenance(

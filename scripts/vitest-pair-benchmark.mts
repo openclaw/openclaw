@@ -50,6 +50,14 @@ function parseArgs(argv: string[]) {
   };
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const mode = values.get("mode");
+  if (mode === "node-cache-diagnostics") {
+    for (const name of values.keys()) {
+      if (!["mode", "output", "run-attempt"].includes(name)) {
+        throw new Error(`--${name} is not supported in node-cache-diagnostics mode`);
+      }
+    }
+    return { mode, outputDir: required("output"), runAttempt: required("run-attempt") } as const;
+  }
   if (mode !== undefined && mode !== "node-compile-cache") {
     throw new Error(`unknown benchmark mode: ${mode}`);
   }
@@ -89,7 +97,11 @@ function parseArgs(argv: string[]) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.mode === "node-compile-cache") {
+if (options.mode === "node-cache-diagnostics") {
+  assertSingleWorkflowAttempt(options.runAttempt);
+  const { qualifyNodeCacheDiagnostics } = await import("./lib/node-compile-cache-diagnostics.mts");
+  await qualifyNodeCacheDiagnostics(options.outputDir);
+} else if (options.mode === "node-compile-cache") {
   assertSingleWorkflowAttempt(options.runAttempt);
   await runNodeCacheBenchmark({
     ...options,

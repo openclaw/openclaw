@@ -81,6 +81,7 @@ type MutationRunParams<Result> = {
   validationOwner?: SqliteMutationWorkerValidationOwner;
   diagnostics?: SqliteSessionReclamationDiagnostics;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
+  onResultReceived?: (result: Result) => void;
 };
 const log = createSubsystemLogger("session-sqlite");
 const memoryPressure = channel("openclaw.memory.critical");
@@ -358,6 +359,7 @@ export class SqliteReclamationWorker {
             exitCode = code;
           },
           withWriteAdmission: params.withWriteAdmission,
+          onResultReceived: params.onResultReceived,
           validationOwner: params.validationOwner,
           validationPath: this.options.path,
           readOpeningValidation: params.readOpeningValidation,

@@ -153,56 +153,77 @@ export type ModelCatalogAuthLabels = ReadonlyMap<
   { all: ModelCatalogAuthLabel; apiKey: ModelCatalogAuthLabel }
 >;
 
-/** Captures display labels from the generation's auth store and workspace environment. */
-export function prepareModelCatalogAuthLabels(params: {
+type LabelCaptureParams = {
   config: OpenClawConfig;
   agentDir: string;
-  authStorePath: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
   providers: Iterable<string>;
-}): ModelCatalogAuthLabels {
+};
+
+/** The full-catalog worker already owns the display path alongside its credential rows. */
+export function prepareModelCatalogAuthLabels(
+  params: LabelCaptureParams & { authStorePath: string },
+): ModelCatalogAuthLabels {
+  return captureModelCatalogAuthLabels(params, (capture) => capture(params.authStorePath));
+}
+
+/** A profile source is needed only when the captured generation can display a profile. */
+export function captureModelCatalogAuthLabels<T>(
+  params: LabelCaptureParams,
+  withProfileSource: (capture: (path: string) => ModelCatalogAuthLabels) => T,
+): ModelCatalogAuthLabels | T {
   const labels = new Map<string, { all: ModelCatalogAuthLabel; apiKey: ModelCatalogAuthLabel }>();
+  const providers = new Set([...params.providers].map(normalizeProviderId));
+  if (providers.size === 0) {
+    return labels;
+  }
   const profileIds = new Set([
     ...Object.keys(params.store.profiles),
     ...Object.keys(params.config.auth?.profiles ?? {}),
     ...Object.values(params.store.order ?? {}).flat(),
     ...Object.values(params.config.auth?.order ?? {}).flat(),
   ]);
-  const providers = new Set([...params.providers].map(normalizeProviderId));
-  if (providers.size === 0) {
+  const fallback = (provider: string) =>
+    captureFallbackLabel(provider, params.config, params.agentDir, params.env, params.workspaceDir);
+  if (profileIds.size === 0) {
+    for (const provider of providers) {
+      const label = fallback(provider);
+      labels.set(provider, { all: label, apiKey: label });
+    }
     return labels;
   }
-  const profileLabels = [...profileIds].map(
-    (id) => [id, captureProfileLabel(id, params.config, params.store)] as const,
-  );
-  for (const provider of providers) {
-    const all = {
-      provider,
-      profiles: Object.fromEntries(
-        profileLabels.map(([id, label]) => [
-          id,
-          !params.store.profiles[id] &&
-          isConfiguredAwsSdkAuthProfileForProvider({ cfg: params.config, provider, profileId: id })
-            ? `${id}=aws-sdk`
-            : label,
-        ]),
-      ),
-      source: `auth profile store: ${shortenHomePath(params.authStorePath)}`,
-      fallback: captureFallbackLabel(
+  return withProfileSource((pathname) => {
+    const profileLabels = [...profileIds].map(
+      (id) => [id, captureProfileLabel(id, params.config, params.store)] as const,
+    );
+    const source = `auth profile store: ${shortenHomePath(pathname)}`;
+    for (const provider of providers) {
+      const all = {
         provider,
-        params.config,
-        params.agentDir,
-        params.env,
-        params.workspaceDir,
-      ),
-      apiKeyOnly: false,
-    };
-    labels.set(provider, {
-      all,
-      apiKey: provider === "openai" ? { ...all, apiKeyOnly: true } : all,
-    });
-  }
-  return labels;
+        profiles: Object.fromEntries(
+          profileLabels.map(([id, label]) => [
+            id,
+            !params.store.profiles[id] &&
+            isConfiguredAwsSdkAuthProfileForProvider({
+              cfg: params.config,
+              provider,
+              profileId: id,
+            })
+              ? `${id}=aws-sdk`
+              : label,
+          ]),
+        ),
+        source,
+        fallback: fallback(provider),
+        apiKeyOnly: false,
+      };
+      labels.set(provider, {
+        all,
+        apiKey: provider === "openai" ? { ...all, apiKeyOnly: true } : all,
+      });
+    }
+    return labels;
+  });
 }
