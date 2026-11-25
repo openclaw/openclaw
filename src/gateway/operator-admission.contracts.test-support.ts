@@ -98,6 +98,7 @@ export type Scenario =
   | "secondary-email-removed"
   | "profile-deleted"
   | "owner-revoked-before-start"
+  | "listed-linked-owner"
   | "plugin-resume-mismatch"
   | "plugin-authorize-denied"
   | "plugin-authorize-allowed"

@@ -83,14 +83,16 @@ async function prepareNativeSend(fixture: AdmissionFixture, c: AdmissionCase) {
   c.profileId = profile.id;
   await setCanonicalUserProfileRole(profile.id, "operator");
   const mixed = c.scenario === "mixed-owner-group";
-  if (mixed || c.scenario === "owner-revoked-before-start") {
+  const linked = c.scenario === "listed-linked-owner";
+  if (mixed || linked || c.scenario === "owner-revoked-before-start") {
     const next = structuredClone(fixture.config);
     next.commands = {
       ...next.commands,
       ownerAllowFrom: [`discord:${mixed ? "323456789012345678" : "123456789012345678"}`],
     };
     await fixture.publish(next, c.signal);
-  } else {
+  }
+  if (linked || !(mixed || c.scenario === "owner-revoked-before-start")) {
     await changeCanonicalUserChannelIdentity("link", profile.id, {
       channelId: "discord",
       accountId: "default",
