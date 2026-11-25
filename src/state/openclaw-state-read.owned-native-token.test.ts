@@ -51,11 +51,14 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
           return { suffix, absent: true };
         }
         const bytes = fs.readFileSync(file);
+        const hash = createHash("sha256");
+        // Native page sizing and backup can update SQLite's WAL read marks.
         if (suffix === "-shm") {
-          // Snapshot preparation and backup may update SQLite's WAL read marks.
-          bytes.fill(0, 100, 120);
+          hash.update(bytes.subarray(0, 100)).update(bytes.subarray(120));
+        } else {
+          hash.update(bytes);
         }
-        return { suffix, sha256: createHash("sha256").update(bytes).digest("hex") };
+        return { suffix, size: bytes.length, sha256: hash.digest("hex") };
       });
     const before = family();
     const shmBefore = fs.readFileSync(`${database.path}-shm`);
@@ -104,7 +107,7 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
       expect(after.filter((entry) => entry.suffix !== "-shm")).toEqual(
         before.filter((entry) => entry.suffix !== "-shm"),
       );
-      // The retained native backup may update only SQLite's documented WAL read marks.
+      // Both native reads may update only SQLite's documented WAL read marks.
       expect(shmAfter.length).toBe(shmBefore.length);
       expect(shmAfter.subarray(0, 100)).toEqual(shmBefore.subarray(0, 100));
       expect(shmAfter.subarray(120)).toEqual(shmBefore.subarray(120));

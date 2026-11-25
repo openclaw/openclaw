@@ -175,7 +175,7 @@ extension OpenClawChatViewModel {
 
     func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
         if mode == .full, !self.composerCapabilityCatalog.canSelectFullPermission {
-            return String(localized: "Full permission requires operator.admin access.")
+            return String(localized: "You don’t have permission to turn on Full access.")
         }
         return self.composerPermissionMutationDisabledReason
     }

@@ -438,6 +438,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.requireWorkspaceOnly !== true && configuredMcpSurface
         ? await materializeStaticMcpToolsForHarnessRun({
             ...mcpOptions,
+            storeAdmission: params.hostCapabilities,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             agentId: sessionAgentId,
@@ -463,6 +464,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? undefined
         : await materializeRequesterScopedMcpToolsForHarnessRun({
             ...mcpOptions,
+            storeAdmission: params.hostCapabilities,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             // Requester servers cannot consume stored grants; Allow Always would re-prompt.

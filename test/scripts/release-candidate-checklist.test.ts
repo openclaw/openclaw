@@ -25,6 +25,7 @@ import { stripLeadingPackageManagerSeparator } from "../../scripts/lib/arg-utils
 import { parsePluginReleaseSelection } from "../../scripts/lib/plugin-npm-release.ts";
 import {
   candidateCumulativeShippedPullRequests,
+  inspectCandidateChangelogRange,
   loadCandidateShippedBaseline,
   validateCandidateChangelogProvenance,
   validateCandidateReleaseNotes,
@@ -311,7 +312,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       );
       const outputDir = join(root, "evidence");
       const loader = pathToFileURL(join(toolingRoot, "scripts/tsx.mjs")).href;
-      const invoke = (npmRun: string) =>
+      const invoke = (npmRun: string, skipParallels = true, output = outputDir) =>
         spawnSync(
           process.execPath,
           [
@@ -328,16 +329,21 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
               "plugin-sdk-api-acknowledgement": "deadbeef",
               "skip-dispatch": true,
               "skip-local-generated-check": true,
-              "skip-parallels": true,
+              "skip-parallels": skipParallels,
               "skip-telegram": true,
-              "output-dir": outputDir,
+              "output-dir": output,
             }),
           ],
           {
             cwd: root,
             encoding: "utf8",
             timeout: 20_000,
-            env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+            env: {
+              ...process.env,
+              HOME: root,
+              OPENAI_API_KEY: "",
+              PATH: `${bin}:${process.env.PATH}`,
+            },
           },
         );
       const rejected = invoke("222");
@@ -357,6 +363,24 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       const changed = invoke("444");
       expect(changed.stderr).toContain("state mismatch for npmPreflightRunId");
       expect(JSON.parse(readFileSync(statePath, "utf8")).npmPreflightRunId).toBe("111");
+
+      // Keep discovery in the real preflight but provide deterministic host tools,
+      // and replace login startup so it cannot overwrite this fixture's PATH.
+      for (const [name, command] of Object.entries({
+        bash: 'exec /bin/bash -c "$2"',
+        prlctl: `printf '%s\n' '[{"name":"fixture-guest"}]'`,
+        prlsrvctl: "exit 1",
+        ifconfig: "exit 1",
+      })) {
+        writeFileSync(join(bin, name), `#!/bin/sh\n${command}\n`, { mode: 0o755 });
+      }
+      const localOutput = join(root, "local-evidence");
+      const blocked = invoke("111", false, localOutput);
+      expect(blocked.status).toBe(1);
+      expect(blocked.stderr).toContain("failed to detect Parallels host IP");
+      expect(blocked.stderr).toContain("--skip-parallels");
+      expect(blocked.stderr).not.toContain("fixture artifact download reached");
+      expect(existsSync(localOutput)).toBe(false);
     },
   );
 
@@ -723,6 +747,12 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
             }),
         "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
+      const recordedTarget = git("rev-parse", "HEAD");
+      if (tagPublished) {
+        writeFileSync(join(targetRoot, "product.ts"), "export const enabled = true;");
+        git("add", "product.ts");
+        git("commit", "-m", "fix: ship a product change after notes freeze");
+      }
       const targetSha = git("rev-parse", "HEAD");
       // The target ref is authoritative even if another checkout has prepared a newer pin.
       if (pin !== null) {
@@ -945,6 +975,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
           parsePluginReleaseSelection,
           isRecord,
           requireString: (value: string) => value,
+          inspectCandidateChangelogRange,
           validateCandidateChangelog: () => {
             if (changelogFailure) {
               throw new Error("candidate changelog rejected");
@@ -952,7 +983,12 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
             return {
               releaseNotesText: "Fixture notes.",
               releaseNotesCheck: { status: "passed" },
-              releaseNotesProvenance: { status: "passed", shippedBaselines: [] },
+              releaseNotesProvenance: {
+                status: "passed",
+                target: recordedTarget,
+                shippedBaselines: [],
+              },
+              changelogPaths: ["CHANGELOG.md"],
             };
           },
           runLocalGeneratedCheckIfNeeded: generatedChecks,
@@ -1230,10 +1266,23 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       expect(waitedRuns).toEqual(["111"]);
       // A pushed tag is read from GitHub instead of reported as still planned.
       expect(preflight.mock.calls[0]?.[1]).toMatchObject({ allowPlannedTag: !tagPublished });
-      expect(
-        readFileSync(join(options.outputDir, "release-candidate-evidence.md"), "utf8"),
-      ).toContain(tag);
+      const markdown = readFileSync(
+        join(options.outputDir, "release-candidate-evidence.md"),
+        "utf8",
+      );
+      expect(markdown).toContain(tag);
       const output = log.mock.calls.map(([line]) => line).join("\n");
+      if (tagPublished) {
+        const compareUrl = `https://github.com/openclaw/openclaw/compare/${recordedTarget}...${targetSha}`;
+        expect(evidence.releaseNotesProvenance.candidateRange).toMatchObject({
+          candidate: targetSha,
+          commitCount: 1,
+          latestChangeOutsideChangelog: targetSha,
+          compareUrl,
+        });
+        expect(markdown).toContain(compareUrl);
+        expect(output).toContain(compareUrl);
+      }
       if (workflowSha) {
         // A resumed candidate keeps its recorded tag even though a newer tag exists at the SHA.
         const reusedToolingTag =

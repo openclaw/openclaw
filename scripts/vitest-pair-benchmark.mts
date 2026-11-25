@@ -24,6 +24,9 @@ function parseArgs(argv: string[]) {
     "mode",
     "workload",
     "seed",
+    "definition",
+    "harness-sha",
+    "timeout-ms",
   ]);
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
@@ -50,6 +53,49 @@ function parseArgs(argv: string[]) {
   };
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const mode = values.get("mode");
+  if (mode === "node-cache-disabled-control" || mode === "node-cache-workload-qualification") {
+    for (const name of values.keys()) {
+      if (
+        ![
+          "mode",
+          "definition",
+          "workload",
+          "output",
+          "scratch",
+          "pnpm-bin",
+          "harness-sha",
+          "timeout-ms",
+          "run-attempt",
+        ].includes(name)
+      ) {
+        throw new Error(`--${name} is not supported in ${mode} mode`);
+      }
+    }
+    return {
+      mode,
+      definitionPath: required("definition"),
+      workloadDir: required("workload"),
+      outputDir: required("output"),
+      scratchDir: required("scratch"),
+      pnpmBin: required("pnpm-bin"),
+      harnessSha: required("harness-sha"),
+      timeoutMs: Number(required("timeout-ms")),
+      runAttempt: required("run-attempt"),
+    } as const;
+  }
+  for (const name of ["definition", "harness-sha", "timeout-ms"]) {
+    if (values.has(name)) {
+      throw new Error(`--${name} requires a node-cache control mode`);
+    }
+  }
+  if (mode === "node-cache-diagnostics") {
+    for (const name of values.keys()) {
+      if (!["mode", "output", "run-attempt"].includes(name)) {
+        throw new Error(`--${name} is not supported in node-cache-diagnostics mode`);
+      }
+    }
+    return { mode, outputDir: required("output"), runAttempt: required("run-attempt") } as const;
+  }
   if (mode !== undefined && mode !== "node-compile-cache") {
     throw new Error(`unknown benchmark mode: ${mode}`);
   }
@@ -89,13 +135,27 @@ function parseArgs(argv: string[]) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.mode === "node-compile-cache") {
+if (
+  options.mode === "node-cache-disabled-control" ||
+  options.mode === "node-cache-workload-qualification"
+) {
+  assertSingleWorkflowAttempt(options.runAttempt);
+  const { qualifyNodeCacheDisabledControl, qualifyNodeCacheWorkload } =
+    await import("./lib/node-cache-disabled-control.mts");
+  await (options.mode === "node-cache-disabled-control"
+    ? qualifyNodeCacheDisabledControl(options)
+    : qualifyNodeCacheWorkload(options));
+} else if (options.mode === "node-cache-diagnostics") {
+  assertSingleWorkflowAttempt(options.runAttempt);
+  const { qualifyNodeCacheDiagnostics } = await import("./lib/node-compile-cache-diagnostics.mts");
+  await qualifyNodeCacheDiagnostics(options.outputDir);
+} else if (options.mode === "node-compile-cache") {
   assertSingleWorkflowAttempt(options.runAttempt);
   await runNodeCacheBenchmark({
     ...options,
     manifest: validateNodeCacheManifest(JSON.parse(readFileSync(options.manifestPath, "utf8"))),
   });
-} else {
+} else if (options.mode === "source-pair") {
   await withTerminalManifest(options.outputDir, async () => {
     assertSingleWorkflowAttempt(options.runAttempt);
     await runVitestPairBenchmark({
@@ -109,4 +169,6 @@ if (options.mode === "node-compile-cache") {
       scratchDir: options.scratchDir,
     });
   });
+} else {
+  throw new Error("Unhandled benchmark mode");
 }

@@ -8,12 +8,14 @@ import {
   operatorScopeSatisfied,
 } from "../shared/operator-scope-compat.js";
 import {
+  decideChannelOwnerPrincipal,
   decideOperatorAdmission,
   decideTurnGrant,
   prepareOperatorAdmission,
   type OperatorAdmissionContext,
 } from "./operator-admission.js";
 import {
+  captureChannelOperatorRunAuthority,
   prepareGatewayOperatorRunAuthority,
   type GatewayOperatorRunAdmissionInput,
   type PreparedGatewayOperatorRunAuthority,
@@ -31,7 +33,6 @@ export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
   /** Only Gateway recovery reauthenticates a Control UI profile. */
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  controlUiAdmin: boolean;
   automationAdmin: boolean;
   release: () => void;
 };
@@ -107,11 +108,23 @@ async function admitQueuedSource(
 ): Promise<RestoredGatewayOperatorAuthority> {
   params.assertCurrent();
   const captured = decodeQueuedOperatorRecoverySource(params.source);
-  const capturedFacts =
-    captured.kind === "unavailable" && params.liveAuthority
-      ? ({ kind: "live", authority: params.liveAuthority } as const)
-      : captured;
-  if (capturedFacts.kind === "unavailable") {
+  // Same-process work keeps its live facts; a saved channel owner is admitted again from config.
+  let live =
+    captured.kind === "unavailable" || captured.kind === "channel-owner"
+      ? params.liveAuthority
+      : undefined;
+  if (!live && captured.kind === "channel-owner") {
+    const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
+    const principal = decideChannelOwnerPrincipal(getConfig(), captured.sender);
+    if (!principal) {
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "This sender is no longer in commands.ownerAllowFrom, so its saved work cannot run. Send a new message.",
+      );
+    }
+    live = captureChannelOperatorRunAuthority({ ...principal, getRuntimeConfig: getConfig });
+  }
+  const capturedFacts = live ? ({ kind: "live", authority: live } as const) : captured;
+  if (capturedFacts.kind === "unavailable" || capturedFacts.kind === "channel-owner") {
     throw new Error("Queued operator authority cannot be recovered; submit a new request.");
   }
   const facts = { ...capturedFacts, agentId: params.agentId };

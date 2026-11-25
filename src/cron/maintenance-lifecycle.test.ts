@@ -99,7 +99,7 @@ beforeEach(() => {
   mocks.keepWarm.mockReset().mockResolvedValue(Infinity);
   promptCacheKeepWarmState.candidates.clear();
   setRuntimeConfigSnapshot({});
-  vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
+  vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
   clock = createGatewaySchedulerClock();
   gatewayWork.resetGatewayWorkAdmission();
   recordAgentDatabaseAdmissions([]);
@@ -119,7 +119,7 @@ it.each([false, true])(
   "does not load disabled keep-warm at startup or on transcript wakes, pressure=%s",
   async (lowMemory) => {
     setRuntimeConfigSnapshot({ agents: { defaults: { promptCacheKeepWarm: false } } });
-    vi.mocked(hostMemory.isConstrainedProcessLowOnMemory).mockReturnValue(lowMemory);
+    vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(lowMemory);
     start();
     await clock.advanceBy(5_000);
     await vi.dynamicImportSettled();
@@ -138,7 +138,7 @@ it.each([false, true])(
     expect(scheduler.nextWakeAtMs).toBe(lowMemory ? 245_000 : null);
 
     // Re-enable through the real config publisher, without another transcript change.
-    vi.mocked(hostMemory.isConstrainedProcessLowOnMemory).mockReturnValue(false);
+    vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(false);
     setRuntimeConfigSnapshot({});
     await clock.advanceBy(4_999);
     expect(mocks.keepWarm).not.toHaveBeenCalled();
@@ -149,7 +149,7 @@ it.each([false, true])(
 );
 
 it("defers the enabled keep-warm import until memory pressure clears without a busy wake", async () => {
-  vi.mocked(hostMemory.isConstrainedProcessLowOnMemory).mockReturnValue(true);
+  vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(true);
   start();
   await clock.advanceBy(5_000);
   await vi.dynamicImportSettled();
@@ -158,7 +158,7 @@ it("defers the enabled keep-warm import until memory pressure clears without a b
   expect(scheduler.nextWakeAtMs).toBe(65_000);
   await clock.advanceBy(60_000);
   expect(scheduler.nextWakeAtMs).toBe(125_000);
-  vi.mocked(hostMemory.isConstrainedProcessLowOnMemory).mockReturnValue(false);
+  vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(false);
   await clock.advanceBy(59_999);
   expect(mocks.keepWarm).not.toHaveBeenCalled();
   await clock.advanceBy(1);

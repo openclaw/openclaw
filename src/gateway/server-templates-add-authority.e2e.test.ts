@@ -335,7 +335,12 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       const revoked = await makeFixture(kind, "revoked");
       setRemoteFixtures([allowed, revoked]);
       const policyPath = state.path("bundled-policy.cjs");
-      await fs.writeFile(policyPath, "// Synthetic external operator policy.\n", { mode: 0o700 });
+      // Exercise real policy-path admission without relying on the runner's Node toolcache.
+      await fs.writeFile(
+        policyPath,
+        `#!${process.execPath}\nthrow new Error("Expected the mocked policy transport");\n`,
+        { mode: 0o700 },
+      );
       let armed = false;
       let skillPreflight: string | undefined;
       const finalPolicySources: string[] = [];
@@ -457,7 +462,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         security: {
           installPolicy: {
             enabled: true,
-            exec: { source: "exec", command: process.execPath, args: [policyPath] },
+            exec: { source: "exec", command: policyPath },
           },
         },
       });

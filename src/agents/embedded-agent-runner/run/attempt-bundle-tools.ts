@@ -162,6 +162,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpAcquisition = bundleMcpEnabled
     ? await acquireSessionMcpRuntime({
         ...mcpConfig,
+        storeAdmission:
+          !params.attempt.sessionManager && params.attempt.sessionPersistence !== "detached"
+            ? params.attempt.admittedRunContext.operationalRunInstance
+            : undefined,
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
         agentId: params.setup.sessionAgentId,

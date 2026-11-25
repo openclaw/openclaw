@@ -12,7 +12,7 @@ import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
 import { projectHealthSummary } from "./health/presentation.js";
 import type { HealthSummary } from "./health/types.js";
-import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
 import { SerializedGatewayFrame } from "./serialized-json.js";
 import {
@@ -342,10 +342,14 @@ export function createGatewayBroadcaster(params: {
         event === "question.requested" || event === "question.resolved"
           ? opts?.questionRecipient
           : undefined;
-      const ownRunQuestion =
-        questionRecipient !== undefined &&
-        !operatorScopeSatisfied(QUESTIONS_SCOPE, c.connect.scopes ?? []);
-      if (!hasEventScope(c, event, explicitPluginScope, ownRunQuestion, hasSessionReadContext)) {
+      const approvalRecipient = isTargeted ? opts?.participationApprovalRecipient : undefined;
+      if (
+        !hasEventScope(c, event, explicitPluginScope, {
+          ownRunQuestion: questionRecipient !== undefined,
+          hasSessionReadContext,
+          participationApprovalRecipient: approvalRecipient,
+        })
+      ) {
         continue;
       }
       if (
@@ -670,6 +674,9 @@ export function createGatewayBroadcaster(params: {
           code: 4001,
           message: "gateway policy changed",
         });
+        continue;
+      }
+      if (approvalRecipient && !isCurrent(() => approvalRecipient(c))) {
         continue;
       }
       clientSeq.set(c, nextSeq);

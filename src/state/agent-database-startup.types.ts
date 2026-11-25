@@ -61,7 +61,7 @@ export type PendingAgentDatabaseRecovery = {
 
 export type PreparedSchemaHeader = Pick<
   AgentSchemaInspection,
-  "version" | "writerAppVersion" | "agentSchemaMeta"
+  "version" | "minReader" | "writerAppVersion" | "agentSchemaMeta"
 >;
 export type PreparedSchemaHeaders = {
   statePath: string;

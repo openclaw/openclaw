@@ -129,16 +129,16 @@ class AgentDatabaseStartupAdmission {
       headers: new Map(),
     };
     this.preparedSchemaHeaders = prepared;
-    return (pathname: string) =>
-      ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
-        if (
-          !this.stopped &&
-          this.preparedSchemaHeaders === prepared &&
-          version === OPENCLAW_AGENT_SCHEMA_VERSION
-        ) {
-          prepared.headers.set(pathname, { version, writerAppVersion, agentSchemaMeta });
-        }
-      };
+    return (pathname: string) => (header: PreparedSchemaHeader) => {
+      if (
+        !this.stopped &&
+        this.preparedSchemaHeaders === prepared &&
+        header.version >= OPENCLAW_AGENT_SCHEMA_VERSION &&
+        (header.minReader ?? header.version) <= OPENCLAW_AGENT_SCHEMA_VERSION
+      ) {
+        prepared.headers.set(pathname, header);
+      }
+    };
   }
 
   takePreparedSchemaHeaders(env: NodeJS.ProcessEnv) {
@@ -148,7 +148,9 @@ class AgentDatabaseStartupAdmission {
       const header = prepared?.headers.get(pathname);
       return !this.stopped &&
         prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
-        header?.version === supportedVersion
+        header !== undefined &&
+        header.version >= supportedVersion &&
+        (header.minReader ?? header.version) <= supportedVersion
         ? header
         : undefined;
     };

@@ -37,10 +37,7 @@ function parse(spec: string, marketplace?: string) {
     .option("--marketplace <source>")
     .action(() => {});
   command.parse([spec, ...(marketplace ? ["--marketplace", marketplace] : [])], { from: "user" });
-  return resolvePluginInstallPreactionRequest({
-    actionCommand: command,
-    commandPath: ["plugins", "install"],
-  });
+  return resolvePluginInstallPreactionRequest(command);
 }
 
 it.each([

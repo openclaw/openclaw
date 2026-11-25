@@ -284,10 +284,8 @@ describe("agent stream approval through the automation tool", () => {
         });
         const listed = await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "list" });
         expect(JSON.stringify(listed)).toContain(stored.id);
-        expect(JSON.stringify(listed)).not.toContain(operatorJob.id);
-        await expect(
-          tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: operatorJob.id }),
-        ).rejects.toThrow(/not found/);
+        // An owner's turn manages every automation, whichever client the owner used.
+        expect(JSON.stringify(listed)).toContain(operatorJob.id);
         const disabled = await updateJob(stored.id, {
           name: "Renamed log watcher",
           enabled: false,
