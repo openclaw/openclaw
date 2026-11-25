@@ -529,10 +529,16 @@ describe("Node compile-cache benchmark contract", () => {
           TSX_DISABLE_CACHE: "poison",
           NODE_OPTIONS: "--bad-option",
           NODE_DEBUG_NATIVE: "COMPILE_CACHE",
+          COREPACK_ENABLE_NETWORK: "1",
+          npm_config_offline: "false",
+          pnpm_config_manage_package_manager_versions: "true",
         },
         { kind, nodeCache: path.join(root, "active-node") },
       );
       const keys = [
+        "COREPACK_ENABLE_NETWORK",
+        "npm_config_offline",
+        "pnpm_config_manage_package_manager_versions",
         "NODE_DISABLE_COMPILE_CACHE",
         "NODE_COMPILE_CACHE",
         "OPENCLAW_VITEST_RUNTIME",
@@ -555,6 +561,9 @@ describe("Node compile-cache benchmark contract", () => {
         timeoutMs: 10_000,
       });
       expect(JSON.parse(readFileSync(path.join(root, "env.json"), "utf8"))).toEqual({
+        COREPACK_ENABLE_NETWORK: "0",
+        npm_config_offline: "true",
+        pnpm_config_manage_package_manager_versions: "false",
         NODE_DISABLE_COMPILE_CACHE: kind === "disabled" ? "1" : null,
         NODE_COMPILE_CACHE: path.join(root, "active-node"),
         OPENCLAW_VITEST_RUNTIME: "node",
@@ -741,7 +750,7 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     const script = [
       'import { existsSync, mkdirSync, writeFileSync } from "node:fs";',
       'import assert from "node:assert/strict";',
-      'for (const [key, value] of Object.entries({ CI: "1", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0" })) assert.equal(process.env[key], value);',
+      'for (const [key, value] of Object.entries({ CI: "1", COREPACK_ENABLE_NETWORK: "0", npm_config_offline: "true", pnpm_config_manage_package_manager_versions: "false", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0" })) assert.equal(process.env[key], value);',
       "assert.equal(process.env.TSX_DISABLE_CACHE, undefined);",
       'assert.ok(process.argv.includes("--no-cache"));',
       'assert.ok(process.argv.includes("--no-fsModuleCache"));',
@@ -1094,6 +1103,9 @@ describe("Vitest pair benchmark", () => {
       version: "12.1.0",
     });
     expect(env.npm_execpath).toBe(pinned);
+    expect(env.COREPACK_ENABLE_NETWORK).toBeUndefined();
+    expect(env.npm_config_offline).toBeUndefined();
+    expect(env.pnpm_config_manage_package_manager_versions).toBeUndefined();
     expect(env.COREPACK_HOME).toBe(path.join(cacheRoot, "corepack"));
     expect(readFileSync(marker, "utf8")).toBe("pinned\npinned\n");
   });

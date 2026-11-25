@@ -245,6 +245,9 @@ export function buildBenchmarkCommandEnv(
     NODE_COMPILE_CACHE: treatment?.nodeCache ?? path.join(cacheRoot, "node-compile"),
     ...(treatment
       ? {
+          COREPACK_ENABLE_NETWORK: "0",
+          npm_config_offline: "true",
+          pnpm_config_manage_package_manager_versions: "false",
           OPENCLAW_VITEST_RUNTIME: "node",
           OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
           OPENCLAW_VITEST_WORKER_CACHE: "0",
