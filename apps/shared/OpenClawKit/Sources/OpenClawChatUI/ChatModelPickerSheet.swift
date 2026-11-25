@@ -47,6 +47,10 @@ struct ChatModelPickerSheet: View {
         .accessibilityIdentifier("chat-model-picker")
         .presentationDetents([.medium, .large], selection: self.$detent)
         .presentationDragIndicator(.visible)
+        // Below full height iOS draws the sheet as glass, which lets the composer's red button tint it
+        // and turns the grouped rows gray. One opaque grouped background, as on the Pages sheet, keeps the
+        // sheet and its rows the same at every height.
+        .presentationBackground(Color(uiColor: .systemGroupedBackground))
         // A medium sheet would sit under the keyboard; searching takes the full height.
         .onChange(of: self.isSearching) { _, searching in
             if searching { self.detent = .large }
