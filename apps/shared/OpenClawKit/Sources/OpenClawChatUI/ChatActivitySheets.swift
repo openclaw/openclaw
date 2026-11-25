@@ -414,6 +414,7 @@ private struct ChatActivityChildRow: View {
     let viewModel: OpenClawChatViewModel
     let child: ChatActivityChild
     @State private var transcript: ChatActivityChildTranscript?
+    @State private var settled = false
 
     var body: some View {
         NavigationLink(value: self.child.key) {
@@ -426,17 +427,20 @@ private struct ChatActivityChildRow: View {
                     .font(OpenClawChatTypography.settingsFootnote)
                     .foregroundStyle(ChatActivityChildFacts
                         .isProblem(self.child) ? Color(uiColor: .systemRed) : .secondary)
-                // The order holds the row's height while it loads: a line of the same size, empty.
-                Text(verbatim: self.transcript?.order ?? " ")
-                    .font(OpenClawChatTypography.settingsFootnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2, reservesSpace: true)
+                // The order holds the row's height while it loads; a row whose order never came gives the space back.
+                if !self.settled || self.transcript?.order != nil {
+                    Text(verbatim: self.transcript?.order ?? " ")
+                        .font(OpenClawChatTypography.settingsFootnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2, reservesSpace: true)
+                }
             }
             .padding(.vertical, 2)
         }
         .accessibilityIdentifier("chat-activity-child-\(self.child.key)")
         .task(id: self.child.key) {
             self.transcript = try? await self.viewModel.loadActivityChildTranscript(sessionKey: self.child.key)
+            self.settled = true
         }
     }
 }
