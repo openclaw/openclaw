@@ -67,7 +67,7 @@ struct ChatReplyMenuPreview: View {
 
     /// The reply's prose without its fenced blocks (code, diagrams) and heading marks; a reply that
     /// is only a fenced block keeps it.
-    static func prose(_ text: String) -> String {
+    nonisolated static func prose(_ text: String) -> String {
         var lines: [Substring] = []
         var inFence = false
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
