@@ -10,7 +10,6 @@ import type { FollowupRequest } from "../subagents/completion/session-followup-c
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   prepareGatewayToolCallerAssertion,
 } from "./gateway-caller-context.js";
@@ -114,12 +113,12 @@ export async function dispatchSessionsSendFollowup(
     requesterSessionKey: string;
     requesterAgentId: string;
     requesterTurnRunId?: string;
-    targetSession?: AgentStepSession;
+    targetSession?: AgentStepSession & { label?: string };
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
 ) {
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const caller = getGatewayToolCallerIdentity();
+  const instance = caller?.operationalRunInstance;
   const completionChild = options.watch
     ? getLatestLiveSubagentRunByChildSessionKey(
         params.sessionStoreTarget.canonicalKey,
@@ -171,10 +170,7 @@ export async function dispatchSessionsSendFollowup(
           targetSessionKey: params.sessionStoreTarget.canonicalKey,
         })
       : undefined;
-  const assertCurrent = () => {
-    assertCallerCurrent?.();
-    request?.custody.assertCurrent();
-  };
+  const assertCurrent = () => request?.custody.assertCurrent();
   const admission = registryTurn
     ? openChildFollowupAdmission(assertCurrent, params.assertDispatchCurrent)
     : undefined;
@@ -196,11 +192,9 @@ export async function dispatchSessionsSendFollowup(
     if (start.ok && registryTurn) {
       const { registerSubagentRun, adoptSubagentRunForRequesterTurn } =
         await import("../subagents/registry/subagent-registry.js");
-      // Acceptance already owns the input; retained custody owns recording its result obligation.
-      const assertCompletionCurrent = () =>
-        request ? request.custody.assertCurrent() : assertCurrent();
       const claim = async () => {
-        assertCompletionCurrent();
+        // Acceptance already owns the input; retained custody owns recording its result obligation.
+        assertCurrent();
         const childSessionKey = start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey;
         let accepted: AcceptedSessionSpawn | undefined;
         if (start.targetDisposition === "steered") {
@@ -218,7 +212,7 @@ export async function dispatchSessionsSendFollowup(
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: registryTurn,
               requesterRunInstance: instance,
-              assertCurrent: assertCompletionCurrent,
+              assertCurrent,
             });
           }
           if (!accepted) {
@@ -230,6 +224,7 @@ export async function dispatchSessionsSendFollowup(
           await registerSubagentRun(
             {
               runId: start.runId,
+              gatewayContextResolver: caller?.gatewayContextResolver,
               childSessionKey,
               sessionEntry: options.targetSession,
               childAgentId: params.sessionStoreTarget.agentId,
@@ -239,6 +234,8 @@ export async function dispatchSessionsSendFollowup(
               requesterTurnRunId: registryTurn,
               requesterOrigin: replyContext.requesterOrigin,
               task: options.message,
+              // The completion receipt names the child as its session does.
+              label: options.targetSession?.label,
               cleanup: "keep",
               spawnMode: "session",
               expectsCompletionMessage: Boolean(completionTurn),
@@ -248,7 +245,7 @@ export async function dispatchSessionsSendFollowup(
                 replyContext.requesterSession?.lifecycleRevision,
             },
             {
-              assertCurrent: assertCompletionCurrent,
+              assertCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
               acceptedRunReplay: true,
               requesterRunInstance: instance,
@@ -270,7 +267,7 @@ export async function dispatchSessionsSendFollowup(
         }
         return accepted;
       };
-      const accepted = await (request ? request.custody.run(claim) : claim());
+      const accepted = await (request ? request.custody.runWithRequester(claim) : claim());
       assertCurrent();
       if (instance) {
         mergeAcceptedSessionSpawnsForRun(instance, [accepted]);

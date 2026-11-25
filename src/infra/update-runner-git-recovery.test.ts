@@ -4,20 +4,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as commands from "../process/exec.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
-import { updateGitCheckout } from "./update-runner-git.js";
-import type { CommandRunner } from "./update-runner-types.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { entry: "standalone", budgetMs: 120_000, workMs: 6_000, corrupt: false, safe: true },
-  { entry: "runner", budgetMs: 1_000, workMs: 6_000, corrupt: false, safe: false },
-  { entry: "runner", budgetMs: 2_400_000, workMs: 1_500_000, corrupt: false, safe: true },
-  { entry: "runner", budgetMs: 120_000, workMs: 6_000, corrupt: true, safe: false },
+  { budgetMs: 2_400_000, workMs: 1_500_000, corrupt: false, safe: true },
+  { budgetMs: 1_000, workMs: 6_000, corrupt: false, safe: false },
+  { budgetMs: 120_000, workMs: 6_000, corrupt: true, safe: false },
 ])(
-  "verifies retained Git runtime after slow HEAD inspection ($entry, budget=$budgetMs, work=$workMs, corrupt=$corrupt)",
-  async ({ entry, budgetMs, workMs, corrupt, safe }) => {
+  "verifies retained Git runtime after slow HEAD inspection (budget=$budgetMs, work=$workMs, corrupt=$corrupt)",
+  async ({ budgetMs, workMs, corrupt, safe }) => {
     const root = directories.make("git-recovery-budget-");
     const sha = "a".repeat(40);
     const dist = path.join(root, "dist");
@@ -53,36 +50,11 @@ it.each([
         termination: timedOut ? "timeout" : "exit",
       };
     });
-    const mutation = vi
-      .fn<CommandRunner>()
-      .mockRejectedValue(new Error("unexpected source mutation"));
-    const refuseCandidate = async () => {
-      throw new Error("Unsupported channel must not prepare or run a candidate");
-    };
-    const recovery =
-      entry === "standalone"
-        ? await readCurrentGitUpdateRecovery(root)
-        : (
-            await updateGitCheckout({
-              gitRoot: root,
-              opts: {
-                channel: "extended-stable",
-                inspectGitTarget: refuseCandidate,
-                validateCandidate: refuseCandidate,
-                beforeGitMutation: refuseCandidate,
-                runGitDoctor: refuseCandidate,
-              },
-              runCommand: mutation,
-              defaultCommandEnv: undefined,
-              timeoutMs: budgetMs,
-              startedAt: Date.now(),
-            })
-          ).recovery;
+    const recovery = await readCurrentGitUpdateRecovery(root, budgetMs);
     expect(recovery).toEqual(
       safe
         ? { serviceRestartSafe: true, version: "2026.9.4", buildId: "retained-build" }
         : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
     );
-    expect(mutation).not.toHaveBeenCalled();
   },
 );

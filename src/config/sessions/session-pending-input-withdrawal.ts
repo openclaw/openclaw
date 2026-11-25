@@ -29,8 +29,10 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 type WithdrawalScope = SessionAccessScope & { agentId: string; sessionId: string };
 type WithdrawalSelection =
   | { runId: string }
-  | { inputIds: readonly string[] }
-  | { lifecycleGeneration: string };
+  | {
+      inputIds: readonly string[];
+      audience?: import("./session-pending-input-audience.js").PendingInputAudience;
+    };
 
 class PendingInputOwnedError extends Error {
   constructor(readonly inputIds: string[]) {
@@ -82,6 +84,7 @@ async function withdrawSessionPendingInputs(
   const input: SessionPendingInputWithdrawal = {
     sessionKey: logical.sessionKey,
     sessionId: target.sessionId,
+    endCause: "delete",
     ...selection,
   };
   const captured = await captureSessionStoreReadTarget(
@@ -188,29 +191,17 @@ export async function dismissRetiredSessionPendingInputs(
   scope: WithdrawalScope,
   inputIds: readonly string[],
   assertCurrent: () => void,
+  audience?: import("./session-pending-input-audience.js").PendingInputAudience,
 ): Promise<RetiredPendingInputDismissalOutcome> {
-  const result = await withdrawSessionPendingInputs(scope, { inputIds }, assertCurrent);
+  const result = await withdrawSessionPendingInputs(scope, { inputIds, audience }, assertCurrent);
   if (typeof result === "boolean") {
     throw new Error("Retired input withdrawal returned a queued-input result");
   }
   return result;
 }
 
-/** Startup settlement never resumes input that lost its process owner. */
-export async function interruptOrphanedSessionPendingInputs(
-  scope: WithdrawalScope,
-  assertCurrent: () => void,
-): Promise<void> {
-  await withdrawSessionPendingInputs(
-    scope,
-    { lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    assertCurrent,
-  );
-}
-
 export async function listOrphanedSessionPendingInputTargets(
   scope: Omit<WithdrawalScope, "sessionKey" | "sessionId">,
-  queuedInputIds: readonly string[],
 ) {
   const captured = {
     ...scope,
@@ -231,7 +222,6 @@ export async function listOrphanedSessionPendingInputTargets(
       env: captured.env,
       source,
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      queuedInputIds,
     }),
   );
   assertReadCurrent();

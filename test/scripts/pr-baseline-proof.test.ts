@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createBaselineFixture,
   reuseBaselineFixture,
@@ -22,6 +22,42 @@ import { validReview } from "./pr-review-artifact-fixture.js";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const flags = (values: Record<string, string>) => Object.entries(values).flat();
 const command = "prepare-baseline-refresh";
+const acceptanceFile = "pending-proof-acceptance.json";
+
+function recordPriorAcceptance(f: ReturnType<typeof fixture>) {
+  const { proofPublication } = JSON.parse(
+    f.readLocal("correction-review.json").toString(),
+  ).correction;
+  const bytes = JSON.stringify({
+    version: 1,
+    kind: "maintainer-accepted-pending-proof",
+    headSha: proofPublication.headSha,
+    treeOid: proofPublication.treeOid,
+    reviewOid: f.oid("correction-review.json"),
+    findings: [
+      { id: "I1", reason: "The maintainer accepted the unavailable package runner risk." },
+    ],
+  });
+  f.writeLocal(acceptanceFile, bytes);
+  return bytes;
+}
+
+function expectArchivedAcceptance(f: ReturnType<typeof fixture>, bytes: string) {
+  expect(existsSync(f.local(acceptanceFile)), "old proof acceptance must no longer be active").toBe(
+    false,
+  );
+  expect(
+    readdirSync(f.local("")).some((name) => {
+      const saved = f.local(`${name}/${acceptanceFile}`);
+      return (
+        name.startsWith("prep-evidence.") &&
+        existsSync(saved) &&
+        readFileSync(saved, "utf8") === bytes
+      );
+    }),
+  ).toBe(true);
+}
+
 const fixture = reuseBaselineFixture((root) => {
   const f = createBaselineFixture(root, 1);
   const binding = f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42");
@@ -666,6 +702,51 @@ function nativeTrace(
 }
 
 describePosix("proof baseline from the retained publication lifecycle", () => {
+  describe("acceptance lifetime", () => {
+    beforeAll(() => {
+      // Both cases restore the same pristine, already-published source.
+      fixture();
+    });
+
+    it.each(["baseline refresh", "continuation"] as const)(
+      "retires prior proof acceptance before fresh READY after %s",
+      (transition) => {
+        const f = fixture();
+        const accepted = recordPriorAcceptance(f);
+        if (transition === "baseline refresh") {
+          const refresh = f.run(command, f.args, f.extra);
+          expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+        } else {
+          // This continuation needs only a signed descendant of the published
+          // head, not the fixture's separate merge with foreign-signed main.
+          f.prepGit("reset", "--hard", f.published);
+          writeFileSync(join(f.worktree, f.product[0]!), "subsequent signed correction\n");
+          f.prepGit("commit", "-qam", "fix: follow up after the published candidate");
+          const head = f.prepGit("rev-parse", "HEAD");
+          const tree = f.prepGit("rev-parse", "HEAD^{tree}");
+          const args = f.continuation.map((value, index) => {
+            const option = f.continuation[index - 1];
+            return option === "--expected-head"
+              ? head
+              : option === "--expected-tree"
+                ? tree
+                : value;
+          });
+          const continuation = f.run("prepare-correction-continue", args, f.extra);
+          expect(continuation.status, continuation.stdout + continuation.stderr).toBe(0);
+        }
+        f.approve();
+        const gates = f.run("prepare-gates", [], {
+          ...f.extra,
+          OPENCLAW_PR_GATES_REMOTE: "github",
+        });
+        expect(gates.status, gates.stdout + gates.stderr).toBe(0);
+        expect(f.readLocal("gates.env").toString()).toContain("GATES_MODE=github_pending");
+        expectArchivedAcceptance(f, accepted);
+      },
+    );
+  });
+
   it("refuses both old routes, creates a descendant, then publishes only with new exact-candidate proof review", () => {
     const f = fixture();
     const ordinary = f.run("prepare-correction-continue", f.continuation, f.extra);

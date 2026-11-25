@@ -131,7 +131,7 @@ describe("CI automation popup scope", () => {
     expect(h.checkbox().checked).toBe(true);
     expect(h.root.querySelector('[role="status"]')?.textContent).toContain(blocked);
     h.jobs = [{ ...fix, state: { triggerState: { blocked: null } } }];
-    h.harness.emit({}, "cron");
+    h.harness.emit({}, "cron.inventory.changed");
     await waitForSolid(() => expect(h.root.textContent).not.toContain(blocked));
     expect(h.checkbox().checked).toBe(true);
   });
@@ -168,8 +168,9 @@ describe("CI automation popup scope", () => {
     await h.open();
     const fixInput = h.checkbox();
     const before = h.root.textContent;
-    h.request.mockImplementationOnce(() => staleRead.promise);
-    h.harness.emit({}, "cron");
+    h.read = staleRead.promise;
+    h.harness.emit({}, "cron.inventory.changed");
+    await waitForSolid(() => expect(h.calls("cron.list")).toHaveLength(2));
     await h.element.updateComplete;
     expect(h.checkbox()).toBe(fixInput);
     h.checkbox().click();
@@ -184,14 +185,15 @@ describe("CI automation popup scope", () => {
     await h.element.updateComplete;
     h.toggles(false, true);
     expect(h.checkbox("autoArchive").disabled).toBe(false);
+    h.read = undefined;
     staleRead.resolve(inventory([job("first")]));
     await h.settle();
     h.toggles(false, true);
     expect(h.checkbox()).toBe(fixInput);
     h.jobs.push(merge);
     mergeWrite.resolve({ job: merge });
-    h.harness.emit({}, "cron");
-    h.harness.emit({}, "cron");
+    h.harness.emit({}, "cron.inventory.changed");
+    h.harness.emit({}, "cron.inventory.changed");
     await h.settle();
     expect(h.checkbox()).toMatchObject({ checked: false, disabled: true });
     expect(h.checkbox("autoMerge").disabled).toBe(false);
@@ -199,8 +201,8 @@ describe("CI automation popup scope", () => {
     const disabledFix = { ...fix, enabled: false, configRevision: "v2" };
     h.jobs = [disabledFix, merge];
     fixWrite.resolve(disabledFix);
-    await h.settle();
-    expect(h.calls("cron.list")).toHaveLength(3);
+    await waitForSolid(() => expect(h.calls("cron.list")).toHaveLength(3));
+    await waitForSolid(() => h.toggles(false, true));
     h.toggles(false, true);
     expect(h.checkbox().disabled).toBe(false);
     expect(h.root.textContent).toBe(before);
@@ -216,7 +218,7 @@ describe("CI automation popup scope", () => {
     await h.open();
     h.checkbox().click();
     h.checkbox("autoMerge").click();
-    h.harness.emit({}, "cron");
+    h.harness.emit({}, "cron.inventory.changed");
     fixWrite.reject(new Error("Lost acknowledgement"));
     await h.settle();
     h.toggles(false, true);
@@ -228,9 +230,8 @@ describe("CI automation popup scope", () => {
     h.jobs = [job("first"), job("first", "autoMerge")];
     h.writes = {};
     mergeWrite.resolve({ job: job("first", "autoMerge") });
-    await h.settle();
+    await waitForSolid(() => h.toggles(true, true));
     expect(h.root.textContent).toContain("Lost acknowledgement");
-    h.toggles(true, true);
     const retryRead = createDeferred<ReturnType<typeof inventory>>();
     h.read = retryRead.promise;
     h.root.querySelector<HTMLButtonElement>(".chat-ci__automation-retry")!.click();
@@ -333,7 +334,9 @@ describe("CI automation popup scope", () => {
       }
       await h.settle();
       // A retired scope must clear its pending checkbox before its RPC settles.
-      expect(h.checkbox()).toMatchObject({ checked: false, disabled: false });
+      await waitForSolid(() =>
+        expect(h.checkbox()).toMatchObject({ checked: false, disabled: false }),
+      );
       if (change === "session") {
         expect(h.checkbox().closest("fieldset")?.disabled).toBe(false);
       }
@@ -359,8 +362,9 @@ describe("CI automation popup scope", () => {
     await h.element.updateComplete;
     h.writes = {};
     h.snapshot({ phase: "connected" });
-    await h.settle();
-    expect(h.checkbox()).toMatchObject({ checked: true, disabled: false });
+    await waitForSolid(() =>
+      expect(h.checkbox()).toMatchObject({ checked: true, disabled: false }),
+    );
     expect(h.checkbox().closest("fieldset")?.disabled).toBe(false);
     pending.resolve({ ...job("first"), enabled: false });
     await h.settle();

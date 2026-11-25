@@ -1,4 +1,7 @@
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import {
+  prepareCommandOwnerAuthority,
+  type PreparedCommandOwnerAuthority,
+} from "../../auto-reply/command-auth.js";
 import {
   assertSessionWriterDeliveryAuthorized,
   prepareSessionWriterDeliveryAuthority,
@@ -34,13 +37,13 @@ export async function buildRecoveryDeliverParams(
   const assertPluginOwner = pluginNotice
     ? await preparePluginNoticeOwnerCheck(pluginNotice.pluginId)
     : undefined;
-  let owner: Awaited<ReturnType<typeof prepareCommandOwnerAuthority>> | undefined;
   const rejection = (error: unknown) =>
     new PlatformMessageNotDispatchedError(
       "Original channel owner authorization could not be checked",
       { cause: error, retryable: !(error instanceof GatewayOperatorAccessDeniedError) },
     );
   if (pendingFinal?.commandOwnerReference !== undefined) {
+    let owner: PreparedCommandOwnerAuthority;
     const reference = parseCommandOwnerReference(pendingFinal.commandOwnerReference);
     if (!reference) {
       throw rejection(new GatewayOperatorAccessDeniedError());
@@ -59,6 +62,16 @@ export async function buildRecoveryDeliverParams(
     if (!owner.source) {
       throw rejection(new GatewayOperatorAccessDeniedError());
     }
+    // Recovered work admits the original owner's policy once. Later callbacks
+    // retain only data-owner and transport lifecycle fences for this batch.
+    try {
+      if (!owner.isCurrent(cfg)) {
+        // A stale capture is not proof that the durable reference was retired.
+        throw new Error("Original channel owner capture changed during delivery");
+      }
+    } catch (error) {
+      throw rejection(error);
+    }
   }
   const writer = await prepareSessionWriterDeliveryAuthority(
     pendingFinal?.sessionWriterDeliveryAuthority,
@@ -66,14 +79,6 @@ export async function buildRecoveryDeliverParams(
     resolveDeliveryQueueStateEnv(stateDir, stateContext),
   );
   const assertCurrent = () => {
-    try {
-      if (pendingFinal?.commandOwnerReference !== undefined && !owner?.isCurrent(cfg)) {
-        // A stale capture is not proof that the durable reference was retired.
-        throw new Error("Original channel owner capture changed during delivery");
-      }
-    } catch (error) {
-      throw rejection(error);
-    }
     assertSessionWriterDeliveryAuthorized(writer.authority);
     try {
       assertPluginOwner?.();
@@ -111,7 +116,7 @@ export async function buildRecoveryDeliverParams(
           },
         }
       : {}),
-    // Recovery retains completion settlement and reconstructs its original authority at I/O.
+    // Recovery retains completion settlement and fences its data/transport owners at I/O.
     ...(pendingFinal || pluginNotice
       ? {
           onDirectAdapterHandoff: async () => assertCurrent(),

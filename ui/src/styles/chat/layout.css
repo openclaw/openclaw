@@ -9,64 +9,96 @@ openclaw-pending-session-create {
   width: 100%;
   max-width: var(--chat-thread-max-width, 48rem);
   align-self: center;
-}
 
-/* Persistent errors keep their recovery action beside the title in every
- * state: expanding details must not move it, and narrow panes must not strand
- * it on its own row. Details span the full width below. */
-.chat-error .app-toast__content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 2px 12px;
-}
+  .app-toast__content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 2px 12px;
+  }
 
-.chat-error .app-toast__body {
-  display: contents;
-}
+  .app-toast__body {
+    display: contents;
+  }
 
-.chat-error .app-toast__message,
-.chat-error .app-toast__description {
-  grid-column: 1;
-}
+  .app-toast__message,
+  .app-toast__description {
+    grid-column: 1;
+  }
 
-.chat-error .app-toast__body > .lazy-view-error__details {
-  grid-column: 1 / -1;
-}
-
-.chat-error .app-toast__content > :not(.app-toast__body) {
-  grid-row: 1;
-  grid-column: 2;
-  margin-block-start: -4px;
-}
-
-/* The long discard label would squeeze the message into a sliver on phones. */
-@media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
-    grid-row: auto;
+  .lazy-view-error__details {
     grid-column: 1 / -1;
-    justify-self: start;
-    margin-block-start: 6px;
+  }
+
+  .chat-error__actions {
+    grid-template-rows: subgrid;
+    grid-row: 1 / span 2;
+    gap: 2px;
+    grid-column: 2;
+    margin-block-start: -4px;
+  }
+
+  > .app-toast__dismiss {
+    position: static;
+    flex: none;
+    margin: -1px -6px 0 -4px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--muted);
+    opacity: 1;
+    scale: 1;
   }
 }
 
-/* Persistent errors do not time out, so their dismiss control stays visible
- * and sits inside the card: a corner badge would be clipped by scrolling
- * composer containers on phones. */
-.chat-error > .app-toast__dismiss {
-  position: static;
-  flex: none;
-  margin: -1px -6px 0 -4px;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-  opacity: 1;
-  scale: 1;
+.chat-error--reply.chat-composer-neighbor-card {
+  column-gap: 8px;
+  min-height: 0;
+  padding-block: 7px;
+
+  .app-toast__message {
+    grid-column: 2;
+    min-width: 0;
+    overflow: hidden;
+    font-size: calc(13px * var(--control-ui-text-scale));
+    font-weight: 400;
+    line-height: calc(18px * var(--control-ui-text-scale));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-error__actions {
+    grid-row: 1;
+    grid-column: 3;
+    gap: 4px;
+    height: 30px;
+    margin: 0;
+  }
+
+  .chat-error__refresh {
+    white-space: nowrap;
+  }
+
+  .chat-error__dismiss {
+    position: relative;
+    inset: auto;
+    opacity: 1;
+    scale: 1;
+    box-shadow: none;
+  }
 }
 
+/* Keep long discard labels below the message on phones. */
 @media (max-width: 560px) {
-  .chat-error__discard,
-  .chat-error__refresh {
+  .chat-error__actions:has(> .chat-error__discard) {
+    grid-template-rows: none;
+    grid-area: auto / 1 / auto / -1;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-self: start;
+    margin-block-start: 6px;
+  }
+
+  .chat-error__discard {
     white-space: normal;
     text-align: start;
   }
@@ -143,6 +175,12 @@ openclaw-pending-session-create {
 
 .chat[data-attachment-drop-active]::after {
   opacity: 0.1;
+}
+
+/* An iframe swallows the drag events of a file dropped over it, so widgets
+   and previews yield to the chat until the drag ends. */
+.chat[data-attachment-drop-active] iframe {
+  pointer-events: none;
 }
 
 /* Center search in its own pane, including narrow split views. */
@@ -272,28 +310,24 @@ openclaw-pending-session-create {
 /* Composer neighbors share one quiet card frame. Status color belongs to the
    item, never to the surface: only the icon, heading and a low-opacity edge
    carry tone while the card keeps the composer's own surface and geometry. */
-:is(.chat-composer-neighbor-card, .session-suggestion, .chat-pr.chat-pr) {
+:is(.chat-composer-neighbor-card, .chat-pr.chat-pr) {
   border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
 }
 
-.chat-composer-neighbor-card,
-.session-suggestion {
-  padding: 10px 12px;
-}
-
 .chat-composer-neighbor-card {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+  padding: 10px 12px;
+  background: var(--chat-composer-surface, var(--popover));
+  color: var(--text);
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   width: calc(100% - 36px);
   max-width: var(--chat-thread-max-width, 48rem);
   min-height: 52px;
   margin: 8px auto 0;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: var(--chat-composer-surface, var(--popover));
-  color: var(--text);
   box-shadow: none;
 }
 
@@ -592,6 +626,16 @@ openclaw-pending-session-create {
   width: 100%;
   contain: content;
 
+  /* WebKit paints the row's trailing margin when a native range crosses turns.
+     Keep the range intact; only its content should paint the selection. */
+  &::selection {
+    background-color: transparent;
+  }
+
+  > *::selection {
+    background-color: var(--selection-bg);
+  }
+
   /* WebKit restyles hidden parked subtrees that retain layout boxes.
      Chromium needs those boxes for timely forecast paint. */
   @supports (-webkit-nbsp-mode: space) {
@@ -627,23 +671,6 @@ openclaw-pending-session-create {
 
 .chat-virtual-row--first > :first-child {
   margin-top: 0 !important;
-}
-
-.chat-history-sentinel {
-  display: flex;
-  min-height: 28px;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-virtual-sizer > .chat-history-sentinel {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  right: 0;
-  left: 0;
-  min-height: 1px;
-  pointer-events: none;
 }
 
 .chat-history-error,
@@ -964,8 +991,7 @@ openclaw-pending-session-create {
 }
 
 .context-usage__header,
-.context-usage__actions,
-.context-usage__latest {
+.context-usage__actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1042,37 +1068,34 @@ openclaw-pending-session-create {
   margin: 10px 0;
   background: var(--details-separator);
 }
-.context-usage__latest {
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  min-height: 26px;
+/* Usage table: label, then right-aligned Cache and Cost columns shared by every row. */
+.context-usage__usage {
+  display: grid;
+  gap: 4px 16px;
+  align-items: baseline;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
-.context-usage__stats {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  margin: 0 0 0 auto;
-  font-size: 12px;
-  div {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 3px;
+.context-usage__usage-row {
+  display: contents;
+  > :not(:first-child) {
+    text-align: right;
   }
-  div:not(:last-child)::after {
-    margin: 0 6px;
-    color: color-mix(in srgb, var(--muted) 50%, transparent);
-    content: "·";
-  }
-  dt {
-    color: var(--muted);
-  }
-  dd {
-    margin: 0;
+  b {
     color: var(--text);
     font-weight: 650;
   }
+}
+.context-usage__usage-head > * {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.context-usage__stats {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 .context-usage__tray {
   --tray: color-mix(in oklab, var(--text) 3.5%, var(--bg-elevated));
@@ -1621,52 +1644,125 @@ openclaw-chat-video-player {
 }
 
 .session-suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-strong);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .session-suggestion {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-strong) 74%, transparent);
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.session-suggestion__author,
-.session-suggestion__state {
-  border-radius: 999px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 600;
+.session-suggestion + .session-suggestion {
+  border-top: 1px solid var(--border);
+}
+
+.session-suggestion__details {
+  min-width: 0;
+  grid-area: 1 / 1;
+}
+
+.session-suggestion__details[open] {
+  grid-column: 1 / -1;
+}
+
+.session-suggestion__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
   white-space: nowrap;
 }
 
-.session-suggestion__author {
-  color: var(--text-strong);
-  background: var(--panel-hover);
+.session-suggestion__summary::-webkit-details-marker {
+  display: none;
 }
 
-.session-suggestion__state {
-  color: var(--muted);
-}
-
+.session-suggestion__author,
 .session-suggestion__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-suggestion__author {
+  flex: none;
+  max-width: 80px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.preview .session-suggestion__author {
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--chat-text-link, var(--link));
+  background: var(--person-reference-bg);
+}
+
+.session-suggestion__details[open] .session-suggestion__text {
+  display: none;
+}
+
+.session-suggestion__body {
   max-height: 12rem;
   overflow: auto;
   overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 13px;
+  padding: 0 10px 10px;
   white-space: pre-wrap;
 }
 
 .session-suggestion__actions {
   display: flex;
-  align-items: center;
+  grid-area: 1 / 2;
+  align-self: start;
   gap: 2px;
+  padding: 2px 4px 2px 0;
+}
+
+.session-suggestion__state {
+  padding: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-suggestion__action {
+  opacity: 0;
+}
+
+.session-suggestion:hover .session-suggestion__action,
+.session-suggestion:focus-within .session-suggestion__action {
+  opacity: 1;
+}
+
+.session-suggestions__more {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+  padding: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+}
+
+.session-suggestion__summary:hover,
+.session-suggestions__more:hover {
+  background: var(--panel-hover);
+}
+
+.session-suggestion__summary:focus-visible,
+.session-suggestions__more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (hover: none) {
+  .session-suggestion__action {
+    opacity: 1;
+  }
 }
 
 .task-suggestion__header-action svg,
@@ -1675,18 +1771,6 @@ openclaw-chat-video-player {
 .chat-ci__status svg {
   width: 15px;
   height: 15px;
-}
-
-@media (max-width: 640px) {
-  .session-suggestion {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .session-suggestion__actions,
-  .session-suggestion__state {
-    grid-column: 1 / -1;
-    justify-self: end;
-  }
 }
 
 .task-suggestion {
@@ -2723,6 +2807,18 @@ openclaw-chat-ci-details {
   margin: 0;
 }
 
+/* Callouts near the composer keep its surface like the other neighbors; tone
+   stays in their text or icon, never in the fill. */
+.agent-chat__composer-notices .callout:is(.agent-chat__composer-alert, .agent-chat__talk-status),
+.agent-chat__disabled-banner.callout:not(.agent-chat__disabled-banner--replacement) {
+  border-color: var(--chat-composer-hairline);
+  background: var(--composer-attached-surface);
+}
+
+.agent-chat__disabled-banner.callout.info {
+  color: var(--text);
+}
+
 @media (max-width: 640px) {
   .chat-topbar-notices {
     max-width: calc(100% - 84px);
@@ -2768,6 +2864,10 @@ openclaw-chat-ci-details {
 
 .agent-chat__disabled-banner--neutral {
   color: inherit;
+}
+
+.agent-chat__workspace-restore-error {
+  color: var(--warn);
 }
 
 .agent-chat__disabled-banner-icon {

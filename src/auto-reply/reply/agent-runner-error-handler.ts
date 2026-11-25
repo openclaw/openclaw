@@ -17,11 +17,13 @@ import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
+import { OperatorRefusalError, operatorRefusalText } from "../../gateway/operator-refusal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -184,17 +186,25 @@ export async function handleAgentExecutionError(params: {
     delete runState?.replyCompletion;
     return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });
   }
+  if (err instanceof OperatorRefusalError) {
+    return settleFailure({ text: err.message });
+  }
   if (isChannelRunAuthorizationError(err)) {
     if (isChannelRunAuthorizationError(err, "unavailable")) {
       return settleFailure({
         text: "⚠️ OpenClaw could not verify current channel access. Please try your request again.",
       });
     }
-    takePendingLifecycleTerminal().emit("error", err);
+    takePendingLifecycleTerminal().emit("error", err, {
+      errorNotice: operatorRefusalText("channel-access-ended", "start this request"),
+    });
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
     defaultRuntime.log("Channel request dropped: source authorization is no longer current.");
-    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
+    return {
+      kind: "final",
+      payload: setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
+    };
   }
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {

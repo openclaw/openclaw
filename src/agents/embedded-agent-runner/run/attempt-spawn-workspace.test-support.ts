@@ -470,11 +470,6 @@ vi.mock("../../custom-api-registry.js", () => ({
   ensureCustomApiRegistered: () => {},
 }));
 
-// mock-isolation: Workspace attempts do not resolve auth mode from host profiles or environment keys.
-vi.mock("../../model-auth.js", () => ({
-  resolveModelAuthModeAsync: () => undefined,
-}));
-
 vi.mock("../../model-tool-support.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../model-tool-support.js")>()),
   supportsModelTools: hoisted.supportsModelToolsMock,

@@ -2,7 +2,7 @@ import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection-shared.js";
 import {
@@ -43,20 +43,21 @@ export async function logGatewayStartup(params: {
   isNixMode: boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
-  const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
+  const agentModel = resolveConfiguredModelRef({
     cfg: params.cfg,
     agentId: tryResolveAmbientOwnerAgentId(params.cfg),
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
   });
-  const agentModelLog = formatAgentModelStartupLogLine({
-    cfg: params.cfg,
-    provider: agentProvider,
-    model: agentModel,
-  });
-  params.log.info(agentModelLog.message, {
-    consoleMessage: agentModelLog.consoleMessage,
-  });
+  if (agentModel) {
+    const agentModelLog = formatAgentModelStartupLogLine({ cfg: params.cfg, ...agentModel });
+    params.log.info(agentModelLog.message, {
+      consoleMessage: agentModelLog.consoleMessage,
+    });
+  } else {
+    params.log.info(
+      "agent model: not configured (choose one in Settings → Models or run `openclaw models set <provider/model>`)",
+    );
+  }
   const startupDurationMs =
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
   const startupDurationLabel =

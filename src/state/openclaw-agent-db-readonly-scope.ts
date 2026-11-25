@@ -30,6 +30,7 @@ import {
   getOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseReadValidation,
 } from "./openclaw-agent-db-validation-cache.js";
+import { describeAgentDatabaseValidationMismatch } from "./openclaw-agent-db-validation-facts.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 
 export type OpenClawAgentDatabaseReadOnlyBehavior = {
@@ -236,7 +237,9 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     const database = this.database;
     const validation = this.target?.validation;
     if (validation && !adoptOpenClawAgentDatabaseValidation(database, validation)) {
-      throw new Error("Session reader validation does not match its current physical owner");
+      throw new Error(
+        `Session reader validation does not match its current physical owner: ${describeAgentDatabaseValidationMismatch(database, validation)}`,
+      );
     }
     // Later requests can carry a successor receipt while this connection still owns the old one.
     this.retainedValidation ??= getOpenClawAgentDatabaseValidation(database);
@@ -365,7 +368,10 @@ export function closeIdleOpenClawAgentDatabaseReadOnly(pathname: string): void {
 }
 
 export function retainCachedOpenClawAgentDatabaseReadOnly(options: ReadTarget) {
-  return cachedScope(options).retain(options);
+  const scope = readOnlyScope.getStore();
+  return (scope?.matches(options.agentId, options.path) ? scope : cachedScope(options)).retain(
+    options,
+  );
 }
 
 /** PostgreSQL reads through the caller's read scope share one snapshot until `operation` settles. */

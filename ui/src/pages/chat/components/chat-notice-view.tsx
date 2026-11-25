@@ -19,6 +19,7 @@ function FailureNotice(props: ChatNoticeProps) {
   const actions = createMemo(() => {
     // Bind the displayed failure: an open confirmation must not retarget a newer run.
     const initialRunId = failure().runId;
+    const initialSummary = failure().summary;
     const recovery = props.recovery;
     if (
       !recovery ||
@@ -30,7 +31,9 @@ function FailureNotice(props: ChatNoticeProps) {
     }
     return {
       onRetry: recovery.onRetryRun ? () => recovery.onRetryRun?.(initialRunId) : undefined,
-      editSource: recovery.failedMessageEditSource,
+      onStartNewSession: recovery.onStartNewSession
+        ? () => recovery.onStartNewSession?.(initialRunId, initialSummary)
+        : undefined,
     };
   });
   return (
@@ -43,10 +46,12 @@ function FailureNotice(props: ChatNoticeProps) {
         feedback={feedback()}
         summary={failure().summary}
         cause={failure().cause}
+        presentation={props.modelCatalog?.find(
+          (model) => model.provider === failure().cause?.provider,
+        )}
         repeatCount={props.item.repeatCount}
         onRetry={actions()?.onRetry}
-        editSource={actions()?.editSource}
-        onFocusComposer={props.recovery?.onFocusComposer}
+        onStartNewSession={actions()?.onStartNewSession}
       />
     </div>
   );
@@ -55,7 +60,11 @@ function FailureNotice(props: ChatNoticeProps) {
 export function ChatNotice(props: ChatNoticeProps) {
   return (
     <Show when={props.item.runError?.runId} keyed fallback={<ChatNoticeDetails {...props} />}>
-      <FailureNotice item={props.item} recovery={props.recovery} />
+      <FailureNotice
+        item={props.item}
+        recovery={props.recovery}
+        modelCatalog={props.modelCatalog}
+      />
     </Show>
   );
 }

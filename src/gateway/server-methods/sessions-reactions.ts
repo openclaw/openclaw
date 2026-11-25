@@ -91,9 +91,9 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
   "session.reactions.list": defineValidatedGatewayHandler(
     "session.reactions.list",
     validateSessionReactionsListParams,
-    async ({ params, respond, client, context, hasCurrentClientAuthority }) => {
+    async ({ params, respond, client, context }) => {
       await withSessionReactionAccess(
-        { ...params, client, context, respond, hasCurrentClientAuthority, write: false },
+        { ...params, client, context, respond, write: false },
         async ({ target, assertCurrent }) => {
           const reactions = await readSessionReactionsAsync({
             ...reactionScope(target),
@@ -108,9 +108,9 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
   "session.reactions.set": defineValidatedGatewayHandler(
     "session.reactions.set",
     validateSessionReactionsSetParams,
-    async ({ params, respond, client, context, hasCurrentClientAuthority }) => {
+    async ({ params, respond, client, context }) => {
       await withSessionReactionAccess(
-        { ...params, client, context, respond, hasCurrentClientAuthority, write: true },
+        { ...params, client, context, respond, write: true },
         async ({ target, assertCurrent }) => {
           const actor = gatewayClientSessionCreator(client);
           if (!actor) {

@@ -3,6 +3,7 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { bindPreparedSessionEntryPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import type { SessionActorStorageChange } from "./session-actor-storage-contract.js";
+import { sessionMemberAccessFacts } from "./session-member-access-facts.js";
 
 /** The owner installs all state before publishing its complete committed facts. */
 export function publishSessionActorMemoryChanges(
@@ -26,6 +27,9 @@ export function publishSessionActorMemoryChanges(
                 after.members.map(({ identityId }) => identityId),
                 { participants: entry.participants, participantCount: entry.participantCount },
                 entry.sessionId,
+                ...(after.members.some((member) => member.access !== undefined)
+                  ? ([sessionMemberAccessFacts(after.members)] as const)
+                  : ([] as const)),
               ],
               lifecycleChanged:
                 before?.entry?.sessionId !== entry.sessionId ||

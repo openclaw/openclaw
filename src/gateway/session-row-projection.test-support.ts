@@ -291,6 +291,7 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    readRestoredCompletion: () => undefined,
     readChildVisibility: (...args) => childVisibility.read(...args),
     readChildActivity: (record, now, excluded, token) =>
       childActivity.read(record, rowContext, now, excluded, token),
@@ -320,6 +321,7 @@ export function createSessionRowProjectionFixture(params: {
       throw new Error("Indexed lookup requires a real session row projection");
     },
     onSelectionChange: revisions.onSelectionChange,
+    onMembershipChange() {},
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
     hasLogicalChildEntries: (parent) => selectEntries({ parentSessionKey: parent }).length > 0,
@@ -437,6 +439,7 @@ export function createSessionRowProjectionFixture(params: {
       const target = projection.sharingTarget(query);
       return target ? { status: "ready", target } : { status: "missing" };
     },
+    memberAccess: () => undefined,
     hasMembership: (path, key, identity) =>
       [...rows.values()].some(
         (row) =>

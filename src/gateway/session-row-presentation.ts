@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -28,7 +29,8 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
 import {
-  reuseSessionRowFields,
+  definedSessionRowFields,
+  freezeSessionRow,
   sessionRowId,
   sessionRowsRevision,
   type SessionRowGeneration,
@@ -52,7 +54,6 @@ import {
 } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -64,7 +65,6 @@ import {
   projectGatewaySessionActiveRun,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
-import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 type PresentationOptions = Readonly<
   Omit<
@@ -159,6 +159,7 @@ export function prepareSessionRowPublication(
 ) {
   const view = prepareSessionRowPublicationView(projection);
   let activeRuns: Map<VisibleActiveSessionRunProjector, ActiveRunStates> | undefined;
+  let subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"] | undefined;
   return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
     const recipient = prepareSessionRowRecipient(read, client, view);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
@@ -169,6 +170,9 @@ export function prepareSessionRowPublication(
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
+        if (subagentRuns?.revision !== recipient.rowContext.subagentRuns.revision) {
+          subagentRuns = recipient.rowContext.subagentRuns.atTime(now);
+        }
         let runStates = projectRun && activeRuns?.get(projectRun);
         if (projectRun && !runStates) {
           runStates = new Map();
@@ -181,6 +185,7 @@ export function prepareSessionRowPublication(
           projectRun,
           recipient,
           runStates,
+          subagentRuns,
         ));
       },
     };
@@ -198,14 +203,10 @@ function prepareSessionRowRecipient(
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
     client: client ?? null,
-    isMember: (value, identityId) =>
-      projection
-        .readMembership({
-          agentId: value.agentId,
-          key: value.storeKey,
-          storePath: value.storePath,
-        })
-        ?.has(identityId) ?? false,
+    memberAccess: (value, id) => projection.memberAccess(value.storePath, value.storeKey, id),
+    isMember: ({ agentId, storePath, storeKey }, identityId) =>
+      projection.describe({ agentId, storePath, key: storeKey })?.membership.has(identityId) ??
+      false,
   });
   return { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing };
 }
@@ -218,6 +219,7 @@ export function prepareProjectedSessionPresentation(
   projectRun?: VisibleActiveSessionRunProjector,
   recipient = prepareSessionRowRecipient(projection, client),
   sharedActiveRuns?: ActiveRunStates,
+  subagentRuns = recipient.rowContext.subagentRuns.atTime(now),
 ) {
   let activeRuns = sharedActiveRuns;
   const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
@@ -227,7 +229,6 @@ export function prepareProjectedSessionPresentation(
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationRows = publicationState?.rows;
-  const subagentRuns = rowContext.subagentRuns.atTime(now);
   const countBackgroundProcesses = prepareRunningBackgroundProcessCount();
   const preparedRowContext = { ...rowContext, subagentRuns };
   const runState = (
@@ -306,25 +307,32 @@ export function prepareProjectedSessionPresentation(
           ).get(profileId)?.hidden ?? false)
         : undefined;
     viewerFacts.sharingRole = sharingRole;
+    const access = sharing.accessForTarget(value);
+    viewerFacts.invitedAccess =
+      access.invitedAccessCeiling &&
+      (access.access === "read" || access.access === "suggest" || access.access === "send")
+        ? access.access
+        : undefined;
+    viewerFacts.invitedPermission =
+      viewerFacts.invitedAccess === "send"
+        ? intersectSessionPermissionModes(
+            sharing.invitedPermission,
+            value.entry.permissionMode ?? "full",
+          )
+        : undefined;
     // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionAgentRun(
-            { cfg: policyConfig, client: client ?? null, target: value },
-            { policy: sharing.policy },
-          )?.message ??
-          sharing.authorizeTarget(value, sharingRole)?.message ??
+        : (sharing.authorizeRun(value, true)?.message ??
+          sharing.authorizeTarget(value, sharingRole, true)?.message ??
           (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
             ? "send blocked by session policy"
             : null));
     viewerFacts.workspaceReadDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionWorkspaceRead(
-            { cfg: policyConfig, client: client ?? null, target: value, unscopedHostRoot },
-            { policy: sharing.policy },
-          )?.message ?? null);
+        : (sharing.authorizeWorkspaceRead(value, unscopedHostRoot)?.message ?? null);
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
@@ -452,12 +460,11 @@ export function prepareProjectedSessionPresentation(
       facts[15] = run?.active;
       facts[16] = run?.status;
       facts[17] = preparedFacts;
-      facts[18] =
-        sessionTitleRequests.get({
-          storePath: record.storeTarget.storePath,
-          sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-        }) !== undefined;
+      facts[18] = sessionTitleRequests.isPending({
+        storePath: record.storeTarget.storePath,
+        sessionKey: record.key,
+        sessionId: record.entry.sessionId,
+      });
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
       facts[20] =
@@ -507,7 +514,7 @@ export function prepareProjectedSessionPresentation(
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole)
+          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole, true)
         : undefined;
     const signature = views && optionKey(options);
     recipientFacts[0] = recipientView?.visibility;
@@ -522,7 +529,9 @@ export function prepareProjectedSessionPresentation(
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
-    recipientFacts.length = 8;
+    recipientFacts[8] = recipientView?.invitedAccess;
+    recipientFacts[9] = recipientView?.invitedPermission;
+    recipientFacts.length = 10;
     const variants = signature === undefined ? undefined : views?.get(signature);
     const current = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
     if (current) {
@@ -596,7 +605,7 @@ export function prepareProjectedSessionPresentation(
     }
     if (signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
-      const snapshot = freezeTrustedJsonSnapshot(reuseSessionRowFields(row, previous?.row));
+      const snapshot = freezeSessionRow(definedSessionRowFields(row), previous?.row);
       const view = { facts: recipientFacts, row: snapshot };
       if (variants) {
         variants.push(view);
@@ -622,11 +631,14 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      select: (
+        retained?: Map<object, SessionListFilteredEntries>,
+        invited?: boolean,
+      ) => SessionEntrySelection,
     ) {
-      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      // Clocks and transient runs are not owned by metadata or membership publications.
       const live = opts.activeOnly || opts.activityPulseBoundaries;
-      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
+      if (opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);
@@ -639,8 +651,10 @@ export function prepareProjectedSessionPresentation(
         view.partitions = undefined;
       }
       if (!view.selection) {
+        view.invited = entryFilter !== undefined && sharing.sessionCap === "invited";
         const { entries, ownerSessionProfiles, ...facets } = select(
           publicationState?.lists.partitions(view),
+          view.invited,
         );
         Object.freeze(entries);
         view.selection = Object.freeze({

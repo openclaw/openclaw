@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -28,8 +36,13 @@ const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence
 const { sessionChanges } = await import("../sessions/session-row-changes.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
-// The admission reads only the restored authority's live assertion.
-const RESTORED_OPERATOR = { assertCurrent: vi.fn() } as unknown as AdmittedRunOperatorAuthority;
+// Restored admission carries the owner decision, not a permission-currentness closure.
+const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
+  canonicalIdentity: null,
+  profileId: "requester",
+  scopes: ["operator.admin"],
+  grant: decideTurnGrant(["operator.admin"]),
+};
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
   return {
@@ -63,7 +76,7 @@ function admit(stored: CronStoredJob) {
 
 async function mint(stored: CronStoredJob) {
   const occurrence = await admit(stored);
-  return { occurrence, minted: occurrence.mint(RUN) };
+  return { occurrence, minted: await occurrence.mint(RUN) };
 }
 
 beforeEach(() => {
@@ -114,6 +127,7 @@ describe("admitScheduledOccurrence", () => {
       ["100000000000000002", false],
     ] as const) {
       const cfg = { commands: { ownerAllowFrom: [`discord:${senderId}`] } };
+      setRuntimeConfigSnapshot(cfg);
       const occurrence = await admitScheduledOccurrence({
         cfg,
         job: stored,
@@ -121,7 +135,7 @@ describe("admitScheduledOccurrence", () => {
         trigger: "cron",
       });
       try {
-        expect(occurrence.mint({ ...RUN, cfg }).result).toMatchObject({
+        expect((await occurrence.mint({ ...RUN, cfg })).result).toMatchObject({
           status: "ready",
           facts: {
             authority: { owner, basis: owner ? "channel-owner" : "none" },
@@ -133,6 +147,63 @@ describe("admitScheduledOccurrence", () => {
       }
     }
   });
+
+  it("admits a stored profile requester through its named role", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      readSessionEntryInWorker.mockResolvedValue({
+        sessionId: "parent-session",
+        lifecycleRevision: "rev-1",
+      });
+      const role = (
+        scopes: GatewayOperatorRoleDefinition["scopes"],
+        agents: GatewayOperatorRoleDefinition["agents"] = "*",
+      ) => ({
+        scopes,
+        agents,
+        sessions: { others: "none" as const },
+      });
+      const cfg = {
+        gateway: {
+          roles: {
+            default: "member",
+            definitions: {
+              admin: role(["operator.admin"]),
+              "research-admin": role(["operator.admin"], ["research"]),
+              member: role(["operator.read", "operator.write"]),
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
+      const profile = ensureProfileForEmail("scheduled-requester@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const stored = job({ ...LINKED_JOB, ownerProfileId: profile.id });
+      // An admin role is the owner on every entry its agents allow; a member role and an untiered
+      // install keep the answer they had before admission decided it.
+      for (const [assigned, roles, owner] of [
+        ["admin", cfg, true],
+        ["research-admin", cfg, false],
+        ["member", cfg, false],
+        ["member", {}, true],
+      ] as const) {
+        setUserProfileRole(profile.id, assigned);
+        setRuntimeConfigSnapshot(roles);
+        const occurrence = await admitScheduledOccurrence({
+          cfg: roles,
+          job: stored,
+          agentId: "main",
+          trigger: "cron",
+        });
+        try {
+          expect((await occurrence.mint({ ...RUN, cfg: roles })).result).toMatchObject({
+            status: "ready",
+            facts: { authority: { owner, basis: owner ? "profile-role" : "none" } },
+          });
+        } finally {
+          occurrence.release();
+        }
+      }
+    }));
 
   it("binds the context to the admitted run and releases it on close", async () => {
     const { minted } = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
@@ -260,8 +331,8 @@ describe("admitScheduledOccurrence", () => {
       lifecycleRevision: "rev-1",
     });
     const occurrence = await admit(job(LINKED_JOB));
-    const first = occurrence.mint(RUN);
-    const retry = occurrence.mint({ ...RUN, runId: "run-2" });
+    const first = await occurrence.mint(RUN);
+    const retry = await occurrence.mint({ ...RUN, runId: "run-2" });
     expect(readSessionEntryInWorker).toHaveBeenCalledOnce();
     expect(prepareSessionGenerationFacts).toHaveBeenCalledOnce();
     expect(first.result).toMatchObject({
@@ -287,12 +358,13 @@ describe("admitScheduledOccurrence", () => {
       }),
     );
     const runSessionKey = PARENT_KEY;
-    expect(occurrence.mint({ ...RUN, runSessionKey }).result).toMatchObject({
+    expect((await occurrence.mint({ ...RUN, runSessionKey })).result).toMatchObject({
       status: "ready",
       facts: { authority: { owner: false, basis: "operator-source" } },
     });
     expect(
-      occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }).result,
+      (await occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }))
+        .result,
     ).toMatchObject({
       status: "ready",
       facts: { authority: { owner: true, basis: "operator-source" } },
@@ -374,7 +446,7 @@ describe("occurrence pause", () => {
     expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: PARENT_KEY, ...row }),
     );
-    expect(occurrence.mint(RUN).result).toMatchObject({
+    expect((await occurrence.mint(RUN)).result).toMatchObject({
       status: "ready",
       facts: {
         principal: { kind: "parent", parent: { sessionKey: PARENT_KEY, ...row } },
@@ -493,20 +565,5 @@ describe("occurrence pause", () => {
     expect(text).toContain(`Automation "${"a".repeat(119)}" is paused`);
     expect(text).toContain(`\`${PARENT_KEY}\`, is unavailable: it was archived.`);
     expect(text).toContain("openclaw automations enable job-1");
-  });
-});
-
-describe("prepareCronRunAdmission", () => {
-  it("refuses a scheduled run that carries no admitted occurrence", () => {
-    expect(() =>
-      prepareCronRunAdmission({
-        cfg: {},
-        agentId: "main",
-        runId: "run-1",
-        sessionKey: "agent:main:cron:job-1:run:s1",
-        jobId: "job-1",
-        deliveryAttemptFence: null,
-      } as unknown as Parameters<typeof prepareCronRunAdmission>[0]),
-    ).toThrow("a scheduled run requires its admitted occurrence");
   });
 });

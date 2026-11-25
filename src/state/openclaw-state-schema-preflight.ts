@@ -30,7 +30,11 @@ import {
 } from "./openclaw-state-db-maintenance.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
-import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  assertSupportedStateSchemaVersion,
+  readStateSchemaContentVersion,
+  readStateSchemaMinReader,
+} from "./openclaw-state-db-schema-version.js";
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
 import { inspectCurrentStateStartupSchema } from "./openclaw-state-schema-inspection.js";
 import { readStateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
@@ -49,6 +53,7 @@ export type StateSchemaInspection = {
   schemas: OpenClawDatabaseSchemaPreflight;
   registeredDatabases?: { agentId: string; path: string }[];
   deletionJournal?: AgentDeletionJournalDisposition;
+  /** One original cause per schemas.indeterminate row, in the same order. */
   inspectionErrors: unknown[];
   startupMetrics?: {
     stateIntegrityCheckCount: number;
@@ -64,6 +69,7 @@ export function inspectStateDatabaseSchema(
   input: StateSchemaInspectionInput,
 ): StateSchemaInspection {
   const { pathname, supportedVersion } = input;
+  const runtime = input.purpose === "runtime" && supportedVersion === OPENCLAW_STATE_SCHEMA_VERSION;
   const schemas: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const inspection: StateSchemaInspection = { schemas, inspectionErrors: [] };
   try {
@@ -86,11 +92,24 @@ export function inspectStateDatabaseSchema(
         : (getStateSchemaVersionAdmission(database)?.userVersion ??
           getAdmittedSqliteSchemaFacts(database)?.userVersion);
     const stateVersion = admittedVersion ?? readSqliteUserVersion(database);
-    const contentVersion =
-      stateVersion > supportedVersion
-        ? stateVersion
-        : readStateSchemaContentVersion(database, stateVersion);
-    if (contentVersion > supportedVersion) {
+    let contentVersion: number;
+    try {
+      contentVersion =
+        stateVersion > supportedVersion && !runtime
+          ? stateVersion
+          : readStateSchemaContentVersion(database, stateVersion);
+    } catch (error) {
+      // An unreadable newer catalog cannot expose its floor or be repaired by T.
+      if (stateVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+        assertSupportedStateSchemaVersion(database, pathname, {
+          userVersion: stateVersion,
+          contentVersion: stateVersion,
+        });
+      }
+      throw error;
+    }
+    const readerVersion = runtime ? readStateSchemaMinReader(database) : contentVersion;
+    if (readerVersion > supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
       schemas.incompatible.push({
         kind: "state",
@@ -127,7 +146,7 @@ export function inspectStateDatabaseSchema(
     if (
       !cleanClose &&
       input.requireStartupMigrationReadiness &&
-      contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION
+      (runtime || contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION)
     ) {
       const integrityStartedAt = performance.now();
       if (metrics) {
@@ -154,7 +173,7 @@ export function inspectStateDatabaseSchema(
       assertCanonicalStateSchemaShape(database, pathname);
       // Readiness must reject malformed ownership even when startup has no pending writes.
       inspectOpenClawStateOwnershipFromDatabase(database, pathname);
-      if (migrationVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+      if (migrationVersion >= OPENCLAW_STATE_SCHEMA_VERSION) {
         const { blockingIssues } = inspectCurrentStateStartupSchema(
           database,
           pathname,
@@ -171,7 +190,7 @@ export function inspectStateDatabaseSchema(
     } else if (
       !cleanClose &&
       input.verifyCurrentSchemaShape &&
-      migrationVersion === OPENCLAW_STATE_SCHEMA_VERSION
+      migrationVersion >= OPENCLAW_STATE_SCHEMA_VERSION
     ) {
       try {
         assertOpenClawStateDatabaseForMaintenance(database, {

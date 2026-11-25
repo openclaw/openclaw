@@ -1,4 +1,3 @@
-import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -54,6 +53,7 @@ import {
 import { createCliFailoverError, readCliStreamRefusalOutput } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import { createCliRunModelRequestGate } from "./cli-runner/model-request-hook.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
@@ -71,6 +71,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { assertParticipationRuntime } from "./participation-ceiling.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
 import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
@@ -137,6 +138,7 @@ async function runCliAgentInternal(
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();
@@ -223,9 +225,7 @@ export async function runPreparedCliAgent(
     },
     () =>
       settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle, (complete) =>
-        runWithCliHistoryWriter(context.cliHistoryWriter, () =>
-          runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
-        ),
+        runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
       ),
   );
 }
@@ -289,6 +289,15 @@ async function runPreparedCliAgentOwned(
     ...buildAgentHookContextChannelFields(params),
     ...buildAgentHookContextIdentityFields(params),
   } as const;
+
+  context.beforeModelRequest = createCliRunModelRequestGate({
+    hookRunner,
+    hookContext: buildAgentHookContext(hookContext),
+    run: params,
+    model: context.modelId,
+    prompt: promptForHooks,
+    history: () => historyMessages,
+  });
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>
     buildAgentHookConversationMessages({
@@ -521,7 +530,9 @@ async function runPreparedCliAgentOwned(
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
     ({ executePreparedCliRun } = await import("./cli-runner/execute.runtime.js"));
-    historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+    if (needsHookHistory || context.beforeModelRequest) {
+      historyMessages = await loadCliSessionHistoryMessages(params);
+    }
     if (turnSideEffectsDisabled) {
       const reusableCliSessionId = isolatedCompletion
         ? undefined

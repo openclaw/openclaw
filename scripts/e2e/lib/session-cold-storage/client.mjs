@@ -181,7 +181,7 @@ if (phase === "seed") {
     assert.equal(backup.ok, true);
     const recoveredState = path.join(proofDir, "recovered");
     const target = databasePath(recoveredState);
-    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const restored = JSON.parse(
       await runCli(context, [
         "backup",

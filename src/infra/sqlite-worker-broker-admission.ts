@@ -16,6 +16,7 @@ import {
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerGenerationUrl } from "./runtime-worker-generation.js";
 import { prepareSqliteDatabaseAdmissionAsync } from "./sqlite-database-admission.js";
+import { publishSqliteWalCheckpointObservation } from "./sqlite-wal-checkpoint.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -24,9 +25,10 @@ import type {
   SqliteWorkerOpenCustody,
   StoreClient,
 } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { SqliteWorkerError, type SqliteWorkerWalCheckpoint } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentity, type DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 import {
   captureSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
@@ -223,13 +225,6 @@ export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqli
     throw new Error("SQLite worker database path must identify a regular file");
   }
   options.assertCurrent?.();
-  if (
-    options.expectedIdentity &&
-    (identity.key !== options.expectedIdentity ||
-      (options.expectedBirthtime !== undefined && identity.birthtime !== options.expectedBirthtime))
-  ) {
-    throw new Error("SQLite Worker path no longer matches its borrowed native owner");
-  }
   return { databasePath, inputHash, identity, key: identity.key };
 }
 
@@ -427,6 +422,47 @@ export function prepareSqliteWorkerActorContext(
     return delivered;
   }
   return undefined;
+}
+
+/** A matched reply retains original actor custody; a maintenance fact grants no access. */
+export function publishSqliteWorkerWalCheckpoint(
+  job: Pick<Job, "request" | "assertCurrent" | "custody">,
+  actors: ReadonlySet<Pick<Actor, "id" | "identity">>,
+  walCheckpoint: SqliteWorkerWalCheckpoint | undefined,
+): void {
+  if (!walCheckpoint) {
+    return;
+  }
+  const authority = job.request.executionAuthority;
+  for (const actor of actors) {
+    if (actor.id !== job.request.actor) {
+      continue;
+    }
+    if (
+      walCheckpoint.identity.key !== actor.identity.key ||
+      walCheckpoint.identity.birthtime !== actor.identity.birthtime ||
+      walCheckpoint.identity.canonicalPath !== actor.identity.canonicalPath ||
+      (authority &&
+        (walCheckpoint.identity.key !== `file:${authority.physicalIdentity}` ||
+          walCheckpoint.identity.birthtime !== authority.birthtime ||
+          walCheckpoint.incarnation !== authority.incarnation))
+    ) {
+      return;
+    }
+    try {
+      // Ordinary host-admitted commands need not carry the optional fast-grant authority.
+      job.assertCurrent?.();
+      if (readSqliteWorkerRequestCustody(job.custody.descriptor)) {
+        publishSqliteWalCheckpointObservation(
+          walCheckpoint.identity.canonicalPath,
+          walCheckpoint.checkpoint,
+        );
+      }
+    } catch {
+      // A stale maintenance fact cannot affect another native owner's work or result.
+    }
+    return;
+  }
 }
 
 /** The captured opening and companion locators own the exact file-creation allowlist. */

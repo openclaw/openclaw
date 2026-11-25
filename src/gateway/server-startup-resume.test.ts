@@ -21,7 +21,7 @@ import {
   productProvider,
 } from "./server.chat-product.test-support.js";
 import * as restartResume from "./session-restart-resume.js";
-import * as systemTurnAuthority from "./session-system-turn-authority.js";
+import * as systemTurnAuthority from "./session-sharing-authorization-async.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -107,7 +107,7 @@ it(
         });
         replaceSessionEntrySync(target, {
           ...loadExactSessionEntry(target)!.entry,
-          resumeAfterRestart: { queuedInputIds: [] },
+          resumeAfterRestart: {},
         });
         expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
         return target;
@@ -267,7 +267,7 @@ it("serves startup reads and unrelated turns while a resumed session retains inp
   const target = { agentId: "main", sessionKey: resumeKey };
   replaceSessionEntrySync(target, {
     ...loadExactSessionEntry(target)!.entry,
-    resumeAfterRestart: { queuedInputIds: [] },
+    resumeAfterRestart: {},
   });
   expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
   stage = "gateway startup";

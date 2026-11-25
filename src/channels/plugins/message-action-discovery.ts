@@ -15,6 +15,7 @@ import {
   resolveBundledChannelMessageToolDiscoveryAdapter,
   type ChannelMessageToolDiscoveryAdapter,
 } from "./message-tool-api.js";
+import { createConfiguredMessageToolDiscoveryAdapter } from "./outbound-message-tool-discovery.js";
 import type {
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionName,
@@ -144,16 +145,17 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
   }
   const catalog = preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   const prepared = catalog?.getChannel(channelId);
-  if (prepared?.actions) {
-    return { pluginId: prepared.id, actions: prepared.actions };
+  const preparedActions = prepared?.actions ?? prepared?.outboundDiscovery;
+  if (prepared && preparedActions) {
+    return { pluginId: prepared.id, actions: preparedActions };
   }
   if (!catalog) {
     const loadedPlugin = getLoadedChannelPlugin(channelId);
-    if (loadedPlugin?.actions) {
-      return {
-        pluginId: loadedPlugin.id,
-        actions: loadedPlugin.actions,
-      };
+    const actions =
+      loadedPlugin &&
+      (loadedPlugin.actions ?? createConfiguredMessageToolDiscoveryAdapter(loadedPlugin));
+    if (actions) {
+      return { pluginId: channelId, actions };
     }
   }
   // Prefer the bundled public artifact before full plugin materialization so
@@ -166,7 +168,21 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
     };
   }
   const plugin = catalog ? undefined : getChannelPlugin(channelId);
-  return plugin?.actions ? { pluginId: plugin.id, actions: plugin.actions } : null;
+  const actions = plugin && (plugin.actions ?? createConfiguredMessageToolDiscoveryAdapter(plugin));
+  return actions ? { pluginId: channelId, actions } : null;
+}
+
+/** Registered send configuration is independent of transport health or action readiness. */
+export function resolveConfiguredOutboundMessageToolDiscoveryAdapter(
+  channel: string,
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog,
+): ChannelMessageToolDiscoveryAdapter | undefined {
+  const catalog = preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
+  if (catalog) {
+    return catalog.getChannel(channel)?.outboundDiscovery;
+  }
+  const plugin = getLoadedChannelPlugin(channel);
+  return plugin ? createConfiguredMessageToolDiscoveryAdapter(plugin) : undefined;
 }
 
 type MessageActionDiscoveryRequest = {
@@ -347,6 +363,8 @@ function mergeToolSchemaProperties(
 type ChannelMessageToolSchemaParams = ChannelMessageActionDiscoveryParams & {
   /** Core discovery selects the session channel set before merging plugin fields. */
   channels?: readonly { id: string; actions?: ChannelMessageToolDiscoveryAdapter }[];
+  /** Final action enum; fragments whose declared actions are all absent are omitted. */
+  advertisedActions?: readonly string[];
   /** Internal caller-owned account selection after the usual provider scoping. */
   resolveAccountIdForChannel?: (
     channel: string,
@@ -374,6 +392,7 @@ export function* resolveChannelMessageToolSchemaPropertiesSteps(
         : contextualAccountId,
     };
   };
+  const advertisedActions = params.advertisedActions && new Set(params.advertisedActions);
   const seenPluginIds = new Set<string>();
   function* mergePluginSchema(
     pluginId: string,
@@ -387,6 +406,14 @@ export function* resolveChannelMessageToolSchemaPropertiesSteps(
     };
     for (const contribution of discovered.schemaContributions) {
       const visibility = contribution.visibility ?? "current-channel";
+      const declaredActions = contribution.actions;
+      if (
+        advertisedActions &&
+        declaredActions?.length &&
+        !declaredActions.some((action) => advertisedActions.has(action))
+      ) {
+        continue;
+      }
       if (!currentChannel || visibility === "all-configured" || pluginId === currentChannel) {
         mergeToolSchemaProperties(properties, contribution.properties);
       }

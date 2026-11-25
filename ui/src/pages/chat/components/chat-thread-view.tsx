@@ -1,4 +1,6 @@
+import type { JSX } from "@solidjs/web";
 import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
+import { routeIdFromPath } from "../../../app-route-paths.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -29,6 +31,11 @@ import { createParkedProjection } from "../../../lib/reactive/parked-projection.
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { TemplateCreatorReview } from "../../templates/creator-review.tsx";
+import {
+  hasAutomationActivity,
+  loadAutomationProjection,
+  type AutomationProjection,
+} from "../chat-automation-projection-loader.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
@@ -56,6 +63,7 @@ import { resolveTranscriptAvatarPlacement } from "./chat-transcript-identity.ts"
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { WIDGET_COMMENT_INTENT, type WidgetCommentIntent } from "./widget-comment-intent.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -82,6 +90,29 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
+function navigatePluginLink(event: MouseEvent, props: ChatThreadProps): void {
+  const anchor = anchorFromNavigationEvent(event);
+  if (
+    !props.onNavigate ||
+    !anchor ||
+    anchor.hasAttribute("download") ||
+    (anchor.target && anchor.target !== "_self")
+  ) {
+    return;
+  }
+  const url = URL.parse(anchor.href, window.location.href);
+  if (
+    !url ||
+    url.origin !== window.location.origin ||
+    routeIdFromPath(url.pathname, props.basePath) !== "plugin"
+  ) {
+    return;
+  }
+  // Keep the current document and its Gateway connection when opening a plugin record.
+  event.preventDefault();
+  props.onNavigate("plugin", { pathname: url.pathname, search: url.search, hash: url.hash });
+}
+
 function openManagedArtifactLink(event: Event, props: ChatThreadProps): boolean {
   const anchor = anchorFromNavigationEvent(event);
   // Attachment-card Download keeps its already-authorized native link action.
@@ -97,6 +128,7 @@ type ChatThreadInput = {
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
   historySupplement?: TranscriptHeader;
+  children?: JSX.Element;
 };
 
 export function ChatThread(input: ChatThreadInput) {
@@ -106,8 +138,19 @@ export function ChatThread(input: ChatThreadInput) {
   const heldWarmBoot =
     initialRestoring &&
     document.documentElement.getAttribute("data-openclaw-warm-frame") === "holding";
-  const initialReady = initialRestoring && !heldWarmBoot;
+  const initialReady =
+    (initialRestoring && !heldWarmBoot) || Boolean(input.props.initialSubmission);
   const [ready, setReady] = createSignal(initialReady);
+  const needsAutomation = createMemo(
+    () =>
+      input.props.messages.some(hasAutomationActivity) ||
+      input.props.toolMessages.some(hasAutomationActivity),
+  );
+  // History owns the transcript. Optional card enrichment must not suspend its first mount.
+  const projectAutomations = createMemo(
+    () => (needsAutomation() ? loadAutomationProjection().catch(() => undefined) : undefined),
+    { loadingValue: undefined },
+  );
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const reveal = createTimeout(() => {
     if (isPresented()) {
@@ -139,7 +182,11 @@ export function ChatThread(input: ChatThreadInput) {
           return (
             <>
               {ready() ? (
-                <ChatThreadContent {...input} presented={isPresented()} />
+                <ChatThreadContent
+                  {...input}
+                  presented={isPresented()}
+                  projectAutomations={projectAutomations()}
+                />
               ) : (
                 <div
                   class={[
@@ -153,7 +200,7 @@ export function ChatThread(input: ChatThreadInput) {
                   ]}
                   ref={[elementRef(input.bindViewport)]}
                 >
-                  {!heldWarmBoot && (
+                  {!heldWarmBoot && input.props.selectedSession?.hasMessages === true && (
                     <div class="chat-thread-content">
                       <div class="chat-thread-inner">
                         <ChatConversationLoading route />
@@ -170,7 +217,9 @@ export function ChatThread(input: ChatThreadInput) {
   );
 }
 
-function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
+function ChatThreadContent(
+  input: ChatThreadInput & { presented: boolean; projectAutomations?: AutomationProjection },
+) {
   const mobile = useContext(ChatConversationMobile);
   // Admission stays with the transcript; all overlay lifetime work loads on intent.
   const [templateIntent, setTemplateIntent] = createSignal<TemplateReference | null>(null);
@@ -197,6 +246,21 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   onSettled(() => {
     const element = root();
     const unregister = element && registerTranscriptElement(paneId(), element);
+    const stopWidgetComments =
+      element &&
+      listen(element, WIDGET_COMMENT_INTENT, (event) => {
+        if (!(event instanceof CustomEvent) || !input.presented || !input.props.onAddToChat) {
+          return;
+        }
+        const widget: WidgetCommentIntent = event.detail;
+        event.stopPropagation();
+        event.preventDefault();
+        input.props.onAddToChat(
+          { text: widget.text, start: 0, end: widget.text.length },
+          widget.anchor,
+          widget,
+        );
+      });
     const searchState = getTranscriptState(paneId()).search;
     let query = searchState.snapshot.query.trim();
     const stopSearch = searchState.subscribe(() => {
@@ -210,6 +274,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     return () => {
       stopSearch();
       unregister?.();
+      stopWidgetComments?.();
     };
   });
   const search = createMemo(() =>
@@ -250,15 +315,21 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       return typeof visible === "object" ? visible.isPresented() : visible;
     },
   );
-  const splitColdRows = !input.props.restoring && splitChatConstruction;
+  const splitColdRows =
+    !input.props.restoring && !input.props.initialSubmission && splitChatConstruction;
   const started = splitColdRows ? performance.now() : 0;
   const current = createMemo(() => {
     const searchState = search().read();
     const { session } = presentation();
-    const projection = projectChatTranscript(input.props, session, searchState);
+    const projection = projectChatTranscript(
+      input.props,
+      session,
+      searchState,
+      input.projectAutomations,
+    );
     expansionVersions();
     // Empty shells establish the baseline for first-submission animation.
-    if (projection.isEmpty || projection.showLoadingSkeleton) {
+    if (projection.isEmpty || projection.isLoading) {
       session.entryAnimations.sync(
         EMPTY_ENTRY_KEYS,
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
@@ -279,6 +350,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
+  const isLoading = createMemo(() => current().projection.isLoading);
   const isEmpty = createMemo(() => current().projection.isEmpty);
   const searchOpen = createMemo(() => current().projection.searchOpen);
   const routeLoading = createMemo(() => input.props.routeLoadingSkeleton && showLoadingSkeleton());
@@ -289,7 +361,11 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     current().projection.showLoadingSkeleton ? false : (input.props.transcriptVisible ?? true),
     Boolean(input.props.gatewayClient?.connected),
   ]);
-  const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
+  const markdownRef = createMarkdownBlocksRef(
+    () => input.props.transcriptVisible ?? true,
+    (links) => input.props.onWorkspaceFileLinks?.(links),
+    () => input.props.workspaceFileLinkScope,
+  );
   // The supplement takes the header only once the transcript has no earlier page,
   // so its controls never stack under the history boundary.
   const headerContent = (
@@ -303,15 +379,11 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       : input.historySupplement?.height;
     return height === undefined ? null : { content: headerContent, height };
   };
-  const historySentinel = (
-    <div class="chat-history-sentinel" ref={[elementRef(input.props.onHistorySentinelRef)]} />
-  );
-  const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
     if (!renderReady()) {
       return (
         <div class="chat-thread-inner">
-          <ChatConversationLoading route />
+          {input.props.selectedSession?.hasMessages === true && <ChatConversationLoading route />}
         </div>
       );
     }
@@ -324,10 +396,9 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         </div>
       );
     }
-    if (showLoadingSkeleton() || isEmpty()) {
+    if (isLoading() || isEmpty()) {
       return (
         <div class="chat-thread-inner">
-          {sentinel()}
           {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.content : undefined}
           {showLoadingSkeleton() ? (
             mobile() ? (
@@ -347,7 +418,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         </div>
       );
     }
-    return current().projection.renderRows(sentinel(), historyHeader());
+    return current().projection.renderRows(historyHeader());
   });
   const announcement = createMemo(() => {
     // The row owner records the accepted announcement while rendering its rows.
@@ -475,6 +546,8 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
           if (sessionTarget && navigation) {
             event.preventDefault();
             input.props.onOpenSessionLink?.(sessionTarget);
+          } else if (navigation) {
+            navigatePluginLink(event, input.props);
           }
         }}
         onMouseDown={(event) => {
@@ -521,6 +594,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         />
         <div class="chat-thread-content">
           {contents()}
+          {input.children}
           <Show when={input.props.applicationContext}>
             {(context) => (
               <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />

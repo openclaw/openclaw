@@ -11,10 +11,12 @@ import { hasErrnoCode, ignoreMissingPath } from "../../infra/errno.js";
 
 function childPids(): number[] {
   const children = new Set<number>();
+  let sawChildrenFile = false;
   for (const thread of readdirSync("/proc/self/task")) {
     let value: string;
     try {
       value = readFileSync("/proc/self/task/" + thread + "/children", "utf8");
+      sawChildrenFile = true;
     } catch (error) {
       // A thread can retire during enumeration. This is not extinction evidence.
       ignoreMissingPath(error);
@@ -27,7 +29,58 @@ function childPids(): number[] {
       children.add(Number(pid));
     }
   }
+  if (!sawChildrenFile) {
+    // Kernels built without CONFIG_PROC_CHILDREN expose no per-thread children
+    // files at all, so the owner would adopt orphans it can never enumerate,
+    // retain their zombies, and never drain. The stat parent map below is the
+    // enumeration for those kernels instead of a silently empty set.
+    return childPidsFromProcStat();
+  }
   return [...children];
+}
+
+/** Parent-id enumeration from /proc stat files, the kernel-independent floor. */
+function childPidsFromProcStat(): number[] {
+  const children: number[] = [];
+  let sawStatFile = false;
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/u.test(entry)) {
+      continue;
+    }
+    let stat: string;
+    try {
+      stat = readFileSync("/proc/" + entry + "/stat", "utf8");
+    } catch (error) {
+      // A foreign process can retire between the listing and its stat read; the
+      // kernel reports ESRCH when the task is gone by the read despite the open
+      // having succeeded. This is not extinction evidence. The owner's own
+      // entry must stay readable, so its failures are never dismissed here.
+      if (
+        Number(entry) !== process.pid &&
+        (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ESRCH"))
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    sawStatFile = true;
+    // A comm value may contain spaces or parentheses; fields follow its last ')'.
+    // PID 1 legitimately reports parent 0; a non-matching parent is simply not ours.
+    const [, parentText] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const parent = Number(parentText);
+    if (!/^\d+$/u.test(parentText ?? "") || !Number.isSafeInteger(parent)) {
+      throw new Error("Linux process owner could not enumerate its children");
+    }
+    if (parent === process.pid) {
+      children.push(Number(entry));
+    }
+  }
+  // A readable /proc always lists this process itself, so reading zero stat
+  // files proves a broken enumeration, never a childless owner.
+  if (!sawStatFile) {
+    throw new Error("Linux process owner could not enumerate its children");
+  }
+  return children;
 }
 
 /** One dedicated process acquires adoption before launching any application work. */

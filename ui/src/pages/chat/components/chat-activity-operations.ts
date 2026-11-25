@@ -9,6 +9,7 @@ import {
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
+import { resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import {
   resolveSessionLaunchPresentation,
   readSubagentCancellation,
@@ -32,7 +33,7 @@ function isAnsweredQuestion(card: ToolCard): boolean {
 export function isStandaloneActivity(card: ToolCard): boolean {
   const name = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
   return (
-    name === "view_image" ||
+    (name === "view_image" && resolveToolCardOutcome(card, undefined) !== "succeeded") ||
     (name === "ask_user" && !isAnsweredQuestion(card)) ||
     name === "agents_wait" ||
     readSubagentCancellation(card) !== null ||

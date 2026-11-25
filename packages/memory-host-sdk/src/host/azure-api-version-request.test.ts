@@ -22,5 +22,9 @@ it.each(["api.openai.com", "openai.azure.com.evil.example"])(
       headers: { "api-version": "proxy-version" },
     };
     expect(resolveAzureApiVersionRequestTarget(request)).toBe(request);
+    expect(request).toEqual({
+      url: `https://${host}/v1/embeddings`,
+      headers: { "api-version": "proxy-version" },
+    });
   },
 );

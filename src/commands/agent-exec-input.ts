@@ -116,16 +116,32 @@ export async function resolveExecBaseConfig(
     const { coerceConfig } = await import("../config/io.read-helpers.js");
     return coerceConfig(applyImplicitAgentRosterDefaults({}));
   }
-  const { createConfigIO, captureRuntimeConfigAsyncReader } = await import("../config/io.js");
-  if (!opts.config) {
-    return await captureRuntimeConfigAsyncReader({ observe: false })();
+  const { createConfigIO, getRuntimeConfigSnapshot } = await import("../config/io.js");
+  const published = !opts.config && getRuntimeConfigSnapshot();
+  if (published) {
+    return published;
   }
   // A pinned file bypasses the published runtime snapshot and fails if missing or invalid.
-  const io = createConfigIO({ configPath: path.resolve(opts.config), observe: false });
-  if (!existsSync(io.configPath)) {
+  const io = createConfigIO({
+    ...(opts.config ? { configPath: path.resolve(opts.config) } : {}),
+    observe: false,
+  });
+  if (opts.config && !existsSync(io.configPath)) {
     throw new Error(`--config file not found: ${io.configPath}`);
   }
-  return await io.loadConfigAsync();
+  const { config, sourceConfig, configDiagnostics } = await io.readBestEffortConfigSnapshot();
+  if (configDiagnostics) {
+    const { createInvalidConfigError, formatInvalidConfigDetails } =
+      await import("../config/io.invalid-config.js");
+    throw createInvalidConfigError(
+      configDiagnostics.path,
+      formatInvalidConfigDetails(configDiagnostics.issues),
+    );
+  }
+  const { captureRuntimeConfigWithSource } =
+    await import("../config/runtime-config-capture-state.js");
+  const { applyConfigOverrides } = await import("../config/runtime-overrides.js");
+  return captureRuntimeConfigWithSource(config, applyConfigOverrides(sourceConfig));
 }
 
 /** Overlay the selected config before resolving the run's agent and credential owner. */
@@ -157,7 +173,16 @@ export async function applyExecConfigOverrides(
       `Invalid --config-override: ${formatConfigIssueLines(result.issues, "", { normalizeRoot: true }).join("; ")}`,
     );
   }
-  return result.config;
+  const { captureRuntimeConfigWithSource } =
+    await import("../config/runtime-config-capture-state.js");
+  const { projectConfigOntoRuntimeSourceSnapshot } =
+    await import("../config/runtime-source-projection.js");
+  const { coerceConfig } = await import("../config/io.read-helpers.js");
+  const sourceConfig = parsed.reduce<unknown>(
+    (config, override) => mergeDeep(config, override),
+    projectConfigOntoRuntimeSourceSnapshot(base),
+  );
+  return captureRuntimeConfigWithSource(result.config, coerceConfig(sourceConfig));
 }
 
 export function buildExecRunConfig(params: {

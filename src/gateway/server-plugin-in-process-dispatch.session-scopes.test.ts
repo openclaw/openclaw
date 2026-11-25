@@ -47,7 +47,7 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
 } from "./methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
@@ -116,6 +116,7 @@ async function createHostedCreation(
     agents: {
       defaults: {
         workspace: state.workspaceDir,
+        model: { primary: "test-provider/scope-model" },
         subagents: { allowAgents: ["main", "reviewer"] },
       },
       entries: { main: {}, reviewer: {} },
@@ -167,7 +168,7 @@ async function createHostedCreation(
   const captured =
     source === "operator"
       ? expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
@@ -457,7 +458,9 @@ describe("hosted session tool narrow scope projection", () => {
     withHostedCreation(async (fixture) => {
       await fixture.seedForeign();
       const before = fixture.read();
-      await expect(fixture.create({ label: "Rejected" })).rejects.toThrow("own session");
+      await expect(fixture.create({ label: "Rejected" })).rejects.toThrow(
+        'Session "agent:main:dashboard:scope-child" was not found.',
+      );
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(fixture.read()).toEqual(before);
     }));
@@ -470,7 +473,7 @@ describe("hosted session tool narrow scope projection", () => {
     }, "unidentified"));
 
   it.each(["operator", "scheduled"] as const)(
-    "retains the original %s source after admission until the creation COMMIT",
+    "cancels %s session creation when its invocation ends before COMMIT",
     (source) =>
       withHostedCreation(async (fixture) => {
         const entered = createDeferred();
@@ -480,11 +483,7 @@ describe("hosted session tool narrow scope projection", () => {
           await release.promise;
         });
         const request = fixture.create({}, { inheritedPermissionMode: "full" });
-        const rejected = expect(request).rejects.toThrow(
-          source === "operator"
-            ? "original native source revoked"
-            : "agent tool caller authority is no longer active",
-        );
+        const rejected = expect(request).rejects.toThrow("original native source revoked");
         try {
           await Promise.race([entered.promise, request]);
           expect(fixture.handler).toHaveBeenCalledOnce();

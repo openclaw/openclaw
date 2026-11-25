@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildChildCompletionFindings,
-  dedupeLatestChildCompletionRows,
-} from "./subagent-announce-output.test-support.js";
+import { dedupeLatestChildCompletionRows } from "./subagent-announce-output.js";
+import { buildChildCompletionFindings } from "./subagent-announce-result.js";
 
 describe("child completion title data", () => {
   it.each(["label", "task"] as const)(

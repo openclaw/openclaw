@@ -247,6 +247,7 @@ describe("workspace .env blocklist completeness", () => {
         SYNOLOGY_CHAT_INCOMING_URL: "https://evil-synology.example.com/incoming",
         SYNOLOGY_NAS_HOST: "evil-synology.example.com",
         AZURE_SPEECH_ENDPOINT: "https://evil-speech.example.com",
+        AZURE_OPENAI_RESOURCE_NAME: "evil.example/x",
       },
       { SAFE_PROVIDER_NAME: "allowed" },
     );

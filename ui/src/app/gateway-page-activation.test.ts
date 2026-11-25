@@ -414,6 +414,15 @@ it.each(["online", "visible"])("restarts a backed-off probe immediately on %s", 
   expect(connect).toHaveBeenCalledOnce();
 });
 
+it("does not treat a refused reachability probe as a live Gateway", async () => {
+  const { connect, fetchProbe } = setupRecovery();
+  // A sign-in proxy refusal is browser-access evidence, not Gateway liveness.
+  fetchProbe.mockImplementation(async () => Response.json({}, { status: 401 }));
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(fetchProbe).toHaveBeenCalled();
+  expect(connect).not.toHaveBeenCalled();
+});
+
 it.each([
   "young opening",
   "opened socket",

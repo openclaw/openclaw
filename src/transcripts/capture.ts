@@ -28,8 +28,6 @@ import { resolveTranscriptsConfig } from "./config.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
 import { getTranscriptSourceProvider } from "./provider-registry.js";
 import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceLocator,
   TranscriptSourceProvider,
   TranscriptToolAction,
   TranscriptToolCaller,
@@ -42,6 +40,7 @@ import {
 } from "./source-locator.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
 import type { TranscriptsStore } from "./store.js";
+import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./types.js";
 
 const ACCOUNT_ID_OUTPUT_MAX_CHARS = 64;
 

@@ -14,12 +14,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
-import {
-  ensureCanonicalUserProfileForEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
-import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
-import { withPublicationGuestRole } from "./github-publication-requester.test-support.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -27,7 +22,6 @@ import {
   persistPublicationTestSession,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -201,7 +195,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
         admission.authorization!.assertCurrent();
         await expect(
           f.invoke("guest", { ...args, action }, SESSION_KEY, { client }),
-        ).rejects.toThrow("The original GitHub publication requester is no longer authorized.");
+        ).rejects.toThrow("This requester is not authorized to publish from this conversation.");
         expect(f.writes).toEqual([]);
         expect(f.state.draft).toBe(true);
       } finally {
@@ -211,69 +205,34 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.writes).toEqual([]);
   });
 
-  it.each(["request_review", "edit", "ready", "close"] as const)(
-    "revalidates authority after the PR read for %s",
+  it.each(["request_review", "ready"] as const)(
+    "revalidates the GitHub publisher after the PR read for %s",
     async (action) => {
       const f = await fixture();
-      const actor = action === "close" ? "admin" : "guest";
-      if (action === "edit") {
-        f.state.head.sha = "b".repeat(40);
-      }
-      const args =
-        action === "edit"
-          ? {
-              title: "New title",
-              expectedTitle: f.state.title,
-              expectedHeadCommit: f.state.head.sha,
-            }
-          : {};
-      if (action === "request_review" || action === "ready") {
-        f.onRead(async () => {
-          mocks.matchesIdentity.mockReturnValue(false);
-        });
-        await expect(f.action(actor, action, args)).rejects.toThrow("The GitHub publisher changed");
-        expect(f.writes).toEqual([]);
-        mocks.matchesIdentity.mockReturnValue(true);
-      }
       f.onRead(async () => {
-        if (actor === "admin") {
-          await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-          invalidateOperatorRolePolicy(f.maintainerProfile);
-        } else {
-          await f.revoke();
-        }
+        mocks.matchesIdentity.mockReturnValue(false);
       });
-      await expect(f.action(actor, action, args)).rejects.toThrow("Your operator role changed");
+      await expect(f.action("guest", action, {})).rejects.toThrow("The GitHub publisher changed");
       expect(f.writes).toEqual([]);
+      mocks.matchesIdentity.mockReturnValue(true);
     },
   );
 
-  it.each(["policy", "lifecycle"] as const)(
-    "refuses an edit when %s changes during the awaited PR read",
-    async (change) => {
-      const f = await fixture();
-      f.onRead(async () => {
-        if (change === "policy") {
-          setRuntimeConfigSnapshot(
-            withPublicationGuestRole(currentGitHubPublicationConfig(), { scopes: [] }),
-          );
-        } else {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: SESSION_KEY },
-            {
-              lifecycleRevision: randomUUID(),
-            },
-          );
-        }
-      });
-      await expect(
-        f.action("guest", "edit", { title: "Unauthorized edit", expectedTitle: f.state.title }),
-      ).rejects.toThrow(
-        change === "policy" ? /role changed|permission|authority/iu : /changed|lifecycle/iu,
+  it("refuses an edit when the lifecycle changes during the awaited PR read", async () => {
+    const f = await fixture();
+    f.onRead(async () => {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SESSION_KEY },
+        {
+          lifecycleRevision: randomUUID(),
+        },
       );
-      expect(f.writes).toEqual([]);
-    },
-  );
+    });
+    await expect(
+      f.action("guest", "edit", { title: "Unauthorized edit", expectedTitle: f.state.title }),
+    ).rejects.toThrow(/changed|lifecycle/iu);
+    expect(f.writes).toEqual([]);
+  });
 
   it("reports uncertain re-reviews without retrying the POST", async () => {
     const f = await fixture();
@@ -401,15 +360,20 @@ describe("session PR actions through the agent tool and registered Gateway metho
 
   it("preserves the original attribution after an edit appends another publication footer", async () => {
     const f = await fixture();
+    const participant = "\n\nRequested by Grace Hopper via OpenClaw";
+    f.state.body = f.state.body.replace("\n\n## Worked on by", `${participant}\n\n## Worked on by`);
     const original = f.state.body;
     const replacement = "\n\n## Worked on by\n\n- @other\n\n<!-- openclaw-publication:fake -->";
     await f.action("guest", "edit", { expectedBody: original, body: original + replacement });
-    await expect(
-      f.action("guest", "edit", {
-        expectedBody: original + replacement,
-        body: "Replacement description" + replacement,
-      }),
-    ).rejects.toThrow("attribution");
+    for (const body of [
+      "Replacement description" + replacement,
+      original.replace(participant, "") + replacement,
+      original.replace("Grace Hopper", "Publisher Account") + replacement,
+    ]) {
+      await expect(
+        f.action("guest", "edit", { expectedBody: original + replacement, body }),
+      ).rejects.toThrow("attribution");
+    }
     expect(f.state.body).toBe(original + replacement);
     expect(f.writes).toHaveLength(1);
   });

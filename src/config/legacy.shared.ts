@@ -12,6 +12,8 @@ export type LegacyConfigRule = {
   // If true, only report when the legacy value is present in the original parsed
   // source (not only after include/env resolution).
   requireSourceLiteral?: boolean;
+  /** Valid config Doctor reports for operator review; it never blocks automatic repair. */
+  reviewOnly?: true;
 };
 
 /** Evaluate exactly the rules selected by the migration owner. */
@@ -41,7 +43,11 @@ export function findLegacyConfigRuleIssues(
           continue;
         }
       }
-      issues.push({ path: rule.path.join("."), message: rule.message });
+      issues.push({
+        path: rule.path.join("."),
+        message: rule.message,
+        ...(rule.reviewOnly ? { reviewOnly: true } : {}),
+      });
     }
   }
   return issues;

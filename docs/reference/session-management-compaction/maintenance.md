@@ -143,9 +143,9 @@ is older than `afterDays`. Recent activity or a running status on the logical
 session protects its current window; historical windows use their own activity
 and running status. Recovery ownership, actual run admissions, and explicit
 history references such as checkpoints continue to protect the required
-windows. Pinning or archiving a session does not count as ongoing activity and
-does not by itself keep its
-payload in SQLite. The Gateway checks at startup and once a minute, running
+windows. Archiving, pinning, or unpinning a session by itself preserves its last
+activity time. Restoring the session to the active list refreshes that time.
+The Gateway checks at startup and once a minute, running
 background batches with work budgets of 128 transcripts and 64 MiB without
 requiring a new message. Changes to these settings apply to future work without
 restarting the Gateway; turning the feature off does not discard or strand
@@ -155,8 +155,9 @@ existing cold history.
 `session.maintenance.mode` is `warn`; that mode controls age, count, and
 disk-budget cleanup. Disable `coldStorage.enabled` to stop future extraction.
 
-Opening chat, requesting history, and channel writes restore cold history
-asynchronously before use. Bulk `sessions.preview` requests keep payloads archived
+Bounded chat history pages and initial message subscriptions use navigation rows
+in SQLite to read the selected archive chunks. Older archives awaiting navigation
+backfill still restore on these reads. Bulk `sessions.preview` requests keep payloads archived
 and return an explicit `cold` status so menu prewarming cannot refill the database.
 Session lists also keep cold payloads archived. When transcript title fields are
 not already cached, lists use session metadata and omit last-message previews
@@ -173,8 +174,8 @@ payloads. Matching preserves newest-first selection and active-branch membership
 a stale active projection still uses restoration and reconciliation. These reads
 verify the entire archive before returning a result, so corruption cannot look
 like missing history. Repeated reads decompress the archive again rather than
-keeping its payload resident. Conversation writes, indexed chat pages, model-context
-reads, and activity-summary generation retain their existing restoration path.
+keeping its payload resident. Conversation writes, model-context reads, and activity-summary
+generation can restore the transcript.
 Archive/unarchive notifications check recap freshness before loading a transcript;
 a current recap does not trigger restoration. New activity and terminal runs still
 request recap work.
@@ -192,10 +193,14 @@ to the process and resets when it restarts. Large transcript windows use ordered
 independently checksummed chunks. Each uncompressed JSONL file, including its
 restoration metadata, is bounded to 64 MiB. Reads and restores process one chunk
 at a time; the window leaves SQLite only after every chunk is durable and verified.
-Restore preparation verifies the chunk manifest and compressed hashes before write
-admission. The transaction decodes each chunk once, consuming one record at a time;
-invalid records or mismatched totals roll back the entire restoration. Restore
-requests share the existing archive-worker queue across agent stores.
+Restore preparation verifies the chunk manifest and compressed hashes, then decodes
+and prepares each bounded batch before writer admission. Restoration retains the
+navigation rows and reuses their metadata, committing at most 256 archive records
+per transaction. Other sessions can write between batches. The cold marker remains
+until every record and chunk total is verified and committed, so readers continue
+using the complete archive. An interruption leaves the session cold; retrying
+replays the archive and rebuilds its search rows. Restore requests share the
+existing archive-worker queue across agent stores.
 One large window can exceed the normal background byte budget because its archive
 publication is atomic. Payload and search cleanup release the writer between
 units of at most 256 rows; embedded archive cleanup releases it after each chunk.
@@ -236,6 +241,9 @@ it does not guarantee that total disk usage shrinks on every pass. Background
 maintenance checkpoints SQLite and reclaims free pages in bounded worker
 passes, including later passes with no new archive candidates. Physical
 database size therefore shrinks gradually; readers can delay reclamation.
+Archive-pruning free-page passes wait for queued foreground writes before
+reserving the writer. A pass that has already started finishes before the next
+write; slow storage commits and checkpoints can still delay that write.
 Use Doctor's offline `compact` operation when a full rewrite is needed.
 
 If any archive chunk is missing or its recorded size or hash does not match, reading

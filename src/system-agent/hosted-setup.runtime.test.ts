@@ -461,7 +461,9 @@ describe("SystemAgentChatEngine runtime", () => {
       if (revisionConflict) {
         expect(stopped.text).toContain("configuration changed during channel setup");
         const [config, options] = mocks.writeWizardConfigFile.mock.calls[0] ?? [];
-        expect(config).toMatchObject({ channels: { telegram: { botToken: "123:abc" } } });
+        expect(config).toMatchObject({
+          channels: { telegram: { botToken: { source: "store", id: expect.any(String) } } },
+        });
         expect(options).toMatchObject({ baseHash: "base-hash" });
         expect(currentConfig).toEqual(changedConfig);
       } else if (phase === "write") {

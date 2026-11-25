@@ -157,6 +157,8 @@ async function plan(
       toolSearchRuntimeConfig: surface.plan.toolSearchRuntimeConfig,
       nestedToolActivityState: createAttemptNestedToolActivityState(),
       toolsEnabled: options.toolsEnabled ?? true,
+      messageToolAvailable: true,
+      fixedListing: false,
       toolsRaw: uncompactedTools,
     } satisfies Parameters<typeof prepareEmbeddedAttemptToolCatalog>[0]["preparedToolBase"];
     const result = await prepareEmbeddedAttemptToolCatalog({

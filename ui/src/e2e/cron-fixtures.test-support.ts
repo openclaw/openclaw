@@ -66,6 +66,24 @@ export async function openAutomation(page: Page, id: string) {
   return row;
 }
 
+/** Opens an automation's settings as a person does: its row, then Edit on the prompt. */
+export async function editAutomation(page: Page, id: string) {
+  const row = await openAutomation(page, id);
+  await page.locator('[data-test-id="cron-edit"]').click();
+  await page.locator("fieldset.cron-editor").waitFor();
+  return row;
+}
+
+const SENTENCE_FREQUENCY: Record<string, string> = { at: "once", every: "every", cron: "custom" };
+
+/** Chooses a schedule kind from the frequency menu. */
+export async function chooseScheduleKind(page: Page, kind: "at" | "every" | "cron" | "event") {
+  await page.locator('button:has([data-test-id="cron-schedule-frequency"])').click();
+  await page
+    .locator(`[data-test-id="cron-schedule-frequency-${SENTENCE_FREQUENCY[kind] ?? kind}"]`)
+    .click();
+}
+
 /** Opens every automation's runs from the Automations sidebar. */
 export async function openAutomationActivity(page: Page) {
   await page.locator('.sidebar-automations a[href$="?activity"]').click();

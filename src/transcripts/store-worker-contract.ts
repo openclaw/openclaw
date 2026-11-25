@@ -1,4 +1,3 @@
-import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
   queryTranscriptReadEntries,
   readLatestTranscriptEntry,
@@ -25,6 +24,7 @@ import type {
   readRecentStoppedTranscriptSession,
   readTranscriptSummaryInputRevision,
 } from "./store-sqlite.js";
+import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./types.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 

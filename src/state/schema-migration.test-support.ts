@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { expect } from "vitest";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
@@ -10,6 +9,7 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   ensureOpenClawAgentSchema,
 } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V27_SQL } from "./openclaw-agent-schema-v25.test-support.js";
 import { captureOpenClawMigrationWitness } from "./openclaw-migration-witness.js";
 import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
@@ -34,10 +34,7 @@ export function seedVersion(db: DatabaseSync, version: number) {
 }
 
 // Frozen v27 plus published v28–30 DDL, independent of the candidate migration.
-const schemaV27 = fs.readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
-  "utf8",
-);
+const schemaV27 = OPENCLAW_AGENT_SCHEMA_V27_SQL;
 
 export function seedAgentV30Schema(database: DatabaseSync, version: number): void {
   database.exec(schemaV27);

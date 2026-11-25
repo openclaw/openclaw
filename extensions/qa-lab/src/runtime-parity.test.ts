@@ -350,14 +350,7 @@ describe("runtime parity", () => {
     const cell = await captureCell("codex", tempRoot, {
       scenarioResult: {
         status: "pass",
-        steps: [
-          {
-            status: "pass",
-            details: ["happy", "failure"]
-              .map((suffix) => `RUNTIME_PARITY_SESSION_KEY=${prefix}:${suffix}`)
-              .join("\n"),
-          },
-        ],
+        runtimeParitySessionKeys: [`${prefix}:happy`, `${prefix}:failure`],
       },
     });
 
@@ -368,7 +361,7 @@ describe("runtime parity", () => {
     const missingCell = await captureCell("codex", tempRoot, {
       scenarioResult: {
         status: "fail",
-        details: "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:missing:happy",
+        runtimeParitySessionKeys: ["agent:qa:runtime-tool:missing:happy"],
       },
     });
     expect(missingCell.transcriptBytes).toBe("");

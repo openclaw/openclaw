@@ -3,6 +3,7 @@ import type {
   PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveStoredSessionPermissionPolicy } from "../../agents/tool-fs-policy.js";
@@ -124,7 +125,6 @@ export async function withRequesterNativeSubagents<T>(
       const assertCurrent = () => {
         guard.assertCurrent();
         signal.throwIfAborted();
-        operatorAuthority.assertCurrent();
         state.assertCurrent();
       };
       const prepare = async (
@@ -135,6 +135,9 @@ export async function withRequesterNativeSubagents<T>(
           entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
         const overlay = state.resolveToolAuthority(owner);
         const model = resolveSessionModelRef(cfg, entry, sessionAgentId);
+        if (!model) {
+          throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+        }
         const options = {
           ...overlay,
           config: cfg,
@@ -216,10 +219,7 @@ export async function withRequesterNativeSubagents<T>(
                   agentId: sessionAgentId,
                   operatorAuthority,
                   // Accepted children retain the operator source, not this invocation.
-                  assertSourceCurrent: () => {
-                    operatorAuthority.assertCurrent();
-                    owner.assertOwnerCurrent?.();
-                  },
+                  assertSourceCurrent: () => owner.assertOwnerCurrent?.(),
                   onAdmitted: (context) =>
                     bindGatewayContextResolver(context, resolveGatewayContext),
                 });

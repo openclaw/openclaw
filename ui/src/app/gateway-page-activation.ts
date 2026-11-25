@@ -83,7 +83,8 @@ export function startGatewayPageActivation(
       probe = controller;
       const timeout = setTimeout(() => controller.abort(), 1_500);
       try {
-        const reachable = await probeGatewayReachability(client.gatewayUrl, controller.signal);
+        const reachable =
+          (await probeGatewayReachability(client.gatewayUrl, controller.signal)) === "live";
         if (!reachable && probe === controller) {
           failedProbes = Math.min(9, failedProbes + 1);
         }

@@ -1,4 +1,4 @@
-import { createMemo, lazy, onSettled, Repeat, Show } from "solid-js";
+import { createMemo, lazy, onSettled, Show } from "solid-js";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -45,7 +45,6 @@ export function MicrophoneActivity(props: {
     },
   );
   let host: HTMLElement | undefined;
-  const bars: HTMLElement[] = [];
   return (
     <openclaw-microphone-activity
       ref={(element) => (host = element)}
@@ -55,15 +54,6 @@ export function MicrophoneActivity(props: {
       data-source="microphone"
       aria-hidden="true"
     >
-      <Repeat count={7}>
-        {(index) => (
-          <span
-            ref={(element) => (bars[index] = element)}
-            class="agent-chat__voice-activity-bar"
-            style={{ "--talk-bar-delay": `${index * -70}ms` }}
-          />
-        )}
-      </Repeat>
       <Show when={canvasLifetime()} keyed>
         {(initial) => {
           const initialStatus = initial.status;
@@ -94,7 +84,6 @@ export function MicrophoneActivity(props: {
                 renderer = createMicrophoneMeter(
                   currentHost,
                   surface,
-                  bars,
                   initialStatus,
                   reducedMotion,
                 );

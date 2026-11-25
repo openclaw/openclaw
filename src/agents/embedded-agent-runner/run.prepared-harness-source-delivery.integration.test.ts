@@ -562,7 +562,7 @@ describe("prepared harness source delivery", () => {
       expect(modelVisiblePrompt).not.toContain("Normal final replies are private");
     } else {
       expect(modelVisiblePrompt).toContain(
-        "Current source visible reply MUST use `message(action=send)`",
+        "Current-source visible replies MUST use `message(action=send)`",
       );
       expect(modelVisiblePrompt).toContain("Normal final replies are private");
       expect(modelVisiblePrompt).not.toContain(

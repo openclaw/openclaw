@@ -29,6 +29,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 import {
   buildChannelUserTurnSender,
@@ -42,8 +43,6 @@ import {
 } from "./user-turn-transcript.test-support.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
-  PersistedUserTurnMessage,
-  UserTurnInput,
   UserTurnOriginalInputCommit,
 } from "./user-turn-transcript.types.js";
 
@@ -359,6 +358,54 @@ describe("persistUserTurnTranscript", () => {
         senderKind: "unknown",
       },
     });
+  });
+
+  it("marks a platform-forwarded channel message without changing who sent it", async () => {
+    const forwardedTarget = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    const sender = buildChannelUserTurnSender({
+      SenderId: "4242",
+      Provider: "telegram",
+      ForwardedFrom: "Someone Else",
+      ForwardedFromType: "user",
+    });
+    await persistUserTurnTranscript({
+      ...forwardedTarget,
+      input: { text: "I moved to Austin", sender },
+    });
+    const [message] = await readTranscriptMessages(forwardedTarget);
+    expect(message?.["__openclaw"]).toMatchObject({
+      senderId: "4242",
+      senderIdentity: { type: "observation", id: "4242", pluginId: "telegram" },
+      forwarded: true,
+    });
+  });
+
+  it("leaves the forward marker off ordinary and non-external channel messages", async () => {
+    const plain = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    await persistUserTurnTranscript({
+      ...plain,
+      input: {
+        text: "hello",
+        sender: buildChannelUserTurnSender({ SenderId: "4242", Provider: "telegram" }),
+      },
+    });
+    const relayed = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    await persistUserTurnTranscript({
+      ...relayed,
+      input: {
+        text: "relayed",
+        provenance: { kind: "inter_session" },
+        sender: buildChannelUserTurnSender({
+          SenderId: "4242",
+          Provider: "telegram",
+          ForwardedFrom: "Someone Else",
+        }),
+      },
+    });
+    for (const transcript of [plain, relayed]) {
+      const [message] = await readTranscriptMessages(transcript);
+      expect(message?.["__openclaw"]).not.toHaveProperty("forwarded");
+    }
   });
 
   it.each(["retain", "in-place", "raw-redact", "forge"] as const)(

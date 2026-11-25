@@ -248,6 +248,78 @@ describe("Checkout chip state", () => {
     },
   );
 
+  it("finds branches beyond the initial suggestions without losing custom input", async () => {
+    const params = checkoutFixture({
+      baseRef: "",
+      worktreeName: "branch-search",
+      repository: {
+        kind: "git",
+        repoRoot: "/repo",
+        branches: [
+          ...Array.from({ length: 8 }, (_, index) => ({
+            name: "feature/" + index,
+            kind: "local" as const,
+          })),
+          { name: "release/customer-portal", kind: "remote" },
+        ],
+      },
+    });
+    const { container, update } = mountCheckout(params);
+    params.onBaseRefInput.mockImplementation((baseRef) => {
+      params.baseRef = baseRef;
+      update({ ...params });
+    });
+    await waitForOpen(container);
+    const branch = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
+    branch.focus();
+    input(branch, "PORTAL");
+    await waitForSolid(() =>
+      expect(
+        container.querySelector('[data-worktree-suggestion="release/customer-portal"]'),
+      ).not.toBeNull(),
+    );
+    expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(1);
+    keydown(branch, "ArrowDown");
+    keydown(branch, "Enter");
+    expect(params.onBaseRefInput).toHaveBeenLastCalledWith("release/customer-portal");
+    expect(params.onConfirm).not.toHaveBeenCalled();
+    input(branch, "v3.1-custom");
+    await waitForSolid(() =>
+      expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(0),
+    );
+    expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
+    expect(document.activeElement).toBe(branch);
+    expect(branch.value).toBe("v3.1-custom");
+    input(branch, "");
+    await waitForSolid(() =>
+      expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(8),
+    );
+  });
+
+  it("lists branch-name and path-segment matches before other matches", async () => {
+    const params = checkoutFixture({
+      baseRef: "release",
+      repository: {
+        kind: "git",
+        repoRoot: "/repo",
+        branches: ["main", "prerelease", "release/next", "docs/release-notes"].map((name) => ({
+          name,
+          kind: "local" as const,
+        })),
+      },
+    });
+    const { container } = mountCheckout(params);
+    await waitForOpen(container);
+    container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!.focus();
+    await waitForSolid(() =>
+      expect(
+        [...container.querySelectorAll("[data-worktree-suggestion]")].map((row) =>
+          row.getAttribute("data-worktree-suggestion"),
+        ),
+      ).toEqual(["release/next", "docs/release-notes", "prerelease"]),
+    );
+  });
+
   it("preserves editable fields through repository discovery failure and retry", async () => {
     const initial = createDeferred();
     const initialRead = { completed: initial.promise };
@@ -298,9 +370,8 @@ describe("Checkout chip state", () => {
       worktreeAvailable: true,
     });
     retry.resolve();
-    await waitForSolid(() =>
-      expect(container.querySelector('[data-worktree-suggestion="main"]')).not.toBeNull(),
-    );
+    await waitForSolid(() => expect(branch.getAttribute("role")).toBe("combobox"));
+    expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(0);
     expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
     expect(container.querySelector("[data-worktree-name]")).toBe(name);
     expect(document.activeElement).toBe(name);
@@ -311,7 +382,7 @@ describe("Checkout chip state", () => {
   });
 
   it("keeps suggestion identities current and only confirms valid input", async () => {
-    const params = checkoutFixture({ worktreeName: "picker-fixes" });
+    const params = checkoutFixture({ worktreeName: "picker-fixes", baseRef: "" });
     const { onConfirm, onPopoverShow, onPopoverHide, onPopoverAfterHide } = params;
     const { container, update } = mountCheckout(params);
     const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });

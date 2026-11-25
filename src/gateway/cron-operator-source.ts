@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
-import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
 import { CronOperatorSourceError } from "../cron/operator-source-error.js";
@@ -8,6 +7,7 @@ import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-
 import { isCronOperatorSourceParent } from "../cron/session-target.js";
 import type { CronJobPatch, CronStoredJob } from "../cron/types.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -16,13 +16,15 @@ import {
   intersectOperatorScopes,
 } from "../shared/operator-scope-compat.js";
 import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import {
   hasAutomationAdminDelegation,
   decodeGatewayOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
 import type { RestartRecoveryOperatorSource } from "./operator-run-recovery-source.codec.js";
-import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import {
+  restoreScheduledAutomationOperator,
+  type RestoredGatewayOperatorAuthority,
+} from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** Re-admit a job's captured parent-conversation source, never a session owner or ambient scheduler. */
@@ -38,7 +40,7 @@ export async function restoreCronOperatorSource(params: {
   if (!params.job.operatorSource) {
     return undefined;
   }
-  let operator: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+  let operator: RestoredGatewayOperatorAuthority | undefined;
   try {
     const captured = params.job.operatorSource;
     const source = decodeGatewayOperatorRecoverySource(captured.source);
@@ -49,8 +51,7 @@ export async function restoreCronOperatorSource(params: {
         : { agentId: source.agentId, sessionKey: source.sessionKey });
     const context =
       params.context ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
-    const assertOccurrence = captureCronJobSourceAuthority(params.job.id);
-    if (!context || !assertOccurrence || !params.deliveryAttemptFence) {
+    if (!context || !params.deliveryAttemptFence) {
       throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
     }
     const fence = params.deliveryAttemptFence;
@@ -60,7 +61,6 @@ export async function restoreCronOperatorSource(params: {
       params.signal?.throwIfAborted();
       // Admission may force-run an already paused job; later disable/remove edits
       // revoke this exact occurrence through its existing cancellation owner.
-      assertOccurrence();
       fence.assertCurrent();
       if (admitted) {
         return;
@@ -93,9 +93,9 @@ export async function restoreCronOperatorSource(params: {
       }
     };
     assertCurrent();
-    operator = await restoreGatewayOperatorSource({
-      snapshot: source.snapshot,
-      target,
+    operator = await restoreScheduledAutomationOperator({
+      agentId: target?.agentId ?? source.agentId,
+      source: { kind: "gateway", snapshot: source.snapshot },
       context,
       assertCurrent,
     });
@@ -104,7 +104,10 @@ export async function restoreCronOperatorSource(params: {
     return operator;
   } catch (error) {
     operator?.release();
-    if (error instanceof GatewayDispatchUnavailableError && error.retryable) {
+    if (
+      isOperatorAuthorityUnavailable(error) ||
+      (error instanceof GatewayDispatchUnavailableError && error.retryable)
+    ) {
       throw error;
     }
     // Restart and cancellation end this attempt; they say nothing about the stored source.
@@ -136,7 +139,7 @@ export async function restoreCronScriptOperatorSource(
   };
   try {
     signal?.addEventListener("abort", onRevoked, { once: true });
-    operator.authority.assertCurrent();
+    signal?.throwIfAborted();
     return { ...operator, release, [Symbol.dispose]: release };
   } catch (error) {
     release();
@@ -156,14 +159,10 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
   patch: CronJobPatch;
   capture: T;
   context: GatewayRequestContext;
-}): T {
+}): T & Pick<CronSourceCapture, "assertOperatorSourceCurrent"> {
   const previous = params.job.operatorSource;
   const fresh = params.capture.operatorSource;
-  if (
-    !previous ||
-    !fresh ||
-    (previous.source.kind !== "gateway" && !previous.source.snapshot.openclawIdPrincipal)
-  ) {
+  if (!previous) {
     return params.capture;
   }
   // A stream's schedule is its process definition, not timing; enabling it remains a control.
@@ -175,22 +174,27 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
     Object.keys(params.patch).every((key) =>
       ["schedule", "enabled", "description", "displayName"].includes(key),
     );
-  const sameRequester = previous.source.snapshot.profileId === fresh.snapshot.profileId;
+  const participantControl = controlOnly && previous.source.snapshot.participationCeiling;
+  if (
+    !participantControl &&
+    (!fresh ||
+      (previous.source.kind !== "gateway" && !previous.source.snapshot.openclawIdPrincipal))
+  ) {
+    return params.capture;
+  }
+  const sameRequester =
+    !participantControl && previous.source.snapshot.profileId === fresh?.snapshot.profileId;
   // Devices share their account's profile, so only the exact device listing that holds the
   // grant may refresh it; another device or a reapproval of the same one keeps the original.
   const sameDevice = isSameOpenClawIdTunnelPrincipal(
     previous.source.snapshot.openclawIdPrincipal,
-    fresh.snapshot.openclawIdPrincipal,
-  );
-  const samePolicy = isDeepStrictEqual(
-    sourceRolePolicy(previous.source.snapshot.rolePolicy),
-    sourceRolePolicy(fresh.snapshot.rolePolicy),
+    fresh?.snapshot.openclawIdPrincipal,
   );
   if (sameRequester && !controlOnly) {
     // Changing what runs authorizes the new task under the editing device, as recreating it would.
     return params.capture;
   }
-  if (sameRequester && sameDevice && samePolicy) {
+  if (fresh && sameRequester && sameDevice) {
     // A fresh connection may have broader invocation scopes; a timing edit does not grant them.
     const scopes = intersectOperatorScopes(fresh.snapshot.scopes, previous.source.snapshot.scopes);
     return {
@@ -200,6 +204,8 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
         snapshot: {
           ...fresh.snapshot,
           scopes,
+          modelPolicy: previous.source.snapshot.modelPolicy,
+          localOperator: previous.source.snapshot.localOperator && fresh.snapshot.localOperator,
           ...(fresh.snapshot.sourceIngress !== "principal"
             ? {
                 automationAdmin:
@@ -215,7 +221,6 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
         },
       }),
       assertOperatorSourceCurrent: () => {
-        params.capture.assertOperatorSourceCurrent?.();
         if (
           !isDeepStrictEqual(params.context.cron.getJob(params.job.id)?.operatorSource, previous)
         ) {
@@ -234,7 +239,6 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
     ...params.capture,
     operatorSource: previous.source,
     assertOperatorSourceCurrent: () => {
-      params.capture.assertOperatorSourceCurrent?.();
       if (!isDeepStrictEqual(params.context.cron.getJob(params.job.id)?.operatorSource, previous)) {
         throw new Error("The automation's original source changed during the control edit.");
       }

@@ -36,6 +36,7 @@ import { UpdatePreMutationError } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
   ManagedGatewayServiceObservation,
+  ManagedServiceStopParams,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
@@ -171,8 +172,9 @@ export async function assertManagedGatewayArtifactPublication(params: {
       `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
     );
   }
+  // A release replaces no root (it builds beside the serving one), so no live Gateway is at risk.
   const warning =
-    params.updateInstallKind === "git" && params.phase !== "before-stop"
+    params.updateInstallKind === "git" && params.phase !== "before-stop" && params.roots.length > 0
       ? await inspectGatewayArtifactConsumer(params)
       : undefined;
   const bindings = await discoverManagedGatewayBindings(params.env);
@@ -305,6 +307,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
 export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
+  updateInstallKind?: ManagedServiceStopParams["updateInstallKind"];
   preManagedServiceStop?: ManagedGatewayServiceObservation;
   allowInstallRootChange?: boolean;
   /** Restoration still rejects observed identity drift when a native probe fails. */
@@ -356,23 +359,30 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     (inspection.kind === "foreign" || inspection.kind === "unresolved") &&
     (params.state.definitionMutationCapability?.kind ?? "writable") === "writable"
   ) {
-    const retained = await inspectManagedGatewayServiceBeforeUpdate({
-      state: params.state,
-      root: verdict.root,
-      retainedCommand: true,
-      allowIncompleteInspection: params.allowIncompleteInspection,
-    });
+    const stopped = { ...before, serviceUpdateVerdict: { ...verdict, refreshDefinition: false } };
+    const retainedAt = (root: string | undefined) =>
+      inspectManagedGatewayServiceBeforeUpdate({
+        state: params.state,
+        root,
+        retainedCommand: true,
+        allowIncompleteInspection: params.allowIncompleteInspection,
+      });
     // A verified core install can replace its root before rewriting the launcher.
     // Pin the original command even when pnpm has removed its old package directory.
-    if (
-      matchesStoppedService(
-        { ...before, serviceUpdateVerdict: { ...verdict, refreshDefinition: false } },
-        params.state,
-        retained,
-        params.allowIncompleteInspection,
-      )
-    ) {
-      return { ...verdict, requiresInstallRootRefresh: true };
+    // The admitted root can be a link the update repointed (a pnpm global entry into
+    // its versioned store, or into a Git checkout); the unchanged definition still runs
+    // the installation admitted before the stop, so match it by its own root as well.
+    for (const root of [verdict.root, undefined]) {
+      if (
+        matchesStoppedService(
+          stopped,
+          params.state,
+          await retainedAt(root),
+          params.allowIncompleteInspection,
+        )
+      ) {
+        return { ...verdict, requiresInstallRootRefresh: true };
+      }
     }
   }
   if (

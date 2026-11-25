@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { promptCacheKeepWarmState } from "../agents/prompt-cache-keep-warm-candidates.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import * as hostMemory from "../infra/host-memory.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -32,6 +36,8 @@ const mocks = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
+  keepWarmLoaded: vi.fn(),
+  keepWarm: vi.fn(async (_signal: AbortSignal) => Infinity),
 }));
 
 // mock-isolation: Exercise the real startup and scheduler lifetimes without SQLite workers.
@@ -61,6 +67,11 @@ vi.mock("./session-registry-maintenance.js", () => ({
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ ...mocks, debug() {}, trace() {} }),
 }));
+// mock-isolation: Retention timing without keep-warm session and transcript reads.
+vi.mock("../agents/prompt-cache-keep-warm.js", () => {
+  mocks.keepWarmLoaded();
+  return { runPromptCacheKeepWarm: mocks.keepWarm };
+});
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
@@ -85,6 +96,10 @@ beforeEach(() => {
   mocks.registry
     .mockReset()
     .mockResolvedValue({ nextSweepAtMs: null, pruned: 0, skippedStores: 0 });
+  mocks.keepWarm.mockReset().mockResolvedValue(Infinity);
+  promptCacheKeepWarmState.candidates.clear();
+  setRuntimeConfigSnapshot({});
+  vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
   clock = createGatewaySchedulerClock();
   gatewayWork.resetGatewayWorkAdmission();
   recordAgentDatabaseAdmissions([]);
@@ -94,8 +109,140 @@ afterEach(async () => {
   await stopCronMaintenance();
   await scheduler.stop();
   vi.restoreAllMocks();
+  resetConfigRuntimeState();
+  promptCacheKeepWarmState.candidates.clear();
   gatewayWork.resetGatewayWorkAdmission();
   recordAgentDatabaseAdmissions([]);
+});
+
+it.each([false, true])(
+  "does not load disabled keep-warm at startup or on transcript wakes, pressure=%s",
+  async (lowMemory) => {
+    setRuntimeConfigSnapshot({ agents: { defaults: { promptCacheKeepWarm: false } } });
+    vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(lowMemory);
+    start();
+    await clock.advanceBy(5_000);
+    await vi.dynamicImportSettled();
+    expect(mocks.keepWarmLoaded).not.toHaveBeenCalled();
+    expect(mocks.keepWarm).not.toHaveBeenCalled();
+    sessionChanges.emit({
+      sessionKey: "agent:main:main",
+      storePath: "/synthetic/agents/main.sqlite",
+      scope: "transcript",
+    });
+    await clock.advanceBy(3 * 60_000);
+    await vi.dynamicImportSettled();
+    expect(mocks.keepWarmLoaded).not.toHaveBeenCalled();
+    expect(mocks.keepWarm).not.toHaveBeenCalled();
+    expect(promptCacheKeepWarmState.candidates.size).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBe(lowMemory ? 245_000 : null);
+
+    // Re-enable through the real config publisher, without another transcript change.
+    vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(false);
+    setRuntimeConfigSnapshot({});
+    await clock.advanceBy(4_999);
+    expect(mocks.keepWarm).not.toHaveBeenCalled();
+    await clock.advanceBy(1);
+    await vi.dynamicImportSettled();
+    expect(mocks.keepWarm).toHaveBeenCalledOnce();
+  },
+);
+
+it("defers the enabled keep-warm import until memory pressure clears without a busy wake", async () => {
+  vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(true);
+  start();
+  await clock.advanceBy(5_000);
+  await vi.dynamicImportSettled();
+  expect(mocks.keepWarmLoaded).not.toHaveBeenCalled();
+  expect(mocks.keepWarm).not.toHaveBeenCalled();
+  expect(scheduler.nextWakeAtMs).toBe(65_000);
+  await clock.advanceBy(60_000);
+  expect(scheduler.nextWakeAtMs).toBe(125_000);
+  vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(false);
+  await clock.advanceBy(59_999);
+  expect(mocks.keepWarm).not.toHaveBeenCalled();
+  await clock.advanceBy(1);
+  await vi.dynamicImportSettled();
+  expect(mocks.keepWarm).toHaveBeenCalledOnce();
+  expect(mocks.registry).toHaveBeenCalledOnce();
+  expect(scheduler.nextWakeAtMs).toBeNull();
+});
+
+it("retains config and transcript wakes while an earlier keep-warm pass is still running", async () => {
+  const result = createDeferredCore<number>();
+  mocks.keepWarm.mockReturnValueOnce(result.promise);
+  start();
+  try {
+    await clock.advanceBy(5_000);
+    await vi.dynamicImportSettled();
+    expect(mocks.keepWarm).toHaveBeenCalledOnce();
+    setRuntimeConfigSnapshot({ agents: { defaults: { promptCacheKeepWarm: false } } });
+    sessionChanges.emit({
+      sessionKey: "agent:main:main",
+      storePath: "/synthetic/agents/main.sqlite",
+      scope: "transcript",
+    });
+    await clock.advanceBy(5_000);
+    // Retention can wake independently; the running pass owns the keep-warm wake.
+    expect(scheduler.nextWakeAtMs).toBe(65_000);
+    expect(mocks.keepWarm).toHaveBeenCalledOnce();
+    result.resolve(500_000);
+    await flushImmediate();
+    await clock.advanceBy(0);
+    expect(promptCacheKeepWarmState.candidates.size).toBe(0);
+    expect(mocks.keepWarm).toHaveBeenCalledOnce();
+    setRuntimeConfigSnapshot({});
+    await clock.advanceBy(5_000);
+    await vi.dynamicImportSettled();
+    expect(mocks.keepWarm).toHaveBeenCalledTimes(2);
+  } finally {
+    result.resolve(Infinity);
+  }
+});
+
+it("wakes keep-warm once after start and again when an interactive session's transcript settles", async () => {
+  start();
+  await clock.advanceBy(5_000);
+  // The pass loads lazily outside the scheduler clock.
+  await vi.waitFor(() => expect(mocks.keepWarm).toHaveBeenCalledTimes(1));
+  // Automation runs never get a keep-warm wake.
+  sessionChanges.emit({
+    sessionKey: "agent:main:cron:job:run:1",
+    storePath: "/synthetic/agents/main.sqlite",
+    scope: "transcript",
+  });
+  sessionChanges.emit({
+    sessionKey: "agent:main:main",
+    storePath: "/synthetic/agents/main.sqlite",
+    scope: "transcript",
+  });
+  // The earliest ping of any cache lifetime is three minutes after the request.
+  await clock.advanceBy(3 * 60_000 - 1);
+  await flushImmediate();
+  expect(mocks.keepWarm).toHaveBeenCalledTimes(1);
+  await clock.advanceBy(1);
+  await vi.waitFor(() => expect(mocks.keepWarm).toHaveBeenCalledTimes(2));
+});
+
+// A `global` transcript receipt names no agent. Keep-warm noting it must not fail the commit's
+// fact installation, which invalidates every reader of that session (a member's turn then failed).
+it("installs a global session's transcript facts without invalidating other readers", async () => {
+  start();
+  const seen: { sessionKey?: string; factsInvalidated?: boolean }[] = [];
+  const stop = sessionChanges.subscribeFacts((change) => {
+    seen.push(change as (typeof seen)[number]);
+  });
+  try {
+    sessionChanges.emit({
+      sessionKey: "global",
+      storePath: "/synthetic/agents/main.sqlite",
+      scope: "transcript",
+    });
+  } finally {
+    stop();
+  }
+  expect(seen).toEqual([expect.objectContaining({ sessionKey: "global" })]);
+  expect(seen[0]?.factsInvalidated).toBeUndefined();
 });
 
 it("keeps pending database admission private when its publisher wakes retention", async () => {

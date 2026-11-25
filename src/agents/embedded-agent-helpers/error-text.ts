@@ -3,7 +3,7 @@ import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "../../../packages/agent-core/sr
 import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
+import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantHistoryMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -54,7 +54,7 @@ import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.j
 const log = createSubsystemLogger("errors");
 const TOOL_REPEAT_LIMIT_FALLBACK =
   "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
-const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
+const sandboxToolPolicyAuditMessages = new WeakSet<AssistantHistoryMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -69,8 +69,6 @@ const RUNTIME_FAILURE_COPY: Partial<
     "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
   callback_timeout:
     "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
-  callback_validation:
-    "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
   auth_scope:
     "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
   auth_html:
@@ -99,7 +97,10 @@ type AssistantErrorTextOptions = {
   sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
-function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
+function classifyAssistantErrorFacts(
+  msg: AssistantHistoryMessage,
+  opts?: AssistantErrorTextOptions,
+) {
   const signal = buildAssistantFailoverSignal(msg, {
     provider: opts?.providerOwner?.id ?? opts?.provider,
   });
@@ -120,7 +121,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
   };
 }
 export function formatAssistantErrorText(
-  msg: AssistantMessage,
+  msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
   facts?: ClassifiedAssistantErrorFacts,
 ): string | undefined {
@@ -320,7 +321,7 @@ function isRawAssistantErrorPassthrough(params: {
 }
 
 export function formatUserFacingAssistantErrorText(
-  msg: AssistantMessage,
+  msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
