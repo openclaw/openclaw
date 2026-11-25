@@ -34,6 +34,85 @@ async function selectProject(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it("keeps long project errors and their recovery controls inside the picker", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const failure = {
+        __mockError: {
+          code: "UNAVAILABLE",
+          message: "Project discovery failed for " + "observatory".repeat(18),
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        featureMethods: [
+          "projects.list",
+          "projects.searchRemote",
+          "fs.listDir",
+          "projects.register",
+          "worktrees.branches",
+        ],
+        methodResponses: {
+          "projects.list": failure,
+          "projects.searchRemote": failure,
+          "fs.listDir": { path: WORKSPACE, home: WORKSPACE, entries: [] },
+          "projects.register": failure,
+          "worktrees.branches": { branches: [], repositoryStatus: "git" },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "new");
+      const draft = page.locator(".new-session-page__message");
+      await draft.fill("Preserve the draft while choosing a project.");
+      const trigger = page.locator("#new-session-project-trigger");
+      await trigger.click();
+      const menu = page.locator(".new-session-page__project-popover");
+      const errors = menu.locator(".new-session-page__project-error");
+      await errors.waitFor();
+      expect(await errors.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      const retry = errors.getByRole("button", { name: "Retry", exact: true });
+      expect(
+        await retry.evaluate((element) => {
+          const message = element.previousSibling;
+          if (!message) {
+            return false;
+          }
+          const range = document.createRange();
+          range.selectNodeContents(message);
+          return element.getBoundingClientRect().top >= range.getBoundingClientRect().bottom;
+        }),
+      ).toBe(true);
+      await menu.locator(".header-search__input").fill("observatory");
+      await expect.poll(() => errors.count()).toBe(2);
+      expect(
+        await errors.evaluateAll((elements) =>
+          elements.every((element) => element.scrollWidth <= element.clientWidth),
+        ),
+      ).toBe(true);
+      await gateway.setMethodResponse("projects.list", {
+        projects: [{ id: "observatory", displayName: "Observatory", source: "registered" }],
+      });
+      await retry.click();
+      await expect.poll(() => errors.count()).toBe(1);
+      await menu.locator('[data-value="project:observatory"]').click();
+      await trigger.click();
+      await expect
+        .poll(() => menu.locator('[data-value="project:observatory"]').getAttribute("aria-pressed"))
+        .toBe("true");
+      await menu.getByRole("button", { name: "Browse folders", exact: true }).click();
+      await menu.getByRole("button", { name: "Register as project", exact: true }).click();
+      const registrationError = menu.locator(".new-session-page__browser [role=alert]");
+      await registrationError.waitFor();
+      expect(
+        await registrationError.evaluate((element) => element.scrollWidth <= element.clientWidth),
+      ).toBe(true);
+      await page.locator("input.new-session-page__browser-path").press("Escape");
+      await menu.getByRole("button", { name: "Browse folders", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      expect(await draft.inputValue()).toBe("Preserve the draft while choosing a project.");
+      expect(await trigger.getAttribute("data-project-id")).toBe("observatory");
+    });
+  });
   const openPage = createPageOpener(suite);
   it("drafts a session with a browsed folder and creates it on first message", async () => {
     const page = await openPage({
