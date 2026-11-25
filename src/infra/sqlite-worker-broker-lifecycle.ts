@@ -205,7 +205,12 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "carrierClass"
+      | "carrierUrl"
+      | "runtimeGeneration"
+      | "assertCurrent"
+      | "signal"
+      | "carrierClass"
+      | "gatewayPlacement"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -229,7 +234,7 @@ export function createSqliteWorkerLifecycle({
     const hosted =
       hostedKey !== "" &&
       explicitSqliteCloseReleasesNativeResources &&
-      claimsSharedHostSlot(carrierUrl, hostedKey);
+      claimsSharedHostSlot(carrierUrl, hostedKey, options.gatewayPlacement);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: hosted
         ? createHostedWorker(

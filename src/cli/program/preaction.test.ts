@@ -47,6 +47,7 @@ vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   prepareGatewayRunBootstrap: prepareGatewayMock,
   recheckGatewayRunBootstrap: recheckGatewayMock,
   reloadTrustedGatewayRunEnvironment: reloadGatewayEnvMock,
+  withPreparedGatewayRunResourceProfile: <T>(run: () => Promise<T>) => run(),
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;

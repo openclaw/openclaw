@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
+import { withGatewayStartupResourceProfile } from "../infra/gateway-resource-profile.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -114,6 +115,17 @@ export async function createGatewayKernel(
   port = 18789,
   opts: GatewayServerOptions = {},
   options: GatewayKernelOptions = {},
+) {
+  return await withGatewayStartupResourceProfile(
+    () => createGatewayKernelWithResourceProfile(port, opts, options),
+    true,
+  );
+}
+
+async function createGatewayKernelWithResourceProfile(
+  port: number,
+  opts: GatewayServerOptions,
+  options: GatewayKernelOptions,
 ) {
   await installGatewayDatabaseEngine(
     opts.startupConfigSnapshotRead?.snapshot,

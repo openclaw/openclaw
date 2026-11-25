@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isWorkerIdleForPressure } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { captureGatewayStartupWorkerPlacement } from "../infra/gateway-resource-profile.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { observeSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
@@ -405,6 +406,7 @@ function createSharedStateWorkerOwner() {
       );
       const ownsOpening = !entry;
       if (!entry) {
+        const gatewayPlacement = captureGatewayStartupWorkerPlacement();
         const openingGuard = captureOpenClawStateWorkerOpeningGuard(context);
         const nativeLostListeners = new Set<() => void>();
         const open = () =>
@@ -419,6 +421,7 @@ function createSharedStateWorkerOwner() {
               openingGuard.assertCurrent,
               {
                 maintenanceScope: context.maintenanceScope,
+                gatewayPlacement,
                 // Opening binds the captured file; later commands retain their own authority.
                 ...(existingOnly && admission.identity.key.startsWith("file:")
                   ? { createAdmission: openingGuard.createAdmission }

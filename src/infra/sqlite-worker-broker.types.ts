@@ -1,5 +1,6 @@
 import type { Worker } from "node:worker_threads";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { captureGatewayStartupWorkerPlacement } from "./gateway-resource-profile.js";
 import type {
   captureStateDatabaseAccess,
   StateDatabaseSchemaLease,
@@ -176,6 +177,7 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  gatewayPlacement?: ReturnType<typeof captureGatewayStartupWorkerPlacement>;
   /** Agent preparation must not block shared-state intake or unrelated plugin actors. */
   carrierClass?: Slot["carrierClass"];
   /** The caching owner synchronously seals an idle client, or declines reclamation. */
@@ -233,6 +235,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "signal"
   | "retireIdle"
   | "carrierClass"
+  | "gatewayPlacement"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

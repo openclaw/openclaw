@@ -8,6 +8,7 @@ import { performance } from "node:perf_hooks";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { installDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withGatewayStartupResourceProfile } from "../infra/gateway-resource-profile.js";
 import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -74,7 +75,9 @@ export function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
-  return withLiveStateReads(() => startGatewayServerLive(port, opts));
+  return withGatewayStartupResourceProfile(() =>
+    withLiveStateReads(() => startGatewayServerLive(port, opts)),
+  );
 }
 
 async function startGatewayServerLive(

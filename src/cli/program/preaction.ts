@@ -175,13 +175,21 @@ export function registerPreActionHooks(program: Command, programVersion: string)
           ...(snapshot ? { snapshot } : {}),
         });
     }
-    await ensureCliExecutionBootstrap({
-      runtime: defaultRuntime,
-      commandPath,
-      startupPolicy,
-      allowInvalid,
-      ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
-    });
+    const bootstrap = () =>
+      ensureCliExecutionBootstrap({
+        runtime: defaultRuntime,
+        commandPath,
+        startupPolicy,
+        allowInvalid,
+        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
+      });
+    if (isGatewayRun) {
+      const { withPreparedGatewayRunResourceProfile } =
+        await import("../gateway-cli/pre-bootstrap.js");
+      await withPreparedGatewayRunResourceProfile(bootstrap);
+    } else {
+      await bootstrap();
+    }
     if (beforeStatePreparation) {
       const { reloadTrustedGatewayRunEnvironment } =
         await import("../gateway-cli/pre-bootstrap.js");

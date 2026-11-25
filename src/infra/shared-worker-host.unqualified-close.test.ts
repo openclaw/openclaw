@@ -53,6 +53,11 @@ it("never hosts a core worker when native SQLite close is unqualified", () => {
     "pluginModelCatalogRead",
   ] as const) {
     expect(claimsSharedHostSlot(resolveRuntimeProcessEntrypointUrl(entrypoint))).toBe(false);
+    expect(
+      claimsSharedHostSlot(resolveRuntimeProcessEntrypointUrl(entrypoint), undefined, {
+        profile: "lean",
+      }),
+    ).toBe(false);
   }
 });
 

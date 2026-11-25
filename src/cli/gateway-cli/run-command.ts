@@ -47,20 +47,23 @@ export async function bootstrapGatewayRun(params: {
       }),
     );
   }
-  await startupTrace.measure("gateway-run-bootstrap", async () => {
-    const { ensureCliExecutionBootstrap } = await import("../command-execution-startup.js");
-    await ensureCliExecutionBootstrap({
-      runtime,
-      commandPath,
-      startupPolicy,
-      loadPlugins: false,
-      ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
-    });
-    const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
-    await startupTrace.measure("gateway-run-reload-environment", () =>
-      reloadTrustedGatewayRunEnvironment({ runtime }),
-    );
-  });
+  const { withPreparedGatewayRunResourceProfile } = await import("./pre-bootstrap.js");
+  await withPreparedGatewayRunResourceProfile(() =>
+    startupTrace.measure("gateway-run-bootstrap", async () => {
+      const { ensureCliExecutionBootstrap } = await import("../command-execution-startup.js");
+      await ensureCliExecutionBootstrap({
+        runtime,
+        commandPath,
+        startupPolicy,
+        loadPlugins: false,
+        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
+      });
+      const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
+      await startupTrace.measure("gateway-run-reload-environment", () =>
+        reloadTrustedGatewayRunEnvironment({ runtime }),
+      );
+    }),
+  );
 }
 
 export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks = {}): Command {
