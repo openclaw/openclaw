@@ -111,7 +111,8 @@ route: `cove` is a Codex GPT-Live voice, and selecting it with `gpt-live-1`
 falls back to `marin`. See [OpenAI voice and speech](/providers/openai/voice-and-speech).
 
 Set `channels.discord.voice.realtime.model` to `gpt-live-1.1-codex` to
-request GPT-Live-1.1 through the same Codex route.
+request GPT-Live 1.1 with ChatGPT sign-in. Unlike `gpt-live-1-codex`,
+this selector does not fall back to a Platform API key.
 
 GPT-Live owns response timing and interruption. Discord plays its continuous
 audio without waiting for a completed-response event, and does not add local
