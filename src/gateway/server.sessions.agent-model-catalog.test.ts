@@ -14,7 +14,8 @@ import { testState } from "./test-helpers.runtime-state.js";
 import * as sessions from "./test/server-sessions.test-helpers.js";
 
 // Prepared runtime eligibility is covered by the native choice owner tests.
-vi.mock("../agents/model-runtime-choice.js", () => ({
+vi.mock("../agents/model-runtime-choice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-runtime-choice.js")>()),
   preparePublishedModelRuntimeChoice: vi.fn<typeof preparePublishedModelRuntimeChoice>(
     async ({ runtimeId, preferredRuntimeId }) => ({
       kind: "ready",

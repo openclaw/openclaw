@@ -5,6 +5,9 @@ import {
   testing as cliBackendsTesting,
 } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
+import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -50,7 +53,8 @@ const runtimeChoice = vi.hoisted(() => ({
       typeof import("../../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
     >(),
 }));
-vi.mock("../../agents/model-runtime-choice.js", () => ({
+vi.mock("../../agents/model-runtime-choice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-runtime-choice.js")>()),
   preparePublishedModelRuntimeChoice: runtimeChoice.prepare,
 }));
 
@@ -549,6 +553,61 @@ describe("sessions.patch personal model-account ownership", () => {
 });
 
 describe("explicit session model runtimes", () => {
+  it("keeps the previous selection when the requested host route has no account", async () => {
+    const key = "agent:main:dm:host-route";
+    const rows = [
+      { provider: "vendor", id: "sample-v2", name: "Sample 2" },
+      { provider: "relay", id: "vendor/sample-v2", name: "Sample 2" },
+    ];
+    cfg.agents!.defaults!.models = Object.fromEntries(
+      rows.map((row) => [row.provider + "/" + row.id, {}]),
+    );
+    const snapshot = catalogSnapshot(rows);
+    const request = context();
+    request.loadGatewayModelCatalogSnapshot.mockResolvedValue(snapshot);
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, { modelCatalog: snapshot });
+    bindPreparedModelRuntimeAuth(owner, {
+      store: {
+        version: 1,
+        profiles: {
+          "relay:fixture": { type: "api_key", provider: "relay", key: "synthetic-fixture" },
+        },
+      },
+    });
+    vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot").mockReturnValue(
+      owner,
+    );
+    await seedSession(key, { providerOverride: "relay", modelOverride: "sample-v1" });
+    const before = readSession(key);
+    const denied = await patchSession({ key, model: "vendor/sample-v2" }, undefined, request);
+    expect(denied[0], denied[2]?.message).toBe(false);
+    expect(denied[2]?.message).toContain("vendor/sample-v2");
+    expect(readSession(key)).toEqual(before);
+    const allowed = await patchSession(
+      { key, model: "relay/vendor/sample-v2" },
+      undefined,
+      request,
+    );
+    expect(allowed[0], allowed[2]?.message).toBe(true);
+    expect(readSession(key)).toMatchObject({
+      providerOverride: "relay",
+      modelOverride: "vendor/sample-v2",
+    });
+    expect(readSession(key)).not.toHaveProperty("agentRuntimeOverride");
+
+    cfg.cloudWorkers = {
+      requiredProfile: "paired",
+      profiles: {
+        paired: { provider: "device", settings: { device: "fixture", inference: "worker" } },
+      },
+    };
+    const worker = await patchSession({ key, model: "vendor/sample-v2" }, undefined, request);
+    expect(worker[0], worker[2]?.message).toBe(true);
+    expect(readSession(key)).toMatchObject({
+      providerOverride: "vendor",
+      modelOverride: "sample-v2",
+    });
+  });
   it.each([
     { agentRuntime: undefined, expectedRuntime: "claude-cli" },
     { agentRuntime: "openclaw", expectedRuntime: "openclaw" },

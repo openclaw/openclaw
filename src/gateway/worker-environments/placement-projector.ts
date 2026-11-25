@@ -12,7 +12,10 @@ import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projectio
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
-import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerEnvironmentServiceRecord,
+} from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = Pick<WorkerSessionPlacementStore, "getMany"> &
   Partial<
@@ -106,6 +109,27 @@ type WorkerPlacementIdentity = {
   inference?: "worker";
 };
 
+/** Only the attached worker for this active placement can own the session's credentials. */
+export function hasWorkerLocalInference(
+  record: WorkerSessionPlacementRecord,
+  environment: WorkerEnvironmentPlacementFacts | WorkerEnvironmentServiceRecord | undefined,
+): boolean {
+  return Boolean(
+    environment &&
+    record.activeOwnerEpoch !== null &&
+    environment.ownerEpoch === record.activeOwnerEpoch &&
+    record.state === "active" &&
+    record.executionMode === "worker-turn" &&
+    environment.environmentId === record.environmentId &&
+    environment.state === "attached" &&
+    environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+    environment.nodeDeviceId &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === record.sessionId &&
+    environment.inference === "worker",
+  );
+}
+
 export function readWorkerPlacementIdentity(
   record: WorkerSessionPlacementRecord,
   environments: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape"> | undefined,
@@ -139,17 +163,7 @@ export function readWorkerPlacementIdentity(
   return {
     providerId: environment.providerId,
     profileId: environment.profileId,
-    ...(record.state === "active" &&
-    record.executionMode === "worker-turn" &&
-    environment.environmentId === record.environmentId &&
-    environment.state === "attached" &&
-    environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
-    environment.nodeDeviceId &&
-    environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === record.sessionId &&
-    environment.inference === "worker"
-      ? { inference: "worker" as const }
-      : {}),
+    ...(hasWorkerLocalInference(record, environment) ? { inference: "worker" as const } : {}),
     ...(machine && Object.keys(machine).length ? { machine } : {}),
   };
 }
