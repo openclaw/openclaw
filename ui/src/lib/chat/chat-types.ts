@@ -168,6 +168,10 @@ export type ChatQueueItem = {
   id: string;
   /** Captured local storage identity; never a server credential. */
   storageScope?: string;
+  /** Submit-time client and physical session for local queue collection. */
+  collectClient?: string;
+  collectTabId?: string;
+  collectedBatch?: true;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
   asyncQuestionItemId?: string;
   appContext?: ChatAppContextAttachment[];

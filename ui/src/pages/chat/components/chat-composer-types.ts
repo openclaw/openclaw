@@ -46,7 +46,10 @@ import type {
   HumanMentionDirectory,
   HumanMentionMenu,
 } from "./chat-composer-mention-menu-state.ts";
-import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu.types.ts";
+import type {
+  ChatComposerCapabilityMenuSource,
+  ChatComposerPlusMenuProps,
+} from "./chat-composer-plus-menu.types.ts";
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
@@ -194,6 +197,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
+  composerMenuToggles?: ChatComposerPlusMenuProps["rootToggles"];
   pendingAttachmentReads?: number;
   attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;

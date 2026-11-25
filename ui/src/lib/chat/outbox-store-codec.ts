@@ -67,6 +67,9 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
     left.storageScope === right.storageScope &&
     left.asyncQuestionItemId === right.asyncQuestionItemId &&
     left.text === right.text &&
+    left.collectClient === right.collectClient &&
+    left.collectTabId === right.collectTabId &&
+    left.collectedBatch === right.collectedBatch &&
     left.workContextUnavailable === right.workContextUnavailable &&
     JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
     stableStringify(left.appContext) === stableStringify(right.appContext) &&
@@ -134,6 +137,17 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const collectClient = normalizeOptionalString(entry.collectClient);
+  if (collectClient && collectClient.length <= 4096) {
+    item.collectClient = collectClient;
+  }
+  const collectTabId = normalizeOptionalString(entry.collectTabId);
+  if (collectTabId && collectTabId.length <= 128) {
+    item.collectTabId = collectTabId;
+  }
+  if (entry.collectedBatch === true) {
+    item.collectedBatch = true;
+  }
   const storageScope = normalizeOptionalString(entry.storageScope);
   if (storageScope) {
     item.storageScope = storageScope;

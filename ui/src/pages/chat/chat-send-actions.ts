@@ -55,6 +55,7 @@ const resetRetryState = (
     !reviewedSessionId &&
     entry.sendState === "failed" &&
     !entry.attachmentStorageError &&
+    !entry.collectedBatch &&
     entry.queueMode !== "steer" &&
     !entry.intent;
   // An ID-less post-clear review barrier has no transport attempt to preserve.
@@ -78,7 +79,11 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string): Promis
   if (chatProviderReviewRow(host)?.providerReview || isInitialChatHistoryUnavailable(host)) {
     return;
   }
-  if (readQueuedMessageById(host, id)?.intent) {
+  const queued = readQueuedMessageById(host, id);
+  if (queued?.collectedBatch) {
+    return;
+  }
+  if (queued?.intent) {
     setChatError(host, t("chat.goals.admissionImmutable"));
     return;
   }

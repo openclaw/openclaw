@@ -46,6 +46,7 @@ import {
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { isChatQueuePaused } from "./chat-queue-pause.ts";
+import { chatQueuePreferenceToggle } from "./chat-queue-preference.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
@@ -66,6 +67,7 @@ registerChatSessionEnglish();
 const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
+  chatQueuePreferenceRevision = 0;
   private readonly resourceProps = createChatPaneResourceProps();
 
   render(
@@ -347,6 +349,18 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
       ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation, selectedSession),
     };
+    // Follow storage changes from this pane and other tabs.
+    void this.chatQueuePreferenceRevision;
+    const queueToggle =
+      nativeConversation && composerAvailability.canCompose
+        ? chatQueuePreferenceToggle(
+            state,
+            () => this.state === state,
+            () => {
+              this.chatQueuePreferenceRevision += 1;
+            },
+          )
+        : undefined;
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
     const conversationAttention = this.projectConversationAttention(
       state,
@@ -467,7 +481,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       runId: catalog ? null : projectionRunId,
       runUsageById: catalog ? undefined : state.chatRunUsageById,
       sendShortcut: state.settings.chatSendShortcut,
-      followUpMode: state.chatFollowUpMode,
+      followUpMode: queueToggle?.checked ? "queue" : state.chatFollowUpMode,
+      composerMenuToggles: queueToggle ? [queueToggle] : undefined,
       draft: state.chatMessage,
       draftSource: this.chatState.composerDraft,
       composerPredictions: {

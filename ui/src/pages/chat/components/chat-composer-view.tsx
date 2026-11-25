@@ -606,6 +606,7 @@ export function renderChatComposerView(
                     open: capabilityOpen(),
                     view: capabilityView(),
                     toolOverrides: props.toolOverrides,
+                    rootToggles: props.composerMenuToggles,
                     onOpenChange: (open) => {
                       setCapabilityOpen(open);
                       if (!open) {

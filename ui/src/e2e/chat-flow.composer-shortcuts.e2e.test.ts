@@ -335,6 +335,82 @@ suite.define(() => {
     await button("Stop").waitFor({ state: "detached" });
   });
 
+  it("restores the conversation's group-queue preference and queued text across reload", async () => {
+    const { page, gateway, pane, composer } = await openChat({
+      presenceUsers: [
+        {
+          id: "queue-test-profile",
+          identity: { type: "profile", id: "queue-test-profile" },
+          self: true,
+        },
+      ],
+      methodResponses: {
+        "config.get": configResponse({ messages: { queue: { mode: "steer" } } }, "queue-test"),
+      },
+    });
+    const option = pane.getByRole("menuitemcheckbox", {
+      name: "Queue and group follow-ups in this chat",
+    });
+    const openMenu = async (checked: boolean) => {
+      await pane.getByRole("button", { name: "Add attachment", exact: true }).click();
+      await expect.poll(() => option.getAttribute("aria-checked")).toBe(String(checked));
+    };
+    await openMenu(false);
+    await option.click();
+    await expect.poll(() => option.getAttribute("aria-checked")).toBe("true");
+    await page.keyboard.press("Escape");
+
+    const first = await sendChat(page, gateway, "begin active turn");
+    const runId = requireString(first.idempotencyKey, "active run");
+    const history = {
+      messages: [chatMessage("user", "begin active turn")],
+      sessionId: `session:${defaultSessionKey}`,
+      sessionInfo: {
+        key: defaultSessionKey,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        status: "running",
+      },
+      thinkingLevel: null,
+    };
+    await gateway.setMethodResponse("chat.history", history);
+    await pane.getByRole("button", { name: "Stop", exact: true }).waitFor();
+    for (const text of ["first waiting follow-up", "second waiting follow-up"]) {
+      await composer.fill(text);
+      await pane.getByRole("button", { name: "Queue message", exact: true }).click();
+      await pane.locator(".chat-queue__item", { hasText: text }).waitFor();
+    }
+    await expectRequestCountStable(gateway, "chat.send", 1);
+    await page.reload();
+    await openMenu(true);
+    await page.keyboard.press("Escape");
+    await pane.locator(".chat-queue__item", { hasText: "first waiting follow-up" }).waitFor();
+    await pane.locator(".chat-queue__item", { hasText: "second waiting follow-up" }).waitFor();
+    await expectRequestCountStable(gateway, "chat.send", 0);
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      sessionInfo: {
+        ...history.sessionInfo,
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "done",
+        lastRunId: runId,
+      },
+    });
+    await gateway.emitChatFinal({ runId, text: "The active turn completed." });
+    const sends = await waitForRequests(gateway, "chat.send", 1);
+    const batch = requireString(requireRecord(sends[0]?.params).message, "grouped user input");
+    const members = JSON.parse(batch.slice(batch.indexOf("\n") + 1)) as Array<{ text: string }>;
+    expect(members.map((member) => member.text)).toEqual([
+      "first waiting follow-up",
+      "second waiting follow-up",
+    ]);
+    await expectRequestCountStable(gateway, "chat.send", 1);
+    await openMenu(true);
+    await option.click();
+    await expect.poll(() => option.getAttribute("aria-checked")).toBe("false");
+  });
+
   it.each(["queue", "steer", "collect"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {

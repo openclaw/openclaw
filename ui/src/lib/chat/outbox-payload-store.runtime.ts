@@ -183,6 +183,7 @@ export async function removeOutboxPayloads(references: readonly PayloadReference
 }
 
 const TAB_STORAGE_KEY = "openclaw.control.outboxTab.v1";
+const COPIED_TAB_STORAGE_KEY = "openclaw.control.outboxCopiedTabs.v1";
 let tabPromise: Promise<string> | null = null;
 export function outboxPayloadTab(): Promise<string> {
   return (tabPromise ??= (async () => {
@@ -215,12 +216,36 @@ export function outboxPayloadTab(): Promise<string> {
     if (id !== previous && !(await claim(id))) {
       throw new Error("Outbox ownership unavailable");
     }
+    if (previous && previous !== id) {
+      const copiedTabs = readCopiedOutboxTabs();
+      storage.setItem(
+        COPIED_TAB_STORAGE_KEY,
+        JSON.stringify([...new Set([...copiedTabs, previous])]),
+      );
+    }
     storage.setItem(TAB_STORAGE_KEY, id);
     return id;
   })().catch((error: unknown) => {
     tabPromise = null;
     throw error;
   }));
+}
+
+function readCopiedOutboxTabs(): string[] {
+  try {
+    const value: unknown = JSON.parse(
+      getSafeSessionStorage()?.getItem(COPIED_TAB_STORAGE_KEY) ?? "[]",
+    );
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A lease conflict identifies copied metadata, not lost ownership after a normal restore. */
+export async function isCopiedOutboxPayloadTab(tabId: string): Promise<boolean> {
+  await outboxPayloadTab().catch(() => undefined);
+  return readCopiedOutboxTabs().includes(tabId);
 }
 
 type RecoveryHost = {

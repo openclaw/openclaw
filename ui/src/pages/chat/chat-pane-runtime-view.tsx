@@ -26,6 +26,7 @@ import { cancelLayout, yieldAfterLayout } from "../../lib/layout-frame.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
@@ -42,6 +43,7 @@ import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
+import { CHAT_QUEUE_PREFERENCE_PREFIX } from "./chat-queue-preference.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
@@ -93,6 +95,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",
+    "chatQueuePreferenceRevision",
   ]);
   const [ready, setReady] = createSignal(false);
   let preparedInlineCommands: InlineCommandPresentation | undefined;
@@ -134,6 +137,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     return promise;
   };
 
+  onSettled(() =>
+    listen(window, "storage", (event) => {
+      if (event.key === null || event.key.startsWith(CHAT_QUEUE_PREFERENCE_PREFIX)) {
+        runtime.chatQueuePreferenceRevision += 1;
+      }
+    }),
+  );
   onSettled(() => {
     const gateway = runtime.context.gateway;
     const pendingSnapshot = waitForPrewarmedChatSnapshot(
