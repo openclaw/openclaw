@@ -284,7 +284,8 @@ struct ChatMediaImageAttachment: View {
                     VStack(spacing: 6) {
                         Image(systemName: "photo.badge.exclamationmark")
                             .accessibilityHidden(true)
-                        Text(String(localized: "Image unavailable"))
+                        // The viewer says the same when a page fails.
+                        Text(String(localized: "Couldn’t load image."))
                         Button {
                             self.retryGeneration &+= 1
                         } label: {

@@ -2854,6 +2854,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt","kind":"ui-call","surface":"android","id":"native.android.a7fa3b928b568c87","source":"Show more"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt","kind":"ui-call","surface":"android","id":"native.android.0622b4b9cd3412dc","source":"Threads"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt","kind":"ui-named-argument","surface":"android","id":"native.android.84244f73da2b8e3b","source":"OpenClaw"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7ba6d37a0b82d0e7","source":"Couldn’t load image."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d6d77aa107e5c0c8","source":"Image unavailable"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7c904d10b3fa3bec","source":"Loading image…"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.538d25a03f60a2aa","source":"Opens image preview"},
