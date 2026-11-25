@@ -25,6 +25,20 @@ function textOf(root: ParentNode, selector: string) {
   return Array.from(root.querySelectorAll(selector), (node) => node.textContent).join("\n");
 }
 
+it("renders named references in conversation text and preserves their spelling in inline code", async () => {
+  const source = "&copy; *&copy;* `&copy;`";
+  const { document } = await render([
+    { role: "user", content: source },
+    { role: "assistant", content: [{ type: "text", text: source }] },
+  ]);
+  for (const role of ["user", "assistant"]) {
+    const paragraph = element(document, `#messages .${role}-message .markdown-content p`);
+    expect(paragraph.textContent).toBe("© © &copy;");
+    expect(element(paragraph, "em").textContent).toBe("©");
+    expect(element(paragraph, "code").textContent).toBe("&copy;");
+  }
+});
+
 it.each([
   ["bash", "", false],
   ["bash", "", true],
