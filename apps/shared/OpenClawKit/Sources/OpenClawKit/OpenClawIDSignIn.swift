@@ -1,7 +1,7 @@
+#if os(iOS) || os(macOS)
 import AuthenticationServices
 import CryptoKit
 import Foundation
-import OpenClawKit
 
 /// Where this build signs in and finds claws. The issuer and client id only authenticate the person
 /// to Discovery; claw access always comes from an owner approval, the recovery kit or an invite.
@@ -224,3 +224,4 @@ public final class OpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationCo
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
     }
 }
+#endif
