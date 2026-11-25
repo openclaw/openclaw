@@ -49,6 +49,20 @@ The [nix-openclaw](https://github.com/openclaw/nix-openclaw) repo is the source 
 
 See the [nix-openclaw README](https://github.com/openclaw/nix-openclaw) for full module options and examples.
 
+## Turn off the Control UI
+
+To run every Home Manager instance without the browser dashboard, add the
+following to your Home Manager configuration and run `home-manager switch`.
+
+```nix
+programs.openclaw.config.gateway.controlUi.enabled = false;
+```
+
+For one instance, use `programs.openclaw.instances.<name>.config.gateway.controlUi.enabled`.
+For the standalone NixOS service, set `services.openclaw-gateway.config.gateway.controlUi.enabled = false;`
+and apply your NixOS configuration. If you supply `services.openclaw-gateway.configFile`,
+set the boolean in that file.
+
 ## Nix-mode runtime behavior
 
 When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw), OpenClaw uses the Nix-managed install mode. Other Nix packages can set the same mode; nix-openclaw is the first-party reference.

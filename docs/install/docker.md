@@ -75,7 +75,7 @@ Hosting mutually untrusted users? Run a separate Gateway for each trust boundary
 
   </Step>
 
-  <Step title="Open the Control UI">
+  <Step title="Open the Control UI (optional)">
     Open `http://127.0.0.1:18789/` and paste the token written to `.env` into Settings. If you switched the container to password auth, use that password instead.
 
     Need the URL again?
@@ -85,6 +85,16 @@ Hosting mutually untrusted users? Run a separate Gateway for each trust boundary
     ```
 
     With a custom `OPENCLAW_GATEWAY_PORT`, replace port `18789` in the printed URL with your host port before opening it in the browser; keep the rest of the URL intact. Dashboard commands inside either container use the internal listener port.
+
+    To run without a dashboard, update the mounted Gateway configuration.
+
+    ```bash
+    docker compose run --rm openclaw-cli config set gateway.controlUi.enabled false
+    ```
+
+    Set it to `true` with the same command to serve the dashboard again. If
+    you manage the mounted `openclaw.json` yourself, set the same boolean in
+    that file. See [Control UI](/web/control-ui).
 
   </Step>
 
@@ -229,6 +239,18 @@ docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
   --no-install-daemon
 docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
   dist/index.js channels add --channel telegram --use-env
+```
+
+If you want the dashboard off from the first start, set the option now.
+
+```bash
+docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js config set gateway.controlUi.enabled false
+```
+
+Start the Gateway.
+
+```bash
 docker compose up -d openclaw-gateway
 ```
 

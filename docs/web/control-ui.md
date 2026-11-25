@@ -13,10 +13,26 @@ The Control UI is a small **Vite + Solid** single-page app served by the Gateway
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
-`gateway.controlUi.enabled` hot-applies. Disable it to stop serving dashboard
-pages and assets while bots and existing Gateway connections keep running.
-Re-enable it to resume serving; missing assets are prepared in the background.
-Changing the serving base path or asset root still requires a Gateway restart.
+The Gateway serves the dashboard by default. This command turns it off.
+
+```bash
+openclaw config set gateway.controlUi.enabled false
+```
+
+If your deployment manages `openclaw.json`, merge this setting into the file.
+
+```json
+{ "gateway": { "controlUi": { "enabled": false } } }
+```
+
+With the default [reload policy](/gateway/configuration/hot-reload), the Gateway
+stops serving dashboard pages and assets. Bots, active agent runs, and existing
+WebSocket connections continue. To serve the dashboard again, run
+`openclaw config set gateway.controlUi.enabled true`. For a non-loopback
+listener, configure the [browser origin](/gateway/config-gateway) before
+re-enabling the dashboard. The Gateway prepares any missing dashboard assets
+in the background. Changing the serving base path or asset root still requires
+a Gateway restart.
 
 During a Gateway restart, lazy views and background UI imports wait for the
 server to return and retry in the open tab. Restarting the same build does not
