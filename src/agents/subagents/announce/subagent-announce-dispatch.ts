@@ -6,29 +6,16 @@ import type { SubagentCompletion } from "../../../shared/subagent-completion.js"
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
-import type { SubagentCompletionDeliveryState } from "../registry/subagent-registry-read.types.js";
 
+// A "queued" path that did not deliver means a queue or mailbox owns the delivery now.
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
-type SubagentAnnounceDeliveryDisposition = NonNullable<
-  SubagentCompletionDeliveryState["disposition"]
->;
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
   | "delivery_suppressed"
-  | "generated_media_missing"
-  | "message_tool_delivery_missing"
-  | "operator_authority_unavailable"
   | "requester_abandoned"
-  | "requester_aborted"
-  | "requester_timed_out"
-  | "requester_preparation_changed"
-  | "requester_state_conflict"
-  | "requester_transcript_conflict"
   | "requester_turn_pending"
-  | "source_owner_changed"
-  | "steer_dropped"
-  | "visible_reply_missing";
+  | "source_owner_changed";
 
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
@@ -41,10 +28,6 @@ export type SubagentAnnounceDeliveryResult = {
   finalAssistantVisibleText?: string;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
-  // Stops fallback delivery when ownership changed or another terminal result
-  // makes trying a second path unsafe.
-  terminal?: boolean;
-  disposition?: SubagentAnnounceDeliveryDisposition;
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
@@ -98,14 +81,3 @@ export type SubagentAnnounceDirectParams = {
   resolveGatewayContext?: GatewayContextResolver;
   controllerInput?: SessionControllerInput;
 };
-
-export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "none",
-    reason: "source_owner_changed",
-    error: "subagent source lifecycle changed before completion delivery",
-    terminal: true,
-    disposition: "intentional_non_delivery",
-  };
-}

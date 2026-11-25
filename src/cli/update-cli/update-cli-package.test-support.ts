@@ -3,7 +3,6 @@ import path from "node:path";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../process/exec.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
@@ -80,28 +79,6 @@ export const writeOpenClawPackageFixture = async (
   }
   return entryPath;
 };
-
-export async function writeGitUpdateResultFixture(
-  params: Pick<UpdateRunResult, "before"> & {
-    root: string;
-    after: { sha: string; version: string };
-    databaseEngines?: string[];
-  },
-): Promise<UpdateRunResult> {
-  await writeOpenClawPackageFixture(params.root, params.after.version, {
-    builtSha: params.after.sha,
-    databaseEngines: params.databaseEngines,
-  });
-  const { readGitRuntimeArtifactIdentity } = await import("../../infra/update-git-runtime.js");
-  return {
-    status: "ok",
-    mode: "git",
-    steps: [],
-    durationMs: 100,
-    ...params,
-    gitRuntime: await readGitRuntimeArtifactIdentity(params.root),
-  };
-}
 
 export const writeNpmPackageInstall = async (
   argv: string[],

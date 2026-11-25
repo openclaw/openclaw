@@ -14,8 +14,10 @@
  * counts owner work in a separate process. --replica-base overlays the saved original
  * session-actor-replica.ts without swapping the checkout or dependency installation.
  * --changed uses three agents and replaces no-op events with changed-row events.
+ * --child-labels --sessions 2000 warms four stores, then commits one label-only
+ * child update per operation. Compare refresh attempts, rebuilt rows and digests.
  * --owner also replays 10,000 metadata changes through captured real row inputs.
- * --source-base overlays the five changed owner modules saved by basename from the
+ * --source-base overlays the changed owner modules saved by basename from the
  * baseline revision. It leaves the benchmark and dependency installation identical.
  */
 import assert from "node:assert/strict";
@@ -26,6 +28,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { compileFunction } from "node:vm";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -37,11 +40,13 @@ const { values } = parseArgs({
     allocation: { type: "boolean", default: false },
     mixed: { type: "boolean", default: false },
     changed: { type: "boolean", default: false },
+    "child-labels": { type: "boolean", default: false },
     owner: { type: "boolean", default: false },
     "source-base": { type: "string" },
     instrument: { type: "boolean", default: false },
     "replica-base": { type: "string" },
     "cpu-profile": { type: "boolean", default: false },
+    "freeze-fixture": { type: "string" },
   },
 });
 assert(values["state-dir"], "Pass a new isolated --state-dir");
@@ -62,16 +67,34 @@ const iterations = parseStrictIntegerOption({
 });
 // Mixed owner proof: 500 resident rows, real metadata/transcript writes, no-op refreshes,
 // and archive demotion/re-promotion. Instrumentation is separate from timing/allocation.
-const residentRows = values.mixed || values.changed ? 500 : 64;
-const agentIds = values.changed ? ["main", "research", "ops"] : ["main"];
+const childLabels = values["child-labels"];
+const residentRows = childLabels ? sessions : values.mixed || values.changed ? 500 : 64;
+const agentIds = childLabels
+  ? ["main", "research", "ops", "support"]
+  : values.changed
+    ? ["main", "research", "ops"]
+    : ["main"];
+const parents = agentIds.length * 8;
 const agentFor = (index: number) => agentIds[index % agentIds.length]!;
-const changedSources = [
+const refreshSources = [
   "src/agents/agent-scope-config.ts",
   "src/agents/agent-roster.ts",
   "src/agents/fast-mode.ts",
   "src/agents/sandbox/runtime-status.ts",
   "src/gateway/session-utils-row.ts",
+  "src/gateway/session-row-identity.ts",
+  "src/gateway/session-row-presentation.ts",
 ];
+const childLabelSources = [
+  "src/gateway/session-row-projection.ts",
+  "src/gateway/session-row-projection-archive.ts",
+  "src/gateway/session-row-projection-context.ts",
+  "src/gateway/session-row-projection-publication.ts",
+  "src/gateway/session-row-projection-record.ts",
+  "src/gateway/session-row-projection-revisions.ts",
+  "src/gateway/session-utils-projection.ts",
+];
+const changedSources = childLabels ? childLabelSources : refreshSources;
 assert(sessions >= residentRows);
 const work = {
   inputs: 0,
@@ -87,6 +110,50 @@ type RowParams = Parameters<
 >[0];
 const ownerInputs = new Map<string, RowParams>();
 Reflect.set(globalThis, "sessionRowOwnerInputs", ownerInputs);
+const freezeShapes: object[] = [];
+if (values["freeze-fixture"]) {
+  // Separate diagnostic process: captures real producer rows before any cleanup.
+  const fast = compileFunction("return %HasFastProperties(row)", ["row"]);
+  const sameMap = compileFunction("return %HaveSameMap(a, b)", ["a", "b"]);
+  const shapes = new Map<string, (frozen: object) => void>();
+  Reflect.set(
+    globalThis,
+    "captureSessionRowFreeze",
+    (row: Record<string, unknown>, fields?: string[]) => {
+      const keys = Object.keys(row);
+      const patch = fields !== undefined;
+      const shape = `${patch ? "patch" : "row"}\n${keys.join("\n")}`;
+      const existing = shapes.get(shape);
+      if (existing) {
+        return existing;
+      }
+      if (shapes.size >= 12) {
+        return undefined;
+      }
+      const sample = {
+        patch,
+        fields,
+        beforeFast: fast(row),
+        afterFast: false,
+        rows: 0,
+        fastRows: 0,
+        sharedMaps: 0,
+        entries: keys.map((key) => ({ key, defined: row[key] !== undefined, value: row[key] })),
+      };
+      freezeShapes.push(sample);
+      let previous: object | undefined;
+      const capture = (frozen: object) => {
+        sample.afterFast = fast(frozen);
+        sample.rows++;
+        sample.fastRows += Number(sample.afterFast);
+        sample.sharedMaps += Number(previous !== undefined && sameMap(previous, frozen));
+        previous = frozen;
+      };
+      shapes.set(shape, capture);
+      return capture;
+    },
+  );
+}
 const injections = new Map([
   [
     "src/agents/agent-scope-config.ts",
@@ -122,15 +189,31 @@ registerHooks({
         ? path.join(values["source-base"], path.basename(relative))
         : undefined);
     const captureOwner = values.owner && relative === "src/gateway/session-utils-row.ts";
+    const captureFreeze =
+      values["freeze-fixture"] && relative === "src/gateway/session-row-identity.ts";
     if (
       !injection &&
       !baseline &&
       !captureOwner &&
+      !captureFreeze &&
       !(values.changed && relative && changedSources.includes(relative))
     ) {
       return nextLoad(url, context);
     }
     let source = readFileSync(baseline || new URL(url), "utf8");
+    if (captureFreeze) {
+      source = source.replace(
+        "export function freezeSessionRow(",
+        "function freezeSessionRowCaptured(",
+      );
+      source += `
+export function freezeSessionRow(...args: Parameters<typeof freezeSessionRowCaptured>) {
+  const capture = globalThis.captureSessionRowFreeze(args[0], args[2]);
+  const row = freezeSessionRowCaptured(...args);
+  capture?.(row);
+  return row;
+}`;
+    }
     if (captureOwner) {
       source = source.replace(
         "export function readSessionRowInputs(",
@@ -151,20 +234,23 @@ export function readSessionRowInputs(...args: Parameters<typeof readSessionRowIn
   },
 });
 const sources = Object.fromEntries(
-  [
-    "gateway/session-row-projection",
-    "gateway/session-row-projection-materialize",
-    "config/sessions/session-actor-replica",
-    ...changedSources.map((file) => file.slice(4, -3)),
-  ].map((name) => {
-    const file =
-      name.endsWith("/session-actor-replica") && values["replica-base"]
-        ? values["replica-base"]
-        : values["source-base"] && changedSources.includes(`src/${name}.ts`)
-          ? path.join(values["source-base"], path.basename(`${name}.ts`))
-          : path.resolve("src", `${name}.ts`);
-    return [name, createHash("sha256").update(readFileSync(file)).digest("hex")];
-  }),
+  Array.from(
+    new Set([
+      "gateway/session-row-projection",
+      "gateway/session-row-projection-materialize",
+      "config/sessions/session-actor-replica",
+      ...changedSources.map((file) => file.slice(4, -3)),
+    ]),
+    (name) => {
+      const file =
+        name.endsWith("/session-actor-replica") && values["replica-base"]
+          ? values["replica-base"]
+          : values["source-base"] && changedSources.includes(`src/${name}.ts`)
+            ? path.join(values["source-base"], path.basename(`${name}.ts`))
+            : path.resolve("src", `${name}.ts`);
+      return [name, createHash("sha256").update(readFileSync(file)).digest("hex")];
+    },
+  ),
 );
 const [
   { withOpenClawTestState },
@@ -182,6 +268,7 @@ const [
   { sessionChanges },
   { getSessionRowSelectionMetrics },
   { patchSessionEntryCore },
+  { replaceSessionEntrySync },
   { persistSessionTranscriptTurn },
   { readSessionActorRowFacts },
   { openOpenClawAgentDatabase },
@@ -201,6 +288,7 @@ const [
   import("../../src/sessions/session-row-changes.js"),
   import("../../src/infra/gateway-work-metrics.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry.js"),
+  import("../../src/config/sessions/session-accessor.sqlite-entry-replace.js"),
   import("../../src/config/sessions/session-accessor.transcript-turn.js"),
   import("../../src/config/sessions/session-actor-replica.js"),
   import("../../src/state/openclaw-agent-db.js"),
@@ -210,6 +298,24 @@ const realNow = Date.now;
 Date.now = () => anchor;
 const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
+function freezeNativeBytes(node: HeapProfiler.SamplingHeapProfileNode, freezing = false): number {
+  const inFreeze = freezing || node.callFrame.functionName === "freezeSessionRow";
+  return (
+    (inFreeze && node.callFrame.scriptId === "0" ? node.selfSize : 0) +
+    node.children.reduce((sum, child) => sum + freezeNativeBytes(child, inFreeze), 0)
+  );
+}
+const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode) => ({
+  allocatedBytes: sampledBytes(node),
+  freezeNativeBytes: freezeNativeBytes(node),
+  acceptBytes: acceptBytes(node),
+});
+function acceptBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
+  const { functionName, url } = node.callFrame;
+  return functionName === "accept" && url.endsWith("/session-row-projection-materialize.ts")
+    ? sampledBytes(node)
+    : node.children.reduce((total, child) => total + acceptBytes(child), 0);
+}
 try {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg: OpenClawConfig = {
@@ -217,7 +323,7 @@ try {
         entries: Object.fromEntries(
           agentIds.map((id, index) => [
             id,
-            values.changed
+            values.changed || childLabels
               ? {
                   workspace: path.join(root, "workspace", id),
                   reasoningDefault: index === 1 ? "on" : "off",
@@ -278,6 +384,9 @@ try {
               providerOverride: "fixture",
               modelOverride: `model-${index % entries.length}`,
               toolOverrides: { mcpToolsDeny: { synthetic: ["unchanged"] } },
+              ...(childLabels && index >= parents
+                ? { parentSessionKey: key(index % parents), spawnedBy: key(index % parents) }
+                : {}),
               ...(index >= residentRows ? { archivedAt: anchor - 1 } : {}),
             });
           }
@@ -315,6 +424,20 @@ try {
       );
       async function run(count: number) {
         for (let index = 0; index < count; index++) {
+          if (childLabels) {
+            const turn = sequence++;
+            const query = queries[parents + (turn % (queries.length - parents))]!;
+            const entry = projection.capture(query)?.storedEntry;
+            assert(entry);
+            const at = performance.now();
+            replaceSessionEntrySync(
+              { agentId: query.agentId, sessionKey: query.key },
+              { ...entry, label: `Synthetic label ${turn}` },
+            );
+            await projection.ensureMaterialized();
+            durations.push(performance.now() - at);
+            continue;
+          }
           if (values.mixed || values.changed) {
             const turn = sequence++;
             const rowIndex = (turn * 37 + Math.floor(turn / queries.length)) % queries.length;
@@ -432,6 +555,9 @@ try {
       }
       if (values["cpu-profile"]) {
         await inspector.post("Profiler.enable");
+        if (childLabels) {
+          await inspector.post("Profiler.setSamplingInterval", { interval: 100 });
+        }
         await inspector.post("Profiler.start");
       }
       const before = getSessionRowSelectionMetrics().materialization;
@@ -439,15 +565,18 @@ try {
       const memoryBefore = process.memoryUsage();
       const hostLoadBefore = loadavg();
       const cpu = process.threadCpuUsage();
+      const processCpu = process.cpuUsage();
       const start = performance.now();
       await run(iterations);
       const elapsedMs = performance.now() - start;
       const used = process.threadCpuUsage(cpu);
+      const processUsed = process.cpuUsage(processCpu);
       const memoryAfter = process.memoryUsage();
       const after = getSessionRowSelectionMetrics().materialization;
-      const allocatedBytes = values.allocation
-        ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      const allocation = values.allocation
+        ? sampledAllocation((await inspector.post("HeapProfiler.stopSampling")).profile.head)
         : undefined;
+      const allocatedBytes = allocation?.allocatedBytes;
       if (values["cpu-profile"]) {
         writeFileSync(
           path.join(root, "owner.cpuprofile"),
@@ -455,8 +584,10 @@ try {
         );
       }
       const digest = createHash("sha256");
+      const rowDigest = createHash("sha256");
       for (const query of queries) {
         digest.update(JSON.stringify(projection.snapshot(query, { now: anchor }).row));
+        rowDigest.update(JSON.stringify(projection.describe(query)!.materialized.row));
       }
       const measuredWork = { ...work };
       let ownerResult;
@@ -503,8 +634,8 @@ try {
         replay(10000);
         const ownerElapsed = performance.now() - ownerStart;
         const ownerUsed = process.threadCpuUsage(ownerCpu);
-        const ownerBytes = values.allocation
-          ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+        const ownerAllocation = values.allocation
+          ? sampledAllocation((await inspector.post("HeapProfiler.stopSampling")).profile.head)
           : undefined;
         ownerDurations.sort((a, b) => a - b);
         const ownerDigest = createHash("sha256");
@@ -515,7 +646,7 @@ try {
           iterations: 10000,
           cpuMs: (ownerUsed.user + ownerUsed.system) / 1000,
           elapsedMs: ownerElapsed,
-          allocatedBytes: ownerBytes,
+          ...ownerAllocation,
           medianMs: ownerDurations[5000],
           p95Ms: ownerDurations[9499],
           digest: ownerDigest.digest("hex"),
@@ -559,6 +690,7 @@ try {
         residentRows: queries.length,
         mixed: values.mixed,
         changed: values.changed,
+        childLabels,
         agents: agentIds.length,
         instrumented: values.instrument,
         work: values.instrument ? measuredWork : undefined,
@@ -578,6 +710,7 @@ try {
         iterations,
         sources,
         digest: digest.digest("hex"),
+        rowDigest: rowDigest.digest("hex"),
         cacheReplacements,
         refreshedRows: projection.materializedCount - countBefore,
         materialization: Object.fromEntries(
@@ -588,8 +721,11 @@ try {
         ),
         elapsedMs,
         threadCpuMs: (used.user + used.system) / 1000,
+        processCpuMs: (processUsed.user + processUsed.system) / 1000,
         cpuUsPerOperation: (used.user + used.system) / iterations,
         allocatedBytes,
+        freezeNativeBytes: allocation?.freezeNativeBytes,
+        acceptAllocatedBytes: allocation?.acceptBytes,
         allocatedBytesPerOperation:
           allocatedBytes === undefined ? undefined : allocatedBytes / iterations,
         memoryBefore,
@@ -598,6 +734,9 @@ try {
         hostLoadAfter: loadavg(),
       };
       writeFileSync(path.join(root, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+      if (values["freeze-fixture"]) {
+        writeFileSync(values["freeze-fixture"], `${JSON.stringify(freezeShapes, null, 2)}\n`);
+      }
       console.log(JSON.stringify(result));
     } finally {
       inspector.disconnect();

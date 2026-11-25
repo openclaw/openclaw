@@ -6,6 +6,7 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
@@ -42,7 +43,11 @@ describe("coding-tool exec working directory", () => {
     vi.unstubAllEnvs();
   });
 
-  function createExecTool(sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"]) {
+  function createExecTool(
+    sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"],
+    participation = false,
+    defaults: Partial<ExecToolDefaults> = {},
+  ) {
     return createCoreCodingTools({
       codingRoot,
       containmentRoot: codingRoot,
@@ -55,10 +60,12 @@ describe("coding-tool exec working directory", () => {
       applyPatchWorkspaceOnly: true,
       execDefaults: {
         host: sandbox ? "sandbox" : "gateway",
+        participation,
         mode: "full",
         allowBackground: false,
         notifyOnExit: false,
         config: { plugins: { enabled: false } },
+        ...defaults,
       },
       processDefaults: {},
     }).find((tool) => tool.name === "exec")!;
@@ -83,6 +90,31 @@ describe("coding-tool exec working directory", () => {
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0, cwd: expectedCwd });
     const output = result.content.find((content) => content.type === "text")?.text;
     expect(output?.trim()).toBe(expectedCwd);
+  });
+
+  it("confines participant process starts before auto-review, including symlink escapes", async () => {
+    const reviewer = vi.fn(
+      () => ({ decision: "allow-once", risk: "low", rationale: "fixture" }) as const,
+    );
+    const tool = createExecTool(undefined, true, { mode: "auto", autoReviewer: reviewer });
+    fs.symlinkSync(path.join(root, "sibling"), path.join(codingRoot, "escape"), "dir");
+    for (const workdir of [path.join(root, "sibling"), "../sibling", "escape"]) {
+      await expect(tool.execute("outside", { command: "pwd -P", workdir })).rejects.toThrow(
+        /participation root/,
+      );
+    }
+    expect(reviewer).not.toHaveBeenCalled();
+    await expect(
+      tool.prepareBeforeToolCallParams?.({ command: "pwd -P", workdir: "escape" }, {}),
+    ).rejects.toThrow(/participation root/);
+    for (const workdir of [undefined, "nested", path.join(codingRoot, "nested")]) {
+      const result = await tool.execute("inside", { command: "pwd -P", workdir });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        cwd: fs.realpathSync(workdir ? path.join(codingRoot, "nested") : codingRoot),
+      });
+    }
   });
 
   it("keeps temporary files in the checkout scratch root when exec changes directory", async () => {

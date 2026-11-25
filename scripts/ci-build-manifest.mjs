@@ -2,7 +2,10 @@ import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
-import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts as getHarnessChangedPathFacts,
+  isTestFileTarget,
+} from "./lib/changed-path-facts.mjs";
 import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
@@ -88,6 +91,11 @@ if (!sourceChannelTestEnv) {
     OPENCLAW_VITEST_MAX_WORKERS: "1",
   };
 }
+
+const uiTestPlanPath = frozenTarget
+  ? "./lib/ci-ui-test-plan.mts"
+  : fromTarget("./scripts/lib/ci-ui-test-plan.mts");
+const uiTestPlan = await import(uiTestPlanPath);
 
 const importTargetPlan = async (targetPath) => {
   if (existsSync(targetPath)) {
@@ -241,8 +249,6 @@ const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-st
 // Stable tags also ship the macOS app, and its post-tag validation is too late
 // to block the tag, so only beta defers macOS Swift proof.
 const deferMacosSwift = releaseScope === "npm-beta";
-const fullNativeValidation =
-  eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
 if (releaseScope !== "full" && !npmQualification) {
   throw new Error("release_scope must be full, npm-beta, or npm-stable");
 }
@@ -446,6 +452,7 @@ const runMacosSwift =
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
+  (eventName !== "workflow_dispatch" || releaseGate || mainValidation) &&
   !nativeGeneratedOnly &&
   scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
@@ -455,6 +462,7 @@ const iosBuildScope =
   (!frozenTarget || supportsCurrentIosCi || (releaseCandidateTarget && supportsIosBuild));
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
+  (eventName !== "workflow_dispatch" || releaseGate || mainValidation) &&
   !nativeGeneratedOnly &&
   scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
@@ -566,7 +574,7 @@ const supportsPublishedDriverUpdate = targetWorkflow.includes(
   "published-driver-update-contract-v1",
 );
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
-const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+const androidTestTier = !useCompatibleAndroidCi;
 // Wear production strings feed the phone generator; only its test/debug inputs
 // are independent. Shared modules, build inputs and missing paths keep all rows.
 const narrowAndroidUnitTests =
@@ -750,8 +758,8 @@ let uiTestGroups =
   (runUiTests || runUiE2e || runUiRealGateway || selectedTestTargets) &&
   !compatibilityTarget &&
   (!frozenTarget || releaseGate) &&
-  typeof nodeTestPlan.createUiTestShardGroups === "function"
-    ? nodeTestPlan.createUiTestShardGroups({
+  typeof uiTestPlan.createUiTestShardGroups === "function"
+    ? uiTestPlan.createUiTestShardGroups({
         // Only edited test files opt into the release-only UI tier on automatic CI.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
         ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
@@ -763,7 +771,15 @@ let uiTestGroups =
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
-let uiTestShardCount = compatibilityTarget ? 1 : 3;
+// Reuse the target's own native UI shard invocation, not the current runner:
+// compatibility still owns discovery, isolation, workers, and test deadlines.
+const supportsUiNativeSharding =
+  /OPENCLAW_NODE_TEST_VITEST_ARGS_JSON:.*--shard=\{0\}\/\{1\}.*matrix\.shard, needs\.preflight\.outputs\.ui_test_shard_count/u.test(
+    targetWorkflow,
+  );
+// Explicit runtime overrides retain their existing compatibility runner envelope.
+let uiTestShardCount =
+  compatibilityTarget && (!supportsUiNativeSharding || dispatchRuntimePolicy) ? 1 : 3;
 if (selectedTestTargets) {
   if (!uiTestGroups) {
     throw new Error("Current PR CI requires UI target groups");
@@ -1196,6 +1212,9 @@ const postgresConformancePaths = [
   "src/gateway/server-methods/cron.ts",
   "src/gateway/server-methods/cron-add.ts",
   "src/gateway/server-methods/cron-run.ts",
+  "src/infra/gateway-lock.ts",
+  "src/infra/gateway-lock-recovery*.ts",
+  "src/infra/gateway-postgres-*.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",
@@ -1405,15 +1424,15 @@ const encodeNodeTestGroups = (groups) => {
 if (
   selectedTestTargets &&
   runUiRealGateway &&
-  typeof nodeTestPlan.createUiRealGatewayTestShards !== "function"
+  typeof uiTestPlan.createUiRealGatewayTestShards !== "function"
 ) {
   throw new Error("Current PR CI requires target-owned real-Gateway groups");
 }
 const plannedUiRealGatewayShards =
   uiTestGroups &&
   (!frozenTarget || releaseGate) &&
-  typeof nodeTestPlan.createUiRealGatewayTestShards === "function"
-    ? nodeTestPlan.createUiRealGatewayTestShards(uiTestGroups.e2e)
+  typeof uiTestPlan.createUiRealGatewayTestShards === "function"
+    ? uiTestPlan.createUiRealGatewayTestShards(uiTestGroups.e2e)
     : selectedTestTargets
       ? []
       : [{ shard: 1, shard_count: 1, run_desktop: true, groups: uiTestGroups?.e2e }];
@@ -1968,7 +1987,9 @@ const manifest = {
   run_macos: runMacos,
   run_android: runAndroid,
   run_android_screenshots:
-    !ordinaryPullRequest && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
+    (eventName !== "workflow_dispatch" || releaseGate) &&
+    !ordinaryPullRequest &&
+    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
@@ -2017,6 +2038,14 @@ const manifest = {
   run_pr_kysely_guardrails: runPrKyselyGuardrails,
   split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
+  // Full lint shards exclude test/. Keep its changed inputs for the fallback
+  // lint step without changing compiler, guard, or extension planning.
+  changed_root_test_paths_json:
+    runCheck && runtimePullRequest && !frozenTarget && !compatibilityTarget
+      ? JSON.stringify(
+          (changedPaths ?? []).filter((file) => getHarnessChangedPathFacts(file).isRootTestSource),
+        )
+      : "[]",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({
@@ -2165,15 +2194,12 @@ const manifest = {
             ? [
                 {
                   check_name: "android-build-play",
-                  task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                  task: "build-play-compat",
                 },
               ]
             : []),
           ...(!useCompatibleAndroidCi
             ? [
-                ...(!androidTestTier
-                  ? [{ check_name: "android-build-wear", task: "build-wear" }]
-                  : []),
                 {
                   check_name: "android-ktlint",
                   task: "ktlint",
@@ -2274,7 +2300,7 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(
       manifest.run_postgres_conformance,
-      workflowEventName === "pull_request" ? 5 : 4,
+      workflowEventName === "pull_request" ? 7 : 6,
     ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(
@@ -2286,8 +2312,15 @@ if (hybridHostedEligible) {
     // and release rows require a different dispatch admission.
     "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
-    "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
+    "ios-screenshot-capture": count(
+      (eventName !== "workflow_dispatch" || releaseGate) &&
+        parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+      1,
+    ),
+    "ios-screenshot-evidence": count(
+      (eventName !== "workflow_dispatch" || releaseGate) &&
+        parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+    ),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
     "docker-seed-e2e": count(

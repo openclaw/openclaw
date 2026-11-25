@@ -395,6 +395,8 @@ it.each([
               if (phase !== "before-publication") {
                 await f.install(hooks);
                 candidate = await fs.readFile(f.sourcePath);
+                // Staging reloads the manager; the assertions count the restore's reloads.
+                native.identity.mockClear();
               }
               if (phase === "cleanup-uncertain") {
                 throw cleanup;

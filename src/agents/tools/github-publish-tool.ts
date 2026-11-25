@@ -50,6 +50,7 @@ const publicationWorkspaceActions = [
   "publish",
   "readiness",
   "inspect_pr",
+  "create_issue",
   "prepare_pr",
   "refresh_base",
   "edit",
@@ -96,7 +97,9 @@ function describeGitHubPublishTool(
 - request_review: after an explicit re-review request, read the PR with edit, then send expectedHeadCommit and any publication requestId to post only "@clawsweeper re-review". For an explicitly identified PR, supply the same pullRequestUrl on the read and request_review, without requestId; the same eligibility and access checks apply without importing source. No comment text, focus or child target is accepted. Posting is not review acceptance or completion. If the response is uncertain, read existing PR comments before any new request; never retry blindly.
 ${prepareAvailable ? `- prepare_pr: when asked to continue an existing PR under the eligibility above, supply pullRequestUrl. Maintainer assistance does not require being the conversation creator or PR author and never grants later guest turns additional authority. Intent may be established before the URL arrives; inspect_pr is optional. An ordinary unbound conversation yields and resumes here with a new owned PR workspace. Earlier files remain in their original source and earlier message links stay read-only. Background work, children or terminals cause a no-effect busy refusal; finish or observe them and retry. Initial preparation in an already managed workspace requires clean source without dirty, untracked, staged, or unpublished work; otherwise preparation preserves it and refuses. For a PR this conversation published, including one the managed publisher authored, preparation instead merges another writer's newer head into the saved work. A clean workspace receives exactly the PR head files. Already managed workspaces keep their directory, sandbox scope and guest Git history. Preparation associates the original PR without publishing. Repeating a completed same-head preparation preserves edits without resetting files. ${refreshBaseAvailable ? "An explicit refresh reconciles the PR's current destination and review comparison while preserving local edits and history; a destination change alone does not merge it into the PR head. Use inspect_pr for current branch and commit facts when needed. Reconcile recoverable changes from the user's intent; ask a focused question only when the intended work is materially ambiguous. Do not ask the user to undo a destination change. An explicit refresh of the bound PR integrates its newer head while preserving later guest work. Files with both staged and unstaged changes must have their staged changes committed first; refresh preserves them and refuses. Resolve returned conflictPaths, then repeat with conflictsResolved: true and expectedHeadCommit set to the returned headCommit. " : ""}Interrupted preparation finishes the same accepted head; if headChanged is true, repeat to integrate the newer remote head. Tests and Auto Review use the returned exact review base. After preparation, omit action to append accepted changes to the original PR through the shared publisher, preserving its branch history, author and draft state. A remote head change refuses publication and preserves local work until the newer head is integrated; do not create a replacement PR. Existing edit, ready${evidenceAvailable ? ", upload_evidence" : ""} and request_review actions use the original bound PR before any new push. Read with edit first: an imported target returns pullRequest instead of a publication receipt; send expectedHeadCommit without requestId.\n` : ""}${evidenceAvailable ? "- upload_evidence: upload one inspected image/video from this conversation's sandbox workspace to its existing GitHub.com PR repository. First read the PR with edit; send its expectedHeadCommit, any publication requestId, and evidence {path: workspace-relative path, sha256: inspected lowercase SHA-256, sizeBytes: inspected byte count, at most 10 MB}. Supports PNG, JPEG, GIF, WebP, MP4, MOV and WebM. Only the inspected bytes are sent. Use the returned uploaded URL with edit to associate it in the PR body, then verify reviewer access; uploaded does not prove public access. An unconfirmed result may have created an attachment: never repeat the upload blindly. No host credentials, other mounts, remote URLs, repository or PR selectors are accepted.\n" : ""}${refreshBaseAvailable ? "- refresh_base: integrate the current target base of this workspace's prepared or published PR into its local managed sandbox before tests and Auto Review; without a PR, use the selected repository base. Finish any pending prepare_pr first. Base refresh preserves the accepted PR head and never imports another writer's newer PR head; use prepare_pr for that source update. Commit distinct staged changes before refreshing a file with unstaged edits. Resolve returned conflicts, then acknowledge with conflictsResolved: true and the returned baseCommit, including unchanged binary choices. Tests and Auto Review use the returned exact review base (mode local). Refresh stages source but preserves guest HEAD/branches/commits and never publishes.\n" : ""}Edit, request_review, inspect, ready, merge and close accept an optional verified pullRequestUrl, never with a publishing session or source ref.`
     : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
-  return `${readiness}${inspection}${publication} inspect, ready, merge and close act on this session's published or bound PR, a delegated child's publishingSessionKey, or an explicit pullRequestUrl (without requestId or publishingSessionKey). For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks; pass the same pullRequestUrl on every call for a PR this session did not publish. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected expectedHeadCommit and any publication requestId; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Inspect, merge, close and child selection require full operator write access. These actions also support a bound original PR: use its observed expectedHeadCommit without requestId when no publication receipt is returned. Actions do not change session sandboxing.`;
+  const issue =
+    "create_issue: file an issue in this conversation's registered GitHub project using the selected agent account. Supply only title and optional body (up to 8192 characters). No worktree or PR is needed. If creation is unconfirmed, check the repository before retrying. ";
+  return `${readiness}${inspection}${issue}${publication} inspect, ready, merge and close act on this session's published or bound PR, a delegated child's publishingSessionKey, or an explicit pullRequestUrl (without requestId or publishingSessionKey). For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks; pass the same pullRequestUrl on every call for a PR this session did not publish. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected expectedHeadCommit and any publication requestId; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Inspect, merge, close and child selection require full operator write access. These actions also support a bound original PR: use its observed expectedHeadCommit without requestId when no publication receipt is returned. Actions do not change session sandboxing.`;
 }
 
 /** Describe the schema after policy filtering, without claiming prepared runtime capabilities. */
@@ -167,7 +170,14 @@ function resolveGitHubPublishParameters(params: {
           {
             ...GitHubPublicationActionSchema.properties,
             pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
-            action: stringEnum(["readiness", "inspect_pr", ...publicationOperatorActions]),
+            action: stringEnum([
+              "readiness",
+              "inspect_pr",
+              "create_issue",
+              ...publicationOperatorActions,
+            ]),
+            title: Type.Optional(GitHubPublicationTitleSchema),
+            body: SessionGitHubPublishParamsSchema.properties.body,
           },
           { additionalProperties: false },
         );
@@ -226,7 +236,7 @@ export function createGitHubPublishTool(
     description: options.observationOnly
       ? "Observe publication readiness and existing receipts without credentials, refresh, publication, or recovery. Send action readiness and retain the original requestId for accepted or uncertain work; never resubmit it. This listing offers no authenticated GitHub actions; configuration or tool refresh re-evaluates them. For current identity status or setup, ask the operator to check GitHub in Settings → Agents → Tools. Readiness does not establish write authority, authentication, CI, or mergeability."
       : options.preview
-        ? "Work with GitHub pull requests through the Gateway."
+        ? "Work with GitHub issues and pull requests through the Gateway."
         : describeGitHubPublishTool(
             publicationAvailable,
             prepareAvailable,
@@ -256,6 +266,7 @@ export function createGitHubPublishTool(
         Omit<GitHubPublicationEdit, "action"> & {
           action?:
             | "readiness"
+            | "create_issue"
             | "inspect_pr"
             | "prepare_pr"
             | "publish"
@@ -436,6 +447,25 @@ export function createGitHubPublishTool(
                 timeoutMs: 600_000,
               }),
           ),
+        );
+      }
+      if (input.action === "create_issue") {
+        if (
+          !input.title ||
+          Object.keys(input).some((key) => !["action", "title", "body"].includes(key))
+        ) {
+          throw new Error(
+            "create_issue accepts only a title and optional body for the current project.",
+          );
+        }
+        return jsonResult(
+          await callGateway("sessions.github.action", {
+            action: "create_issue",
+            sessionKey: caller.sessionKey,
+            agentId: caller.agentId,
+            title: input.title,
+            ...(input.body !== undefined ? { body: input.body } : {}),
+          }),
         );
       }
       if (input.action === "inspect_pr") {

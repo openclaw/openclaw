@@ -625,7 +625,7 @@ describe("gateway send conversation ownership", () => {
 
     const { respond } = await request;
     expect(firstRespondCall(respond)[0]).toBe(false);
-    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expect(firstRespondCall(respond)[2]?.message).toContain("Start a new turn to retry.");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });

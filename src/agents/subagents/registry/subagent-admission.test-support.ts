@@ -47,8 +47,7 @@ export function countAdmissionBefore(
     }
     index ??= buildSubagentRunReadIndexFromRuns({ runs, now });
     if (
-      index.countPendingDescendantRuns(entry.childSessionKey, { excludeSuspendedDelivery: true }) >
-      0
+      index.countPendingDescendantRuns(entry.childSessionKey, { excludeSettledDelivery: true }) > 0
     ) {
       count++;
     }

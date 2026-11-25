@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -71,6 +72,63 @@ describe("model provider config patches", () => {
     });
   });
 
+  it.each(["primary", "fallback"] as const)(
+    "round-trips the %s model's harness and retains the way back",
+    async (field) => {
+      const model = field === "primary" ? "openai/first" : "openai/second";
+      const chain = { primary: "openai/first", fallbacks: ["openai/second", "fixture/last"] };
+      const original = {
+        model: chain,
+        models: {
+          [model]: {
+            alias: "Favorite",
+            agentRuntime: { id: "openclaw" },
+            pickerRuntimes: ["codex"],
+          },
+          "fixture/last": { streaming: false },
+        },
+      };
+      let config: Record<string, unknown> = { agents: { defaults: original } };
+      for (const [id, base] of [
+        ["codex", "openclaw"],
+        ["openclaw", "codex"],
+      ] as const) {
+        let draft: DefaultsDraft = {
+          ...readModelProviderConfig(config).defaults,
+          ...readModelBehaviorConfig({}),
+        };
+        const actions = modelDefaultsActions(
+          () => draft,
+          (patch) => {
+            draft = { ...draft, ...patch };
+          },
+        );
+        if (field === "primary") {
+          actions.onPrimaryChange(model, { id, base });
+        } else {
+          actions.onFallbackChange(model, { id, base });
+        }
+        const next = applyMergePatch(config, await submitDefaults(draft));
+        if (!isRecord(next)) {
+          throw new Error("Expected a merged configuration object");
+        }
+        config = next;
+        expect(config).toEqual({
+          agents: {
+            defaults: {
+              ...original,
+              models: {
+                ...original.models,
+                [model]: { alias: "Favorite", agentRuntime: { id }, pickerRuntimes: [base] },
+              },
+            },
+          },
+        });
+        expect(readModelProviderConfig(config).defaults.runtimes?.[model]?.id).toBe(id);
+      }
+    },
+  );
+
   it("edits utility defaults without changing the regular model chain", () => {
     let defaults = readModelProviderConfig({
       agents: {
@@ -128,6 +186,51 @@ describe("model provider config patches", () => {
         await submitDefaults({ ...defaults, ...readModelBehaviorConfig({}) }),
       ),
     ).toEqual({ agents: { defaults: { utilityModel: { fallbacks: ["fixture/backup"] } } } });
+  });
+
+  it("sets and clears the subagent model without touching its sibling settings", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          subagents: {
+            maxConcurrent: 4,
+            model: { primary: "fixture/runner", fallbacks: ["fixture/backup"] },
+          },
+        },
+      },
+    };
+    let defaults = readModelProviderConfig(config).defaults;
+    const actions = modelDefaultsActions(
+      () => defaults,
+      (patch) => {
+        defaults = { ...defaults, ...patch };
+      },
+    );
+    const saved = async () =>
+      applyMergePatch(
+        config,
+        await submitDefaults({ ...defaults, ...readModelBehaviorConfig({}) }),
+      );
+    // Promoting a saved fallback and switching back must not drop it from the chain.
+    actions.onSubagentChange("fixture/backup");
+    expect(await saved()).toEqual({
+      agents: {
+        defaults: {
+          subagents: {
+            maxConcurrent: 4,
+            model: { primary: "fixture/backup", fallbacks: ["fixture/backup"] },
+          },
+        },
+      },
+    });
+    actions.onSubagentChange("fixture/runner");
+    expect(await saved()).toEqual(config);
+    actions.onSubagentChange(null);
+    expect(await saved()).toEqual({
+      agents: {
+        defaults: { subagents: { maxConcurrent: 4, model: { fallbacks: ["fixture/backup"] } } },
+      },
+    });
   });
 
   it("preserves a configured Ultrafast preference when another default is saved", async () => {

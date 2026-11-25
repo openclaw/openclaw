@@ -1,8 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { isDisposableEntrypoint } from "../daemon/durable-service-entrypoint.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
+import { setEntrypoint } from "./onboard-entrypoint.test-support.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
+
+const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("runGuidedOnboarding quick start", () => {
   const {
@@ -40,9 +47,14 @@ describe("runGuidedOnboarding quick start", () => {
 
       const transcript = capture.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(transcript).toContain("Local setup");
-      expect(transcript.split("Everything's in place.")).toHaveLength(2);
+      const completion =
+        choice === "skip"
+          ? "OpenClaw setup is saved. Connect AI before opening chat."
+          : "Everything's in place.";
+      expect(transcript.split(completion)).toHaveLength(2);
       if (choice === "skip") {
         expect(transcript).toContain("Next steps");
+        expect(transcript).not.toContain("Everything's in place.");
       }
     },
   );
@@ -359,4 +371,56 @@ describe("runGuidedOnboarding quick start", () => {
       expect.objectContaining({ agentId: "coordinator" }),
     );
   });
+
+  it.each([
+    ["npx", "hatch", "en"],
+    ["npx", "chat", "en"],
+    ["npx", "hatch", "zh-CN"],
+    ["npx", "hatch", "zh-TW"],
+    ["durable", "hatch", "en"],
+  ] as const)(
+    "%s skipped-AI next steps use entrypoint commands in %s/%s",
+    async (kind, handoffMode, locale) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_CONTAINER_HINT: undefined,
+          OPENCLAW_LOCALE: locale,
+        },
+        async () => {
+          const entrypoint = await setEntrypoint(
+            testTempDirs.make("openclaw-guided-entrypoint-"),
+            kind,
+          );
+          if (kind === "npx") {
+            expect(await isDisposableEntrypoint(entrypoint)).toBe(true);
+          }
+          const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
+          promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+          const deps = setupDeps({ prompter, handoffMode });
+
+          await runGuidedOnboardingImpl(
+            { agentName: "main", acceptRisk: true },
+            makeRuntime(),
+            deps,
+          );
+
+          const notes = vi
+            .mocked(prompter.note)
+            .mock.calls.map(([message]) => message)
+            .join("\n");
+          if (kind === "npx") {
+            expect(notes).toContain(`npx openclaw@${VERSION} onboard`);
+            expect(notes).toContain(`npx openclaw@${VERSION} channels add`);
+            expect(notes).toContain(`npx openclaw@${VERSION} dashboard`);
+            expect(notes).not.toContain("`openclaw onboard`");
+          } else {
+            expect(notes).toContain(
+              "Add AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
+            );
+          }
+        },
+      );
+    },
+  );
 });

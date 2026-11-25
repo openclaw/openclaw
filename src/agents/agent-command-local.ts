@@ -149,6 +149,7 @@ export async function runLocalAgentCommand<TResult>(params: {
                 )
               : await run();
           } finally {
+            prepared.releaseParticipation?.();
             await prepared.runLease?.release();
           }
         }),

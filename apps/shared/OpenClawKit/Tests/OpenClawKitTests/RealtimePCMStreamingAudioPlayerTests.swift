@@ -443,8 +443,8 @@ struct RealtimePCMLoudnessTests {
 
     @Test func `quiet speech is lifted and loud frames stay under the ceiling`() {
         var loudness = RealtimePCMLoudness()
-        #expect(Self.samples(loudness.apply(to: Self.frame(1000))).allSatisfy { $0 == 2820 })
-        #expect(Self.samples(loudness.apply(to: Self.frame(20000))).allSatisfy { $0 == 29204 })
+        #expect(Self.samples(loudness.apply(to: Self.frame(1000))) == [Int16](repeating: 2820, count: 480))
+        #expect(Self.samples(loudness.apply(to: Self.frame(20000))) == [Int16](repeating: 29204, count: 480))
         // Recovery is gradual: the next quiet frame starts at the reduced gain and stays under full gain.
         let after = Self.samples(loudness.apply(to: Self.frame(1000)))
         #expect(after.first == 1460)

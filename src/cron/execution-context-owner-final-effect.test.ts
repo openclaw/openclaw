@@ -21,7 +21,19 @@ vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
       }
     };
     assertCurrent();
-    return { assertCurrent };
+    return {
+      assertCurrent,
+      readCurrentFacts: () => {
+        assertCurrent();
+        return {
+          profileId,
+          emails: [],
+          assignedRole: null,
+          githubLogin: null,
+          openclawIdAccountIds: [],
+        };
+      },
+    };
   },
 }));
 
@@ -131,7 +143,7 @@ async function approveFromScheduledRun(runtime: "embedded" | "cli", revokeDuring
     deliveryAttemptFence: null,
     // The Gateway binds its request context to the admitted run, as cron does.
     resolveGatewayContext: () => context,
-    scheduledExecution: occurrence.mint({
+    scheduledExecution: await occurrence.mint({
       cfg: CFG,
       agentId: "main",
       runId: "run-1",
@@ -208,10 +220,10 @@ describe.each(["embedded", "cli"] as const)("%s scheduled run", (runtime) => {
     expect(run.stillPending).toBe(false);
   });
 
-  it("refuses node.pair.approve when the requester is revoked during node.pair.list", async () => {
+  it("finishes node pairing when the requester is revoked during an admitted run", async () => {
     const run = await approveFromScheduledRun(runtime, true);
-    expect(run.outcome.ok).toBe(false);
-    expect(run.dispatched).toEqual(["node.pair.list"]);
-    expect(run.stillPending).toBe(true);
+    expect(run.outcome.ok).toBe(true);
+    expect(run.dispatched).toEqual(["node.pair.list", "node.pair.approve"]);
+    expect(run.stillPending).toBe(false);
   });
 });

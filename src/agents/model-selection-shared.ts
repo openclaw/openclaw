@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 /**
  * Shared model-selection resolution, alias, allowlist, and visibility logic.
@@ -21,6 +22,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
+import { modelKey } from "../shared/model-key.js";
 import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { hasExactConfiguredProviderModelRef } from "./configured-provider-model.js";
@@ -31,15 +33,7 @@ import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import {
-  createConfiguredProviderCatalogModelIdNormalizer,
-  normalizeConfiguredProviderCatalogModelId,
-  type ModelManifestNormalizationContext,
-  type ModelRef,
-  modelKey,
-  normalizeModelRef,
-  normalizeProviderId,
-} from "./model-ref-shared.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import {
   createModelAliasScope,
   type EffectiveModelAlias,
@@ -47,7 +41,13 @@ import {
   preferLiteralPrimary,
   providerAliasKey,
 } from "./model-selection-alias-scope.js";
-import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import {
+  createConfiguredProviderCatalogModelIdNormalizer,
+  findNormalizedProviderValue,
+  normalizeConfiguredProviderCatalogModelId,
+  normalizeModelRef,
+  parseModelRef,
+} from "./model-selection-normalize.js";
 import {
   warnDisallowedConfiguredModel,
   warnUnqualifiedConfiguredModel,
@@ -608,7 +608,7 @@ export function resolveConfiguredRouteModelLabel(params: {
 
 /** Prepare implicit provider selection without promoting the agent's utility route. */
 export function resolveConfiguredPrimaryProviderFallback(
-  params: ConfiguredModelSelectionParams & { defaultModel: string | undefined },
+  params: ConfiguredModelSelectionParams,
 ): ModelRef | null {
   const utility = readUtilityModelSetting(params.cfg, params.agentId);
   const excludedModel =
@@ -619,14 +619,17 @@ export function resolveConfiguredPrimaryProviderFallback(
           aliasIndex: buildModelAliasIndex(params),
         })?.ref
       : undefined;
-  return resolveConfiguredProviderFallback({ ...params, excludedModel });
+  return resolveConfiguredProviderFallback({ cfg: params.cfg, excludedModel });
 }
 
-/** Resolve the default configured model ref, including aliases and fallback provider rows. */
+/**
+ * Resolve the configured primary model ref, including aliases and fallback provider rows.
+ * Undefined means no model is configured; nothing invents one.
+ */
 export function resolveConfiguredModelRef(
-  params: ConfiguredModelSelectionParams & { defaultModel: string },
+  params: ConfiguredModelSelectionParams,
   modelRuntime: "native" | "acp" = "native",
-): ModelRef {
+): ModelRef | undefined {
   const agentEntry = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   const agentModel = resolveAgentModelConfigForRuntime(agentEntry, modelRuntime);
   const rawModel =
@@ -786,15 +789,10 @@ export function resolveConfiguredModelRef(
     }
 
     if (modelRuntime !== "acp") {
-      warnUnresolvedConfiguredModel(trimmed, params.defaultProvider, params.defaultModel);
+      warnUnresolvedConfiguredModel(trimmed);
     }
   }
-  return (
-    resolveConfiguredPrimaryProviderFallback(params) ?? {
-      provider: params.defaultProvider,
-      model: params.defaultModel,
-    }
-  );
+  return resolveConfiguredPrimaryProviderFallback(params) ?? undefined;
 }
 
 type ModelPolicyPreparationParams = ConfiguredModelSelectionParams & {

@@ -11,7 +11,7 @@ import {
 } from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { createHostWorkspaceEditTool } from "../agents/agent-tools.read.js";
@@ -29,6 +29,7 @@ import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entr
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { readPublicationCommit } from "./github-publication-git.test-support.js";
@@ -75,6 +76,9 @@ describe("local checkout publication", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
     realWorktree: true,
+  });
+  beforeEach(async () => {
+    onTestFinished((await prepareUserProfileCatalog()).release);
   });
   it("publishes an owned checkout outside the default workspace without admin", async () => {
     const f = await createLocalPublicationFixture();
@@ -551,14 +555,13 @@ describe("local checkout publication", () => {
     }
     if (outcome.startsWith("before")) {
       expect(result).toMatchObject([
-        false,
-        undefined,
-        { code: "UNAVAILABLE", message: expect.stringContaining("no longer authorized") },
+        true,
+        { status: "published", url: expect.stringContaining("/pull/") },
       ]);
-      expect(source.effects).toEqual(outcome === "before PR" ? ["push"] : []);
-      if (outcome === "before binding") {
-        expect(loadSessionEntryReadOnly(scope)?.worktree).toBeUndefined();
-      }
+      expect(source.effects).toEqual(["push", "pull_request"]);
+      const tasks = await listSessionChildEntriesReadOnly(scope);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.entry.worktree?.canonicalWorkspaceDir).toBe(publicationSource);
       return;
     }
     expect(result).toMatchObject([
@@ -654,7 +657,7 @@ describe("local checkout publication", () => {
       expect(await invoke(source.cwd, true, "guest-follow-up")).toMatchObject([
         false,
         undefined,
-        { message: expect.stringContaining("requester is no longer authorized") },
+        { message: expect.stringContaining("requester is not authorized to publish") },
       ]);
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);
@@ -677,11 +680,7 @@ describe("local checkout publication", () => {
       expect(revoked).toBe(true);
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);
-      expect(revokedResult).toMatchObject([
-        false,
-        undefined,
-        { message: expect.stringContaining("session authorization is unavailable") },
-      ]);
+      expect(revokedResult).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
       return;
     }
 
@@ -728,6 +727,34 @@ describe("local checkout publication", () => {
     }
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
     expect(source.effects).toEqual(["push", "pull_request", "push", "push"]);
+    // The PR branch is checked out only in the task's own checkout, so follow-up work lands
+    // there. Publishing it updates the same task, branch and PR, also after published
+    // history was rewritten in place.
+    const taskCheckout = task.entry.spawnedCwd!;
+    for (const [text, args] of [
+      ["review feedback\n", ["commit", "-qam", "Address review feedback"]],
+      ["rewritten\n", ["commit", "-qa", "--amend", "-m", "Rewrite the published head"]],
+    ] as const) {
+      const publishedHead = await source.git("-C", taskCheckout, "rev-parse", "HEAD");
+      await fs.writeFile(path.join(taskCheckout, "artifact.txt"), text);
+      await source.git("-C", taskCheckout, ...args);
+      const followUp = await invoke(taskCheckout, true, text);
+      expect(followUp, JSON.stringify(followUp)).toMatchObject([
+        true,
+        { status: "published", ...publicationTarget },
+      ]);
+      await source.git(
+        "-C",
+        taskCheckout,
+        "merge-base",
+        "--is-ancestor",
+        publishedHead,
+        followUp[1].headCommit,
+      );
+      expect(await source.git("-C", taskCheckout, "show", "HEAD:artifact.txt")).toBe(text.trim());
+    }
+    expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
+    expect(source.effects).toEqual(["push", "pull_request", "push", "push", "push", "push"]);
     if (outcome === "rebased task") {
       const upstream = path.join(root, "upstream");
       await source.git("worktree", "add", "--detach", upstream, "main");
@@ -840,6 +867,9 @@ describe("registered session GitHub publication access", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+  beforeEach(async () => {
+    onTestFinished((await prepareUserProfileCatalog()).release);
   });
 
   it.each([

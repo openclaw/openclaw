@@ -66,6 +66,19 @@ describe("GitHub identity view", () => {
     },
   );
 
+  it("shows how to activate a saved account without asking the operator to sign in again", () => {
+    const identity = githubIdentityViewFixture({
+      connectionReady: true,
+      authorizable: true,
+      statusReadable: true,
+      authorization: { phase: "config_not_applied" },
+    });
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    expect(view.getByText("GitHub account saved")).toBeTruthy();
+    expect(view.getByText(/restart the Gateway/u)).toBeTruthy();
+    expect(view.queryByRole("button", { name: "Continue with GitHub" })).toBeNull();
+  });
+
   it("keeps a failed sign-in summary separate from the raw detail", () => {
     const identity = githubIdentityViewFixture({
       connectionReady: true,

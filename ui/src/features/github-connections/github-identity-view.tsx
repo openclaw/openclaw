@@ -172,7 +172,9 @@ function GitHubAuthorization(props: IdentityProps) {
   };
   const failureDetail = () => {
     const state = authorization();
-    return state.phase === "failed" ? state.message : undefined;
+    return state.phase === "failed" || state.phase === "config_not_applied"
+      ? state.message
+      : undefined;
   };
   const patButton = () => (
     <Show when={view().scope !== "personal"}>
@@ -236,6 +238,17 @@ function GitHubAuthorization(props: IdentityProps) {
       </Match>
       <Match when={code()}>
         {(state) => <GitHubAuthorizationCode identity={props.identity} authorization={state()} />}
+      </Match>
+      <Match when={authorization().phase === "config_not_applied"}>
+        <SettingsRow
+          title={<SettingsStatus kind="warn" label={t("agentTools.githubAccountSaved")} />}
+          description={
+            <>
+              <div>{t("agentTools.githubActivationPending")}</div>
+              <ErrorDetails error={failureDetail()} />
+            </>
+          }
+        />
       </Match>
       <Match when={!view().patVisible}>
         <SettingsRow

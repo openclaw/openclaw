@@ -11,19 +11,28 @@
  * the state broker are child processes and excluded. Filesystem caches are warm. A large
  * agent DB is present, but run leases only use the state registry; workspace preparation
  * also reads its exact session. Report the actual filesystem, never infer btrfs.
+ * --restore measures explicit restoration after real snapshot removal,
+ * then 20 warm preparations. Before the timed window, wait for paced deletion to
+ * finish. Both baseline and candidate must restore the exact saved files.
+ * Run A/A and five serial A/B pairs on the same owned fixture, using unique report paths.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.js";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
-  options: { prepare: { type: "string" }, files: { type: "string", default: "62000" } },
+  options: {
+    prepare: { type: "string" },
+    files: { type: "string", default: "62000" },
+    restore: { type: "boolean", default: false },
+  },
 });
 const root = path.resolve(values.prepare ?? positionals[0]!);
 const stateDir = path.join(root, "state");
@@ -138,10 +147,65 @@ try {
       assert.equal(prepared.effectiveCwd, workspaceDir);
     };
     const measurements = [];
-    for (const [owner, run] of [
-      ["lease", lease],
-      ["workspace", workspace],
-    ] as const) {
+    if (values.restore) {
+      await workspace();
+      const saved = path.join(workspaceDir, "saved-task.txt");
+      fs.writeFileSync(saved, "synthetic saved work\n");
+      assert((await service.remove({ id, reason: "synthetic-explicit-restore" })).removed);
+      const parent = path.dirname(workspaceDir);
+      const deletionDeadline = Date.now() + 120_000;
+      while (fs.readdirSync(parent).some((name) => name.startsWith(".openclaw-removing-"))) {
+        assert(Date.now() < deletionDeadline, "Synthetic retired checkout cleanup did not settle");
+        await delay(100);
+      }
+      for (const [phase, iterations] of [
+        ["restore", 1],
+        ["warm", 20],
+      ] as const) {
+        global.gc();
+        const load = os.loadavg();
+        const allocation = getHeapStatistics().total_allocated_bytes;
+        const cpu = process.cpuUsage();
+        const mainCpu = process.threadCpuUsage();
+        const start = performance.now();
+        let failure: unknown;
+        try {
+          for (let index = 0; index < iterations; index++) {
+            if (phase === "restore") {
+              await service.restore({ id });
+            } else {
+              await workspace();
+            }
+          }
+        } catch (error) {
+          failure = error;
+        }
+        const wallMs = performance.now() - start;
+        const used = process.cpuUsage(cpu);
+        const mainUsed = process.threadCpuUsage(mainCpu);
+        const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocation;
+        measurements.push({
+          owner: phase === "restore" ? "worktrees.restore" : "workspace",
+          phase,
+          iterations,
+          wallMs,
+          processCpuMs: (used.user + used.system) / 1000,
+          mainCpuMs: (mainUsed.user + mainUsed.system) / 1000,
+          allocatedBytes,
+          outcome: failure ? "refused" : "ready",
+          load,
+        });
+        assert.equal(failure, undefined);
+        assert.equal(fs.readFileSync(saved, "utf8"), "synthetic saved work\n");
+        assert.equal(fs.statSync(path.join(workspaceDir, "d0/f0.txt")).size, 18_432);
+      }
+    }
+    for (const [owner, run] of values.restore
+      ? []
+      : ([
+          ["lease", lease],
+          ["workspace", workspace],
+        ] as const)) {
       await run();
       await updateRegistryWorktree(process.env, id, { lastActiveAt: 1 });
       let observedActivity = 1;

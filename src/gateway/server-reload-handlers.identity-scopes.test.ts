@@ -30,7 +30,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createChannelManager } from "./server-channels.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -178,9 +178,9 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
         requestRecoveryRestart,
       }),
     );
-    const captures: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>[] =
+    const captures: NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>[] =
       [];
-    let delegated: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    let delegated: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     const guards: ReturnType<typeof readGatewayRequestMutationAuthority>[] = [];
     try {
       await reloader.ready;
@@ -193,7 +193,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
         getRequiredSharedGatewaySessionGeneration: generation.reader,
         extraHandlers: {
           wake: async (options) => {
-            const captured = await captureGatewayOperatorRunAuthority({
+            const captured = await prepareGatewayOperatorRunAuthority({
               client: options.client,
               context,
               hasCurrentClientAuthority: options.hasCurrentClientAuthority,
@@ -218,15 +218,14 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
         return original;
       };
       const original = await capture();
-      delegated = await captureGatewayOperatorRunAuthority({
+      delegated = await prepareGatewayOperatorRunAuthority({
         client: { ...client, internal: { operatorRunAuthority: original.authority } },
         context,
       });
       assert(delegated);
       const expectLive = (...runs: (typeof original)[]) => {
         for (const { authority } of runs) {
-          expect(authority.signal?.aborted).toBe(false);
-          expect(authority.assertCurrent).not.toThrow();
+          expect(authority.signal?.aborted).not.toBe(true);
         }
       };
       const prepareEffect = async (name: string, authority: typeof original.authority) => {

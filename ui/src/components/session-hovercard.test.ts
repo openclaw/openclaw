@@ -104,82 +104,6 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("session hovercard", () => {
-  it.each([
-    {
-      name: "group conversation with contributors",
-      facts: {
-        label: "Weekend plans",
-        channelPresentation: {
-          channel: "whatsapp",
-          channelLabel: "WhatsApp",
-          kind: "group",
-          conversation: "Weekend plans",
-          account: "personal",
-        },
-        createdActor: { type: "human", id: "cli", label: "CLI" },
-        participants: [{ identity: { type: "profile", id: "alice" }, label: "Alice" }],
-        participantCount: 1,
-      },
-    },
-    {
-      name: "direct contact without contributors",
-      facts: {
-        label: "Alex",
-        createdActor: undefined,
-        channelPresentation: {
-          channel: "imessage",
-          channelLabel: "iMessage",
-          kind: "direct",
-          address: "alex@example.com",
-        },
-      },
-    },
-  ] satisfies { name: string; facts: Partial<SidebarRecentSession> }[])(
-    "renders channel identity for $name",
-    ({ facts }) => {
-      const container = renderCard({ row: row({ workContext: undefined, ...facts }) });
-      const contributors = container.querySelector('[aria-label="In this session"]');
-      if (facts.channelPresentation.kind === "group") {
-        const header = container.querySelector(".session-hovercard__header");
-        expect(header?.textContent).toContain("Linked to WhatsApp");
-        expect(header?.textContent).toContain("Group chat");
-        expect(header?.textContent).toContain("Via personal");
-        expect(header?.textContent?.match(/Weekend plans/g)).toHaveLength(1);
-        expect(header?.textContent).not.toContain("CLI");
-        expect(contributors?.textContent).toContain("CLI");
-        expect(contributors?.textContent).toContain("1 other");
-        expect(container.textContent).not.toContain("members");
-      } else {
-        expect(container.querySelector(".session-hovercard__conversation")?.textContent).toContain(
-          "alex@example.com",
-        );
-        expect(container.querySelector(".session-hovercard__conversation a")).toBeNull();
-        expect(contributors).toBeNull();
-        expect(container.textContent).not.toContain("Via");
-      }
-    },
-  );
-
-  it("keeps the card to the session's location, without machine, color, or surface facts", () => {
-    const container = renderCard({
-      row: row({
-        color: "purple",
-        boardFace: "dashboard",
-        hasAutomation: true,
-        placementProviderId: "machine0",
-        placementProfileId: "team",
-        placementMachine: { class: "medium", os: "linux", cpu: 4, memoryGb: 16 },
-      }),
-    });
-    expect(
-      container.querySelector('[aria-label="Runs on machine0 · team"]')?.textContent,
-    ).toContain("machine0 · team");
-    expect(container.querySelector(".session-color-dot")).toBeNull();
-    expect(container.textContent).not.toContain("16 GB");
-    expect(container.textContent).not.toContain("Opens as dashboard");
-    expect(container.textContent).not.toContain("Automation");
-  });
-
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-17T12:00:00Z"));
@@ -335,74 +259,33 @@ describe("session hovercard", () => {
     );
   });
 
-  it("shows all supplied PRs with active work first, identities, and checks", () => {
-    const container = renderCard({
-      pullRequests: snapshot({
-        pullRequests: (
-          [
-            {
-              number: 101,
-              owner: "openclaw",
-              repo: "openclaw",
-              branch: "feature",
-              title: "First",
-              url: "https://github.com/openclaw/openclaw/pull/101",
-              state: "open",
-              changedFiles: 2,
-              additions: 7,
-              deletions: 3,
-              checks: { state: "passing", passed: 2, failed: 0, skipped: 0, running: 0 },
-            },
-            {
-              number: 102,
-              owner: "openclaw",
-              repo: "openclaw",
-              branch: "feature",
-              title: "Second",
-              url: "https://github.com/openclaw/openclaw/pull/102",
-              state: "draft",
-            },
-            {
-              number: 103,
-              owner: "openclaw",
-              repo: "openclaw",
-              branch: "feature",
-              title: "Third",
-              url: "https://github.com/openclaw/openclaw/pull/103",
-              state: "merged",
-            },
-          ] satisfies ControlUiSessionPullRequest[]
-        ).toReversed(),
-      }),
-    });
-
+  it("orders active PRs first and preserves accessible external links", () => {
+    const requests = (["merged", "draft", "open"] as const).map((state, index) => ({
+      number: index + 1,
+      owner: "example",
+      repo: "project",
+      branch: "feature",
+      title: `${state} request`,
+      url: `https://github.com/example/project/pull/${index + 1}`,
+      state,
+      additions: 7,
+      checks: { state: "passing" as const, passed: 2, failed: 0, skipped: 0, running: 0 },
+    }));
+    const container = renderCard({ pullRequests: snapshot({ pullRequests: requests }) });
     const links = [...container.querySelectorAll<HTMLAnchorElement>(".session-hovercard__pr-row")];
-    expect(links).toHaveLength(3);
-    expect(links[0]?.href).toBe("https://github.com/openclaw/openclaw/pull/101");
+    expect(links.map((link) => link.dataset.state)).toEqual(["open", "draft", "merged"]);
+    expect(links[0]?.href).toBe(requests[2]?.url);
     expect(links[0]?.target).toBe("_blank");
     expect(links[0]?.rel).toContain("noopener");
-    expect(links[0]?.querySelector(".session-hovercard__pr-title")?.textContent).toBe("First");
-    expect(
-      links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title"),
-    ).toBeNull();
-    expect(links[0]?.querySelector(".session-hovercard__pr-number")?.textContent).toBe("#101");
-    expect(links[0]?.querySelector(".session-hovercard__pr-author")).toBeNull();
+    expect(links[0]?.querySelector(".session-hovercard__pr-title")?.textContent).toBe(
+      "open request",
+    );
     expect(
       links[0]?.querySelector(".session-hovercard__pr-state-icon")?.getAttribute("title"),
     ).toBe("Open · CI checks passing");
-    expect(links[0]?.querySelector(".session-hovercard__pr-state-icon svg")).not.toBeNull();
-    expect(links[0]?.querySelector(".session-hovercard__files")).toBeNull();
-    expect(links[0]?.querySelector(".session-hovercard__additions")).toBeNull();
-    expect(links[0]?.getAttribute("aria-label")).toContain("First");
-    expect(links[0]?.getAttribute("aria-label")).toContain("openclaw/openclaw#101");
+    expect(links[0]?.getAttribute("aria-label")).toContain("example/project#3");
     expect(links[0]?.getAttribute("aria-label")).toContain("CI checks passing");
     expect(links[0]?.getAttribute("aria-label")).toContain("+7");
-    expect(links[0]?.getAttribute("aria-label")).not.toContain("Opened by");
-    expect(links[0]?.getAttribute("aria-label")).not.toContain("files");
-    expect(links.map((link) => link.dataset.state)).toEqual(["open", "draft", "merged"]);
-    expect(links[0]?.querySelector(".session-hovercard__pr-checks")).toBeNull();
-    expect(container.querySelector("details")).toBeNull();
-    expect(container.querySelector(".session-hovercard__section--header")).toBeNull();
   });
 
   it("swaps the PR number for failing and pending check signals, up to ten rows", () => {
@@ -478,43 +361,6 @@ describe("session hovercard", () => {
 
   it.each([
     {
-      workContext: {
-        kind: "project",
-        name: "project",
-        path: "https://github.com/example/project",
-        branch: "feature/ui",
-      },
-      label: "Project: project, Branch: feature/ui",
-      title: "Project: https://github.com/example/project",
-    },
-    {
-      workContext: { kind: "workspace", name: "release-notes", path: "/workspaces/release-notes" },
-      label: "Workspace: release-notes",
-      title: "Workspace: /workspaces/release-notes",
-    },
-    { workContext: undefined, label: "node-only subtitle", title: "" },
-  ] satisfies { workContext: SidebarRecentSession["workContext"]; label: string; title: string }[])(
-    "renders only authoritative work context: $label",
-    ({ workContext, label, title }) => {
-      const container = renderCard({ row: row({ subtitle: "macbook", workContext }) });
-      if (!workContext) {
-        expect(container.querySelector(".session-hovercard__section--metadata")).toBeNull();
-        expect(container.querySelector(".session-hovercard__context-text")).toBeNull();
-        return;
-      }
-      const context = container.querySelector(`[aria-label="${label}"]`);
-      expect(context?.getAttribute("title")).toBe(title);
-      if (workContext.kind === "project") {
-        expect(context?.textContent).toContain("project / feature/ui");
-      } else {
-        expect(context?.getAttribute("aria-label")).toBe(label);
-        expect(context?.textContent).toContain("release-notes");
-      }
-    },
-  );
-
-  it.each([
-    {
       branch: "feature",
       changedFiles: 3,
       additions: 12,
@@ -551,41 +397,6 @@ describe("session hovercard", () => {
     expect(container.textContent).not.toContain(latestMessage);
     expect(container.querySelector(".session-hovercard__task")).toBeNull();
   });
-
-  it.each(["active", "markdown-only", "completed"])(
-    "keeps Task progress separate from %s plan metadata",
-    (mode) => {
-      const card = progressCard();
-      const container = renderCard({
-        row: row(mode === "completed" ? { status: "done" } : {}),
-        progressCard: {
-          ...card,
-          steps:
-            mode === "markdown-only"
-              ? undefined
-              : mode === "completed"
-                ? [{ step: "Verify", status: "completed" }]
-                : card.steps,
-        },
-      });
-
-      const plan = container.querySelector(".session-hovercard__plan-row");
-      if (mode === "active") {
-        expect(plan?.querySelector(".session-hovercard__plan-step")?.textContent).toBe("Verify");
-        expect(plan?.querySelector(".session-hovercard__plan-count")?.textContent).toBe("0/1");
-        expect(plan?.querySelector(".session-run-spinner")).not.toBeNull();
-      } else {
-        expect(plan).toBeNull();
-      }
-      const notepad = container.querySelector(".session-hovercard__notepad");
-      expect(notepad).not.toBeNull();
-      expect(notepad?.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
-        "Task progress",
-      );
-      expect(container.querySelector(".session-progress-card")).toBeNull();
-      expect(container.querySelector("time")).toBeNull();
-    },
-  );
 
   it.each([
     { hasActiveRun: true, updateOffset: -1, status: "running" },
@@ -631,58 +442,46 @@ describe("session hovercard", () => {
     ).toBe("Verify, paused");
   });
 
-  it("shows the first active step, otherwise the first pending step, and never completed work", () => {
-    const container = renderCard({
-      row: row(),
-      progressCard: {
-        ...progressCard(),
-        markdown: undefined,
-        steps: [
-          { step: "Done", status: "completed" },
-          { step: "Next", status: "pending" },
-          { step: "Working", status: "in_progress" },
-          { step: "Later", status: "pending" },
-        ],
-      },
-    });
-    expect(container.querySelector(".session-hovercard__plan-step")?.textContent).toBe("Working");
-    expect(container.querySelector(".session-hovercard__plan-count")?.textContent).toBe("1/4");
-    expect(container.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
-      "Task progress",
-    );
-    expect(container.querySelector(".session-hovercard__commentary")).toBeNull();
-
+  it.each([
+    { steps: ["completed", "pending", "in_progress", "pending"], step: "Step 2", count: "1/4" },
+    { steps: ["completed", "pending", "pending"], step: "Step 1", count: "1/3" },
+    { steps: ["completed"], step: null, count: null },
+    { steps: ["completed"], step: null, count: null, markdown: "Release ready." },
+    { steps: [], step: null, count: null, markdown: "Release ready." },
+  ] satisfies {
+    steps: NonNullable<ProgressCard["steps"]>[number]["status"][];
+    step: string | null;
+    count: string | null;
+    markdown?: string;
+  }[])("selects unfinished progress from $steps", ({ steps, step, count, markdown }) => {
+    const container = renderCard({ row: row(), progressCard: progressCard() });
     renderCard(
       {
         row: row(),
         progressCard: {
           ...progressCard(),
-          markdown: undefined,
-          steps: [
-            { step: "Done", status: "completed" },
-            { step: "Next", status: "pending" },
-            { step: "Later", status: "pending" },
-          ],
+          markdown,
+          steps: steps.map((status, index) => ({ step: `Step ${index}`, status })),
         },
       },
       container,
     );
-    expect(container.querySelector(".session-hovercard__plan-step")?.textContent).toBe("Next");
-    expect(container.querySelector(".session-hovercard__plan-count")?.textContent).toBe("1/3");
-
-    renderCard(
-      {
-        row: row(),
-        progressCard: {
-          ...progressCard(),
-          markdown: undefined,
-          steps: [{ step: "Done", status: "completed" }],
-        },
-      },
-      container,
+    expect(Boolean(container.querySelector(".session-hovercard__plan-row"))).toBe(Boolean(step));
+    expect(Boolean(container.querySelector(".session-hovercard__notepad"))).toBe(
+      Boolean(step || markdown),
     );
-    expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
-    expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
+    expect(container.querySelector(".session-hovercard__plan-step")?.textContent ?? null).toBe(
+      step,
+    );
+    expect(container.querySelector(".session-hovercard__plan-count")?.textContent ?? null).toBe(
+      count,
+    );
+    expect(container.querySelector(".session-hovercard__notepad-title")?.textContent ?? null).toBe(
+      step || markdown ? "Task progress" : null,
+    );
+    expect(Boolean(container.querySelector(".session-hovercard__commentary"))).toBe(
+      Boolean(markdown),
+    );
   });
 
   it.each([

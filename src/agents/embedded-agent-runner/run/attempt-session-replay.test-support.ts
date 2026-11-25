@@ -10,10 +10,8 @@ import { persistInternalSourceReply } from "../../../gateway/internal-source-rep
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-} from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnInput } from "../../../sessions/user-turn-input.types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,

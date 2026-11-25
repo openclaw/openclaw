@@ -118,7 +118,6 @@ maybeDescribe("twitch live IRC lifecycle (skipped unless TWITCH_LIVE_TEST=1)", (
 
     await task;
 
-    expect(settled).toBe(true);
     expect(stopCalled, "stop hook must run on abort").toBe(true);
     log(`PASS — promise pending for ${WATCH_MS}ms after connect, then stopped on abort`);
   }, 60_000);

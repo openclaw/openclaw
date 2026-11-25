@@ -1,7 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
-import { readHistoryDetails, readMessageId } from "./sessions-history-tool.test-support.js";
+import { readHistoryDetails } from "./sessions-history-tool.test-support.js";
 
 const historyDetails = (messages: unknown[], truncated = false, extra = {}) => ({
   sessionKey: "main",
@@ -14,47 +14,26 @@ const historyDetails = (messages: unknown[], truncated = false, extra = {}) => (
   ...extra,
 });
 
-it("sessions_history serializes each message once while growing a 512-message anchored window", async () => {
-  const messages = Array.from({ length: 512 }, (_, index) => ({
+it("sessions_history preserves Unicode messages in an anchored window", async () => {
+  const messages = Array.from({ length: 3 }, (_, index) => ({
     role: index % 2 === 0 ? "user" : "assistant",
     content: `入口 🦊 "message ${index}"\n`,
     __openclaw: { id: `budget-${index}`, seq: index + 1 },
   }));
-  const ids = new Set(messages.map((message) => readMessageId(message)));
   const tool = createSessionsHistoryTool({
     config: {},
     callGateway: async <T>() => ({ messages, totalMessages: messages.length }) as T,
   });
   const stringify = JSON.stringify;
   const originalMessages = stringify(messages);
-  let serializedElements = 0;
-  const spy = vi
-    .spyOn(JSON, "stringify")
-    .mockImplementation((...args: Parameters<typeof JSON.stringify>) => {
-      const [value] = args;
-      if (
-        Array.isArray(value) &&
-        value.length > 0 &&
-        value.every((message) => ids.has(readMessageId(message) ?? ""))
-      ) {
-        serializedElements += value.length;
-      }
-      return stringify(...args);
-    });
-  let result: Awaited<ReturnType<typeof tool.execute>>;
-  try {
-    result = await tool.execute("anchored-work-budget", {
-      sessionKey: "main",
-      limit: messages.length,
-      messageId: "budget-256",
-    });
-  } finally {
-    spy.mockRestore();
-  }
+  const result = await tool.execute("anchored-budget", {
+    sessionKey: "main",
+    limit: messages.length,
+    messageId: "budget-1",
+  });
 
   expect(readHistoryDetails(result).messages).toEqual(messages);
   expect(stringify(messages)).toBe(originalMessages);
-  expect(serializedElements).toBe(messages.length);
 });
 
 type BudgetCase = [

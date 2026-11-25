@@ -5,10 +5,12 @@ import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -21,11 +23,11 @@ import { directSessionReq } from "./test/server-sessions.test-helpers.js";
 const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 test.each([false, true])(
-  "stamps member-created sessions and rejects unavailable sandbox provisioning (named roles=%s)",
+  "stamps member-created sessions and rejects unavailable sandbox provisioning (named-role default=%s)",
   async (enforced) => {
     const { storePath } = await createSessionStoreDir();
     const profile = ensureProfileForEmail("member-sandbox@example.test");
-    setUserProfileRole(profile.id, "host");
+    setUserProfileRole(profile.id, "guest");
     const cfg: OpenClawConfig = {
       ...getRuntimeConfig(),
       session: { ...getRuntimeConfig().session, store: storePath },
@@ -37,6 +39,7 @@ test.each([false, true])(
         },
       },
       gateway: {
+        openclawId: { enabled: true },
         roles: {
           ...(enforced ? { default: "host" } : {}),
           definitions: {
@@ -57,10 +60,18 @@ test.each([false, true])(
       kind: "member",
       peerKey: "iroh:guest",
       accountId: "guest",
-      role: "guest",
+      role: "host",
     };
+    linkOpenClawIdUserProfile(
+      { profileId: profile.id, accountId: principal.accountId, email: null },
+      {},
+    );
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === "guest");
     setOpenClawIdTunnelPrincipalLookup(() => principal);
-    onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+    onTestFinished(() => {
+      setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
+    });
     const client: GatewayClient = {
       connect: gatewayConnect(["operator.sessions.write"]),
       authenticatedUserProfile: gatewayProfile(profile.id),
@@ -135,9 +146,12 @@ test.each([false, true])(
       createdActor: { id: profile.id },
     });
 
+    const hostProfile = ensureProfileForEmail("host-sandbox@example.test");
+    setUserProfileRole(hostProfile.id, "host");
     const namedClient: GatewayClient = {
       ...client,
       connect: gatewayConnect(["operator.write"]),
+      authenticatedUserProfile: gatewayProfile(hostProfile.id),
       internal: undefined,
     };
     const hostKey = `${key}-other-signin`;
@@ -151,8 +165,8 @@ test.each([false, true])(
       loadSessionEntry({ agentId: "main", sessionKey: hostKey, storePath })?.sandbox,
     ).toBeUndefined();
 
-    setUserProfileRole(profile.id, "guest");
-    principal = { ...principal, role: "operator" };
+    setUserProfileRole(profile.id, "operator");
+    principal = { ...principal, role: "guest" };
     client.internal = { openclawIdPrincipal: principal };
     client.connect.scopes = ["operator.write"];
     const operatorKey = `${key}-operator`;

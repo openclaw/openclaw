@@ -9,7 +9,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
-  retainSqliteDatabaseAdmissionLocation,
+  prepareSqliteDatabaseAdmissionAsync,
 } from "../infra/sqlite-database-admission.js";
 import { capturePluginSourceSnapshot } from "./plugin-generation-capture.js";
 import { capturePluginSnapshotGeneration } from "./plugin-generation-frozen-source.js";
@@ -155,7 +155,7 @@ it("releases staging token descriptor custody before atomic rename", async () =>
     stateDir,
     capture,
     binding,
-    assertCurrent() {
+    async assertCurrent() {
       if (++checks !== 2) {
         return;
       }
@@ -163,7 +163,7 @@ it("releases staging token descriptor custody before atomic rename", async () =>
       const stage = fs.readdirSync(parent).find((name) => name.startsWith("snapshot-v1-staging-"))!;
       // Exercise the physical-descriptor cache that Windows publication must release.
       const location = path.join(parent, stage, "owner.sqlite");
-      retainSqliteDatabaseAdmissionLocation(location);
+      await prepareSqliteDatabaseAdmissionAsync({ location, assertCurrent() {} });
       tokenDescriptor = captureSqliteDatabaseAdmissions(undefined, { location })[0]?.descriptor;
       expect(tokenDescriptor).toBeDefined();
       tokenIdentity = fs.fstatSync(tokenDescriptor!, { bigint: true });

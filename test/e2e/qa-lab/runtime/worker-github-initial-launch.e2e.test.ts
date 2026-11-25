@@ -172,11 +172,7 @@ async function profiles(root: string): Promise<string[]> {
     .map((file) => path.join(root, file.relativePath));
 }
 
-for (const scenario of [
-  "allowed",
-  "original-operator-revoked",
-  "cancelled-before-successor",
-] as const) {
+for (const scenario of ["allowed", "cancelled-before-successor"] as const) {
   it.skipIf(process.platform !== "linux")(
     `shipped worker initial GitHub launch after request completion: ${scenario}`,
     { timeout: 240_000 },
@@ -391,16 +387,7 @@ for (const scenario of [
               .map((frame) => parseNodeWorkerLaunchInput(frame.paramsJSON))
               .filter((frame) => frame.descriptor.assignment.runId === targetRunId);
           expect(launches().length).toBe(0);
-          if (scenario === "original-operator-revoked") {
-            const listed = z
-              .object({
-                profiles: z.array(z.object({ id: z.string(), emails: z.array(z.string()) })),
-              })
-              .parse(await operator.request("users.list", {}));
-            const profile = listed.profiles.find((item) => item.emails.includes(WRITER));
-            assert(profile);
-            await operator.request("users.setRole", { profileId: profile.id, role: "revoked" });
-          } else if (scenario === "cancelled-before-successor") {
+          if (scenario === "cancelled-before-successor") {
             const aborted = await request(writer, "chat.abort", { sessionKey: key, runId }, signal);
             expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
           }

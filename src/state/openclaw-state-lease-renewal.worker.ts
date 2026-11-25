@@ -21,7 +21,7 @@ function identityKey(identity: OpenClawStateLeaseIdentity): string {
 }
 
 /** One deadline and one conditional write serve the physical database's due leases. */
-export function createStateLeaseRenewalScheduler(db: EngineConnection) {
+export function createStateLeaseRenewalScheduler(getDatabase: () => EngineConnection) {
   const pending = new Map<StateLeaseRenewal, number>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = false;
@@ -52,7 +52,8 @@ export function createStateLeaseRenewalScheduler(db: EngineConnection) {
     }
     running = true;
     try {
-      first.execute(() => {
+      const expiries = first.execute(() => {
+        const db = getDatabase();
         const renewedAt = Date.now();
         const query = getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
           .updateTable("state_leases")
@@ -98,16 +99,18 @@ export function createStateLeaseRenewalScheduler(db: EngineConnection) {
         const rows = isPostgresSqlConnection(db)
           ? renew()
           : runWithSqliteBusyTimeout(db, 0, renew, { lockFailureReporting: "suppress" });
-        const expiries = new Map(
+        return new Map(
           rows.map((row) => [
             identityKey({ scope: row.scope, key: row.lease_key, owner: row.owner }),
             row.expires_at ?? undefined,
           ]),
         );
-        for (const entry of due) {
-          entry.complete({ expiresAt: expiries.get(identityKey(entry.identity)) });
-        }
       });
+      // Completion can close a registration's admission port. Leave the first
+      // registration's database exchange before notifying any sibling.
+      for (const entry of due) {
+        entry.complete({ expiresAt: expiries.get(identityKey(entry.identity)) });
+      }
     } catch (error) {
       for (const entry of due) {
         entry.complete({ error });

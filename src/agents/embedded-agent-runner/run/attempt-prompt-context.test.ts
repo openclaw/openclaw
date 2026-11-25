@@ -148,6 +148,32 @@ afterEach(async () => {
 describe("prepareEmbeddedAttemptPromptContext", () => {
   registerParityHostLifecycle();
 
+  it("reports unavailable MCP servers in this turn without rewriting history or the system prompt", async () => {
+    const fixture = createInput();
+    const history = JSON.stringify(fixture.input.messages);
+    const prepared = await prepareContext({
+      ...fixture.input,
+      sessionVersion: 4,
+      appendOnlyRuntimeContext: true,
+      mcpDiagnostics: [
+        {
+          serverName: "fixture",
+          safeServerName: "fixture",
+          launchSummary: "synthetic server",
+          message: "MCP tool listing timed out after 10000ms",
+        },
+      ],
+    });
+    expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "MCP server fixture unavailable: MCP tool listing timed out after 10000ms",
+    );
+    expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "Check server reachability",
+    );
+    expect(JSON.stringify(fixture.input.messages)).toBe(history);
+    expect(prepared.systemPromptForHook).toBe("Base system prompt");
+  });
+
   it("preserves fallback context envelopes and canonical input across route switches and replay", async () => {
     const original = "Describe the attached landscape.";
     const recorder = createUserTurnTranscriptRecorder({

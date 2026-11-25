@@ -174,6 +174,8 @@ Except for the temporary CodeQL exception below, macOS jobs use GitHub-hosted `x
 
 iOS screenshot capture, Store Release, and its screenshot-only operation use `xcode-27-xlarge` on the same macOS 27 image as the reusable qualification job. On the 3-CPU, 7 GB `xcode-27` runner, the iPad Pro 13-inch simulator exhausted memory: `simctl` and XCTest launches stalled for 60 to 100 seconds, failing iPad captures at launch or readiness. Screenshot capture uses stock simulators without SimSlim. It creates a fresh simulator for each device type, then shuts down and deletes it before starting the next; the screenshot-only job accepts a selected branch without release credentials. The qualification job uses the same larger runner for its Simulator and isolated Gateway. Stock qualification keeps the simulator unmodified. Its Debug build targets the host simulator architecture with compiler indexing disabled. After the native build, each arm starts one isolated Gateway and prepares its setup handler through `device.pair.setupStatus` before booting a fresh simulator. The status call prunes expired completion records without issuing a credential; the setup code consumed by the app is issued after boot. The same Gateway serves the live pairing, chat, and relaunch case, then stops before the independent transcript-reader case on the same simulator. Both cases must pass within their individual deadlines.
 
+The optional qualification comparison records each measurement's scheduled, start, and completion offsets, including failed calls, plus both test boundaries. These offsets use the test window's monotonic clock. Each trial retains up to 4,096 call records and reports any dropped records separately; dropped diagnostics do not change the original sampling or qualification rules. SimSlim preparation records elapsed wall seconds and exit codes for cold boot, configuration, readiness, and verification. These Bash timings separate the preparation commands but are not monotonic timestamps. Neither timing surface proves a cause or a memory saving on its own.
+
 Before checkout, the screenshot capture and release jobs disable host Spotlight indexing on their disposable runners, matching release qualification. This reduces contention while retaining the existing simulator headroom checks. The optional `startup_probe` diagnostic keeps indexing enabled for its Spotlight positive controls. Local screenshot commands leave host indexing unchanged.
 
 Screenshot-only runs retain the full build and XCTest logs and archived `.xcresult` bundles alongside phase and resource diagnostics, including when capture fails. Main CI also retains the full command logs in its screenshot timing diagnostics artifact. These captures use synthetic screenshot fixtures; the console keeps only the final 8 KiB of each native command's output.
@@ -410,10 +412,15 @@ reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
 live/E2E source admission and candidate evidence binding use the same label.
 Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
 workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
-and the nightly watcher keep their 720-minute budgets. When
-`OPENCLAW_CI_RUNNER_BACKEND=boat`, short hosted jobs provision separate Boat VMs
-and register ephemeral organization runners for those three jobs. Native Boat
-CI has a six-hour limit, so these watchers use regular VMs instead.
+and the nightly watcher keep their 720-minute budgets. The current reusable
+release watcher uses `blacksmith-2vcpu-ubuntu-2404` independently of backend and
+runner-group settings; it retains the `runner_label` input for caller compatibility.
+Both release callers pin the merged Blacksmith watcher definition and run
+without Boat provisioning or cleanup jobs. Historical immutable watcher pins
+retain their original routing. The nightly watcher is unchanged: when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`, a short hosted job provisions its Boat VM
+and registers an ephemeral organization runner. Native Boat CI has a six-hour
+limit, so the nightly watcher uses a regular VM instead.
 
 This route requires the repository secrets `BOAT_API_KEY` and
 `BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,
@@ -422,12 +429,12 @@ GitHub App with organization self-hosted runner write access and a dedicated
 runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
 hosted runners. App token creation must succeed before a VM is provisioned;
 a missing app ID or private key stops provisioning.
-The runner group must admit the nightly workflow on `main` and
-`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
-Full Release Validation pins that reviewed watcher definition from its immutable
-`release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
-verifier. When changing the watcher definition, update the caller pin and
-runner-group entry together. Install a Crabbox release supporting
+The Boat runner group must admit the nightly workflow on `main`; Release
+Decision and Diagnostic Drain no longer use that group. Full Release Validation
+pins the reviewed Blacksmith watcher definition from its immutable `release-ci/`
+refs; the watcher checks out the caller's pinned tooling and admitted verifier.
+When changing the watcher definition, update both caller pins together. Install
+a Crabbox release supporting
 `actions register --receipt` and `actions unregister --receipt` before enabling
 the backend. The provisioning preflight rejects older clients before creating
 a VM.
@@ -444,7 +451,8 @@ reports its operation ID for reconciliation with `boat deletion status`.
 Mantis Discord and web UI actor authorization, request resolution, ref validation,
 and ordinary proof orchestration use `ubuntu-24.04`. This preserves access for all
 authorized maintainers without requiring Boat account admission. Request-bound
-isolated proof jobs retain their separate runtime placement and deadlines.
+isolated web chat and Telegram proof jobs also use `ubuntu-24.04`, with bounded
+rootless Podman storage and their existing 60-minute deadlines.
 
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
 The QA controls honor their `runner_group` input. Reusable live/E2E and QA
@@ -711,7 +719,7 @@ The `agents-sessions` graph owns root `src/agents/session-*.test.ts(x)` tests an
 
 The `ui-e2e-chat` graph owns root-level `ui/src/e2e/chat*.test.ts(x)` tests. The `ui-e2e` graph retains the other UI E2E tests and `ui/src/test-helpers/control-ui-e2e*.test.ts(x)` harness tests. Both retain the UI bootstrap and Solid JSX compiler settings. The new graph is appended to the canonical registry, preserving existing stripe assignments and the five CI type-check rows.
 
-Android admits all four rows together on upstream Blacksmith push and PR first attempts, excluding fork PRs. Hosted routes, including forks, retries, manual dispatches, and schedules retain two. Android Play and ThirdParty rows run their unit tests. In the normal four-row tier, Wear also owns third-party app lint, while the Kotlin-lint row owns Play app and Wear-shared lint. Every row keeps separate, sequential Gradle processes and shares one UTC build timestamp through the existing `openclawBuildTimestamp` property when it has multiple native invocations, avoiding `BuildConfig` regeneration solely because a later command starts. Phone test classes on Blacksmith run in at most four isolated JVMs, bounded by available processors, with the existing 1 GiB heap per JVM. Each JVM receives its share of the available processors so its GC and internal pools do not multiply the runner CPU budget. Classes remain sequential within each JVM; hosted tests keep one JVM. Full manual and historical compatibility task inventories are unchanged.
+Android [admits up to four rows concurrently](/ci/scope-and-routing/job-budgets#android-matrix) on every runner route. Android Play and ThirdParty rows run their unit tests. In the normal four-row tier, Wear also owns third-party app lint, while the Kotlin-lint row owns Play app and Wear-shared lint. Every row keeps separate, sequential Gradle processes and shares one UTC build timestamp through the existing `openclawBuildTimestamp` property when it has multiple native invocations, avoiding `BuildConfig` regeneration solely because a later command starts. Phone test classes on Blacksmith run in at most four isolated JVMs, bounded by available processors, with the existing 1 GiB heap per JVM. Each JVM receives its share of the available processors so its GC and internal pools do not multiply the runner CPU budget. Classes remain sequential within each JVM; hosted tests keep one JVM. Full manual and historical compatibility task inventories are unchanged.
 
 Task-scoped Blacksmith sticky disks retain the Gradle user home across dependency changes. Gradle owns content-addressed invalidation and periodic expiry of unused caches and wrapper distributions; CI does not erase the warm home when a dependency fingerprint changes. Protected pushes remain the only snapshot writers, and pull requests consume read-only clones. Dependency resolution remains online so a changed dependency or cold snapshot can populate missing artifacts.
 

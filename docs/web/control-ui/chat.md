@@ -74,6 +74,8 @@ presentation does not resume the run or recover an answer that was never saved.
 Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
 composer; unarchive the session to continue the conversation.
+Before you archive or delete a session with enabled linked automations, the
+confirmation shows their names and any available schedules in read-only cards.
 
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
@@ -107,23 +109,27 @@ for messages, a calendar clock for scheduled jobs, and an image for image genera
 Shared tools keep their semantic icons regardless of the provider. Tools owned by
 installed third-party plugins may show the plugin logo when the Gateway has
 confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugins
-keep their monochrome activity icons. Missing or unreadable logos fall back to
-the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
-icon. Unknown publisher metadata does not enable branding.
+keep their monochrome activity icons. When an installed, non-bundled plugin
+owns an MCP tool but provides no activity artwork for it, chat can use the
+plugin's icon instead, even for an OpenClaw-published service wrapper. Missing
+or unreadable artwork falls back to the normal tool glyph; unknown tools use a
+puzzle icon.
 
 Choose **View → Inline command trail (this browser)** in the session menu to show
 compact command, read, and search rows in conversation order while work is running.
 Command output advances in place; expand a row for captured output and details.
-Grouped tool activity remains the default, and completed dashboard turns keep their
-**Worked for…** folding. This preference stays in this browser for this Gateway.
+Grouped tool activity remains the default. This preference does not change which
+completed dashboard turns show **Worked for…**. This preference stays in this browser for this Gateway.
 If the trail cannot load, grouped commands remain available. Turn the option off
 and on to retry; the error’s details retain the technical failure.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.
-Reloading history preserves the recorded purpose. A saved call without a loaded
-result shows **No result available** rather than counting as an unknown outcome.
+Reloading history preserves the recorded purpose. In imported Claude CLI history,
+a tool result without an error flag counts as completed, just as it does live.
+A saved call without a loaded result shows **No result available** rather than
+counting as an unknown outcome.
 Live execution facts and the active run’s replay snapshot establish **Running**;
 the run being active alone does not. Refreshing the same session retains those
 facts until history records an outcome. Partial output alone does not finish a
@@ -296,8 +302,8 @@ keep their existing capture limits. If an interrupted command has no saved tool
 result, its partial output may be unavailable after terminal reconciliation or
 reload.
 
-Completed dashboard turns still fold their intermediate work into **Worked for…**.
-Open that disclosure to inspect the chronological trail again. Channel sessions
+Completed OpenAI turns can fold their intermediate work into **Worked for…**.
+Open that disclosure to inspect the trail again. Other models keep it inline. Channel sessions
 and speech bubbles keep their existing completion behavior. The preference
 persists in this browser for this Gateway; grouped activity remains the default.
 Live Codex stdout is delivered to panes that enable the inline trail. Switching
@@ -456,7 +462,9 @@ Confirming text with an input method does not send the Side chat question. Finis
 
 Editing a Side chat draft does not interrupt loading its earlier answers. On desktop, closing the Side chat tab waits for the Gateway to confirm the reset; a failed reset leaves the tab and its content open. Hiding the panel or switching tabs preserves the thread and draft. When Side chat occupies the main panel, or on mobile, **Clear side chat** remains available. It removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 
-Side chat cancels a question after 60 seconds. Once the canceled model run has finished cleanup, the failed question offers **Retry**. Earlier answers stay intact, and a late answer from the canceled run is not added to the thread.
+After a minute, Side chat shows **Still waiting for an answer** instead of cutting off a running answer. The runner detects stalled model requests, and each question has a five-minute upper limit. **Stop side chat answer** stops just that question, without clearing earlier answers, your next draft, or the main session. A stopped or timed-out question offers **Retry** after cleanup; a late answer is not added to the thread.
+
+Side chat returns complete answers, including lists of links, within the thread’s 48 KiB text budget. If a single exchange exceeds that budget, the answer ends at a word boundary with an explicit notice instead of a broken link.
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
@@ -554,9 +562,11 @@ filename tabs stay in the current chat pane. Files outside the session root
 follow that session's file-tool read boundary and also require permission to
 start a turn in that session. These out-of-root previews are read-only.
 
-In Chat and New session, provider groups retain their expanded or collapsed state when you close and reopen the same model picker. Closing clears the search text without resetting those toggles. Reloading the page initializes the groups from the selected model again.
+In Chat and New session, the model picker reopens on **Favorites** if that was the last tab you chose and it is still available, even if your current model is not starred. Otherwise, the picker opens on the current model’s provider. Closing the picker clears the search text without resetting which provider lists you expanded.
 
 Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+
+Model search in Chat, New session, and the command palette composer puts available recommended models first when the search text matches equally well. Searching for a specific model still finds it even if it is not recommended.
 
 On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model. To reorder models in **Favorites**, drag a model row, or focus the row and press **Alt+Up Arrow** or **Alt+Down Arrow**. The new order is saved with your favorites for that agent.
 
@@ -1013,11 +1023,11 @@ Retries stay in the working claw row: **Retrying…**, **Retrying in …s** when
 
 Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up. A run-error banner remains available when its durable thread notice has not loaded; once that notice is present, the duplicate banner is hidden.
 
-Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
+Other chat error banners, including cloud runner startup failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 
 When an active run compacts the conversation while your next message is being prepared, OpenClaw follows the verified continuation automatically, even if the earlier run finishes before preparation does. This keeps the original message and send identity without displaying a retry error.
 
-Run-error banners offer **Refresh** to reload the conversation without resending a message or replacing your draft. If the conversation changes before a message can run and dispatch cannot verify a safe continuation, the banner explains that the message did not run and asks you to refresh before sending it again. The original diagnostic remains under **Details**. OpenClaw does not automatically redirect that message into a replacement conversation.
+When a reply fails and its thread notice is unavailable, the card above the composer shows the redacted error on one line, cut off with an ellipsis when it does not fit. It has no details or expansion control. **Refresh** reloads the conversation without resending a message or replacing your draft; **X** dismisses the card. Sign-in failures offer **Open Models**, and busy-state failures offer **Check status**. Reporting a bug remains available from Help. If the conversation changes before a message can run, OpenClaw does not automatically redirect that message into a replacement conversation.
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
@@ -1516,7 +1526,10 @@ Closing the sheet hides it without clearing the conversation or its draft.
 On wide chat panes it opens automatically as a docked right-hand column, with
 the transcript and composer centered in the remaining space. Docking uses the
 space left after navigation, split panes, and other panels—not the window width
-alone. The column scrolls independently and never covers the conversation.
+alone. Details and the Home agent sidebar can both stay open if the remaining
+chat pane fits its default reading column and Details. The column scrolls
+independently and never covers the conversation. If the session has no details
+to show, the open panel says so instead of leaving an empty column.
 
 When the pane becomes too narrow, automatically opened Details collapses. Select
 **Details** to open it as an overlay on narrower screens. Closing it explicitly
@@ -1535,7 +1548,7 @@ lists above the composer. The mobile **Publish PR** control appears only for an
 undismissed branch with publishable work or a retained publication result or
 recovery state. An empty workspace or account discovery alone does not show it.
 
-Subagent rows show elapsed time once the child starts, just like ordinary child-session rows.
+Subagent rows in the panel show elapsed time once the child starts.
 Queued rows have no elapsed label; finished work stops at its recorded end time.
 
 The progress header shows the current step, not a completed-step total. On desktop,
@@ -1616,9 +1629,13 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns, commentary, reasoning-only messages, and tool activity
-share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and delivered visual
+In completed dashboard turns answered by OpenAI models, commentary, reasoning-only
+messages, and tool activity can share one **Worked for…** disclosure above the answers.
+For other models, mixed-model work, or history that does not identify the model,
+there is no turn-wide disclosure: text and tools stay inline. Switching the selected
+model does not change earlier turns. Tool names and tool grouping are unchanged.
+
+Expanding **Worked for…** shows the activity in its original order; explicit answer segments and delivered visual
 results stay visible below it. Images returned for tool inspection remain inside
 that tool's activity instead of splitting the completed response. Browser tab
 previews keep their execution order relative to those visible results, so a page
@@ -1649,7 +1666,7 @@ stable. Navigation and keyboard focus still reveal the selected marker.
 
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". A reply can carry one "Replying to" line with the author's avatar and name, and no message excerpt. Assistant replies show it when they answer an older message, or when the conversation is shared: two or more people appear in the session participants or anywhere in the transcript, including messages hidden by search or not yet loaded. A reply in a one-to-one conversation that answers the prompt of its own turn shows no line. The line appears only once its origin and author are known, from a loaded message, a fetched original, or a reply snapshot that names its sender; until then, or when the author stays unknown, it is omitted rather than guessed. A reply to the current message resolves only through the run that prompt started, so legacy, mirrored, or ambiguous replies without that link show no line. When the original is confirmed deleted or inaccessible, the line shows "Original message unavailable" without an avatar or link, after the sender's name when the snapshot names it. A line whose row is reserved while the original is fetched never changes height: it fills in place, and a lookup that cannot reach the Gateway keeps the row reserved until a new connection retries. One exception is a shared conversation where the fetched original has no sender metadata and no reply snapshot names its sender: the author stays unknown, so the line ends hidden and its reserved row is released when the answer arrives. On desktop, the agent avatar stays at the top of attributed reply groups, with a short curved connector running from behind it to that line. On narrow screens, agent and participant avatars beside messages stay hidden to preserve content width; a small reply arrow introduces the line instead of the connector, while the author's avatar remains visible. Your own replies keep the line inside the bubble. Select the author to scroll to and briefly highlight the original. System entries such as local slash-command output render as centered notice rows without an avatar. A graceful restart appears as the ordinary resume input and resulting turn. It adds no restart-recovery banner or interrupted-input notice. Ordinary failed sends and cancelled delivery keep their explanations.
 
-Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player. Expand a video to sweep through assistant videos in the same turn with the previous/next buttons or Left/Right arrow keys. On touch screens, swipe the video picture or surrounding space left/right; the bottom native control strip remains available for seeking. When the video player itself has keyboard focus, its native playback shortcuts take precedence. Navigation stops the previous clip, and closing the viewer stops playback and returns focus to the original control. Videos from another turn or session are not included.
+Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Select **Play** on a video attachment to watch it in chat, or download the original from the attachment card. Compatible QuickTime recordings play from a streaming MP4 copy without re-encoding. Chat shows a preparation status only when the Gateway still needs time to make the video playable. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player. Expand a video to sweep through assistant videos in the same turn with the previous/next buttons or Left/Right arrow keys. On touch screens, swipe the video picture or surrounding space left/right; the bottom native control strip remains available for seeking. When the video player itself has keyboard focus, its native playback shortcuts take precedence. Navigation stops the previous clip, and closing the viewer stops playback and returns focus to the original control. Videos from another turn or session are not included.
 
 Images use a plain, lightly tinted shimmer while their availability or preview is loading. An image that needs explicit permission keeps a compact **Allow image** card until you choose to allow it; unavailable images retain their status and retry controls.
 

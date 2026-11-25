@@ -89,9 +89,6 @@ const completeEntry: InternalSessionEntry = {
     sessionId: "selected",
     state: "known",
     authFingerprint: "1".repeat(64),
-    generation: "synthetic-generation",
-    maxSeq: 7,
-    writerRunId: "synthetic-writer",
   },
 };
 

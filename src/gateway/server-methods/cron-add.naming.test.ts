@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import {
@@ -49,10 +49,9 @@ const uiClient: GatewayClient = {
   connect: gatewayConnect(["operator.cron"]),
   internal: {
     authenticatedControlUi: true,
-    operatorRunAuthority: createAdmittedRunOperatorAuthority({
+    operatorRunAuthority: createTestOperatorAuthority({
       profileId: "synthetic-operator",
       scopes: ["operator.cron"],
-      assertCurrent() {},
     }),
   },
 };

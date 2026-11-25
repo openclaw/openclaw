@@ -12,7 +12,6 @@ import {
   resolveReplySourceTurnId,
   setChannelSourceTurnId,
 } from "../../auto-reply/reply/source-turn-id.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
@@ -152,8 +151,6 @@ async function executeAgentRun(
     const assertDispatchCurrent = () => {
       params.assertGatewayLifetimeCurrent?.();
       params.executionSource?.();
-      prepared.operatorAuthority?.assertCurrent();
-      prepared.userTurn.assertRequesterCurrent?.();
       abortController.signal.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
@@ -302,6 +299,7 @@ async function executeAgentRun(
         // must leave the paused task's completion lifecycle with its owner.
         if (prepared.reactivateSubagent && params.resolvedSessionKey) {
           await reactivateCompletedSubagentSession({
+            operatorAuthority: prepared.operatorAuthority,
             sessionKey: params.resolvedSessionKey,
             runId: params.runId,
             task: message,
@@ -371,7 +369,7 @@ async function executeAgentRun(
         // Awaited routing can retire this owner before final dispatch.
         params.assertGatewayLifetimeCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);
-        const clientCaps = [...callerContext.GatewayClientCaps];
+        const clientCaps = [...(callerContext.GatewayClientCaps ?? [])];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
         const supportsTaskSuggestions =
           (isOperatorUiClient(params.client?.connect.client) ||
@@ -388,15 +386,7 @@ async function executeAgentRun(
                   sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
-                !params.inputProvenance &&
-                  !params.isOneShotModelRun &&
-                  !params.request.internalEvents &&
-                  !params.request.internalRuntimeHandoffId &&
-                  !params.request.execApprovalFollowupExpectedSessionId &&
-                  params.sessionEffects !== "internal" &&
-                  !params.request.suppressPromptPersistence &&
-                  !params.request.swarmCollector &&
-                  params.request.lane !== "subagent",
+                prepared.operatorAuthority?.grant,
               )
             : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);
@@ -413,14 +403,7 @@ async function executeAgentRun(
               },
               cronCreatorAuthority: prepared.cronCreatorAuthority,
               ingressOpts: {
-                // An owner fact taken from the requester, such as a spawning channel owner,
-                // fences the run like a channel owner's own turn, not only its admission.
-                assertSourceCurrent: prepared.userTurn.assertRequesterCurrent
-                  ? composeSessionSourceAssertion([
-                      params.executionSource,
-                      prepared.userTurn.assertRequesterCurrent,
-                    ])
-                  : params.executionSource,
+                assertSourceCurrent: params.executionSource,
                 skillLibraryAuthoring,
                 message,
                 images: params.images,

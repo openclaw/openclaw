@@ -9,6 +9,7 @@ import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { createWorkerPlacementTools } from "../worker/worker-placement-tools.js";
 import {
   registerOneShotExecScopeCleanup,
   stopSessionExecProcesses,
@@ -36,7 +37,10 @@ vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisor,
 }));
-const memoryOwner = vi.hoisted(() => ({ resetBudget: () => {} }));
+const memoryOwner = vi.hoisted(() => ({
+  resetBudget: () => {},
+  setBudget: (_bytes: number) => {},
+}));
 vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
   return {
@@ -46,6 +50,9 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
       if (args[0] === Symbol.for("openclaw.hostExecMemory") && owner && typeof owner === "object") {
         memoryOwner.resetBudget = () => {
           Object.assign(owner, { budget: undefined });
+        };
+        memoryOwner.setBudget = (memoryBytes) => {
+          Object.assign(owner, { budget: { memoryBytes, swapBytes: 0 } });
         };
       }
       return owner;
@@ -155,6 +162,11 @@ function aggregated(details: { status: string; aggregated?: string }): string {
   return details.aggregated ?? "";
 }
 
+/** OpenClaw's notes about a finished command, kept apart from the command's output. */
+function warningText(details: { status: string; warningText?: string }): string {
+  return details.warningText ?? "";
+}
+
 function hostExec(cwd: string, scopeKey: string, allowBackground = false) {
   return createExecTool({
     host: "gateway",
@@ -210,14 +222,17 @@ child.once("spawn", () => {
           command: `exec ${node} ${quote(fixture)}`,
         });
         expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-        const output = aggregated(result.details);
-        const [survivor, ...group]: number[] = JSON.parse(output.split("\n")[0]!);
+        // The output is exactly what the command wrote, so a program can parse it whole.
+        const [survivor, ...group]: number[] = JSON.parse(aggregated(result.details));
         expect(
           [survivor, ...group].every((pid) => Number.isSafeInteger(pid) && (pid ?? 0) > 1),
         ).toBe(true);
         started.push(survivor!);
         // Every survivor is reported and tracked; capacity never stops one.
-        expect(output).toMatch(new RegExp(`pid ${survivor} .*keeps running as background session`));
+        expect(warningText(result.details)).toMatch(
+          new RegExp(`pid ${survivor} .*keeps running as background session`),
+        );
+        expect(JSON.stringify(result.content)).toContain(`pid ${survivor} `);
         adopted.push(survivor!);
         // The direct native owner has a shared caller, not an owned relay above it.
         const hosts = new Set([process.pid, getSpawnBroker()?.pid]);
@@ -491,8 +506,10 @@ it.skipIf(process.platform === "win32")(
       const fill = await exec.execute("fill", {
         command: `for i in $(seq 20); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
       });
-      const output = aggregated(fill.details);
-      const pids = [...output.matchAll(/PID=(\d+)/g)].map((match) => Number(match[1]));
+      const pids = [...aggregated(fill.details).matchAll(/PID=(\d+)/g)].map((match) =>
+        Number(match[1]),
+      );
+      const output = warningText(fill.details);
       started.push(...pids);
       expect(pids).toHaveLength(20);
       const tracked = runningIn(scopeKey).map((session) => session.pid!);
@@ -550,7 +567,7 @@ it.skipIf(process.platform === "win32")(
         command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
       });
       const extraPid = firstPid(aggregated(extra.details));
-      expect(aggregated(extra.details)).toMatch(
+      expect(warningText(extra.details)).toMatch(
         new RegExp(`pid ${extraPid} .*keeps running as background session`),
       );
       expect(isPidAlive(extraPid)).toBe(true);
@@ -609,7 +626,7 @@ it.skipIf(process.platform === "win32")(
           command: "for i in $(seq 17); do sleep 0.5 & done; echo ok",
         });
         expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-        expect(aggregated(result.details)).not.toMatch(/Stopped|could not confirm/i);
+        expect(JSON.stringify(result)).not.toMatch(/Stopped|could not confirm/i);
       }
       // Helpers that are still exiting never block a declared service.
       const declared = await exec.execute("declared", {
@@ -774,5 +791,66 @@ setTimeout(() => process.stdout.write(allocation[0] === 1 ? "memory-fit" : "corr
         aggregated: "memory-fit",
       });
     });
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "honors admitted Sandbox memory authority through worker exec while ignoring tool overrides",
+  async () => {
+    const cwd = tempDirs.make("worker-exec-memory-");
+    vi.stubGlobal("WORKER_DEPLOY_BUILD", true);
+    memoryOwner.setBudget(1);
+    try {
+      await withEnvAsync(testEnv(cwd), async () => {
+        for (const memoryBoundary of ["sandbox", undefined] as const) {
+          const exec = createWorkerPlacementTools({
+            policy: {
+              workspaceOnly: true,
+              readOnly: false,
+              applyPatchEnabled: false,
+              applyPatchWorkspaceOnly: true,
+              imageSanitization: {},
+            },
+            cwd,
+            containmentRoot: cwd,
+            permissionMode: "full",
+            execAuthority: { host: "gateway", security: "full", ask: "off", memoryBoundary },
+            agentId: "main",
+            sessionKey: "worker:memory-proof",
+            sessionId: "memory-proof",
+            runId: "memory-proof",
+            github: {
+              credentialScrubEnv: {},
+              localIdentityEnv: {},
+              excludedStoreNames: [],
+              managedLocalIdentity: true,
+            },
+          }).find((tool) => tool.name === "exec")!;
+          const result = await exec.execute("memory-proof", {
+            command: "printf worker-before; sleep 2; printf worker-after",
+            awaitResults: true,
+            memoryBoundary: "sandbox",
+            env: { WORKER_DEPLOY_BUILD: "true" },
+          });
+          if (memoryBoundary === "sandbox") {
+            expect(result.details).toMatchObject({
+              status: "completed",
+              exitCode: 0,
+              aggregated: "worker-beforeworker-after",
+            });
+          } else {
+            expect(result.details).toMatchObject({ status: "failed" });
+            expect(result.details).toMatchObject({
+              aggregated: expect.stringContaining("shared host exec memory budget"),
+            });
+            expect(result.details).toMatchObject({
+              aggregated: expect.not.stringContaining("worker-after"),
+            });
+          }
+        }
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   },
 );

@@ -49,7 +49,7 @@ function effective(config: OpenClawConfig, modelProvider?: string, modelId?: str
         ),
       }),
     }).map((tool) => tool.name),
-    gatewayConfigReadAllowed: policy.gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed: policy.gatewayManagementActionsAllowed,
   };
 }
 

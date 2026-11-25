@@ -389,54 +389,63 @@ it("rejects status returned for a different agent", async () => {
   expect(identity.read().status).toBeNull();
 });
 
-it("waits for each authoritative poll deadline and adopts successful OAuth status", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(1_800_000_000_000);
-  const pollTimes: number[] = [];
-  const pollResults = [
-    { status: "slow_down" as const, retryAfterMs: 10_000 },
-    { status: "success" as const, githubStatus: availableStatus("system") },
-  ];
-  const request = vi.fn(async (method: string) => {
-    if (method === "config.get") {
-      return sourceConfigSnapshot({}, "poll-hash");
-    }
-    if (method === "tools.github.authorize.start") {
-      return authorizationCode;
-    }
-    if (method === "tools.github.authorize.poll") {
-      pollTimes.push(Date.now());
-      return pollResults.shift();
-    }
-    throw new Error(`unexpected method ${method}`);
-  });
-  const client = { request } as unknown as GatewayBrowserClient;
-  const runtimeConfig = createRuntimeConfig(client);
-  await runtimeConfig.ensureLoaded();
-  request.mockClear();
-  const { identity, sync } = createIdentityFixture(client, {
-    runExternalMutation: runtimeConfig.runExternalMutation,
-  });
-  sync();
+it.each(["success", "config_not_applied"])(
+  "waits for polls and refreshes on %s",
+  async (outcome) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const pollTimes: number[] = [];
+    const pollResults = [
+      { status: "slow_down" as const, retryAfterMs: 10_000 },
+      outcome === "success"
+        ? { status: "success" as const, githubStatus: availableStatus("system") }
+        : { status: "failed" as const, reason: "config_not_applied" as const },
+    ];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return sourceConfigSnapshot({}, "poll-hash");
+      }
+      if (method === "tools.github.authorize.start") {
+        return authorizationCode;
+      }
+      if (method === "tools.github.authorize.poll") {
+        pollTimes.push(Date.now());
+        return pollResults.shift();
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const runtimeConfig = createRuntimeConfig(client);
+    await runtimeConfig.ensureLoaded();
+    request.mockClear();
+    const { identity, sync } = createIdentityFixture(client, {
+      runExternalMutation: runtimeConfig.runExternalMutation,
+    });
+    sync();
 
-  await identity.startAuthorization();
-  expect(identity.read().authorization).toMatchObject({ phase: "code", userCode: "ABCD-1234" });
-  await vi.advanceTimersByTimeAsync(4_999);
-  expect(pollTimes).toEqual([]);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(pollTimes).toEqual([1_800_000_005_000]);
-  expect(identity.read().authorization).toMatchObject({ phase: "pending", slowedDown: true });
-  expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(0);
+    await identity.startAuthorization();
+    expect(identity.read().authorization).toMatchObject({ phase: "code", userCode: "ABCD-1234" });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(pollTimes).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pollTimes).toEqual([1_800_000_005_000]);
+    expect(identity.read().authorization).toMatchObject({ phase: "pending", slowedDown: true });
+    expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(0);
 
-  await vi.advanceTimersByTimeAsync(9_999);
-  expect(pollTimes).toHaveLength(1);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(pollTimes).toEqual([1_800_000_005_000, 1_800_000_015_000]);
-  expect(identity.read().status).toEqual(availableStatus("system"));
-  expect(identity.read().authorization).toEqual({ phase: "idle" });
-  expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
-  runtimeConfig.dispose();
-});
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(pollTimes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pollTimes).toEqual([1_800_000_005_000, 1_800_000_015_000]);
+    if (outcome === "success") {
+      expect(identity.read().status).toEqual(availableStatus("system"));
+      expect(identity.read().authorization).toEqual({ phase: "idle" });
+    } else {
+      expect(identity.read().authorization).toMatchObject({ phase: "config_not_applied" });
+    }
+    expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+    runtimeConfig.dispose();
+  },
+);
 
 it.each([
   { label: "selected agent changes", overrides: { agentId: "reviewer" } },

@@ -7,8 +7,8 @@ import {
   buildProjectedAgentRunIndex,
   readAgentRunIndexVersion,
 } from "../infra/agent-run-registry.js";
+import { captureModelCostPricing } from "../model-catalog/usage-pricing.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
-import { captureModelCostPricing } from "../utils/usage-format.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import * as records from "./session-row-projection-record.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
@@ -278,7 +278,7 @@ export function createSessionRowProjectionContext(
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
-        const childLinks = projectSessionRowChildLinks(readChildLinks(row));
+        const links = readChildLinks(row);
         const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
@@ -286,12 +286,12 @@ export function createSessionRowProjectionContext(
           { includeChildren: true },
         );
         const swarmChanged = !isDeepStrictEqual(row.materialized.row.swarm, swarm);
-        const childrenChanged = !isDeepStrictEqual(row.materialized.source.childLinks, childLinks);
+        const childrenChanged = links !== row.materialized.source.childLinks;
         if (swarmChanged || childrenChanged) {
           row.materialized = replaceSessionRowFacts(
             row.materialized,
             swarmChanged ? { swarm } : undefined,
-            childrenChanged ? { childLinks } : undefined,
+            childrenChanged ? { childLinks: projectSessionRowChildLinks(links) } : undefined,
           );
         }
         row.subagentRevision = subagentRevision;

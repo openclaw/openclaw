@@ -61,6 +61,7 @@ function copyGeneratedPublisherFixture(root: string, workspaceName: string) {
 
 export type GeneratedPublisherOptions = {
   headBranch?: string;
+  repository?: string;
   disarmRace?: boolean;
   updateSourceBeforeAutoMerge?: boolean;
   race?: "delete" | "advance" | "recreate";
@@ -73,6 +74,7 @@ export type GeneratedPublisherOptions = {
   generatedFiles?: Record<string, string>;
   invalidationPaths?: string;
   malformedAutoMergeRecord?: boolean;
+  unknownMergeabilityOnce?: boolean;
   mergeGeneratedPush?: boolean;
   noGeneratedChange?: boolean;
   overlapPolicy?: string;
@@ -186,13 +188,13 @@ export function prepareGeneratedPublisherFixture(
     "  api:*)",
     '    if [[ -f "$FAKE_PR_STATE" ]]; then',
     '      read_head "$FAKE_STALE_HEAD_ONCE"',
-    '      printf "https://github.com/openclaw/openclaw/pull/1\\t%s\\n" "$head"',
+    '      printf "https://github.com/${PUBLISH_REPOSITORY}/pull/1\\t%s\\n" "$head"',
     "    fi",
     "    ;;",
     "  pr:create)",
     '    if [[ "$FAKE_RECONCILIATION" == "" ]]; then : > "$FAKE_PR_STATE"; fi',
     '    if [[ "$FAKE_RECONCILIATION" == "merged" ]]; then "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/main "$("$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/${FAKE_HEAD_BRANCH})"; fi',
-    '    printf "%s\\n" "https://github.com/openclaw/openclaw/pull/1"',
+    '    printf "%s\\n" "https://github.com/${PUBLISH_REPOSITORY}/pull/1"',
     "    ;;",
     "  pr:edit) exit 0 ;;",
     "  pr:view)",
@@ -200,7 +202,9 @@ export function prepareGeneratedPublisherFixture(
     '    [[ -n "${GH_TOKEN:-}" ]]',
     '    [[ -f "$FAKE_PR_STATE" ]]',
     '    read_head "$FAKE_STALE_PR_VIEW_HEAD_ONCE"',
-    '    if [[ "$FAKE_MALFORMED_AUTO_MERGE_RECORD" == "true" ]]; then printf "%s\\n" "$head"; else printf "%s\\t%s\\n" "$head" "$FAKE_AUTO_MERGE_METHOD"; fi',
+    '    state="CLEAN"',
+    '    if [[ "$FAKE_UNKNOWN_MERGEABILITY_ONCE" == "true" && ! -f "$FAKE_PR_STATE.known" ]]; then state="UNKNOWN"; : > "$FAKE_PR_STATE.known"; fi',
+    '    if [[ "$FAKE_MALFORMED_AUTO_MERGE_RECORD" == "true" ]]; then printf "%s\\n" "$head"; else printf "%s\\t%s\\t%s\\n" "$head" "$FAKE_AUTO_MERGE_METHOD" "$state"; fi',
     '    if [[ -n "$FAKE_RACE" && ! -f "$FAKE_PR_STATE.raced" ]]; then',
     '      : > "$FAKE_PR_STATE.raced"',
     '      if [[ "$FAKE_RACE" == "advance" ]]; then',
@@ -237,6 +241,7 @@ export function prepareGeneratedPublisherFixture(
       COMMIT_MESSAGE: "chore(test): refresh generated output",
       AUTO_MERGE: String(options.autoMerge ?? false),
       FAKE_AUTO_MERGE_METHOD: options.existingAutoMergeMethod ?? "",
+      FAKE_UNKNOWN_MERGEABILITY_ONCE: String(options.unknownMergeabilityOnce ?? false),
       FAKE_MALFORMED_AUTO_MERGE_RECORD: String(options.malformedAutoMergeRecord ?? false),
       FAKE_ORIGIN: origin,
       FAKE_HEAD_BRANCH: headBranch,
@@ -251,6 +256,7 @@ export function prepareGeneratedPublisherFixture(
       CONTENTS_TOKEN: "contents-token",
       GH_TOKEN: "test-token",
       GITHUB_REPOSITORY: "openclaw/openclaw",
+      PUBLISH_REPOSITORY: options.repository ?? "openclaw/openclaw",
       GITHUB_REPOSITORY_OWNER: "openclaw",
       GITHUB_STEP_SUMMARY: summary,
       HEAD_BRANCH: headBranch,

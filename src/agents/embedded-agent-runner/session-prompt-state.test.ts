@@ -21,6 +21,7 @@ import {
   readSessionSentTools,
   retireSessionSystemPrompt,
 } from "./session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "./session-prompt-update.js";
 import {
   readToolSurfaceCheckpoint,
   resolveSessionToolPolicyDigest,
@@ -446,6 +447,55 @@ describe("system prompt series", () => {
   });
 });
 
+describe("prompt history identity across bounded windows", () => {
+  const routeKey = "openai/gpt-6-sol/openai-responses";
+  const fixture = promptFixture("history-identity", routeKey);
+  const prepareCounted = (
+    systemPrompt: string,
+    entries: SessionEntry[],
+    historyBoundaryCount?: number,
+  ) => {
+    const result = prepareSessionSystemPrompt({
+      state: fixture.state,
+      routeKey,
+      systemPrompt,
+      entries,
+      historyBoundaryCount,
+    });
+    result.commit();
+    return result;
+  };
+  const refreshed = "Base.\n## AGENTS.md\nNew rule.";
+
+  it("restarts when the window's checkpoint predates a compaction outside it", async () => {
+    const entries: SessionEntry[] = [];
+    prepareCounted("Base.", entries, 0);
+    await fixture.persist(entries);
+    // A compaction committed after this checkpoint, and its summary did not fit the next window.
+    fixture.reload();
+    const next = prepareCounted(refreshed, entries, 1);
+    expect(next).toMatchObject({
+      restart: true,
+      seriesStatus: "restarted:history",
+      systemPrompt: refreshed,
+    });
+    expect(next.update).toBeUndefined();
+  });
+
+  it.each([0, undefined])(
+    "keeps a never-compacted session pinned (checkpoint boundary count %s)",
+    async (writtenCount) => {
+      const entries: SessionEntry[] = [];
+      prepareCounted("Base.", entries, writtenCount);
+      await fixture.persist(entries);
+      fixture.reload();
+      const next = prepareCounted(refreshed, entries, 0);
+      expect(next).toMatchObject({ restart: false, seriesStatus: "pinned", systemPrompt: "Base." });
+      expect(next.update?.content).toContain("New rule.");
+    },
+  );
+});
+
 describe("session tool surface", () => {
   const routeKey = "openai/gpt-6-sol/openai-responses";
   const fixture = promptFixture("tool-surface", routeKey);
@@ -685,6 +735,27 @@ describe("session tool surface", () => {
     ]);
   });
 
+  it("keeps the series when a bounded window starts after the compaction", async () => {
+    const entries: SessionEntry[] = [historyEntry("compaction", "compaction-1")];
+    // Production passes the transcript's boundary count beside every window.
+    const prepareWindow = (systemPrompt: string, window: SessionEntry[]) =>
+      prepareSessionSystemPrompt({
+        state: fixture.state,
+        routeKey,
+        systemPrompt,
+        entries: window,
+        historyBoundaryCount: 1,
+      });
+    prepareWindow("Base.", entries).commit();
+    await fixture.persist(entries);
+    fixture.reload();
+    // The reload sees only entries after the compaction, then a workspace file changed.
+    const prepared = prepareWindow("Base.\n## AGENTS.md\nNew rule.", entries.slice(1));
+    expect(prepared.restart).toBe(false);
+    expect(prepared.systemPrompt).toBe("Base.");
+    expect(prepared.update?.content).toContain("New rule.");
+  });
+
   it("retires the pin at compaction instead of carrying it into the new history", async () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
@@ -737,6 +808,54 @@ describe("session tool surface", () => {
     ).toEqual(["message", "read"]);
   });
 
+  it.each([false, true])(
+    "separates participation pins across warm and restored turns (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const ceiling = {
+        kind: "send" as const,
+        profileId: "guest",
+        sessionKey: "agent:main:shared",
+        tools: ["read", "ls"],
+      };
+      const creatorPolicy = resolveSessionToolPolicyDigest({}, "main");
+      const participantPolicy = resolveSessionToolPolicyDigest({}, "main", ceiling);
+      expect(participantPolicy).not.toBe(creatorPolicy);
+      expect(
+        resolveSessionToolPolicyDigest({}, "main", {
+          ...ceiling,
+          profileId: "other",
+          tools: ["ls", "read", "read"],
+        }),
+      ).toBe(participantPolicy);
+      const defaultPolicy = resolveSessionToolPolicyDigest({}, "main", {
+        ...ceiling,
+        tools: undefined,
+      });
+      expect(defaultPolicy).not.toBe(participantPolicy);
+      expect(defaultPolicy).not.toBe(creatorPolicy);
+      for (const [policy, offered] of [
+        [participantPolicy, ["ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+        [participantPolicy, ["ls", "read"]],
+        [defaultPolicy, ["exec", "ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+      ] as const) {
+        const tools = surface(
+          offered.map((name) => tool(name)),
+          entries,
+          routeKey,
+          policy,
+        );
+        expect(names(tools)).toEqual(offered);
+        await persist(entries);
+        if (restored) {
+          fixture.reload();
+        }
+      }
+    },
+  );
+
   it("drops pinned tools when the tool policy changes", () => {
     surface([tool("read"), tool("exec")]);
     expect(surface([tool("read")], [], routeKey, "policy-b").map((entry) => entry.name)).toEqual([
@@ -779,4 +898,52 @@ describe("embedded session active project keys", () => {
     expect(prepare("session-one", null)).toEqual(["repo-a"]);
     expect(prepare("session-two", null)).toEqual([]);
   });
+});
+
+it("retires user-row prompt deltas sent before the newest rebuild", () => {
+  const row = (text: string, timestamp: string, projection?: string) => ({
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp: Date.parse(timestamp),
+    ...(projection
+      ? { __openclaw: { modelPromptProjection: { version: 1, text: projection } } }
+      : {}),
+  });
+  const plain = row("before", "2026-10-01T00:00:01Z", `before\n\n${updateHeading}rule A`);
+  const hooked = row(
+    "hooked",
+    "2026-10-01T00:00:02Z",
+    `recalled memory\n\nhooked\n\n${updateHeading}rule B`,
+  );
+  const recent = row("after", "2026-10-01T00:00:04Z", `after\n\n${updateHeading}rule C`);
+  const update = {
+    role: "custom" as const,
+    customType: "openclaw.system-update",
+    content: `${updateHeading}rule D`,
+    display: false,
+    details: { kind: "prompt-update", turnScoped: false },
+    timestamp: Date.parse("2026-10-01T00:00:05Z"),
+  };
+  const rebuild: SessionEntry = {
+    ...entryMetadata,
+    timestamp: "2026-10-01T00:00:03Z",
+    id: "rebuild",
+    type: "custom",
+    customType: "openclaw.system-prompt",
+    data: { restart: true },
+  };
+  const messages = [plain, hooked, recent, update];
+  expect(retireUserRowPromptUpdates(messages, [], false)).toBe(messages);
+  const retained = retireUserRowPromptUpdates(messages, [rebuild], false);
+  expect(retained.slice(2)).toEqual([recent, update]);
+  expect(retained[0]).not.toHaveProperty("__openclaw.modelPromptProjection");
+  // Other model-only text on the row survives the retirement.
+  expect(retained[1]).toHaveProperty(
+    "__openclaw.modelPromptProjection.text",
+    "recalled memory\n\nhooked",
+  );
+  // The rebuilding request drops prompt-update rows and every older delta.
+  const rebuilding = retireUserRowPromptUpdates(messages, [], true);
+  expect(rebuilding).toHaveLength(3);
+  expect(rebuilding[2]).not.toHaveProperty("__openclaw.modelPromptProjection");
 });
