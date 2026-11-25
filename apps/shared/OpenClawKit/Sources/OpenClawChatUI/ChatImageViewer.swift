@@ -115,7 +115,8 @@ enum ChatImageViewerSources {
 /// The transcript thumbnail. A UIKit image view, because the system zoom transition grows the
 /// viewer out of a real view and hides that view while the viewer covers it.
 struct ChatImageViewerThumbnail: UIViewRepresentable {
-    static let cornerRadius: CGFloat = 12
+    /// The bubble's corner, so the thumbnail and its reserved box share one outline.
+    static let cornerRadius: CGFloat = 16
 
     let image: UIImage
     let artifactId: String

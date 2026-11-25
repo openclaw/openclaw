@@ -12,6 +12,9 @@ private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "Open
 private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
+    /// The message text of an attachment-only send; the transcript draws no bubble for it.
+    nonisolated static let attachmentOnlyMessageText = "See attached."
+
     public var canSend: Bool {
         !self.usesWebConversation &&
             !isSubmittingDraft &&
@@ -282,7 +285,8 @@ extension OpenClawChatViewModel {
         let composerRevision: UInt64
 
         var messageText: String {
-            self.trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : self.trimmed
+            self.trimmed.isEmpty && !self.attachments.isEmpty
+                ? OpenClawChatViewModel.attachmentOnlyMessageText : self.trimmed
         }
 
         var outgoingMessageText: String {

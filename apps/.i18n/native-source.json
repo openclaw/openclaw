@@ -4127,7 +4127,6 @@
     {"path":"apps/macos/Sources/OpenClaw/DebugActions.swift","kind":"ui-call","surface":"apple","id":"native.apple.9ad2c13699338d12","source":"Remote SSH transport is not enabled."},
     {"path":"apps/macos/Sources/OpenClaw/DebugActions.swift","kind":"ui-call","surface":"apple","id":"native.apple.e583b99e9bacb160","source":"SSH tunnel reset was superseded or canceled."},
     {"path":"apps/macos/Sources/OpenClaw/DebugActions.swift","kind":"ui-call","surface":"apple","id":"native.apple.48ff60f5602ad477","source":"Send failed: \\(detail)"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.bfc04c89bb6a31b6","source":"See attached."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.570721a9201c893a","source":"\\(invocation) "},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.cb847c3215d72441","source":"delivery unconfirmed"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.bf8d849bf884ab05","source":"queued after route change"},

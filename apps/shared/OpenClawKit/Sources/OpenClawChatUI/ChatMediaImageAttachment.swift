@@ -79,6 +79,11 @@ struct ChatImageBox: Layout {
         self.size = CGSize(width: width, height: width / ratio)
     }
 
+    /// A square gallery tile (a user message with several images).
+    init(tile side: CGFloat) {
+        self.size = CGSize(width: side, height: side)
+    }
+
     func sizeThatFits(proposal: ProposedViewSize, subviews _: Subviews, cache _: inout ()) -> CGSize {
         let width = min(self.size.width, proposal.width ?? self.size.width)
         return CGSize(width: width, height: width * self.size.height / self.size.width)
@@ -109,6 +114,8 @@ struct ChatMediaImageAttachment: View {
     #if os(iOS)
     /// The source's pixel size, when the Gateway sends it.
     let gatewaySize: CGSize?
+    /// Set for a square gallery tile; the image fills it.
+    let tileSide: CGFloat?
     /// A size remembered from an earlier load, read once when the row appears: adopting it later
     /// would reshape a box that is already on screen.
     @State private var rememberedSize: CGSize?
@@ -126,6 +133,7 @@ struct ChatMediaImageAttachment: View {
         label: String,
         width: Int?,
         height: Int?,
+        tileSide: CGFloat? = nil,
         resolverReady: Bool,
         gallery: [ChatImageViewerItem] = [],
         load: @escaping @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?)
@@ -136,6 +144,7 @@ struct ChatMediaImageAttachment: View {
         self.gallery = gallery
         self.load = load
         #if os(iOS)
+        self.tileSide = tileSide
         if let width, let height, width > 0, height > 0 {
             self.gatewaySize = CGSize(width: width, height: height)
         } else {
@@ -168,8 +177,11 @@ struct ChatMediaImageAttachment: View {
     /// skeleton's ink while the bytes load, the image fading in over it, and the retry inside it if
     /// the load fails. The row never changes height because of the image.
     private var boxedImage: some View {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        return ChatImageBox(pixelSize: self.pixelSize) {
+        // The bubble's corner: the Control UI pairs 20 px images with 18 px bubbles
+        // (ui/src/styles/chat/message-layout.css:546-553, grouped.css:2089-2097).
+        let shape = RoundedRectangle(cornerRadius: ChatImageViewerThumbnail.cornerRadius, style: .continuous)
+        let box = self.tileSide.map { ChatImageBox(tile: $0) } ?? ChatImageBox(pixelSize: self.pixelSize)
+        return box {
             ZStack {
                 shape.fill(OpenClawChatTheme.assistantText.opacity(0.07))
                 switch self.state {
@@ -186,13 +198,13 @@ struct ChatMediaImageAttachment: View {
                             thumbnail: image,
                             load: self.load)
                     } label: {
-                        // The UIKit thumbnail is the zoom transition's source. A known size fills
-                        // its own box; an unknown one keeps the 3:2 box. It takes no touches, so
-                        // the clear overlay gives the button its hit area.
+                        // The UIKit thumbnail is the zoom transition's source. A known size or a
+                        // tile fills its own box; an unknown size keeps the 3:2 box. It takes no
+                        // touches, so the clear overlay gives the button its hit area.
                         ChatImageViewerThumbnail(
                             image: image,
                             artifactId: self.artifactId,
-                            fillsProposal: self.pixelSize != nil)
+                            fillsProposal: self.pixelSize != nil || self.tileSide != nil)
                             .allowsHitTesting(false)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .overlay { Color.clear.contentShape(Rectangle()) }
