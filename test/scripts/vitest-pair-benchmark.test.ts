@@ -536,6 +536,7 @@ describe("Node compile-cache benchmark contract", () => {
         { kind, nodeCache: path.join(root, "active-node") },
       );
       const keys = [
+        "PATH",
         "COREPACK_ENABLE_NETWORK",
         "npm_config_offline",
         "pnpm_config_manage_package_manager_versions",
@@ -561,6 +562,13 @@ describe("Node compile-cache benchmark contract", () => {
         timeoutMs: 10_000,
       });
       expect(JSON.parse(readFileSync(path.join(root, "env.json"), "utf8"))).toEqual({
+        PATH: [
+          path.dirname(packageManager.executable),
+          path.dirname(process.execPath),
+          process.env.PATH,
+        ]
+          .filter(Boolean)
+          .join(path.delimiter),
         COREPACK_ENABLE_NETWORK: "0",
         npm_config_offline: "true",
         pnpm_config_manage_package_manager_versions: "false",
@@ -1103,6 +1111,7 @@ describe("Vitest pair benchmark", () => {
       version: "12.1.0",
     });
     expect(env.npm_execpath).toBe(pinned);
+    expect(env.PATH).toBe(ambientEnv.PATH);
     expect(env.COREPACK_ENABLE_NETWORK).toBeUndefined();
     expect(env.npm_config_offline).toBeUndefined();
     expect(env.pnpm_config_manage_package_manager_versions).toBeUndefined();
