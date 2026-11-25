@@ -64,6 +64,7 @@ export function captureReplyToolAuthorityContinuation({
   requesterPrincipalKey,
   requesterProfileId,
   channelOwner,
+  requesterOwnerKey,
   inputChannel,
 }: {
   snapshot: ReplyToolAuthorityInput;
@@ -71,6 +72,7 @@ export function captureReplyToolAuthorityContinuation({
   requesterPrincipalKey: string | undefined;
   requesterProfileId: string | undefined;
   channelOwner: ReturnType<typeof getCommandOwnerAuthority>;
+  requesterOwnerKey?: string;
   inputChannel: string | undefined;
 }): Pick<
   ReplyToolAuthorityCallerBinding,
@@ -98,6 +100,24 @@ export function captureReplyToolAuthorityContinuation({
     continuation.caller.operatorAuthority?.scopes.includes("operator.admin")
       ? continuation.caller.operatorAuthority
       : undefined;
+  // A helper result resumed after sessions_yield has no requester of its own; the channel
+  // owner whose turn yielded may guide it without lending it their identity.
+  const ingress =
+    continuation && normalizeChatChannelId(readReplyInputChannel(continuation.caller));
+  const yieldingOwner = Boolean(
+    requesterOwnerKey &&
+    continuation &&
+    ingress &&
+    !requesterPrincipalKey &&
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "subagent_settle" &&
+    requesterOwnerKey ===
+      resolveRequesterPrincipalKey({
+        ...continuation.caller,
+        requesterOrigin: undefined,
+        messageProvider: ingress,
+      }),
+  );
   // A profile link records attribution; only host-attested human ingress can
   // use it to continue another transport's execution.
   const matchingProfile =
@@ -148,7 +168,9 @@ export function captureReplyToolAuthorityContinuation({
       ? "verified-profile"
       : sharedOwner
         ? "shared-owner"
-        : undefined;
+        : yieldingOwner
+          ? "requester-owner"
+          : undefined;
   // Continuation permits guidance across scopes, not automatic question
   // answers or image cancellation under the incumbent's question authority.
   const allowPendingUserInputAnswer: false | undefined =
@@ -157,6 +179,7 @@ export function captureReplyToolAuthorityContinuation({
     "kind" in caller &&
     (backgroundOwner ||
       sharedOwner ||
+      yieldingOwner ||
       !isSameReplyToolAuthorityConversation(snapshot, caller.caller) ||
       requesterPrincipalKey !==
         resolveRequesterPrincipalKey({

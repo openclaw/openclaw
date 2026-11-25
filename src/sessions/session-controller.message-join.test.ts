@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapabilityResolver,
+} from "../agents/cron-creator-authority-context.js";
+import {
   bindReplyInputChannel,
   bindWorkerToolPreparation,
   isToolAuthorityReadCaptureActive,
@@ -39,6 +43,7 @@ import {
   gatewayConnect,
   operatorRecoverySnapshotFixture,
 } from "../gateway/server/client-fixtures.test-support.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -115,6 +120,8 @@ type JoinCase = {
     bot?: true;
   };
   sessionOnly?: true;
+  /** A helper-result turn resumes the yielding channel owner's work, guided by this sender. */
+  yieldOwner?: "same" | "different" | "other-transport" | "followup" | "other-run";
 };
 type Outcome = "accepted" | "deferred" | "rejected" | "stopped" | "failed";
 const uiTarget = (connId: string, profileId = "join-owner") => ({ connId, profileId });
@@ -247,6 +254,15 @@ it.each<[string, Outcome, JoinCase?]>([
     "accepted",
     { sharedOwner: { direction: "outgoing" }, after: "shared-revoke" },
   ],
+  ["yielding channel owner guides its helper result", "accepted", { yieldOwner: "same" }],
+  ["another sender cannot guide a yielded helper result", "deferred", { yieldOwner: "different" }],
+  [
+    "the yielding owner's id on another transport is not that owner",
+    "deferred",
+    { yieldOwner: "other-transport" },
+  ],
+  ["a follow-up result is not a yielded helper result", "deferred", { yieldOwner: "followup" }],
+  ["another session's yield scope lends no owner", "deferred", { yieldOwner: "other-run" }],
 ])(
   "joins the selected execution with current admission checks: %s",
   async (name, outcome, c = {}) => {
@@ -346,6 +362,7 @@ it.each<[string, Outcome, JoinCase?]>([
             })
           : operatorAuthority);
       const channelOwnerCurrent = true;
+      let yieldScopeCurrent = true;
       run.operatorAuthority = operatorAuthority;
       let originalIdentityCurrent = true;
       let incomingIdentityCurrent = true;
@@ -397,13 +414,58 @@ it.each<[string, Outcome, JoinCase?]>([
           }
         }
       }
+      if (c.yieldOwner) {
+        // The settle turn has no sender; the yielding owner travels only in its admission scope.
+        Object.assign(run.run, {
+          senderId: undefined,
+          senderIsOwner: false,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:helper",
+            sourceChannel: "internal",
+            sourceTool: c.yieldOwner === "followup" ? "subagent_announce" : "subagent_settle",
+          },
+        });
+        run.operatorAuthority = undefined;
+        run.originatingChannel = "telegram";
+        run.run.messageProvider = "telegram";
+      }
+      const yieldScope = c.yieldOwner
+        ? createCronCreatorAuthorityCapability(
+            `${key}:yield-settle`,
+            { kind: "unknown" },
+            undefined,
+            () => yieldScopeCurrent,
+            undefined,
+            { channel: "telegram", senderId: "alice" },
+          )
+        : undefined;
+      if (yieldScope) {
+        registerAgentRunContext(yieldScope.runId, {
+          agentId: "main",
+          sessionKey: c.yieldOwner === "other-run" ? "agent:main:nested-run" : key,
+          sessionId: entry.sessionId,
+        });
+      }
       await withSessionTurn({ ...address, sessionId: entry.sessionId }, async (operation) => {
         if (!operation) {
           throw new Error("Expected direct execution owner");
         }
+        const prepareSnapshot = () =>
+          c.legacy ? prepareReplyToolAuthority(run) : prepareReplyRunToolAuthority(run, entry);
         await operation.bindToolAuthoritySnapshotAsync(
-          c.legacy ? prepareReplyToolAuthority(run) : prepareReplyRunToolAuthority(run, entry),
+          yieldScope
+            ? runWithCronCreatorAuthorityCapabilityResolver({
+                capability: yieldScope,
+                runId: yieldScope.runId,
+                resolve: () => Promise.reject(new Error("Unexpected Cron tool construction")),
+                run: prepareSnapshot,
+              })
+            : prepareSnapshot(),
         );
+        // The owner's steer is a fresh channel turn: it revokes the pending yield authority
+        // before it joins, which must not end the yielding owner's guidance.
+        yieldScopeCurrent = false;
         const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
         const delivered = vi.fn();
         const replacement = vi.fn();
@@ -475,6 +537,13 @@ it.each<[string, Outcome, JoinCase?]>([
           if (c.sharedOwner.differentSession) {
             incoming.run.sessionKey = "agent:main:another-session";
           }
+        }
+        if (c.yieldOwner) {
+          Object.assign(incoming.run, {
+            senderId: c.yieldOwner === "different" ? "bob" : "alice",
+            senderIsOwner: true,
+            inputProvenance: undefined,
+          });
         }
         if (c.caps) {
           incoming.run.clientCaps = c.caps === "narrow" ? [] : ["ui-commands", "usage-refreshing"];
@@ -606,6 +675,12 @@ it.each<[string, Outcome, JoinCase?]>([
             bindCommandOwnerAuthority(caller, { isCurrent: () => channelOwnerCurrent });
           }
         }
+        if (c.yieldOwner) {
+          bindReplyInputChannel(
+            caller,
+            c.yieldOwner === "other-transport" ? "discord" : "telegram",
+          );
+        }
         const delivery = prepareSteeringDelivery({
           ...address,
           entry: currentEntry,
@@ -640,6 +715,9 @@ it.each<[string, Outcome, JoinCase?]>([
         ) {
           expect(joined).toMatchObject({ kind: "deferred", reason: "requester-mismatch" });
         }
+        if (c.yieldOwner && c.yieldOwner !== "same") {
+          expect(joined).toMatchObject({ kind: "deferred", reason: "requester-mismatch" });
+        }
         if (c.crossSurface === "incoming" && c.mismatch === "model") {
           expect(joined).toMatchObject({ kind: "deferred", reason: "model-fallback-changed" });
         }
@@ -648,7 +726,7 @@ it.each<[string, Outcome, JoinCase?]>([
           expect(delivered).not.toHaveBeenCalled();
           return;
         }
-        if (c.sharedOwner) {
+        if (c.sharedOwner || c.yieldOwner) {
           expect(joined.allowPendingUserInputAnswer).toBe(false);
         }
         if (c.after === "stop") {

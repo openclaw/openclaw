@@ -22,7 +22,7 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { AsyncContext } from "../shared/async-context.js";
-import { requesterCreatorProfileId } from "./requester-origin.js";
+import { requesterCreatorProfileId, resolveRequesterPrincipalKey } from "./requester-origin.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
   CronToolOptions,
@@ -238,6 +238,37 @@ export function bindRequesterOwnerIdentity(params: {
       }
     },
   };
+}
+
+/** Identity of the channel owner whose yielded turn this admitted continuation resumes. */
+export function readRequesterOwnerContinuation(run: {
+  sessionKey?: string;
+  sessionId?: string;
+}): string | undefined {
+  const scope = activeCronCreatorAuthority.getStore();
+  const owner = scope?.requesterOwner;
+  const context = scope && getAgentRunContext(scope.runId);
+  // Read once, when the settle turn starts, and only for a run in the continuation's session.
+  // The owner's own message retires the continuation (`isCurrent`), so liveness is the run's.
+  if (
+    !scope ||
+    !owner ||
+    scope.callerOrigin.kind !== "unknown" ||
+    !scope.isCurrent ||
+    !scope.active ||
+    scope.signal.aborted ||
+    !run.sessionKey ||
+    !run.sessionId ||
+    context?.sessionKey !== run.sessionKey ||
+    context.sessionId !== run.sessionId
+  ) {
+    return undefined;
+  }
+  return resolveRequesterPrincipalKey({
+    messageChannel: owner.channel,
+    accountId: owner.accountId,
+    senderId: owner.senderId,
+  });
 }
 
 /** Bind at tool construction, never rediscover authority from model arguments or routes. */

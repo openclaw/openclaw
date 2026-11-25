@@ -222,7 +222,7 @@ export type ReplyToolAuthorityCaller =
 export type ReplyToolAuthorityCallerBinding = {
   assertCurrent(): void;
   /** Classify continuation before compatibility, retaining the selected live owner. */
-  continuationKind?: "verified-profile" | "shared-owner" | "owner-guidance";
+  continuationKind?: "verified-profile" | "shared-owner" | "owner-guidance" | "requester-owner";
   allowPendingUserInputAnswer?: false;
   joinObservation?: ReplyMessageJoinObservation;
   prepare(): Promise<PreparedQuestionCallerRead | undefined>;

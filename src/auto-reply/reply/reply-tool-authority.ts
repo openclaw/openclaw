@@ -11,6 +11,7 @@ import {
   type ResolvedConversationCapabilityProfile,
 } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
+import { readRequesterOwnerContinuation } from "../../agents/cron-creator-authority-context.js";
 import {
   bindReplyToolAuthorityCallerRead,
   readReplyInputChannel,
@@ -337,6 +338,7 @@ export function prepareReplyToolAuthority(
   > {
   const capturedJoinObservation = joinObservation ? structuredClone(joinObservation) : undefined;
   const channelOwner = getCommandOwnerAuthority(run.run);
+  const requesterOwnerKey = readRequesterOwnerContinuation(run.run);
   const inputChannel = readReplyInputChannel(run.run);
   const snapshot = captureReplyToolAuthorityInput(run);
   const requesterPrincipalKey = resolveRequesterPrincipalKey({
@@ -579,6 +581,7 @@ export function prepareReplyToolAuthority(
       requesterPrincipalKey,
       requesterProfileId,
       channelOwner,
+      requesterOwnerKey,
       inputChannel,
     });
     const assertCurrent = () => {
