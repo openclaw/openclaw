@@ -638,7 +638,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
     it.each(["openclaw", "lib/node_modules/openclaw"])(
       "keeps the service on the release launcher for %s",
       async (relativeSlot) => {
-        const { prefix } = await setup();
+        const { stateDir, prefix } = await setup();
         const slot = path.join(prefix, relativeSlot);
         const root = path.join(prefix, "releases", "git-fixture", relativeSlot);
         await fs.mkdir(path.join(root, "dist"), { recursive: true });
@@ -651,7 +651,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         await fs.writeFile(launcher, "");
         const { resolveGatewayProgramArguments } = await import("../daemon/program-args.js");
         const service = await resolveGatewayProgramArguments({
-          cliEntrypoint: entry,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          cliEntrypoint: { planned: entry },
           runtime: "node",
           runtimePath: process.execPath,
           port: 18789,
